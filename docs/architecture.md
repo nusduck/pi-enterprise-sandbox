@@ -163,13 +163,13 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - **dev / prod 均使用 Redis 5.0.14**（`redis:5.0.14`，与 UPRedis 同版本；AOF + `noeviction` + 命名 volume 默认持久协调数据）
 - **BullMQ key 前缀带 hash tag**：`AGENT_RUN_QUEUE_PREFIX` 默认 `{bull}`，HTTP 投递与 Worker 消费共用；不带 tag 拒绝启动。UPRedis Proxy 按 key 路由，BullMQ 多 key 脚本必须落在同一节点（ADR 0011 D9）；其余脚本（lease / 会话锁 / MCP 锁）都是单 key
 - **Agent 独占 Redis 权威**：`AGENT_REDIS_URL` / `REDIS_URL`（仅 `redis://` / `rediss://`）、`TEST_REDIS_URL`（测试）
-- BFF **不**注入 Redis 连接权威配置（PR-03 边界）。Sandbox internal plane 使用**独立** `sandbox-replay-redis` + `SANDBOX_INTERNAL_REDIS_PASSWORD`（replay jti 防重放；与 Agent `REDIS_PASSWORD` / queue/lease/stream **凭据隔离**，DB 索引不算隔离）
+- BFF **不**注入 Redis 连接权威配置（PR-03 边界）。exec 也不连 Redis：internal plane 曾用的 `sandbox-replay-redis`（jti 防重放）随 ADR 0008 D8 退役，服务、卷与 `SANDBOX_INTERNAL_*REDIS*` / `PLANE_ENABLED` 等无读取方的变量已于 2026-09-16 删除；内部面的闸门只有 HMAC keyring 与来源 CIDR 白名单
 - 职责边界（plan §7.2 / §9）：BullMQ Run Queue（`agent-runs`）、Worker Lease（TTL 30s / 续约 10s）、Run Stream（`MAXLEN ~ 10000`）、取消信号、短期 cache/presence、Outbox wakeup
 - Redis **不得**成为 Run 状态或对话事实的唯一来源
 - **清空 Redis 的后果**：仅丢失运行态协调（queue job、lease、live stream 游标、短期 cache）；MySQL 中 Conversation / Run / `run_events` / 审计事实保留
 - **恢复路径**：Outbox publisher 从 `domain_outbox` 重试未发布事件；SSE/历史从 MySQL `run_events` 重放；Worker 按 MySQL Run 状态 + 幂等记录决定重试或失败
 - 生产：`REDIS_PASSWORD` 必填（compose fail-fast）；禁止无密码生产 Redis
-- **应用口令只来自 DBPM**（ADR 0011 D10，2026-09-14 起）：Agent / Agent Worker 取 UPDRDB 与服务 Redis 口令，exec 只取 UPDRDB，sandbox-mcp 只取服务 Redis；启动时取一次、只放内存，连接串带口令或 DBPM 不可用即拒绝启动。`REDIS_PASSWORD` / `MYSQL_PASSWORD` 只配置服务端自身。开发由 `dbpm-fake` 真协议假服务端提供。上面提到的 replay Redis 当前没有代码消费方（ADR 0008 D8 已去掉 jti 防重放），不取密；其去留另行处理
+- **应用口令只来自 DBPM**（ADR 0011 D10，2026-09-14 起）：Agent / Agent Worker 取 UPDRDB 与服务 Redis 口令，exec 只取 UPDRDB，sandbox-mcp 只取服务 Redis；启动时取一次、只放内存，连接串带口令或 DBPM 不可用即拒绝启动。`REDIS_PASSWORD` / `MYSQL_PASSWORD` 只配置服务端自身。开发由 `dbpm-fake` 真协议假服务端提供
 
 ### 4c. 企业工具面与策略挂载
 

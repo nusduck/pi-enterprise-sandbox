@@ -39,11 +39,11 @@ class TestComposeRedisTopology:
         assert "redis5_dev_data" in text
         # 注释里可以提旧卷名（说明保留不删），非注释行不能再挂载或声明它。
         assert re.search(r"^[^#\n]*\bredis_dev_data\b", text, re.M) is None
-        assert re.search(r"^[^#\n]*\bsandbox_replay_redis_dev_data\b", text, re.M) is None
+        # 退役的 replay Redis 服务与数据卷不得回来（ADR 0008 D8；2026-09-16 清理）。
+        assert "sandbox-replay-redis" not in text
+        assert "sandbox_replay_redis" not in text
         redis = _service_block(text, "redis")
         assert "- --maxmemory-policy\n      - noeviction\n" in redis
-        replay = _service_block(text, "sandbox-replay-redis")
-        assert "- --maxmemory-policy\n      - noeviction\n" in replay
         assert "redis-cli" in redis
         assert "ping" in redis
         assert "healthcheck:" in redis
@@ -74,7 +74,7 @@ class TestComposeRedisTopology:
         assert "AGENT_RUN_STREAM_MAXLEN:" in agent
         assert "10000" in agent
 
-    def test_dev_compose_bff_lacks_redis_authority_sandbox_replay_only(self):
+    def test_dev_compose_bff_and_exec_lack_redis_authority(self):
         text = COMPOSE.read_text()
         api = _service_block(text, "api-server")
         sandbox = _service_block(text, "sandbox")
@@ -83,17 +83,20 @@ class TestComposeRedisTopology:
         assert re.search(r"^\s+REDIS_URL:", api, re.M) is None
         assert re.search(r"^\s+TEST_REDIS_URL:", api, re.M) is None
         assert re.search(r"^\s+redis:\s*$", api, re.M) is None
-        # Sandbox uses dedicated sandbox-replay-redis (independent secret), never
-        # Agent REDIS_URL / AGENT_REDIS_URL / shared REDIS_PASSWORD authority.
+        # exec 从不持有 Agent Redis 权威；内部面的闸门只有 HMAC keyring。
         # 显式清空（值为 ""）是允许的：那是在挡住 env_file 注入，不是授予权威。
         assert re.search(r'^\s+AGENT_REDIS_URL:(?!\s*""\s*$)', sandbox, re.M) is None
         assert re.search(r'^\s+REDIS_URL:(?!\s*""\s*$)', sandbox, re.M) is None
-        assert "SANDBOX_INTERNAL_REDIS_URL" in sandbox
-        assert "SANDBOX_INTERNAL_PLANE_ENABLED" in sandbox
-        assert "sandbox-replay-redis:6379/0" in sandbox
-        assert "REDIS_PASSWORD" not in sandbox or "SANDBOX_INTERNAL" in sandbox
-        assert "sandbox-replay-redis:" in text
-        assert re.search(r"^\s+sandbox-replay-redis:\s*$", sandbox, re.M) is not None
+        assert "SANDBOX_INTERNAL_HMAC_KEYRING" in sandbox
+        # 退役：replay Redis、平面开关、并发与 drain 变量都没有读取方，不得回来。
+        for retired in (
+            "SANDBOX_INTERNAL_REDIS_URL",
+            "SANDBOX_INTERNAL_REDIS_PASSWORD",
+            "SANDBOX_INTERNAL_PLANE_ENABLED",
+            "SANDBOX_INTERNAL_MAX_CONCURRENCY",
+            "SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS",
+        ):
+            assert retired not in sandbox, retired
 
     def test_dev_compose_no_postgres_or_sqlite_formal_topology(self):
         text = COMPOSE.read_text()
@@ -110,13 +113,11 @@ class TestComposeRedisTopology:
         assert "image: redis:7" not in text
         assert "redis5_data" in text
         assert re.search(r"^[^#\n]*\bredis_data\b", text, re.M) is None
-        assert re.search(r"^[^#\n]*\bsandbox_replay_redis_data\b", text, re.M) is None
         redis = _service_block(text, "redis")
         # Compose merge may use ports: [] or ports: !reset []
         assert "ports:" in redis and ("[]" in redis or "!reset" in redis)
         assert "healthcheck:" in redis
         assert "- --maxmemory-policy\n      - noeviction\n" in redis
-        assert "- --maxmemory-policy\n      - noeviction\n" in _service_block(text, "sandbox-replay-redis")
         for name in ("agent", "agent-worker"):
             assert "AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}\n" in _service_block(text, name)
 
@@ -139,16 +140,15 @@ class TestComposeRedisTopology:
         assert re.search(r"^\s+REDIS_URL:", api, re.M) is None
         assert re.search(r"^\s+AGENT_REDIS_URL:", sandbox, re.M) is None
         assert re.search(r"^\s+REDIS_URL:", sandbox, re.M) is None
-        # Production Sandbox: mandatory internal plane + independent replay Redis.
-        assert "SANDBOX_INTERNAL_PLANE_ENABLED" in sandbox
-        assert "SANDBOX_INTERNAL_REDIS_URL" in sandbox
-        assert "SANDBOX_INTERNAL_REDIS_PASSWORD" in text
-        assert "sandbox-replay-redis:6379/0" in sandbox
+        # Production Sandbox: HMAC keyring 是内部面唯一的闸门，生产必填。
         assert "SANDBOX_INTERNAL_HMAC_KEYRING" in sandbox
-        # Must not wire Agent REDIS_PASSWORD into Sandbox internal URL.
+        assert "SANDBOX_INTERNAL_HMAC_ACTIVE_KID" in sandbox
+        # Must not wire Agent REDIS_PASSWORD into the Sandbox service.
         assert "REDIS_PASSWORD:?Set REDIS_PASSWORD for production}@redis:6379/2" not in sandbox
-        assert "sandbox-replay-redis:" in text
-        assert "sandbox_replay_redis5_data" in text
+        # 退役的 replay Redis 服务 / 卷 / 密码不得回到生产 overlay。
+        assert "sandbox-replay-redis" not in text
+        assert "sandbox_replay_redis" not in text
+        assert "SANDBOX_INTERNAL_REDIS" not in text
 
         assert "image: postgres" not in text
         assert "POSTGRES_" not in text
@@ -176,11 +176,19 @@ class TestEnvRedisCatalog:
         # 应用用的 Redis URL 不带口令（口令来自 DBPM）；Redis 服务端口令仍在 REDIS_PASSWORD。
         assert "AGENT_REDIS_URL=redis://redis:6379/0" in text
         assert "AGENT_REDIS_URL=redis://:" not in text
-        # Sandbox replay-only plane (independent secret; no real prod values)
-        assert "SANDBOX_INTERNAL_REDIS_URL=" in text
-        assert "SANDBOX_INTERNAL_REDIS_PASSWORD=" in text
-        assert "SANDBOX_INTERNAL_PLANE_ENABLED=" in text
-        assert "sandbox-replay-redis" in text
+        # 内部面仍然必须有 HMAC keyring（exec 缺它 fail-closed）。
+        assert "SANDBOX_INTERNAL_HMAC_KEYRING=" in text
+        # 退役的 replay Redis 配置不得回到模板（ADR 0008 D8）。注释里可以解释它们
+        # 为什么消失；断言只看赋值行。
+        for retired in (
+            "SANDBOX_INTERNAL_REDIS_URL=",
+            "SANDBOX_INTERNAL_REDIS_PASSWORD=",
+            "SANDBOX_INTERNAL_PLANE_ENABLED=",
+            "SANDBOX_INTERNAL_MAX_CONCURRENCY=",
+            "SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS=",
+        ):
+            assert retired not in text, retired
+        assert "sandbox-replay-redis" not in text
         # Env example must not embed a production-looking shared secret for replay.
         assert "REDIS_PASSWORD=@redis:6379/2" not in text
         # Dev placeholder only — not a production-looking secret dump

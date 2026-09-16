@@ -328,9 +328,9 @@ docker compose up -d mysql
 
 ### Redis 操作（Agent-only 协调）
 
-正式协调拓扑为 **Redis 5.0.14**（`redis:5.0.14`，与 UPRedis 同版本；`maxmemory-policy noeviction`；`AGENT_REDIS_URL` / `REDIS_URL`；可选 `TEST_REDIS_URL`）。BullMQ 在 6.0.6 以下自动改用不依赖 `LPOS` 的脚本，启动日志里「recommended minimum 6.2.0」的提示是预期的。队列 key 前缀 `AGENT_RUN_QUEUE_PREFIX` 默认 `{bull}`，必须带 hash tag。Agent 依赖 Redis health；BFF 不持有 Redis 权威配置。`REDIS_PASSWORD` 只配置 Redis 服务端，Agent / sandbox-mcp 的连接口令由 DBPM 下发，URL 不带口令。Sandbox 另起 **sandbox-replay-redis**（独立密码/volume，DB0）仅作 internal HMAC jti 防重放，**不得**复用 Agent Redis 凭据。
+正式协调拓扑为 **Redis 5.0.14**（`redis:5.0.14`，与 UPRedis 同版本；`maxmemory-policy noeviction`；`AGENT_REDIS_URL` / `REDIS_URL`；可选 `TEST_REDIS_URL`）。BullMQ 在 6.0.6 以下自动改用不依赖 `LPOS` 的脚本，启动日志里「recommended minimum 6.2.0」的提示是预期的。队列 key 前缀 `AGENT_RUN_QUEUE_PREFIX` 默认 `{bull}`，必须带 hash tag。Agent 依赖 Redis health；BFF 不持有 Redis 权威配置。`REDIS_PASSWORD` 只配置 Redis 服务端，Agent / sandbox-mcp 的连接口令由 DBPM 下发，URL 不带口令。exec **不连 Redis**：曾经的 `sandbox-replay-redis`（internal HMAC jti 防重放）已于 2026-09-16 随 ADR 0008 D8 退役，相关变量没有读取方，一并删除。
 
-- 默认 AOF + `redis5_dev_data` volume：容器重建后协调数据仍在。旧的 `redis_dev_data` / `sandbox_replay_redis_dev_data` 是 7.2 写出的，5.0.14 读不了，保留不挂载；本地 `.env` 若还写着旧卷名要改掉或在命令行覆盖。
+- 默认 AOF + `redis5_dev_data` volume：容器重建后协调数据仍在。旧的 `redis_dev_data` 是 7.2 写出的，5.0.14 读不了，保留不挂载；本地 `.env` 若还写着旧卷名要改掉或在命令行覆盖。`sandbox_replay_redis*` 卷随 replay 实例退役，可直接删除。
 - 本地复现 UPRedis Proxy 路由限制：叠加 `scripts/dev/docker-compose.upredis-sim.yml`（可与 UPDRDB 双 Proxy 模拟同时叠加）。
 - 队列放行测试：`TEST_UPREDIS_URL=redis://127.0.0.1:<port>/0 TEST_UPREDIS_PASSWORD=… [TEST_UPREDIS_EXPECT_ROUTING=1] npx tsx --test tests/redis/upredis-queue.integration.test.js`（在 `agent/` 下）。
 - **清空 Redis**（`FLUSHALL` 或删 volume）只丢失 queue/lease/stream 等运行态，**不**删除 MySQL 事实。

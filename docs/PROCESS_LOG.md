@@ -912,3 +912,31 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **验证：** 新测试修复前失败 2 项、修复后 exec 403/403（Linux 容器真实 bwrap）；contract 109/109、agent 1325 pass / 3 cancelled（已知组，不记为通过）、
   api-server 159/159、frontend 367/367 + build、各包类型检查（Node 22 容器）。重建 sandbox / sandbox-mcp 并换新容器后沙箱内 docx / xlsx / pptx 转 PDF 成功并读回；
   openEuler VM exec 装新 release 同样成功（挂载跳过）；开发栈真实链路通过。详见 [证据](evidence/sandbox-soffice-libreoffice-registry-2026-09-15.md)。
+
+## 2026-09-16 — 退役 replay Redis 与同族死变量；入口改内网 HTTP（双模式）
+
+- **Context：** design §7 的 D2c 补记留了「replay 实例与配置的去留另行处理」；用户本轮决定内网服务先不上 HTTPS，并要求清理无消费方的配置。
+- **Decision：**
+  1. 删除 `sandbox-replay-redis`（开发 / 生产 overlay / CI smoke）、数据卷、独立口令，以及 5 个全仓无读取方的
+     `SANDBOX_INTERNAL_*` 变量（含被文档与生产校验当成 fail-closed 开关的 `PLANE_ENABLED`）。内部面闸门仍是
+     HMAC keyring + `EXEC_INTERNAL_ALLOW_CIDR`，不变。
+  2. 边缘 nginx 改双模式：`TLS_ENABLED`（默认 `true` 保持既有行为）选 `sandbox-tls.conf` / `sandbox-http.conf`，
+     两者 include 同一份 `locations.conf`，路由与 SSE 语义不随模式漂移；非法值拒启，渲染后跑 `nginx -t`。
+     明文模式**不声明 HSTS**（对无加密端口的站点声明 HSTS 会锁死入口）。
+  3. 会话 Cookie 去掉 `Secure`（用户选定）：明文入口下带 `Secure` 的 Cookie 浏览器不回传，登录会直接失效；
+     `HttpOnly` / `SameSite=Lax` 保留，恢复 HTTPS 时必须同时恢复 `Secure`。
+- **Action：** `docker-compose.yml` / `docker-compose.prod.yml`、`.env.example`、`.github/workflows/test.yml`、
+  `scripts/smoke-cross-service.mjs`、`scripts/verify_compose_prod_config.py`；`nginx/conf.d/sandbox.conf` 拆为
+  `nginx/templates/{locations,sandbox-http,sandbox-tls}.conf` + 重写 `entrypoint.sh` / `Dockerfile`；
+  `api-server` 的 `cookies.ts` / `auth.ts`；四份测试改为退役棘轮与双模式契约；
+  `deployment.md`、`development.md`、`architecture.md`、`sandbox-mcp.md`、design §1/§2.2/§7/§12、README、CHANGELOG。
+  顺带修正 deployment.md 架构图里过期的 `redis:7.2`，以及 TLS 模板里 nginx 1.27 已废弃的 `listen ... http2`。
+- **STATUS IDs：** 不改变任何 STATUS 行。design §12 的「HTTPS 域名/证书/终止点」待落实项按用户决定关闭。
+- **验证：** 六套测试 + 各包类型检查 + 前端 build 全绿（pytest 206；contract 109；exec 401/2 skipped；
+  agent 1325 pass / 3 cancelled；api-server 158 pass / 2 cancelled；frontend 367）——5 例 cancelled 是宿主
+  Node v23.11.0 的已知组，不记为通过。prod overlay 渲染 + 校验通过且不再含 replay 服务与卷。
+  nginx 两种模式在真实容器中验证渲染、`nginx -t` 与非法值拒启。**重建 BFF 镜像并换新容器后**，
+  经 BFF 的真实链路 17/17：Cookie 无 `Secure` 且仅凭 Cookie 认证成功、带工具 Run `SUCCEEDED`、
+  进程 logs 有 `TICK`、SIGTERM 后 `cancelled`、6 项跨租户 404 且有本人 200 的拒绝对照。
+  过程中自我修正三处（渲染校验放错层、检查容器自我代理回环、`ENTRYPOINT` 覆盖写法）均记在证据里。
+  详见 [证据](evidence/replay-redis-retire-and-http-ingress-2026-09-16.md)。

@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> 生产部署指南 — Frontend / BFF / Agent / Exec（含 MCP 第二入口）+ Nginx 反向代理 + SSL + 资源限制 + 持久化存储
+> 生产部署指南 — Frontend / BFF / Agent / Exec（含 MCP 第二入口）+ Nginx 反向代理（HTTP / TLS 双模式）+ 资源限制 + 持久化存储
 
 ## 快速启动（开发模式）
 
@@ -31,13 +31,26 @@ docker compose exec sandbox node -e "fetch('http://127.0.0.1:8081/ready').then(r
 ## 生产部署
 
 ```bash
-# 使用生产 overlay（Nginx + SSL + 资源限制）
+# 使用生产 overlay（Nginx + 资源限制）
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 
-# 验证
+# 验证（TLS 模式，默认）
 curl -sf https://localhost/health/ready
-curl -sf https://localhost/nginx/status
+
+# 内网明文部署：入口只监听 80
+TLS_ENABLED=false docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d nginx
+curl -sf http://localhost/health/ready
 ```
+
+**入口形态由 `TLS_ENABLED` 决定**（默认 `true`）：`true` 时边缘 nginx 终止 TLS，80 只做
+ACME 与 301 跳转，并声明 HSTS；`false` 时只监听 80 明文，不生成也不要求证书、不声明 HSTS
+（对没有加密端口的站点声明 HSTS 会把浏览器锁死在打不开的地址上）。两套 server 模板共用同一份
+`nginx/templates/locations.conf`，路由、SSE 免缓冲、55MB 上传上限等语义不随模式改变。
+值不是 `true` / `false` 时容器拒绝启动；渲染后还会跑一次 `nginx -t`，坏配置不会起到 502。
+
+明文模式是**内网部署的显式选择**：会话 Cookie、上传内容与 SSE 都不加密，只应在受信内网
+（或由更外层入口加密）使用。BFF 的会话 Cookie 相应不带 `Secure`（否则浏览器在明文连接上
+根本不会回传，登录直接失效），`HttpOnly` 与 `SameSite=Lax` 保留。
 
 ### Workspace / temp disk quota (production)
 
@@ -147,8 +160,8 @@ Chrome for Testing 的一次性 `--screenshot` 模式在该环境挂起，产品
 
 ```
                            ┌───────────────────────┐
-                           │   Nginx (443/80)        │
-                           │   TLS + Rate Limit     │
+                           │   Nginx (80 / 443)     │
+                           │   Rate limit + 可选 TLS │
                            └──────┬────────────────┘
                                   │
                   ┌───────────────▼──────────────┐
@@ -173,7 +186,7 @@ Chrome for Testing 的一次性 `--screenshot` 模式在该环境挂起，产品
                   └──────────────────────────────┘
                                   │
                   ┌───────────────▼──────────────┐
-                  │   redis:7.2 (Agent-only)      │
+                  │   redis:5.0.14 (Agent-only)   │
                   │   Queue · Lease · Stream      │
                   │   (not fact authority)        │
                   └──────────────────────────────┘
@@ -183,9 +196,9 @@ Chrome for Testing 的一次性 `--screenshot` 模式在该环境挂起，产品
                   └──────────────────────────────┘
 ```
 
-图中 Redis 连接属于 Agent 的队列/lease/stream 协调；Sandbox 只使用独立
-的 replay Redis 保存 internal HMAC jti。外部 MCP 由 Agent 的
-`@deepseek-ai/dsh-mcp-client` 直连，不经过 Sandbox，也不与 Sandbox replay Redis 共用凭据。
+图中 Redis 连接属于 Agent 的队列/lease/stream 协调；exec **不连任何 Redis**
+（ADR 0008 D8 去掉 jti 防重放后，内部面只靠 HMAC 与来源白名单）。外部 MCP 由 Agent 的
+`@deepseek-ai/dsh-mcp-client` 直连，不经过 Sandbox。
 若部署独立的 `sandbox-mcp`，它同样不经过 Agent：只使用服务 Redis 的专用
 key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。见
 [`sandbox-mcp.md`](./sandbox-mcp.md)。
@@ -201,7 +214,6 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `SANDBOX_INTERNAL_HMAC_ACTIVE_KID` | — | 当前签名 key id；必须存在于 keyring |
 | `EXEC_INTERNAL_ALLOW_CIDR` | 开发 Compose：`127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`；生产 overlay：必填 | exec 内部面（`/internal/v1/*`）的来源 CIDR 白名单（逗号分隔）。**空值 = 拒绝全部内部面请求**（启动日志告警），非法 CIDR = 拒绝启动，放行全部须显式写 `0.0.0.0/0,::/0`。判定用的对端地址取自 TCP socket（IPv4-mapped IPv6 按 IPv4 匹配），**不采信 `X-Forwarded-For` / `X-Real-IP`**，取不到对端地址一律拒绝 |
 | `EXEC_HTTP_LOG` | 空 | 设为 `1` 打开 exec 内部面的请求行日志（JSON 一行：方法/路径/状态码，不含 query）|
-| `SANDBOX_INTERNAL_REDIS_URL` | — | 独立 replay Redis，用于 HMAC jti 防重放；不得复用 Agent Redis 凭据 |
 | `SANDBOX_JWT_SECRET` | — | **Agent HTTP 进程**签发/校验浏览器 JWT 的 HMAC 密钥；变量名为迁移兼容保留，生产必须是强密钥且不会传给 exec |
 | `SANDBOX_JWT_TTL_SECONDS` / `SANDBOX_JWT_ISSUER` / `SANDBOX_JWT_AUDIENCE` | `86400` / `pi-enterprise-sandbox` | Agent 浏览器会话 token 的有效期与签发约束 |
 | `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 注册入口开关；生产 compose 强制 `false` |
@@ -297,13 +309,14 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 | `LLMIO_API_KEY` | — | **必需** — LLM API 密钥 |
 | `MODEL_ID` | `deepseek-v4-flash` | 模型 ID |
 
-### Domain & SSL
+### Domain & 入口形态
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DOMAIN` | `localhost` | 生产 Nginx SSL 域名 |
+| `TLS_ENABLED` | `true` | 边缘 nginx 的入口形态。`true`：终止 TLS，80 跳 443，声明 HSTS，缺证书时自签一张；`false`：只监听 80 明文（内网部署），不生成证书、不声明 HSTS。**只接受 `true` / `false`**，其它值容器拒绝启动 |
+| `DOMAIN` | `localhost` | 生产 Nginx `server_name`（TLS 模式下也是自签证书的 CN） |
 | `NGINX_HTTP_PORT` | `80` | HTTP 端口 |
-| `NGINX_HTTPS_PORT` | `443` | HTTPS 端口 |
+| `NGINX_HTTPS_PORT` | `443` | HTTPS 端口。明文模式下仍会发布，但没有监听者——端口发布在编排期决定，模式在运行期决定 |
 
 ### Frontend nginx 上游
 
@@ -405,7 +418,7 @@ fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 | sandbox（exec） | ✔ | — |
 | sandbox-mcp | — | ✔（对外 facade，拿不到 UPDRDB 口令） |
 
-replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不取密；该实例与配置的去留另行处理。
+exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-16 随 ADR 0008 D8 退役）。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -447,24 +460,25 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 
 **生产:** `docker-compose.prod.yml` 要求 `REDIS_PASSWORD` 已设置（`${REDIS_PASSWORD:?…}` fail-fast），启用 `requirepass`、healthcheck、持久 `redis5_data` volume（旧 `redis_data` 为 7.2 数据，按[队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) drain 后保留，不挂载）、`noeviction`，Agent 对 Redis `service_healthy` 依赖；**不**对外发布 Redis 端口。BFF **不**获得 Redis 权威环境变量。
 
-**Sandbox internal plane（PR-07 replay-only）:**
+**Sandbox internal plane:**
 
 | 变量 | 说明 |
 | --- | --- |
-| `SANDBOX_INTERNAL_PLANE_ENABLED` | 开发默认 `false`；**生产必须 `true`**（启动 fail-closed） |
-| `SANDBOX_INTERNAL_REDIS_PASSWORD` | **独立** replay 密码；**禁止**等于 `REDIS_PASSWORD` |
-| `SANDBOX_INTERNAL_REDIS_URL` | 指向专用服务 `sandbox-replay-redis:6379/0`（固定 DB0）；仅 jti `SET NX` |
-| `SANDBOX_INTERNAL_HMAC_KEYRING` / `ACTIVE_KID` | Agent→Sandbox HMAC；生产必填 |
-| `SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS` | 必须 **>0**；超时后先 UNKNOWN reconcile，再关 MySQL |
+| `SANDBOX_INTERNAL_HMAC_KEYRING` / `ACTIVE_KID` | Agent→Sandbox HMAC；**内部面唯一的闸门**，缺任一项 exec 拒绝启动，生产必填 |
+| `EXEC_INTERNAL_ALLOW_CIDR` | 来源白名单，见上文 Auth 表；空值拒绝全部内部面请求 |
 
-- Compose 使用 **独立** `sandbox-replay-redis` 服务 + 独立 volume/密码；**不是** Agent `redis` 换 DB 索引。
-- 最小权限：键 `sandbox:internal:replay:v1:*`；命令 SET/PING（及握手）；固定 DB0；不授 SELECT。
-- Sandbox **不得**获得 Agent Redis 凭据；Agent **不得**获得 replay secret。
-- 真实 Redis ACL / 连通性为本仓库最终 gate，离线测试只覆盖配置语义。
+- exec **不连 Redis**。ADR 0008 D8 去掉了 jti 防重放及其专用实例，`sandbox-replay-redis`
+  服务、数据卷、独立口令，以及 `SANDBOX_INTERNAL_PLANE_ENABLED` / `_REDIS_URL` /
+  `_REDIS_PASSWORD` / `_MAX_CONCURRENCY` / `_DRAIN_TIMEOUT_SECONDS` 五个**没有读取方**的变量
+  已于 2026-09-16 一并删除。存量部署升级时把它们从 `.env` 与编排配置里删掉，并删除
+  `sandbox_replay_redis5_*` 卷（里面只有过期 jti，无需保留）。
+- 重放防护的现状：签名覆盖方法、路径、规范化 query 与请求体摘要，claim 带有效期与
+  fence；内部网络不对外，且来源受 CIDR 白名单约束。**没有**跨请求的 jti 去重。
+- Sandbox **不得**获得 Agent Redis 凭据。
 
 **清空 Redis 与恢复:**
 
-- Redis 清空 / 丢失只影响运行态协调（queue、lease、live stream、短期 cache）以及 Sandbox internal jti 防重放窗口，**不**删除 MySQL 中的 Conversation / Run / 审计事实。
+- Redis 清空 / 丢失只影响 Agent 的运行态协调（queue、lease、live stream、短期 cache），**不**删除 MySQL 中的 Conversation / Run / 审计事实。
 - 未成功发布到 Redis Stream 的事件保留在 MySQL `domain_outbox`，Outbox publisher 可在 Redis 恢复后重试。
 - 完整事件历史与 SSE 重放以 MySQL `run_events` 为准；Redis Stream 可按长度裁剪。
 
@@ -495,9 +509,10 @@ replay Redis（`SANDBOX_INTERNAL_REDIS_URL`）目前没有代码消费方，不�
 ## Sandbox internal authentication
 
 正式 Agent 工具调用只使用 `/internal/v1/*` HMAC 平面。每个请求都携带
-短期 claim、scope、owner/run/session identity、body digest 和 jti；Sandbox
-通过独立 replay Redis 拒绝重放。一个永不过期的 `SANDBOX_API_TOKEN` 不能
-替代该授权。
+短期 claim、scope、owner/run/session identity、body digest 与 jti，签名覆盖
+方法、路径与规范化 query。**jti 只签不去重**（ADR 0008 D8 退役了专用的 replay
+Redis）：抗重放依赖 claim 有效期、fence 与来源白名单，不是跨请求去重。
+一个永不过期的 `SANDBOX_API_TOKEN` 不能替代该授权。
 
 Agent 自身的 `/internal/*` HTTP 面（conversations、runs、A2A admin 等）由
 `AGENT_INTERNAL_TOKEN` 保护，比较为常量时间；**token 缺失时平面直接关闭**
@@ -528,8 +543,8 @@ curl -f http://localhost:4000/health/ready
 
 | Volume | 路径 | 说明 |
 |--------|------|------|
-| `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产） |
-| `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产） |
+| `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产，仅 `TLS_ENABLED=true`） |
+| `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产，仅 `TLS_ENABLED=true`） |
 | `./skills` | Agent `/home/sandbox/skill:ro` + Sandbox `:ro` | 共享系统 Skill，始终只读 |
 | `./.runtime/sandbox/workspaces` | `/var/sandbox/workspaces` | Agent Session 物理工作区 |
 | `./.runtime/sandbox/tmp` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
@@ -602,7 +617,7 @@ docker compose exec sandbox curl -fsS http://localhost:8081/ready
 # {"status":"ready","shutting_down":false,"database":"ok","storage":{"workspaces":"ok","tmp":"ok","artifacts":"ok","control":"ok"},"isolation":"ok"}
 # 或 HTTP 503 status=not_ready（对应项为 unavailable / unchecked）
 
-# Nginx (生产)
+# Nginx (生产；明文模式用 http://)
 curl -f https://localhost/nginx/status
 ```
 
@@ -689,6 +704,8 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f nginx
 
 ## Let's Encrypt (Production SSL)
 
+> 仅适用于 `TLS_ENABLED=true`。明文模式不使用 `nginx_ssl` / `nginx_certbot` 两个卷。
+
 ```bash
 # 安装 certbot
 apt-get install certbot
@@ -750,8 +767,8 @@ docker exec pi-enterprise-sandbox sh -c \
 docker exec pi-enterprise-agent sh -c \
   'test -n "$SANDBOX_INTERNAL_HMAC_KEYRING" && test -n "$SANDBOX_INTERNAL_HMAC_ACTIVE_KID"'
 
-# 检查独立 replay Redis 与 Sandbox readiness
-docker compose ps sandbox-replay-redis sandbox
+# 检查 Sandbox readiness（exec 不连 Redis，没有 replay 实例可查）
+docker compose ps sandbox
 docker compose exec sandbox curl -fsS http://localhost:8081/ready
 ```
 

@@ -240,7 +240,7 @@ function normalizeSandboxMysqlUrl(value) {
   return parsed.toString();
 }
 
-async function prepareDataPlane(mysqlUrl, redisUrl, replayRedisUrl) {
+async function prepareDataPlane(mysqlUrl, redisUrl) {
   const [{ createMysqlKnex, destroyMysqlKnex }, { migrateLatest }, redisMod] =
     await Promise.all([
       import('../agent/src/infrastructure/mysql/client.js'),
@@ -250,22 +250,16 @@ async function prepareDataPlane(mysqlUrl, redisUrl, replayRedisUrl) {
 
   const knex = createMysqlKnex(mysqlUrl);
   let redis;
-  let replayRedis;
   try {
     await knex.raw('SELECT 1');
     await migrateLatest(knex);
     redis = redisMod.createRedisClient(redisUrl);
     await redis.ping();
-    replayRedis = redisMod.createRedisClient(replayRedisUrl);
-    await replayRedis.ping();
   } catch (error) {
     throw new Error(
       `formal data-plane preflight failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   } finally {
-    if (replayRedis) {
-      await redisMod.destroyRedisClient(replayRedis).catch(() => {});
-    }
     if (redis) await redisMod.destroyRedisClient(redis).catch(() => {});
     await destroyMysqlKnex(knex).catch(() => {});
   }
@@ -391,10 +385,7 @@ async function main() {
     'AGENT_REDIS_URL',
     'TEST_REDIS_URL',
   ]);
-  const replayRedisUrl = requiredServiceUrl('Sandbox replay Redis URL', [
-    'SMOKE_SANDBOX_REPLAY_REDIS_URL',
-  ]);
-  await prepareDataPlane(agentMysqlUrl, redisUrl, replayRedisUrl);
+  await prepareDataPlane(agentMysqlUrl, redisUrl);
 
   // 服务进程与生产一样：连接串不带口令，启动时向 DBPM 取（ADR 0011 D10）。
   // 预检与迁移（上一行）是 smoke 自己直连，仍用带口令的原始连接串。

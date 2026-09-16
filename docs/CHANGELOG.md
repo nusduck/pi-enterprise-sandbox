@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed（入口形态）
+
+- **边缘 nginx 支持 HTTP / TLS 双模式，生产会话 Cookie 不再带 `Secure`**：新增 `TLS_ENABLED`
+  （默认 `true`，保持既有 TLS 行为）。`false` 时边缘 nginx 只监听 80 明文，不生成证书、不做 301 跳转、
+  **不声明 HSTS**（对没有加密端口的站点声明 HSTS 会把浏览器锁死在打不开的地址上）。取值不是
+  `true` / `false` 时容器拒绝启动，渲染后还会跑一次 `nginx -t`。两套 server 模板共用
+  `nginx/templates/locations.conf`，SSE 免缓冲、55MB 上传上限等代理语义不随模式漂移；
+  `X-Forwarded-Port` 由写死的 `443` 改为 `$server_port`。原 `nginx/conf.d/sandbox.conf` 拆成
+  `nginx/templates/{locations,sandbox-http,sandbox-tls}.conf`，由 entrypoint 按模式渲染进 `conf.d`。
+  **破坏性**：BFF 的 `pi_enterprise_session` Cookie 不再在 `DEPLOYMENT_ENV=production` 下附加
+  `Secure`（内网 HTTP 入口下浏览器不会回传 `Secure` Cookie，登录会直接失效）；`HttpOnly` 与
+  `SameSite=Lax` 保留。**若把入口改回 HTTPS，必须同时恢复 `Secure`**。
+
+### Removed
+
+- **退役 replay Redis 与同族无消费方变量**：`sandbox-replay-redis` 服务（开发 Compose、生产 overlay、
+  CI cross-service smoke）、它的数据卷与独立口令，连同 `SANDBOX_INTERNAL_PLANE_ENABLED`、
+  `SANDBOX_INTERNAL_REDIS_URL`、`SANDBOX_INTERNAL_REDIS_PASSWORD`、`SANDBOX_INTERNAL_MAX_CONCURRENCY`、
+  `SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS` 一并删除。ADR 0008 D8 去掉 jti 防重放后，这五个变量在
+  `exec/src` 与 `agent/src` 中都**没有任何读取方**——其中 `SANDBOX_INTERNAL_PLANE_ENABLED` 还被文档和
+  生产校验写成「生产必须 true 的 fail-closed 开关」，实际不接任何闸门，属于假的安全感。内部面
+  （`/internal/v1/*`）的真实闸门未变：HMAC keyring（缺 keyring / active kid 时 exec 拒绝启动）加
+  `EXEC_INTERNAL_ALLOW_CIDR` 来源白名单。`verify_compose_prod_config.py` 相应改为要求 keyring 与
+  active kid 非空，并在这些退役变量重新出现时拒绝渲染结果。**升级时**：从 `.env` 与编排配置里删掉上述
+  变量，停掉并删除 `sandbox-replay-redis` 容器与 `sandbox_replay_redis5_*` 卷（其中只有过期的 jti key，
+  无数据需要保留）。
+
 ### Changed
 
 - **破坏性：exec 内部面来源白名单空值改为拒绝全部**：`EXEC_INTERNAL_ALLOW_CIDR` 为空（或取不到对端地址）时，

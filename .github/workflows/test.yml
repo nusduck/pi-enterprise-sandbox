@@ -175,7 +175,6 @@ jobs:
           MYSQL_PASSWORD: ci_mysql_password_0123456789
           MYSQL_ROOT_PASSWORD: ci_mysql_root_password_0123456789
           REDIS_PASSWORD: ci_redis_password_0123456789
-          SANDBOX_INTERNAL_REDIS_PASSWORD: ci_replay_password_0123456789
           SANDBOX_API_TOKEN: ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
           AGENT_INTERNAL_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           SANDBOX_JWT_SECRET: jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
@@ -221,19 +220,6 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=30
-      sandbox-replay-redis:
-        # Bitnami moved the 7.2 line to its legacy registry; the former
-        # bitnami/redis:7.2 tag no longer has a pullable manifest.
-        image: bitnamilegacy/redis:7.2
-        env:
-          REDIS_PASSWORD: ci_replay_password_0123456789
-        ports:
-          - 6380:6379
-        options: >-
-          --health-cmd="redis-cli -a ci_replay_password_0123456789 ping"
           --health-interval=5s
           --health-timeout=3s
           --health-retries=30
@@ -300,7 +286,6 @@ jobs:
         env:
           SMOKE_MYSQL_URL: mysql://sandbox:ci_mysql_password_0123456789@127.0.0.1:3306/sandbox
           SMOKE_REDIS_URL: redis://127.0.0.1:6379/0
-          SMOKE_SANDBOX_REPLAY_REDIS_URL: redis://:ci_replay_password_0123456789@127.0.0.1:6380/0
           SMOKE_START_WORKER: "true"
         run: |
           mkdir -p .smoke-tmp

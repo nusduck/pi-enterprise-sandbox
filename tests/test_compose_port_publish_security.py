@@ -83,10 +83,8 @@ def _valid_rendered_prod_config() -> dict:
                 "environment": {
                     "SANDBOX_DATABASE_URL": "mysql+pymysql://sandbox@mysql:3306/sandbox",
                     "DBPM_URL": dbpm,
-                    "SANDBOX_INTERNAL_PLANE_ENABLED": "true",
-                    "SANDBOX_INTERNAL_REDIS_URL": (
-                        "redis://:example@sandbox-replay-redis:6379/0"
-                    ),
+                    "SANDBOX_INTERNAL_HMAC_KEYRING": '{"prod-v1":"a2tra2tra2tra2s"}',
+                    "SANDBOX_INTERNAL_HMAC_ACTIVE_KID": "prod-v1",
                     "SANDBOX_SKILLS_ROOT": "/home/sandbox/skill",
                     "EXEC_INTERNAL_ALLOW_CIDR": "10.20.0.0/16",
                 },
@@ -363,7 +361,6 @@ class TestComposeConfigGateDocumentation:
             "MYSQL_PASSWORD",
             "MYSQL_ROOT_PASSWORD",
             "REDIS_PASSWORD",
-            "SANDBOX_INTERNAL_REDIS_PASSWORD",
             "SANDBOX_API_TOKEN",
             "AGENT_INTERNAL_TOKEN",
             "SANDBOX_JWT_SECRET",
@@ -460,12 +457,15 @@ class TestRenderedProductionConfigVerifier:
         with pytest.raises(SystemExit, match="MySQL SANDBOX_DATABASE_URL|MySQL scheme"):
             verify_rendered_prod_config(config)
 
-    def test_rejects_disabled_sandbox_internal_plane(self):
+    @pytest.mark.parametrize(
+        "key",
+        ["SANDBOX_INTERNAL_HMAC_KEYRING", "SANDBOX_INTERNAL_HMAC_ACTIVE_KID"],
+    )
+    def test_rejects_missing_internal_hmac_material(self, key):
+        # keyring / kid 是内部面唯一的闸门：缺任一项 exec 拒绝启动。
         config = _valid_rendered_prod_config()
-        config["services"]["sandbox"]["environment"][
-            "SANDBOX_INTERNAL_PLANE_ENABLED"
-        ] = "false"
-        with pytest.raises(SystemExit, match="internal plane must be enabled"):
+        del config["services"]["sandbox"]["environment"][key]
+        with pytest.raises(SystemExit, match=f"{key} must be set"):
             verify_rendered_prod_config(config)
 
     def test_rejects_legacy_sandbox_dsn_leak_to_agent(self):

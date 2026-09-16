@@ -103,13 +103,11 @@ Authorization: Bearer <SANDBOX_MCP_TOKEN>
 `SANDBOX_MCP_PUBLIC_BASE_URL`；Artifact URL 才会对外可下载。MCP 的 DNS
 rebinding 保护只接受 loopback、服务名，以及这个配置的公共 host。
 
-必须分别设置以下高熵值，严禁复用 `SANDBOX_API_TOKEN`、Agent HMAC key 或
-Sandbox replay Redis 密码：
+必须分别设置以下高熵值，严禁复用 `SANDBOX_API_TOKEN` 或 Agent HMAC key：
 
 - `SANDBOX_MCP_TOKEN`：MCP 客户端到 `sandbox-mcp`
 - `SANDBOX_MCP_INTERNAL_TOKEN`：`sandbox-mcp` 到 Sandbox 私有桥
 - `SANDBOX_MCP_DOWNLOAD_SECRET`：Artifact 下载 URL 签名
 
 `SANDBOX_MCP_REDIS_URL` 使用服务 Redis 的专用 key 前缀
-`sandbox:mcp:v1`，不得指向仅供 HMAC 重放保护的
-`sandbox-replay-redis`。
+`sandbox:mcp:v1`，与 Agent 的队列 / lease / stream key 空间分开。

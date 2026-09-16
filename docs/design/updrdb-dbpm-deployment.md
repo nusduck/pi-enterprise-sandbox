@@ -15,7 +15,7 @@
 | 条件 | 证据等级 / 本轮处理 |
 |---|---|
 | 三边可提供共享文件存储 | **用户于 2026-09-12 确认**；具体 export、CSI、权限与文件语义仍需联调 |
-| 浏览器入口 HTTPS | **用户确认按此设计，资源待确认**；域名、证书与现有 LB/网关终止点是上线条件 |
+| 浏览器入口 | **2026-09-16 改为内网 HTTP**（用户决定）：边缘 nginx `TLS_ENABLED=false` 只监听 80，生产会话 Cookie 不带 `Secure`。TLS 模式保留为默认值，日后要加密只需翻开关并提供证书 |
 | 双 K8s 集群 + 单裸装 VM | 既有部署约束；VM 的 bwrap 可用性尚无目标机器运行证据 |
 | UPDRDB 透传、双 Proxy、UPRedis 两套实例、DBPM 启动取密 | 沿用 ADR 0011；目标地址、权限与运维配置上线前复核 |
 | 5.7 / Redis 5.0.14 兼容性 | 既往探针支持部分语法/场景，不能外推整条生产链路兼容 |
@@ -77,7 +77,7 @@ VM exec                         --> 本地 workspace / tmp / artifact / control
 
 | 地址 | 来源 | 要求 |
 |---|---|---|
-| frontend 公共域名 | 浏览器 | HTTPS；保留生产 Secure / HttpOnly / SameSite Cookie；80 仅重定向到 HTTPS |
+| frontend 公共域名 | 浏览器 | 内网 HTTP（80）；保留 HttpOnly / SameSite Cookie。改回 HTTPS 时把 `TLS_ENABLED` 与 Cookie 的 `Secure` 一起翻回来 |
 | api-server 内部 LB | frontend | 不对浏览器或办公网开放直连 |
 | agent 内部 LB | BFF、明确授权的内部服务 | 允许内部 API；仍需服务端鉴权 |
 | A2A 外部入口 | 指定 A2A 客户端 | 只开放 Agent Card 与 `/a2a/*`；不得把无关 `/internal/*` 顺带开放 |
@@ -86,9 +86,9 @@ VM exec                         --> 本地 workspace / tmp / artifact / control
 
 A2A 与内部 Agent 后端可复用，但外部入口必须有路径过滤或独立 listener。优先用现有平台 L7 入口，不新增代理服务；若平台只能提供整端口 L4，该入口未满足要求，不能自动扩大 `/internal/*` 的可达范围。实际 listener 数以平台能力清单为准，不强行保证恰好五个监听器。
 
-浏览器 HTTPS 与内部链路加密分别处理：本次不强制将所有东西向链路同时改成 TLS，但保留当前认证和来源约束；HTTP 内部链路仍是明确的传输风险，不写成“内网所以没有风险”。
+浏览器入口与内部链路都是 HTTP（用户 2026-09-16 决定：内网服务，先不上 HTTPS）。认证与来源约束不变。**这是一项被接受的传输风险，不写成“内网所以没有风险”**：浏览器会话 Cookie、上传内容与 SSE 全程明文，任何能接触该网段的旁路都能读取或改写；`Secure` Cookie、HSTS 与证书校验这几道防线在此形态下都不生效。
 
-TLS 由现有入口终止，frontend 仍可监听 80。入口及 nginx 禁止 SSE 响应缓冲，保留流式上传、55MB 请求上限和 300s 读写超时，LB idle timeout 应大于心跳间隔并实测长连接。L7 本身不等于不支持 SSE。生产 Cookie 不能通过关闭 Secure 或设置开发环境适配 HTTP，依据 [MDN Cookie 协议](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie)。
+边缘 nginx 的入口形态由 `TLS_ENABLED` 决定（默认 `true` 终止 TLS；内网部署设 `false` 只监听 80），两套 server 模板共用一份 location 定义。入口及 nginx 禁止 SSE 响应缓冲，保留流式上传、55MB 请求上限和 300s 读写超时，LB idle timeout 应大于心跳间隔并实测长连接。L7 本身不等于不支持 SSE。会话 Cookie 在明文入口下不带 `Secure`——带 `Secure` 的 Cookie 浏览器在 HTTP 连接上不会回传（[MDN Cookie 协议](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie)），登录会直接失效；恢复 HTTPS 入口时必须同时恢复 `Secure`。
 
 frontend 将上游模板化为 `API_UPSTREAM`；使用 nginx envsubst 时仅替换明确允许的变量，保留 `$host`、`$remote_addr` 等 nginx 变量。平台重写而非透传客户端自报的转发头；BFF 的 `X-Acting-*` 仍由认证结果生成。VM CIDR 校验按实测的 LB SNAT/源地址保留方式配置，不能盲目填 Pod CIDR 或信任任意 `X-Forwarded-For`。
 
@@ -313,9 +313,8 @@ schema manifest 覆盖实际 migrations 的全部表，包括后续 DSH/exec/cro
 |---|---|
 | UPDRDB | Agent、Worker、VM exec |
 | 服务 UPRedis | Agent、Worker、sandbox-mcp |
-| replay UPRedis | 仅 VM exec |
 
-> **2026-09-14 实施细化（D2c）**：按「逐项追到实际工厂」核对后，`SANDBOX_INTERNAL_REDIS_URL` 在 `exec/src` 与 `agent/src` 中**没有任何读取方**（ADR 0008 D8 已去掉 jti 防重放实例），因此 replay UPRedis 这一行**不实施取密**，只保留 UPDRDB 与服务 Redis 两类；该实例与 Compose 配置的去留另行处理。用户确认「全部强制」：开发 Compose、CI smoke、release-gate 测试都经（假）DBPM 取密，生产 overlay 要求真实 `DBPM_URL`。`agent-migrate` 作为 DBA 工具保留带口令 DSN（单独变量 `AGENT_MIGRATE_DATABASE_URL`），不进应用容器。
+> **2026-09-14 实施细化（D2c）**：按「逐项追到实际工厂」核对后，`SANDBOX_INTERNAL_REDIS_URL` 在 `exec/src` 与 `agent/src` 中**没有任何读取方**（ADR 0008 D8 已去掉 jti 防重放实例），因此 replay UPRedis 这一行**不实施取密**，只保留 UPDRDB 与服务 Redis 两类。**2026-09-16 补记**：该实例与配置已按用户决定删除——`sandbox-replay-redis`（开发 / 生产 overlay / CI smoke）、数据卷、独立口令，以及同样没有读取方的 `SANDBOX_INTERNAL_PLANE_ENABLED` / `_REDIS_URL` / `_REDIS_PASSWORD` / `_MAX_CONCURRENCY` / `_DRAIN_TIMEOUT_SECONDS`。内部面闸门仍是 HMAC keyring + `EXEC_INTERNAL_ALLOW_CIDR`，生产渲染校验改为核对 keyring/kid 非空并拒绝退役变量回归。用户确认「全部强制」：开发 Compose、CI smoke、release-gate 测试都经（假）DBPM 取密，生产 overlay 要求真实 `DBPM_URL`。`agent-migrate` 作为 DBA 工具保留带口令 DSN（单独变量 `AGENT_MIGRATE_DATABASE_URL`），不进应用容器。
 
 DBPM 纯 TCP 客户端可共享在 `contract/`，按既有协议发送请求并收至换行；拒绝名称中的空白、换行/控制字符，校验响应前缀，限制单帧大小（设计值 4KiB）。连接超时 3s，每端点请求 5s，两端点一轮总预算 10s；EOF、半帧超时、过大帧和错误响应均失败并销毁 socket。返回类型只含口令，不包含整个原始响应。
 
@@ -458,7 +457,7 @@ MySQL 5.7 使用新命名数据卷，例如 `mysql57_dev_data`，不复用 `mysq
 | 待落实项 | 当前状态 / 负责人 | 阻塞范围 |
 |---|---|---|
 | 共享存储 export/CSI/ACL 与 POSIX 语义 | 可提供已确认；存储/平台团队落实参数 | S1 实际联调及多副本上线 |
-| HTTPS 域名/证书/终止点 | 用户同意按 HTTPS 设计；平台团队待配置 | S2 浏览器生产验收 |
+| ~~HTTPS 域名/证书/终止点~~ | **2026-09-16 关闭**：用户决定内网走 HTTP（`TLS_ENABLED=false`），不再是上线阻塞；要上 HTTPS 时重开此项并同时恢复 Cookie `Secure` | — |
 | A2A 路径隔离与 LB 后端注册 | 平台/安全团队确认现有能力 | A2A 外部开放 |
 | VM 到位、隔离、规格、软件源与 systemd 权限 | 运维；尚无新体检输出 | VM 上线与 T6 |
 | 生产 DB 元数据可见性/DDL 执行权限分离 | DBA；特别确认触发器正文验证 | D3 目标验收 |

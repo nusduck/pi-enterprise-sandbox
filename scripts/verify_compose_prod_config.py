@@ -79,12 +79,6 @@ def _require_mysql_dsn(service_name: str, environment: dict[str, Any]) -> None:
         _fail(f"{service_name} SANDBOX_DATABASE_URL must use a MySQL scheme")
 
 
-def _is_true(value: Any) -> bool:
-    return value is True or (
-        isinstance(value, str) and value.strip().lower() == "true"
-    )
-
-
 def verify(config: dict[str, Any]) -> None:
     services = config.get("services")
     if not isinstance(services, dict):
@@ -118,8 +112,6 @@ def verify(config: dict[str, Any]) -> None:
         _fail("sandbox service is missing")
     sandbox_environment = _environment("sandbox", sandbox)
     _require_mysql_dsn("sandbox", sandbox_environment)
-    if not _is_true(sandbox_environment.get("SANDBOX_INTERNAL_PLANE_ENABLED")):
-        _fail("sandbox internal plane must be enabled in production")
     if sandbox_environment.get("SANDBOX_SKILLS_ROOT") != CANONICAL_SKILL_TARGET:
         _fail("sandbox SANDBOX_SKILLS_ROOT must use the canonical Skill path")
     # exec 内部面来源白名单：空值会拒绝全部内部面请求，放行全部等于没有这道闸。
@@ -129,9 +121,14 @@ def verify(config: dict[str, Any]) -> None:
         _fail("sandbox EXEC_INTERNAL_ALLOW_CIDR must be set in production")
     if any(entry.endswith("/0") for entry in allow_entries):
         _fail("sandbox EXEC_INTERNAL_ALLOW_CIDR must not allow every source (/0) in production")
-    replay_url = sandbox_environment.get("SANDBOX_INTERNAL_REDIS_URL")
-    if not isinstance(replay_url, str) or "sandbox-replay-redis:6379/0" not in replay_url:
-        _fail("sandbox internal Redis must use the dedicated replay service DB0")
+    # 内部面的唯一闸门（ADR 0008 D8 退役 jti 防重放之后）：HMAC keyring + active kid。
+    # 缺任一项 exec 启动即拒绝，这里在渲染阶段就先拦下来。
+    for key in ("SANDBOX_INTERNAL_HMAC_KEYRING", "SANDBOX_INTERNAL_HMAC_ACTIVE_KID"):
+        if not str(sandbox_environment.get(key) or "").strip():
+            _fail(f"sandbox {key} must be set in production")
+    # 退役变量（SANDBOX_INTERNAL_PLANE_ENABLED / _REDIS_URL 等）不在这里拦：
+    # 渲染结果会把运维 .env 里的历史遗留一并展开，那是无害的残留，不是编排回归。
+    # 「不要写回 compose 文件」由 tests/test_redis_topology_config.py 的静态棘轮守。
 
     # ADR 0011 D10: the development credential stub never renders in production.
     # Checked after the DSN scheme so a non-MySQL DSN is reported as such first.

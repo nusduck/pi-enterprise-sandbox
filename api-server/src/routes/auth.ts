@@ -4,17 +4,13 @@
 import type { ServerResponse } from 'node:http';
 import { authFromRequest } from '../services/sandbox-client.js';
 import { authLogin, authMe, authRegister } from '../services/agent-auth-client.js';
-import { config } from '../config.js';
 import { expiredSessionCookie, sessionCookie } from '../http/cookies.js';
 import { sendError, sendJson as json } from '../http/response.js';
 import type { ReqWithTrace } from '../application/run-access-service.js';
 
 function establishSession(res: ServerResponse, data: any) {
   if (!data?.token) throw new Error('Agent auth response did not include a token');
-  res.setHeader(
-    'Set-Cookie',
-    sessionCookie(data.token, { secure: config.DEPLOYMENT_ENV === 'production' }),
-  );
+  res.setHeader('Set-Cookie', sessionCookie(data.token));
   return { user: data.user };
 }
 
@@ -52,10 +48,7 @@ export async function handleLogin(body: any, res: ServerResponse, req: ReqWithTr
 
 /** POST /api/auth/logout — clear the BFF-owned browser session. */
 export function handleLogout(res: ServerResponse): void {
-  res.setHeader(
-    'Set-Cookie',
-    expiredSessionCookie({ secure: config.DEPLOYMENT_ENV === 'production' }),
-  );
+  res.setHeader('Set-Cookie', expiredSessionCookie());
   json(res, 200, { ok: true });
 }
 

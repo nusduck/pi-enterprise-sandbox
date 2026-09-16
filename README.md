@@ -73,7 +73,7 @@ pi-sandbox/
 ├── skills/               ← 可选系统 Skill 挂载（非硬依赖；AgentVersion allowlist + capabilities 控制模型可见性）
 ├── tests/                ← pytest：仓库卫生（结构棘轮、版本钉、compose 安全、SSE 夹具）
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
-├── nginx/                ← 生产 Nginx + SSL
+├── nginx/                ← 生产边缘 Nginx（TLS_ENABLED 选 HTTP / TLS 两套 server 模板）
 ├── docs/                 ← 活跃文档（见 docs/README.md 权威顺序）
 ├── .runtime/             ← 全部宿主机运行态（Git/Docker build 均忽略）
 │   ├── sandbox/          ← workspaces、tmp、artifacts、control
