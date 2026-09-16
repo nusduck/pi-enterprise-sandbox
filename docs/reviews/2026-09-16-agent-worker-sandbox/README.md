@@ -4,7 +4,19 @@
 
 基线：分支 `refactor/updrdb-dbpm`，HEAD `01230b876c6d8e5aee217c4c228e16af670503f0`，以当前工作区为准。开始审查时已有 15 个修改文件，涉及模型注册表、模型配置、runtime manifest/patch、Compose、测试及文档；这些文件没有被本次审查修改。本次仅新增本目录的报告和 [隔离探针](probe.mjs)。
 
-后续执行见 [修复执行方案](implementation-plan.md)（仅计划，尚未实施）。
+后续执行见 [修复执行方案](implementation-plan.md)。
+
+> **2026-09-16 实施完成。** R1–R6 全部落地，分两批提交：
+> `99ef6b02`（R1/R2/R4/R5/R6）与 `de745e3c`（R3，新增
+> [ADR 0012](../../adr/0012-depth-layered-run-queues.md)）。真机验证见
+> [执行面限额与 shell 契约证据](../../evidence/exec-resource-limits-and-shell-contract-2026-09-16.md)
+> 与 [分层队列证据](../../evidence/run-queue-depth-layering-2026-09-16.md)。
+> **下面的报告正文是 2026-09-16 审查当时的快照，不再更新**——它描述的是修复前
+> 的代码；判断当前状态请读证据与 `docs/STATUS.md`。`probe.mjs` 里的断言同理，
+> 它们断言的是当时的缺陷，已按执行方案「阶段 0」翻成各包里的回归用例
+> （`contract/test/shell-payload.test.ts`、`exec/test/internal-shell-wiring.test.ts`、
+> `agent/tests/runtime/shell-deadline-buffer.test.ts`、
+> `agent/tests/redis/subagent-slot-starvation.integration.test.js` 等）。
 
 结论：发现 3 项 P1 风险、3 项 P2 问题。P1 尚未在真实运行栈重现；其中 RPC 超时阈值已用真实客户端加替身 transport 确认。不能把本报告理解为全面安全审计通过，或已经观察到线上事故。
 

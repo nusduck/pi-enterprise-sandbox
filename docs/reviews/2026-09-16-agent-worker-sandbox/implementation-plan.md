@@ -1,6 +1,16 @@
 # Agent / Worker / Sandbox 修复执行方案
 
-日期：2026-09-16。依据：[审查报告 R1–R6](README.md)。状态：待实施；本文不表示生产代码已经修复或验收完成。
+日期：2026-09-16。依据：[审查报告 R1–R6](README.md)。
+
+> **状态：已实施（2026-09-16）。** R1/R2/R4/R5/R6 在 `99ef6b02`，R3 在 `de745e3c`
+> （含 [ADR 0012](../../adr/0012-depth-layered-run-queues.md)）。验收结果与**未覆盖项**
+> 见两份证据：
+> [执行面限额与 shell 契约](../../evidence/exec-resource-limits-and-shell-contract-2026-09-16.md)、
+> [分层 Run 队列](../../evidence/run-queue-depth-layering-2026-09-16.md)。
+> 与方案的偏差有两处，都记在证据里：内存限额刻意不自动接线（`RLIMIT_AS` ≠ 进程树
+> 常驻内存，改为容器兜底声明 + 显式 opt-in 的 `SANDBOX_MAX_ADDRESS_SPACE_MB`）；
+> R3 的槽位预算校验拆成「路由」与「槽位分配」两步，只有消费者做预算校验。
+> **本文正文保持计划当时的原文**，不回填实施结果。
 
 ## 范围与工作方式
 
