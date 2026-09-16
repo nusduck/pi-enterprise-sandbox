@@ -46,7 +46,9 @@ HOTSPOT_LINE_BUDGETS = {
     # 一次性消费 CAS），1_526 -> 1_505，预算继续收紧。
     "agent/src/application/dsh-run-executor.ts": 1_505,
     # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
-    "agent/src/bootstrap/container.ts": 1_065,
+    # 2026-09-16 拆出 container-run-queue.ts（分层 Run 队列的装配、路由与拆卸，
+    # ADR 0012），1_065 -> 1_058，预算继续收紧。
+    "agent/src/bootstrap/container.ts": 1_058,
     # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts
     # （/health + /ready），1_439 -> 1_399，预算收紧。
     "agent/src/bootstrap/create-http-server.ts": 1_399,

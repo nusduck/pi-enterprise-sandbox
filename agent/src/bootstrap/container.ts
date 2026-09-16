@@ -43,6 +43,11 @@ import {
   buildDshRunExecutorFactory,
 } from './container-run-executor.js';
 import { buildSkillManagerFactory } from './container-skill-manager.js';
+import {
+  buildRunQueueAdapter,
+  destroyLayeredRunQueues,
+  startLayeredRunQueues,
+} from './container-run-queue.js';
 import { McpDiscoveryState } from './container-mcp.js';
 
 // Re-exported so bootstrap callers keep one entry point for the container.
@@ -94,6 +99,9 @@ export class ServiceContainer {
   credentials: { mysql?: string | undefined; redis?: string | undefined } = {};
   redis: Loose = null;
   runQueueHandle: Loose = null;
+  /** 分层 Run 队列（ADR 0012）：`subagent_depth` → Queue 句柄，以及生效的拓扑。 */
+  runQueueHandles: Map<number, Loose> = new Map();
+  runQueueTopology: Loose = null;
   started = false;
   /**
    * After a successful start then shutdown, instance is terminal (no restart).
@@ -120,6 +128,8 @@ export class ServiceContainer {
     this.knex = null;
     this.redis = null;
     this.runQueueHandle = null;
+    this.runQueueHandles = new Map();
+    this.runQueueTopology = null;
     this.started = false;
     /**
      * After a successful start then shutdown, instance is terminal (no restart).
@@ -238,29 +248,37 @@ export class ServiceContainer {
         this._opts.createRunQueue || redisMod.createRunQueue;
       redisMod.assertRedisConnectionUrl(this.redisUrl);
       this.redis = createRedisClient(this.redisUrl, { password: this.credentials.redis });
-      this.runQueueHandle = createRunQueue(this.redisUrl, {
-        queueName: this.env.AGENT_RUNS_QUEUE_NAME || undefined,
-        prefix: this.env.AGENT_RUN_QUEUE_PREFIX || undefined,
+      // 分层拓扑（ADR 0012）：每个允许的 subagent 深度一个队列。深度 0 的
+      // 句柄仍放在既有字段上——既有调用方（含测试替身）只认它。
+      const layered = startLayeredRunQueues({
+        env: this.env,
+        createRunQueue,
+        planRunQueueTopology: redisMod.planRunQueueTopology,
+        redisUrl: this.redisUrl,
         password: this.credentials.redis,
       });
+      this.runQueueTopology = layered.topology;
+      this.runQueueHandles = layered.handles;
+      this.runQueueHandle = this.runQueueHandles.get(0) ?? null;
     }
 
     return this;
   }
 
+  /** 关掉全部分层队列句柄（失败与正常拆卸共用）。 */
+  async #destroyRunQueues(): Promise<unknown[]> {
+    const destroy = this._opts.destroyRunQueue ||
+      (await import('../infrastructure/redis/run-queue.js')).destroyRunQueue;
+    const errors = await destroyLayeredRunQueues(this.runQueueHandles, destroy);
+    this.runQueueHandle = null;
+    return errors;
+  }
+
   /** Destroy any handles opened during a failed start. */
   async #rollbackPartialStart() {
     const errors = [];
-    if (this.runQueueHandle) {
-      try {
-        const destroy =
-          this._opts.destroyRunQueue ||
-          (await import('../infrastructure/redis/run-queue.js')).destroyRunQueue;
-        await destroy(this.runQueueHandle);
-      } catch (err) {
-        errors.push(err);
-      }
-      this.runQueueHandle = null;
+    if (this.runQueueHandles.size > 0) {
+      errors.push(...(await this.#destroyRunQueues()));
     }
     if (this.redis) {
       try {
@@ -445,19 +463,9 @@ export class ServiceContainer {
     if (!this.runQueueHandle?.queue) {
       throw new Error('ServiceContainer Redis run queue not started');
     }
-    const queue = this.runQueueHandle.queue;
-    return {
-      /**
-       * @param {{ runId: string, orgId: string, traceId: string }} ref
-       * @param {import('bullmq').JobsOptions} [options]
-       */
-      enqueue: async (ref, options) => {
-        const { enqueueRunJob } = await import(
-          '../infrastructure/redis/run-queue.js'
-        );
-        return enqueueRunJob(queue, ref, options);
-      },
-    };
+    // 路由规则在 container-run-queue.ts：只看 MySQL 的权威 `subagent_depth`。
+    const { runQueueHandles: handles, runQueueTopology: topology, knex } = this;
+    return buildRunQueueAdapter({ handles, topology, knex });
   }
 
   createCancelSignal() {
@@ -1001,16 +1009,8 @@ export class ServiceContainer {
     this.shutdownDone = true;
     const errors: unknown[] = [];
 
-    if (this.runQueueHandle) {
-      try {
-        const destroy =
-          this._opts.destroyRunQueue ||
-          (await import('../infrastructure/redis/run-queue.js')).destroyRunQueue;
-        await destroy(this.runQueueHandle);
-      } catch (err) {
-        errors.push(err);
-      }
-      this.runQueueHandle = null;
+    if (this.runQueueHandles.size > 0) {
+      errors.push(...(await this.#destroyRunQueues()));
     }
 
     if (this.redis) {

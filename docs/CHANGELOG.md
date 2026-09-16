@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed（破坏性：Worker 容量语义）
+
+- **Run 队列按子任务深度分层，每层保留消费槽**（审查 R3，[ADR 0012](adr/0012-depth-layered-run-queues.md)）：
+  父 Run 发起子 Run 后前台等待、不让出 BullMQ 槽位；父子共用一个队列时，N 个
+  父 Run 占满 N 个槽之后子 Run 永远排不上，父 Run 又在等子 Run——整条队列停住。
+  提高并发不解决（任何有限 N 都有同样的饱和条件）。现在深度 0 是 `agent-runs`、
+  深度 n 是 `agent-runs-d{n}`，每个允许的深度一个队列、一个消费者、至少一个
+  保留槽；投递路由只看 MySQL 里的权威 `subagent_depth`。
+  - **`AGENT_WORKER_CONCURRENCY` 的含义变了**：它现在是**总预算**，按「每个
+    深度 ≥ 1 的层保留 1 个槽、其余给深度 0」切分。默认 `4` + `maxDepth=2` →
+    **2 / 1 / 1**，根任务的同时执行量从 4 降到 2。要维持原吞吐请提到 `6`。
+    预算 < `maxDepth + 1` 时**拒绝启动**。
+  - **升级不需要排空**（深度 0 沿用旧队列名）；**回滚必须先排空**分层队列——
+    Worker 启动时会检查「本配置不服务的层里是否还有存量」，有就拒绝启动并点名
+    队列与条数。步骤见 deployment.md。
+  - 就绪判定收紧：任何一个必需层的消费者不在跑，`/ready` 即不就绪；依赖守卫的
+    暂停 / 恢复对全部层生效。
+
 ### Fixed
 
 - **沙箱资源限额与子进程磁盘配额真的接线了**（审查 R1）：`SANDBOX_MAX_PROCESS_COUNT`

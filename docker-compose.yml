@@ -321,7 +321,12 @@ services:
       REDIS_PASSWORD: ""
       SANDBOX_MCP_REDIS_URL: ""
       # Queue / lease / stream settings (plan §9 defaults; code may hard-pin until wired).
+      # Base name for depth 0; deeper layers derive as <base>-d1, -d2 (ADR 0012).
       AGENT_RUNS_QUEUE_NAME: ${AGENT_RUNS_QUEUE_NAME:-agent-runs}
+      # Must match agent-worker: it decides how many queue layers exist and how a
+      # Run's authoritative subagent_depth routes. A mismatch would route to a
+      # queue nobody consumes.
+      AGENT_SUBAGENT_MAX_DEPTH: ${AGENT_SUBAGENT_MAX_DEPTH:-2}
       # 空值由应用取默认 {bull}；compose 默认值里写不了右花括号。
       AGENT_RUN_QUEUE_PREFIX: ${AGENT_RUN_QUEUE_PREFIX:-}
       AGENT_RUN_LEASE_TTL_MS: ${AGENT_RUN_LEASE_TTL_MS:-30000}
@@ -435,7 +440,11 @@ services:
       AGENT_RUN_MAX_TOOL_CALLS: ${AGENT_RUN_MAX_TOOL_CALLS:-200}
       AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS: ${AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS:-6}
       AGENT_RUN_MAX_MODEL_TURNS: ${AGENT_RUN_MAX_MODEL_TURNS:-120}
+      # Total slot budget, split per subagent depth (ADR 0012): with the default
+      # AGENT_SUBAGENT_MAX_DEPTH=2 this becomes 2 / 1 / 1 across
+      # agent-runs, agent-runs-d1, agent-runs-d2. Must be >= maxDepth + 1.
       AGENT_WORKER_CONCURRENCY: ${AGENT_WORKER_CONCURRENCY:-4}
+      AGENT_SUBAGENT_MAX_DEPTH: ${AGENT_SUBAGENT_MAX_DEPTH:-2}
       AGENT_RECOVERY_INTERVAL_MS: ${AGENT_RECOVERY_INTERVAL_MS:-60000}
       AGENT_RECOVERY_SCAN_LIMIT: ${AGENT_RECOVERY_SCAN_LIMIT:-100}
       AGENT_OUTBOX_IDLE_MS: ${AGENT_OUTBOX_IDLE_MS:-1000}

@@ -180,7 +180,7 @@ describe('ServiceContainer', () => {
           return { status: 'ready' };
         },
         createRunQueue: (_url, opts) => {
-          seen.push(['queue', opts.password]);
+          seen.push(['queue', opts.password, opts.queueName]);
           seen.push(['prefix', opts.prefix]);
           return { queue: { add: async () => ({}) } };
         },
@@ -190,14 +190,26 @@ describe('ServiceContainer', () => {
       },
     );
     await c.start();
+    // 分层拓扑（ADR 0012）：默认 maxDepth=2 → 三个队列，深度 0 沿用历史名字。
     assert.deepEqual(seen, [
       ['credentials', { mysql: true, redis: true }],
       ['knex', 'db-from-dbpm'],
       ['redis', 'redis-from-dbpm'],
-      ['queue', 'redis-from-dbpm'],
+      ['queue', 'redis-from-dbpm', 'agent-runs'],
       // 未配 AGENT_RUN_QUEUE_PREFIX 时交给工厂取默认 {bull}，不在容器里另写一份默认值。
       ['prefix', undefined],
+      ['queue', 'redis-from-dbpm', 'agent-runs-d1'],
+      ['prefix', undefined],
+      ['queue', 'redis-from-dbpm', 'agent-runs-d2'],
+      ['prefix', undefined],
     ]);
+    // 容器只算**路由**拓扑：HTTP 进程只投递，不该被消费者的并发预算卡住。
+    // 槽位分配（默认 4 → 2 / 1 / 1）在 agent-worker 侧做。
+    assert.equal(c.runQueueTopology.totalConcurrency, null);
+    assert.deepEqual(
+      c.runQueueTopology.layers.map((l) => l.depth),
+      [0, 1, 2],
+    );
     assert.equal(c.credentials.redis, 'redis-from-dbpm', 'worker 需要从容器拿 Redis 口令');
   });
 

@@ -102,3 +102,14 @@ export {
   destroyRunQueue,
   destroyRunWorker,
 } from './run-queue.js';
+
+export {
+  allocateReservedSlots,
+  assertNoStrandedLayers,
+  layerForDepth,
+  planRunQueueTopology,
+  queueNamesToProbe,
+  routeRunToQueue,
+  runQueueNameForDepth,
+} from './run-queue-topology.js';
+export type { RunQueueLayer, RunQueueTopology } from './run-queue-topology.js';

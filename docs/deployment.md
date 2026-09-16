@@ -484,18 +484,54 @@ exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-1
 | `REDIS_URL` | `redis://redis:6379/0`（不带口令） | 通用 / plan 别名 DSN |
 | `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`；带口令拒绝启动） |
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试 DSN |
-| `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue |
+| `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue 的**基名**（深度 0）。深层队列由它派生：`<base>-d1`、`<base>-d2`（见下文分层拓扑） |
 | `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，HTTP 与 Worker 必须一致；必须含非空 hash tag，否则拒绝启动。Redis 被多环境复用时用环境独立值（如 `{pi-test-bull}`）。改值前按 [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
-| `AGENT_WORKER_CONCURRENCY` | `4` | BullMQ Worker 并发；前台 durable 子 Agent 至少需要 `2`，默认值为文档深度 2 链路预留槽位 |
+| `AGENT_WORKER_CONCURRENCY` | `4` | Worker 的并发**总预算**（ADR 0012）。不是每层各一份——它按深度分层切分，见下文。必须 ≥ `AGENT_SUBAGENT_MAX_DEPTH + 1`，否则拒绝启动 |
+| `AGENT_SUBAGENT_MAX_DEPTH` | `2` | 允许的最大子任务嵌套深度。同时决定队列层数（`0..N`）与保留槽数量 |
 | `AGENT_WORKER_PROBE_PORT` | `4101` | Worker 探针 listener 端口（`/health`、`/ready`，见 [Health Checks](#health-checks)）；非 1–65535 整数拒绝启动 |
 | `AGENT_WORKER_PROBE_HOST` | `0.0.0.0` | Worker 探针监听地址；K8s 探针打 Pod IP，不要改成 loopback |
 | `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS` | `5000` | Worker 依赖守卫探测间隔（500–600000，非法值拒绝启动）；连续 2 次失败暂停取任务、连续 2 次成功恢复，见 [Health Checks](#health-checks) |
 | `AGENT_RUN_MAX_TOOL_CALLS` | `200` | 单个 Run 最多执行的工具调用数；达到后下一轮只能基于已有结果作答 |
 | `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `6` | 同一工具与规范化参数组合的最多执行次数 |
 | `AGENT_RUN_MAX_MODEL_TURNS` | `120` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
+
+#### Run 队列按子任务深度分层（ADR 0012）
+
+`agent-worker` 为**每个允许的子任务深度**建一个 BullMQ 队列与一个消费者：
+深度 0 是 `agent-runs`（沿用历史名字），深度 n 是 `agent-runs-d{n}`。
+
+为什么：父 Run 发起子 Run 后是**前台等待**结果、不让出消费槽。父子共用一个
+队列时，N 个父 Run 占满 N 个槽 → 子 Run 排不上 → 父 Run 等不到结果，整条队列
+停住。提高并发不解决（任何有限 N 都有同样的饱和条件）。
+
+`AGENT_WORKER_CONCURRENCY` 是**总预算**，按「每个深度 ≥ 1 的层保留 1 个槽、
+其余全给深度 0」切分：
+
+| `AGENT_WORKER_CONCURRENCY` | `AGENT_SUBAGENT_MAX_DEPTH` | 分配（d0 / d1 / d2） |
+|---|---|---|
+| 4（默认） | 2（默认） | **2 / 1 / 1** |
+| 6 | 2 | 4 / 1 / 1 |
+| 3 | 2 | 1 / 1 / 1 |
+| 2 | 2 | **拒绝启动**（预算不够给每层留一个槽） |
+| 4 | 0 | 4（只有一层） |
+
+**升级注意：根任务的同时执行量会下降。** 同样是 `4`，分层前根任务并发是 4，
+分层后是 2。要维持原吞吐，把 `AGENT_WORKER_CONCURRENCY` 提到 `6`，或降低
+`AGENT_SUBAGENT_MAX_DEPTH`。
+
+**升级不需要排空**：深度 0 沿用 `agent-runs`，旧队列里的存量（含升级前按旧规则
+投进去的子 Run）仍由深度 0 的消费者处理。
+
+**回滚必须先排空**：换回旧镜像或调小 `AGENT_SUBAGENT_MAX_DEPTH` 之后没有人消费
+`agent-runs-d1/d2`。Worker 启动时会反向检查——**本配置不服务的层里还有存量就
+拒绝启动**，并点名队列与条数。回滚顺序：停止投递新子任务 → 等分层队列排空
+（启动闸门不再报错即为排空）→ 换镜像。禁止新旧消费者同时在跑。
+
+就绪判定随之收紧：**任何一个必需层的消费者不在跑，`/ready` 就不就绪**；
+依赖守卫的暂停 / 恢复对全部层生效。
 
 **开发:** `docker compose up` 启动 `redis:5.0.14`（AOF + `maxmemory-policy noeviction` + `redis5_dev_data` volume；7.2 写出的旧卷 5.0 读不了，不复用）。Agent 依赖 Redis health；默认 DSN 指向 compose 网络内 `redis` 服务。占位密码仅用于本地。要在本地复现 UPRedis Proxy 的路由限制（零 key `EVAL` 被拒、同一命令/事务的 key 必须同一节点），再叠加 `scripts/dev/docker-compose.upredis-sim.yml`，服务 Redis 的三个消费者会改连模拟代理。
 

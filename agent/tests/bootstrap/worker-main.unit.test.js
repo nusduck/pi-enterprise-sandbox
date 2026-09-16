@@ -13,6 +13,16 @@ describe('startWorkerMain', () => {
     const redis = {};
     let shutdowns = 0;
     const fakeContainer = {
+      env: {},
+      // `assertNoStrandedRunQueues` 只在配置**不服务**的层上查 key；
+      // 这里拓扑只有一层，探测会扫 d1..d8，全部返回「不存在」。
+      redis: { type: async () => 'none' },
+      // 分层拓扑（ADR 0012）：消费者按层建，容器必须把拓扑交出来。
+      runQueueTopology: {
+        maxDepth: 0,
+        totalConcurrency: 1,
+        layers: [{ depth: 0, queueName: 'agent-runs', concurrency: 1 }],
+      },
       async start() {
         return this;
       },
@@ -83,6 +93,20 @@ describe('startWorkerMain', () => {
 
   it('forwards isolated BullMQ stall knobs without changing defaults', async () => {
     const fakeContainer = {
+      env: {},
+      // `assertNoStrandedRunQueues` 只在配置**不服务**的层上查 key；
+      // 这里拓扑只有一层，探测会扫 d1..d8，全部返回「不存在」。
+      redis: { type: async () => 'none' },
+      // 生产默认拓扑（ADR 0012）：maxDepth=2、总预算 4 → 2 / 1 / 1。
+      runQueueTopology: {
+        maxDepth: 2,
+        totalConcurrency: 4,
+        layers: [
+          { depth: 0, queueName: 'agent-runs', concurrency: 2 },
+          { depth: 1, queueName: 'agent-runs-d1', concurrency: 1 },
+          { depth: 2, queueName: 'agent-runs-d2', concurrency: 1 },
+        ],
+      },
       async start() {
         return this;
       },
@@ -162,7 +186,10 @@ describe('startWorkerMain', () => {
     assert.equal(defaultOptions.stalledInterval, undefined);
     assert.equal(defaultOptions.maxStalledCount, undefined);
     assert.equal(defaultOptions.prefix, undefined);
-    assert.equal(defaultOptions.concurrency, 4);
+    // 并发来自**这一层**的保留槽，不再是「总预算全给一个队列」：
+    // 4 个槽在 maxDepth=2 下分成 2 / 1 / 1，深度 0 拿到 2。
+    assert.equal(defaultOptions.concurrency, 2);
+    assert.equal(defaultOptions.queueName, 'agent-runs');
     // 暂停期间在途取到的作业放回 delayed：谓词接到消费者暂停状态，延后时长等于依赖探测间隔。
     assert.equal(typeof defaultOptions.shouldDefer, 'function');
     assert.equal(defaultOptions.shouldDefer(), false, 'no consumer yet means not paused');

@@ -71,6 +71,27 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'bootstrap/container-run-queue.ts',
+    match: /const\s+handles\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Depth -> BullMQ Queue handle for this process (ADR 0012); connection handles, not Run state — MySQL subagent_depth decides routing',
+    scope: 'local',
+  },
+  {
+    rel: 'bootstrap/container.ts',
+    match: /runQueueHandles:\s*Map<number,\s*Loose>\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Container-held depth -> BullMQ Queue handles (ADR 0012); torn down with the container, never a Run fact',
+    scope: 'instance',
+  },
+  {
+    rel: 'bootstrap/container.ts',
+    match: /this\.runQueueHandles\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Same handle map reset in the constructor; see the field declaration above',
+    scope: 'instance',
+  },
+  {
     rel: 'application/fenced-run-event-recorder.ts',
     match: /this\._pendingDedupe\s*=\s*new\s+Map\s*\(/,
     purpose:
@@ -445,9 +466,13 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 2026-09-14: 28 → 31（design §3.3 S1）。`published-skills-provider.ts` 两条是单个 Run
     // 的 provider 内索引（清单名 → 版本、最近一次 list 的原始候选），
     // `extension-diagnostics-service.ts` 一条是单次能力投影的合并索引；权威在启用账本。
+    // 2026-09-16: 31 → 34（ADR 0012 分层 Run 队列）。三条都是 `subagent_depth`
+    // → BullMQ Queue **句柄**的索引（容器一份、装配函数里一份局部、构造器
+    // 复位一次），随容器拆卸一起消失。路由权威仍是 MySQL 的 `subagent_depth`，
+    // 这些 Map 里没有任何 Run 事实。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      31,
+      34,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

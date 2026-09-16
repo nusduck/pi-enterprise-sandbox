@@ -25,6 +25,7 @@
 
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import { AGENT_RUNS_QUEUE_NAME } from '../infrastructure/redis/constants.js';
+import { runQueueNameForDepth } from '../infrastructure/redis/run-queue-topology.js';
 import {
   isTerminalRunStatus,
   RUN_STATUS,
@@ -316,7 +317,10 @@ export class SubagentSpawnService {
         subagentDepth: depth + 1,
         subagentLabel: label,
         status: RUN_STATUS.ACCEPTED,
-        queueName: this.queueName,
+        // 账本里记的目的地必须和实际投递的一致（ADR 0012）。两边都由
+        // `runQueueNameForDepth(depth, base)` 从**同一个权威深度**算出来，
+        // 所以不存在「写的是 agent-runs、投的是 agent-runs-d1」这种分叉。
+        queueName: runQueueNameForDepth(depth + 1, this.queueName),
         // Same trace as the parent, parented to the parent's run span: a
         // fan-out must read as one distributed trace, not as N unrelated roots.
         traceId: parent.traceId,

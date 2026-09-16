@@ -60,7 +60,7 @@ facade 是 slim 镜像，不带模型工具链、Bubblewrap、执行面代码与
 | **Frontend** | `pi-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
 | **API Server (BFF)** | `pi-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
 | **Agent** | `pi-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/src/runtime/` 组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
-| **Agent Worker** | `pi-enterprise-agent-worker` | 同 Agent 镜像，入口 `dist/worker.js` | 消费 BullMQ `agent-runs` 队列并真正执行 Run；Worker Lease 续约、会话恢复、Outbox publisher。**无 HTTP 面、不暴露端口**；可独立于 Agent HTTP 面横向扩缩容 |
+| **Agent Worker** | `pi-enterprise-agent-worker` | 同 Agent 镜像，入口 `dist/worker.js` | 消费**按子任务深度分层**的 BullMQ Run 队列（`agent-runs` / `agent-runs-d1` / …，每层一个消费者，ADR 0012）并真正执行 Run；Worker Lease 续约、会话恢复、Outbox publisher。**无 HTTP 面、不暴露端口**；可独立于 Agent HTTP 面横向扩缩容 |
 | **Sandbox（执行面）** | `pi-enterprise-sandbox` | Node.js 22 + TypeScript + Bubblewrap | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；命令执行、文件、搜索、数据集、产物。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
 | **Sandbox MCP** | `pi-enterprise-sandbox-mcp` | 同一镜像，入口 `dist/mcp-main.js` | 对外的 Streamable HTTP MCP 面。**只能走 `/internal/mcp/v1/*` 窄桥**，够不到内部面——这是它单独成进程的全部理由 |
 
@@ -164,7 +164,7 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - **BullMQ key 前缀带 hash tag**：`AGENT_RUN_QUEUE_PREFIX` 默认 `{bull}`，HTTP 投递与 Worker 消费共用；不带 tag 拒绝启动。UPRedis Proxy 按 key 路由，BullMQ 多 key 脚本必须落在同一节点（ADR 0011 D9）；其余脚本（lease / 会话锁 / MCP 锁）都是单 key
 - **Agent 独占 Redis 权威**：`AGENT_REDIS_URL` / `REDIS_URL`（仅 `redis://` / `rediss://`）、`TEST_REDIS_URL`（测试）
 - BFF **不**注入 Redis 连接权威配置（PR-03 边界）。exec 也不连 Redis：internal plane 曾用的 `sandbox-replay-redis`（jti 防重放）随 ADR 0008 D8 退役，服务、卷与 `SANDBOX_INTERNAL_*REDIS*` / `PLANE_ENABLED` 等无读取方的变量已于 2026-09-16 删除；内部面的闸门只有 HMAC keyring 与来源 CIDR 白名单
-- 职责边界（plan §7.2 / §9）：BullMQ Run Queue（`agent-runs`）、Worker Lease（TTL 30s / 续约 10s）、Run Stream（`MAXLEN ~ 10000`）、取消信号、短期 cache/presence、Outbox wakeup
+- 职责边界（plan §7.2 / §9）：BullMQ Run Queue（`agent-runs` 及按深度派生的 `agent-runs-d{n}`，ADR 0012）、Worker Lease（TTL 30s / 续约 10s）、Run Stream（`MAXLEN ~ 10000`）、取消信号、短期 cache/presence、Outbox wakeup
 - Redis **不得**成为 Run 状态或对话事实的唯一来源
 - **清空 Redis 的后果**：仅丢失运行态协调（queue job、lease、live stream 游标、短期 cache）；MySQL 中 Conversation / Run / `run_events` / 审计事实保留
 - **恢复路径**：Outbox publisher 从 `domain_outbox` 重试未发布事件；SSE/历史从 MySQL `run_events` 重放；Worker 按 MySQL Run 状态 + 幂等记录决定重试或失败
@@ -240,13 +240,19 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 
 #### 子 Run（sub-agent）
 
-子 Run 就是普通 Run：同一张 `runs` 表、同一个 `agent-runs` 队列、同一套 worker
-与恢复路径，只是多了血缘字段 `source='subagent'` / `parent_run_id` /
-`subagent_depth`（migration `20260822000001`）。三条硬约束：
+子 Run 就是普通 Run：同一张 `runs` 表、同一套 worker 与恢复路径，只是多了血缘
+字段 `source='subagent'` / `parent_run_id` / `subagent_depth`
+（migration `20260822000001`）。三条硬约束：
 
-前台 `subagent` 调用会占住父 Run 的 Worker 槽位并等待子 Run 终态，因此
-`AGENT_WORKER_CONCURRENCY` 默认设为 4；部署若启用 durable 子 Agent，不能把它降到
-1，否则父子 Run 会互相等待。默认值也为文档中的 depth-2 链路保留并发槽位。
+前台 `subagent` 调用会占住父 Run 的 Worker 槽位并等待子 Run 终态。**2026-09-16
+起队列按深度分层**（[ADR 0012](adr/0012-depth-layered-run-queues.md)）：深度 0 是
+`agent-runs`，深度 n 是 `agent-runs-d{n}`，每个允许的深度有专属的保留消费槽。
+在此之前父子共用一个队列，N 个前台等待的父 Run 占满 N 个槽之后子 Run 永远排不上，
+整条队列停住——提高并发不解决，任何有限 N 都有同样的饱和条件。
+`AGENT_WORKER_CONCURRENCY` 现在是**总预算**，按「每个深度 ≥ 1 的层保留 1 个槽、
+其余给深度 0」切分（默认 4 / maxDepth 2 → 2 / 1 / 1），预算不足以给每层留槽时
+拒绝启动。投递路由只看 MySQL 里的权威 `subagent_depth`，容量与迁移细节见
+[deployment.md](deployment.md#run-队列按子任务深度分层adr-0012)。
 
 - **子 Run 有自己的 Conversation 与 AgentSession**。父 Run 在整个生命周期内持有其
   AgentSession 的执行 fence 与 Redis 锁，共用会话的子 Run 永远拿不到锁——它会一直

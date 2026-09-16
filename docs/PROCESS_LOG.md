@@ -985,3 +985,39 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   登录 → 建会话 → 带工具 Run `SUCCEEDED` → 进程 logs 有 `TICK` → SIGTERM → `cancelled` →
   四项跨租户 404 且本人 200。详见
   [证据](evidence/exec-resource-limits-and-shell-contract-2026-09-16.md)。
+
+## 2026-09-16 — Run 队列按子任务深度分层，每层保留消费槽（R3）
+
+- **Context：** 审查 R3（P1）：等待子 Run 的父 Run 会耗尽同队列全部消费槽。父子共用
+  `agent-runs`，父任务前台等待子任务结果、不让出 BullMQ 槽位；N 个父 Run 占满 N 个槽之后
+  子 Run 排不上，父 Run 又在等子 Run。提高并发无效——任何有限 N 都有同样的饱和条件。
+- **Decision：** 新增 [ADR 0012](adr/0012-depth-layered-run-queues.md)，按 `subagent_depth`
+  分层：深度 0 是 `agent-runs`、深度 n 是 `agent-runs-d{n}`，每个允许的深度一个队列、
+  一个消费者、至少一个保留槽。`AGENT_WORKER_CONCURRENCY` 改为**总预算**，按「深层各留 1 个、
+  其余给深度 0」切分（默认 4 / maxDepth 2 → 2 / 1 / 1）。**没有**实现通用的 park/replay——
+  当前只有 `WAITING_APPROVAL` / `WAITING_INPUT` 两种停泊语义，复用会污染对外状态，
+  新增完整 park/replay 涉及状态迁移、持久化 continuation 与模型重放，不该夹在缺陷修复里。
+- **Action：** `agent/src/infrastructure/redis/run-queue-topology.ts`（新）、
+  `agent/src/bootstrap/container-run-queue.ts`（新，从 `container.ts` 按职责拆出，
+  容器 1_065 → 1_058，棘轮预算同步收紧）、`container.ts`、`worker-main.ts`、
+  `subagent-spawn-service.ts`（`queue_name` 改为按深度派生，账本与实际目的地同源）；
+  新增 `agent/tests/redis/run-queue-topology.unit.test.ts`、
+  `agent/tests/bootstrap/run-queue-routing.unit.test.ts`、
+  `agent/tests/redis/subagent-slot-starvation.integration.test.js`（真实 BullMQ）；
+  `docker-compose.yml`、`.env.example`、`architecture.md`、`deployment.md`、CHANGELOG。
+- **STATUS IDs：** **无对应 §32 条目**。R3 不属于现有任何一行的验收标准，按执行方案
+  「不得强行套号」处理，只在 ADR、CHANGELOG 与证据里记录。G2（Worker 重启）的 release gate
+  未按分层拓扑重跑，状态不变。
+- **验证：** 六套测试全绿（pytest 206；contract 118；exec 411/2 skipped；agent 1357；
+  api-server 160；frontend 367 + build）+ 各包类型检查 + `docker compose config -q`。
+  **先复现再修**：真实 BullMQ 上基线形态 6 秒内 0 子作业被消费、0 父作业完成；分层后同一
+  预算下 188 ms 全部完成；深度 0→1→2 的等待链自底向上排空。真机：重建 agent 镜像换容器后
+  worker 打出 `budget=4 d0:agent-runsx2 d1:agent-runs-d1x1 d2:agent-runs-d2x1`，`/ready` 200；
+  经 BFF 让模型用 `subagent` 工具，父子 Run 均 `SUCCEEDED`，子 Run 的 `subagent_depth=1`、
+  `queue_name=agent-runs-d1`，Redis 的 `{bull}:agent-runs-d1:id=1` 证明真的投到了那一层；
+  回滚闸门在 d2 有存量时拒启并点名队列与条数，排空后同一配置正常启动（正对照）。
+  过程中 fail-closed 校验抓到本机 `.env` 的 `AGENT_WORKER_CONCURRENCY=1`
+  （旧代码下 depth-2 链路在这台机器上从来不可能跑通），以及我自己把预算校验放进
+  投递方共用路径导致 HTTP 面拒启的设计错误——已拆成「路由」与「槽位分配」两步，
+  两处都记在证据里。详见
+  [证据](evidence/run-queue-depth-layering-2026-09-16.md)。
