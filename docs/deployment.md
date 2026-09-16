@@ -307,7 +307,7 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 |------|--------|------|
 | `LLMIO_BASE_URL` | — | **必需** — LLM API 基地址 |
 | `LLMIO_API_KEY` | — | **必需** — LLM API 密钥 |
-| `MODEL_ID` | `deepseek-v4-flash` | 模型 ID |
+| `MODEL_ID` | `deepseek-flash` | 默认模型 ID。当前目录只保留网关可用的 `deepseek-flash`（多模态）与 `qwen3.8-27b`（文本） |
 
 ### Domain & 入口形态
 

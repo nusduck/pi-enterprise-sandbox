@@ -83,7 +83,7 @@ services:
   # 生产：DBA 按发布包执行），agent / agent-worker / sandbox 启动时只按随包清单
   # 只读核对，结构不对即拒绝启动。空库上直接 up 会让它们重启等待，直到 schema 就绪。
 
-  # ── Redis 7 (Agent-only runtime coordination) ─────────────
+  # ── Redis 5.0.14 (Agent-only runtime coordination; ADR 0011 D9) ──
   # Holds queues, leases, streams, cancel signals, short-lived
   # cache — never authoritative Run/Conversation facts (those
   # live in MySQL). Clearing Redis loses only coordination state;
@@ -216,6 +216,18 @@ services:
       AUTH_ENABLED: ${AUTH_ENABLED:-}
       # JWT signing material belongs only to Agent, despite the legacy prefix.
       SANDBOX_JWT_SECRET: ""
+      # env_file injects the host .env wholesale. BFF has no MySQL/Redis
+      # authority; blank inherited DSNs and passwords so they do not appear
+      # in the process environment or docker inspect.
+      AGENT_DATABASE_URL: ""
+      AGENT_REDIS_URL: ""
+      REDIS_URL: ""
+      MYSQL_PASSWORD: ""
+      MYSQL_ROOT_PASSWORD: ""
+      REDIS_PASSWORD: ""
+      SANDBOX_MCP_REDIS_URL: ""
+      SANDBOX_INTERNAL_REDIS_URL: ""
+      SANDBOX_INTERNAL_REDIS_PASSWORD: ""
       # Stable external subjects for explicit auth-disabled local development.
       # Agent provisions owner-scoped internal ULIDs from these values.
       BFF_DEV_ACTING_USER_ID: ${BFF_DEV_ACTING_USER_ID:-local-development-user}
@@ -326,7 +338,7 @@ services:
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
-      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      MODEL_ID: ${MODEL_ID:-deepseek-flash}
       MODEL_CONTEXT_WINDOW: ${MODEL_CONTEXT_WINDOW:-262144}
       MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-65536}
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
@@ -438,7 +450,7 @@ services:
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
-      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      MODEL_ID: ${MODEL_ID:-deepseek-flash}
       MODEL_CONTEXT_WINDOW: ${MODEL_CONTEXT_WINDOW:-262144}
       MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-65536}
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
@@ -755,7 +767,5 @@ networks:
 
 volumes:
   agent_user_skills:
-  # 8.0 时代的开发数据卷：当前不再挂载，保留声明以免被 compose 当作孤儿清理。
-  mysql_dev_data:
   mysql57_dev_data:
   redis5_dev_data:

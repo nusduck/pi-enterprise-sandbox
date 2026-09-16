@@ -61,10 +61,10 @@ export const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
 export const SEED_MODELS = Object.freeze([
   {
     provider: 'llmio',
-    model_id: 'deepseek-v4-flash',
-    name: 'DeepSeek V4 Flash',
+    model_id: 'deepseek-flash',
+    name: 'DeepSeek Flash',
     api_protocol: 'openai-completions',
-    input_modalities: Object.freeze(['text']),
+    input_modalities: Object.freeze(['text', 'image']),
     context_window: DEFAULT_CONTEXT_WINDOW,
     max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
@@ -82,34 +82,10 @@ export const SEED_MODELS = Object.freeze([
   },
   {
     provider: 'llmio',
-    model_id: 'deepseek-v4-pro',
-    name: 'DeepSeek V4 Pro',
+    model_id: 'qwen3.8-27b',
+    name: 'Qwen 3.8 27B',
     api_protocol: 'openai-completions',
     input_modalities: Object.freeze(['text']),
-    context_window: DEFAULT_CONTEXT_WINDOW,
-    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    supports_tool_call: true,
-    supports_developer_role: false,
-    supports_reasoning: true,
-    // Effort ids the routed adapter accepts (`dsh-llm-deepseek`:
-    // off|low|high|max). `medium` was inherited from the retired pi-ai enum
-    // and the wire never accepted it; see infrastructure/dsh/reasoning-efforts.ts.
-    thinking_levels: Object.freeze(['off', 'low', 'high', 'max']),
-    pricing: Object.freeze({
-      input_per_mtok: 1.25,
-      output_per_mtok: 5.0,
-      cache_read_per_mtok: 0.125,
-      cache_write_per_mtok: 1.25,
-    }),
-    enabled: true,
-  },
-  {
-    provider: 'llmio',
-    model_id: 'deepseek-v4-flash-vision-exp',
-    name: 'DeepSeek V4 Flash Vision',
-    api_protocol: 'openai-completions',
-    // The only image-capable id the LLMIO gateway serves.
-    input_modalities: Object.freeze(['text', 'image']),
     context_window: DEFAULT_CONTEXT_WINDOW,
     max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     supports_tool_call: true,
@@ -117,10 +93,10 @@ export const SEED_MODELS = Object.freeze([
     supports_reasoning: false,
     thinking_levels: Object.freeze([]),
     pricing: Object.freeze({
-      input_per_mtok: 0.14,
-      output_per_mtok: 0.28,
-      cache_read_per_mtok: 0.014,
-      cache_write_per_mtok: 0.14,
+      input_per_mtok: 0,
+      output_per_mtok: 0,
+      cache_read_per_mtok: 0,
+      cache_write_per_mtok: 0,
     }),
     enabled: true,
   },
@@ -431,7 +407,7 @@ export function resolveDefaultModelId(registry: Map<string, ModelEntry>) {
     if (entry.default === true) return entry.model_id;
   }
   // Legacy fallback so registries without any `default` flag keep working.
-  return 'deepseek-v4-flash';
+  return 'deepseek-flash';
 }
 
 /**

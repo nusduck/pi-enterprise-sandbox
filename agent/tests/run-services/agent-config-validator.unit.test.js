@@ -73,7 +73,7 @@ describe('AgentConfigValidator accepted configurations', () => {
     const result = subject.validate({
       schemaVersion: 1,
       systemPrompt: 'You are a build assistant.',
-      modelPolicy: { modelId: 'deepseek-v4-pro', maxOutputTokens: 4096, thinkingLevel: 'high' },
+      modelPolicy: { modelId: 'deepseek-flash', maxOutputTokens: 4096 },
       toolPolicy: {
         tools: { bash: 'require_approval', read: 'allow' },
         riskApproval: { high: 'deny' },
@@ -95,11 +95,11 @@ describe('AgentConfigValidator accepted configurations', () => {
 
   it('upgrades a legacy model reference that maps onto the catalog', () => {
     const result = validator().validate({
-      modelPolicy: { modelRef: 'deepseek-v4-pro' },
+      modelPolicy: { modelRef: 'deepseek-flash' },
     });
     assert.deepEqual(result.errors, []);
     assert.equal(result.valid, true);
-    assert.equal(result.normalizedConfig?.modelPolicy?.modelId, 'deepseek-v4-pro');
+    assert.equal(result.normalizedConfig?.modelPolicy?.modelId, 'deepseek-flash');
     assert.ok(result.warnings.some((warning) => warning.code === 'LEGACY_MODEL_MAPPED'));
   });
 
@@ -159,25 +159,20 @@ describe('AgentConfigValidator accepted configurations', () => {
 
   it('offers only the reasoning efforts the routed adapter accepts', () => {
     const subject = validator();
-    const pro = subject.options().platformConstraints.models
-      .find((model) => model.modelId === 'deepseek-v4-pro');
-    // `dsh-llm-deepseek` 接受 off|low|high|max；`medium` 是退役的 pi-ai 枚举。
-    assert.deepEqual(pro.thinkingLevels, ['off', 'low', 'high', 'max']);
+    const flash = subject.options().platformConstraints.models
+      .find((model) => model.modelId === 'deepseek-flash');
+    const qwen = subject.options().platformConstraints.models
+      .find((model) => model.modelId === 'qwen3.8-27b');
+    assert.deepEqual(flash?.thinkingLevels, []);
+    assert.deepEqual(qwen?.thinkingLevels, []);
 
+    // 非推理模型一个 effort 都不该提供，也不能靠 `off` 蒙混过关。
     const rejected = subject.validate({
       schemaVersion: 1,
-      modelPolicy: { modelId: 'deepseek-v4-pro', thinkingLevel: 'medium' },
+      modelPolicy: { modelId: 'deepseek-flash', thinkingLevel: 'off' },
     });
     assert.equal(rejected.valid, false);
     assert.equal(rejected.errors[0].code, 'MODEL_THINKING_LEVEL_UNSUPPORTED');
-
-    // 非推理模型一个 effort 都不该提供，也不能靠 `off` 蒙混过关。
-    const flash = subject.validate({
-      schemaVersion: 1,
-      modelPolicy: { modelId: 'deepseek-v4-flash', thinkingLevel: 'off' },
-    });
-    assert.equal(flash.valid, false);
-    assert.equal(flash.errors[0].code, 'MODEL_THINKING_LEVEL_UNSUPPORTED');
   });
 
   it('rejects a riskApproval value that is a risk level rather than a decision', () => {

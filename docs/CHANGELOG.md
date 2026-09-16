@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **模型目录改为 `deepseek-flash`（默认）与 `qwen3.8-27b`**：LLMIO 网关实测
+  `deepseek-v4-pro` / `deepseek-v4-flash-vision-exp` 返回 500
+  `balancer pop err: no provide items or all items are disabled`，选中即整轮失败。
+  目录、DSH `llm-deepseek` 路由、`MODEL_ID` 默认值与 seed 同步只保留网关 `/models`
+  里能 200 的这两个 id。`deepseek-v4-flash` 在网关上仍能通，但 wire 名已是
+  `deepseek-flash`，本仓跟网关 id。`deepseek-flash` 是多模态（`text`+`image`）；
+  `qwen3.8-27b` 只接受文本。
+- **BFF 不再从 `env_file` 继承 MySQL/Redis 口令 DSN**：`api-server` 与 Agent 一样
+  把 `AGENT_DATABASE_URL` / `AGENT_REDIS_URL` / `MYSQL_PASSWORD` / `REDIS_PASSWORD`
+  等置空。BFF 源码本来就不读这些变量。
+- **`skills/README.md` 对齐 ADR 0009 D7**：三层根 + 人工启用；不再描述已退役的
+  `skill_install/create/edit/uninstall`。
+
 ### Changed（入口形态）
 
 - **边缘 nginx 支持 HTTP / TLS 双模式，生产会话 Cookie 不再带 `Secure`**：新增 `TLS_ENABLED`

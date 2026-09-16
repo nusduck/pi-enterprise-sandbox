@@ -268,6 +268,21 @@ describe('disabled model', () => {
       [],
     );
   });
+
+  it('the shipped seed is exactly the live LLMIO catalog', () => {
+    assert.deepEqual(
+      SEED_MODELS.map((m) => m.model_id),
+      ['deepseek-flash', 'qwen3.8-27b'],
+    );
+    assert.deepEqual(
+      [...SEED_MODELS.find((m) => m.model_id === 'deepseek-flash').input_modalities],
+      ['text', 'image'],
+    );
+    assert.deepEqual(
+      [...SEED_MODELS.find((m) => m.model_id === 'qwen3.8-27b').input_modalities],
+      ['text'],
+    );
+  });
 });
 
 describe('usage recording', () => {
@@ -278,12 +293,12 @@ describe('usage recording', () => {
 describe('env overrides (backward compatible)', () => {
   it('MODEL_CONTEXT_WINDOW / MODEL_MAX_TOKENS override active model only', () => {
     const reg = buildRegistry({ seed: SEED_MODELS, filePath: null });
-    const base = resolveModel('deepseek-v4-flash', {
+    const base = resolveModel('deepseek-flash', {
       registry: reg,
       applyOverrides: false,
     });
     const overridden = applyEnvOverrides(base, {
-      MODEL_ID: 'deepseek-v4-flash',
+      MODEL_ID: 'deepseek-flash',
       MODEL_CONTEXT_WINDOW: '64000',
       MODEL_MAX_TOKENS: '4096',
     });
@@ -292,9 +307,9 @@ describe('env overrides (backward compatible)', () => {
 
     // Overrides for a different MODEL_ID do not apply.
     const other = applyEnvOverrides(
-      resolveModel('deepseek-v4-pro', { registry: reg, applyOverrides: false }),
+      resolveModel('qwen3.8-27b', { registry: reg, applyOverrides: false }),
       {
-        MODEL_ID: 'deepseek-v4-flash',
+        MODEL_ID: 'deepseek-flash',
         MODEL_CONTEXT_WINDOW: '1',
         MODEL_MAX_TOKENS: '1',
       },
@@ -347,7 +362,7 @@ describe('cost accounting is pi-ai’s job', () => {
     // (pi-ai/dist/models.js). The registry used to run the same arithmetic on
     // the same numbers; that duplicate is gone, and this pins the one path
     // that remains: catalog pricing -> Model.cost -> pi-ai usage.cost.
-    const entry = resolveModel('deepseek-v4-pro', { env: {} });
+    const entry = resolveModel('deepseek-flash', { env: {} });
     const model = toPiModel(entry, { baseUrl: 'http://localhost' });
     assert.deepEqual(model.cost, {
       input: entry.pricing.input_per_mtok,

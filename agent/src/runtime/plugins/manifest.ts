@@ -95,20 +95,13 @@ const FACTORY_TUNING: readonly PatchEntry[] = [
       baseURL: '!!js:LLMIO_BASE_URL',
       defaultContextWindow: 262144,
       models: [
-        { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 262144 },
-        { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 262144, reasoning: true },
         {
-          id: 'deepseek-v4-flash-vision-exp',
-          name: 'DeepSeek V4 Flash Vision',
+          id: 'deepseek-flash',
+          name: 'DeepSeek Flash',
           contextWindow: 262144,
           inputModalities: ['text', 'image'],
         },
-        {
-          id: 'private-reasoner',
-          description: 'Company-hosted reasoning model',
-          contextWindow: 512000,
-          reasoning: true,
-        },
+        { id: 'qwen3.8-27b', name: 'Qwen 3.8 27B', contextWindow: 262144 },
       ],
     },
   },

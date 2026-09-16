@@ -151,13 +151,13 @@ describe('CreateRunService durable path', () => {
   it('persists an explicit model selection on the triggering message', async () => {
     await svc.create.execute({
       messages: MESSAGES,
-      modelId: 'deepseek-v4-flash-vision-exp',
+      modelId: 'qwen3.8-27b',
       auth: FIXED_AUTH,
       traceId: TRACE,
       idempotencyKey: 'selected-model',
     });
     const stored = JSON.parse(world.tables.messages[0].content_json);
-    assert.equal(stored.modelId, 'deepseek-v4-flash-vision-exp');
+    assert.equal(stored.modelId, 'qwen3.8-27b');
   });
 
   it('rejects image turns for a text-only selected model', async () => {
@@ -173,7 +173,7 @@ describe('CreateRunService durable path', () => {
     await assert.rejects(
       () => svc.create.execute({
         messages: imageTurn,
-        modelId: 'deepseek-v4-flash',
+        modelId: 'qwen3.8-27b',
         auth: FIXED_AUTH,
         traceId: TRACE,
         idempotencyKey: 'text-model-image',
@@ -183,6 +183,25 @@ describe('CreateRunService durable path', () => {
         /does not support image input/.test(error.message),
     );
     assert.equal(world.tables.runs.length, 0);
+  });
+
+  it('accepts image turns for the multimodal default model', async () => {
+    await svc.create.execute({
+      messages: [{
+        role: 'user',
+        content: 'describe this',
+        attachments: [{
+          attachment_id: 'dataset-1',
+          mime_type: 'image/png',
+          size: 4,
+        }],
+      }],
+      modelId: 'deepseek-flash',
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: 'flash-image',
+    });
+    assert.equal(world.tables.runs.length, 1);
   });
 
   it('titles a fresh conversation from the first user input', async () => {

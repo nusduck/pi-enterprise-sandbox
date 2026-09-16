@@ -53,7 +53,7 @@ async function scenario(
   const handle: any = await ctx.agents.create({
     sessionId: `probe-${label}-${Date.now()}`,
     meta: { cwd: '/tmp' },
-    agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+    agentOptions: { provider: 'deepseek-official', model: 'deepseek-flash' },
   });
   const agent: any = handle?.agent ?? handle;
   for (const fn of late) fn(agent);
