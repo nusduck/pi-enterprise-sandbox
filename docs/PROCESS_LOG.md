@@ -940,3 +940,48 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   进程 logs 有 `TICK`、SIGTERM 后 `cancelled`、6 项跨租户 404 且有本人 200 的拒绝对照。
   过程中自我修正三处（渲染校验放错层、检查容器自我代理回环、`ENTRYPOINT` 覆盖写法）均记在证据里。
   详见 [证据](evidence/replay-redis-retire-and-http-ingress-2026-09-16.md)。
+
+## 2026-09-16 — 接上沙箱资源限额与配额；打通 shell 参数、截止与取消（R1/R2/R4/R5/R6）
+
+- **Context：** `docs/reviews/2026-09-16-agent-worker-sandbox` 的审查发现 6 项问题，
+  其中三项 P1。本轮按该目录的执行方案实施 R1、R2、R4、R5、R6；R3（等待子 Run 的父 Run
+  会耗尽同队列全部消费槽）另行处理。
+- **Decision：**
+  1. **R1**：Compose 与 `.env.example` 声明的六个资源变量在 `exec/src` 里没有任何消费者，
+     子进程配额的三个函数（`evaluateChildQuota` / `ChildWorkspaceQuotaWatch` /
+     `assertProductionQuotaBackend`）也只存在于定义链里。新增 `exec/src/shell/resource-limits.ts`
+     统一读取并**严格校验范围**（越界拒启）；in-namespace 包装器从只设 `ulimit -u` 泛化成成对
+     下发 `-u/-n/-t/-f/-v`；shell 路由做 spawn 前准入 + 执行中采样；生产启动调用配额闸门。
+     **内存刻意不自动接线**——rlimit 里只有 `RLIMIT_AS` 沾边，而地址空间不等于进程树常驻内存；
+     `SANDBOX_MAX_MEMORY_MB` 定位为容器兜底并在启动日志说明归属，另给显式的
+     `SANDBOX_MAX_ADDRESS_SPACE_MB`。控制面账本默认额度从写死 1024 MB 改取
+     `SANDBOX_WORKSPACE_QUOTA_MB`。
+  2. **R2**：传输截止改为「执行预算 + 15 秒有界回传余量」（仍有 24 小时硬上界），并与调用方
+     `AbortSignal` 融合；exec 监听器把客户端提前断开转成请求的 `AbortSignal`（监听 `res` 的
+     `close` + `writableFinished`，不是 `req` 的 `close`——后者在请求体正常读完时也会触发）。
+  3. **R4**：新增两侧共用的 `@pi/contract/shell-payload`，越界 workdir 与非法字段执行前拒绝；
+     `executor.spawnTargetFor()` 成为 run/start 共用的唯一拼装点；`stdoutMaxBytes` 按字节解释，
+     截断落在字符边界。
+  4. **R5**：每轮等待退出时摘 abort 监听器；轮询 50 ms 定频 → 200 ms 起、最多 2 s 有界退避。
+  5. **R6**：Agent 侧后台输出缓冲有界（保留尾部，截断置 `lossy`）。
+- **Action：** `contract/src/shell-payload.ts`（新）+ 导出与 package exports；
+  `exec/src/shell/resource-limits.ts`（新）、`executor.ts`、`process-runner.ts`、`output-capture.ts`；
+  `exec/src/isolation/{profile,build,render}.ts`；`exec/src/http/{internal-shell,router,app,node-listener}.ts`；
+  `agent/src/runtime/providers/{exec-rpc,remote-shell,durable-subagent}.ts`；
+  新增回归 `contract/test/shell-payload.test.ts`、`exec/test/internal-shell-wiring.test.ts`、
+  `agent/tests/runtime/shell-deadline-buffer.test.ts` 与 `durable-subagent.test.ts` 的 R5 三例；
+  `docker-compose.yml`、`.env.example`、`docs/{api,deployment,CHANGELOG,STATUS}.md`。
+- **STATUS IDs：** C4、C7 的 notes 补记本次修复与**仍然开放**的部分；两行状态**不变**
+  （`unknown` / `partial`）——本次只关闭了「限额和参数根本没接线」这个前提，
+  整项验收标准未满足。R3 / R5 没有对应的 §32 条目，不强行套号。
+- **验证：** 六套测试 + 各包类型检查 + 前端 build（pytest 206；contract 118；exec 411/2 skipped；
+  agent 1339 / 0 cancelled；frontend 367 + build）。api-server 158 pass / **2 cancelled**
+  （`file proxy id domain`，与本次无关，未修，不记为通过）。
+  重建 agent / agent-worker / api-server / sandbox / sandbox-mcp 五个镜像并逐个核对运行容器的
+  image id 已换新。真机：执行面探针 14/14（真实 HMAC + 真实 bwrap，含 20 秒任务、短预算超时、
+  取消后无残留写入、workdir/stdin/env/多字节输出上限、越界拒绝 + 合法对照）；
+  独立低阈值沙箱上的配额闸门（额度内成功 / 超限执行中被终止 / 越线后 fail-closed /
+  另一 owner 不受影响）；四条启动 fail-closed + 一条正对照；经 BFF 的完整链路
+  登录 → 建会话 → 带工具 Run `SUCCEEDED` → 进程 logs 有 `TICK` → SIGTERM → `cancelled` →
+  四项跨租户 404 且本人 200。详见
+  [证据](evidence/exec-resource-limits-and-shell-contract-2026-09-16.md)。
