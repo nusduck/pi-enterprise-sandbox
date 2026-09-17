@@ -130,35 +130,54 @@ try {
       createServiceContainer(env, { runExecutorFactory }),
   });
 
-  started.workerHandle.worker.on('stalled', (jobId, previous) => {
-    emit({
-      type: 'stalled',
-      jobId: String(jobId),
-      previous: String(previous),
+  // ADR 0012 之后每个子任务深度一层消费者；事件带上队列名，gate 才能断言
+  // 子 Run 是在它自己那一层被接管和重放的，而不是被根队列捡走。
+  for (const handle of started.workerHandles) {
+    const queueName = handle.queueName;
+    handle.worker.on('active', (job) => {
+      emit({
+        type: 'active',
+        queueName,
+        jobId: String(job.id),
+        attemptsStarted: Number(job.attemptsStarted || 0),
+      });
     });
-  });
-  started.workerHandle.worker.on('completed', (job, result) => {
-    emit({
-      type: 'completed',
-      jobId: String(job.id),
-      data: job.data,
-      attemptsStarted: Number(job.attemptsStarted || 0),
-      stalledCounter: Number(job.stalledCounter || 0),
-      result,
+    handle.worker.on('stalled', (jobId, previous) => {
+      emit({
+        type: 'stalled',
+        queueName,
+        jobId: String(jobId),
+        previous: String(previous),
+      });
     });
-  });
-  started.workerHandle.worker.on('failed', (job, error) => {
-    emit({
-      type: 'failed',
-      jobId: job?.id == null ? null : String(job.id),
-      message: error instanceof Error ? error.message.slice(0, 256) : 'error',
+    handle.worker.on('completed', (job, result) => {
+      emit({
+        type: 'completed',
+        queueName,
+        jobId: String(job.id),
+        data: job.data,
+        attemptsStarted: Number(job.attemptsStarted || 0),
+        stalledCounter: Number(job.stalledCounter || 0),
+        result,
+      });
     });
-  });
+    handle.worker.on('failed', (job, error) => {
+      emit({
+        type: 'failed',
+        queueName,
+        jobId: job?.id == null ? null : String(job.id),
+        message: error instanceof Error ? error.message.slice(0, 256) : 'error',
+      });
+    });
+  }
 
-  await started.workerHandle.worker.waitUntilReady();
+  await Promise.all(
+    started.workerHandles.map((handle) => handle.worker.waitUntilReady()),
+  );
   emit({
     type: 'ready',
     queueName: started.workerHandle.queueName,
+    queueNames: started.workerHandles.map((handle) => handle.queueName),
   });
 
   if (process.env.TEST_EMIT_RECOVERY_SCANS === 'true') {

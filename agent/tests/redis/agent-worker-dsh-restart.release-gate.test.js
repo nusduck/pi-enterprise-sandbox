@@ -221,7 +221,9 @@ function createWorkerHarness(workerLabel, ids) {
       AGENT_DATABASE_URL: stripUrlPassword(TEST_MYSQL_URL),
       AGENT_REDIS_URL: stripUrlPassword(TEST_REDIS_URL),
       ...dbpm.env,
-      AGENT_RUNS_QUEUE_NAME: QUEUE,      AGENT_WORKER_CONCURRENCY: '1',
+      AGENT_RUNS_QUEUE_NAME: QUEUE,
+      // 分层之后这是总预算（ADR 0012）：默认最大深度 2 需要至少 3 个槽。
+      AGENT_WORKER_CONCURRENCY: '3',
       AGENT_RECOVERY_SCAN_LIMIT: '20',
       AGENT_RECOVERY_INTERVAL_MS: '200',
       AGENT_OUTBOX_IDLE_MS: '50',

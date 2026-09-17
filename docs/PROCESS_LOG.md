@@ -1068,3 +1068,22 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   重建开发栈 `sandbox-mcp` 容器后核对同样只剩这三项，healthy；外部 MCP 路径探针 9/9。
   同时把本机（未入库的）`.env` 中过期的 `MODEL_ID` / `PI_MODEL=deepseek-v4-flash` 改为
   `deepseek-flash`，按 `.env` 重建 agent 后经 BFF 完整链路 12/12。
+
+## 2026-09-17 — Agent Worker 重启 gate 适配分层队列；C7 截止复验；插件树测试在 Linux 通过
+
+- **Context：** 盘点分支剩余工作时，F1–F3 证据 §五列出「分层拓扑下 Worker 重启 release gate 未重跑」，
+  STATUS C7 写着前台截止 / 取消三项「未跑」，上一轮 5 个真实插件树测试在挂载环境里失败。开工时发现
+  运行中的 sandbox / sandbox-mcp 镜像早于 `6361ae91`，先按 `1e1fc604` 重建全部服务镜像并核对容器已换新。
+- **复现：** `scripts/dev/release-gates.sh` 退出码 1——Agent Worker 重启 gate 两个恢复用例的 Worker
+  都因 `AGENT_WORKER_CONCURRENCY must be at least 3 … got 1` 拒启。gate 夹具写死并发 1，`de745e3c`
+  把它改成总预算后没有跟着改。
+- **Decision / Action：** 两个 Worker 重启 gate 的并发改为 3（根层单槽，保持原 gate 形状）；夹具监听
+  全部层消费者、事件带队列名；新增「深度 1 子 Run 由启动恢复扫描按权威深度重投到 `-d1`，SIGKILL 后在
+  同一层被接管重放、账本与投递目的地一致、副作用只执行一次」用例。`development.md` 的 gate 覆盖说明、
+  复核报告状态补记同步。STATUS C7 更正：三项已有真实 bwrap 证据，行状态仍 `partial`（其余缺口未变）。
+  没有改生产代码。
+- **STATUS IDs：** C7 仅更正备注，状态不变；G2 状态不变（`agent-worker-dsh-restart` 未跑）。
+- **验证：** 修复后 release gate 全部通过（Agent Worker 重启 4/4）；变异 `resolveRunDepth` 恒返回 0 时
+  新用例失败、其余通过，已还原。C7 探针（生产 `RemoteShell` → 真实 HMAC → bwrap）5/5。生产 agent 镜像内
+  断网跑 5 个插件树测试 41/41。重建后经 BFF 完整链路 11/11。pytest 207。未跑六套业务测试与类型检查
+  （无生产代码改动）。详见[证据](evidence/worker-restart-gate-layered-and-c7-recheck-2026-09-17.md)。

@@ -107,6 +107,27 @@ const UNSAFE_IDS = Object.freeze({
   workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN66',
   toolCallId: `${TOOL_CALL_ID}-unsafe`,
 });
+// 分层拓扑（ADR 0012）专用：父 Run 在深度 0，子 Run 在深度 1、走 `${QUEUE}-d1`。
+const PARENT_IDS = Object.freeze({
+  conversationId: '01K0G2PAV8FPMVC9QHJG7JPN71',
+  sessionId: '01K0G2PAV8FPMVC9QHJG7JPN72',
+  runId: '01K0G2PAV8FPMVC9QHJG7JPN73',
+  messageId: '01K0G2PAV8FPMVC9QHJG7JPN77',
+  sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPN75',
+  workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN76',
+  toolCallId: `${TOOL_CALL_ID}-parent`,
+});
+const CHILD_IDS = Object.freeze({
+  conversationId: '01K0G2PAV8FPMVC9QHJG7JPN81',
+  sessionId: '01K0G2PAV8FPMVC9QHJG7JPN82',
+  runId: '01K0G2PAV8FPMVC9QHJG7JPN83',
+  messageId: '01K0G2PAV8FPMVC9QHJG7JPN87',
+  sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPN85',
+  workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN86',
+  toolCallId: `${TOOL_CALL_ID}-child-d1`,
+});
+const QUEUE_D1 = `${QUEUE}-d1`;
+const QUEUE_D2 = `${QUEUE}-d2`;
 
 async function docker(...args) {
   return execFileAsync('docker', args, {
@@ -128,7 +149,10 @@ function createWorkerHarness(workerLabel, opts = {}) {
       AGENT_REDIS_URL: stripUrlPassword(TEST_REDIS_URL),
       TEST_FIXTURE_DATABASE_URL: TEST_MYSQL_URL,
       ...dbpm.env,
-      AGENT_RUNS_QUEUE_NAME: QUEUE,      AGENT_WORKER_CONCURRENCY: '1',
+      AGENT_RUNS_QUEUE_NAME: QUEUE,
+      // 分层之后这是总预算（ADR 0012）：默认最大深度 2 需要至少 3 个槽。
+      // 取 3 → 根层 1 个、d1/d2 各 1 个，保持原 gate「根任务单槽」的形状。
+      AGENT_WORKER_CONCURRENCY: '3',
       AGENT_RECOVERY_SCAN_LIMIT: '10',
       AGENT_RECOVERY_INTERVAL_MS: String(RECOVERY_INTERVAL_MS),
       AGENT_OUTBOX_IDLE_MS: '100',
@@ -322,6 +346,7 @@ async function seedQueuedRun(knex, ids, opts = {}) {
     orgId: ORG,
     userId: USER,
     agentId: AGENT,
+    ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
     title: 'Worker restart gate',
     status: 'active',
   });
@@ -360,9 +385,13 @@ async function seedQueuedRun(knex, ids, opts = {}) {
     agentVersionId: VER,
     triggeringMessageId: ids.messageId,
     source: 'release-gate',
-    status: 'QUEUED',
-    queueName: QUEUE,
+    ...(opts.parentRunId
+      ? { parentRunId: opts.parentRunId, subagentDepth: opts.subagentDepth }
+      : {}),
+    status: opts.status ?? 'QUEUED',
+    queueName: opts.queueName ?? QUEUE,
     traceId: TRACE,
+    ...(opts.status === 'SUCCEEDED' ? { completedAt: new Date() } : {}),
   });
 }
 
@@ -445,6 +474,7 @@ describe('Agent Worker restart release-gate safety', () => {
 describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
   let knex = null;
   let queueHandles = null;
+  let layerQueueHandles = [];
   const workers = [];
 
   before(async () => {
@@ -477,6 +507,13 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     queueHandles = createRunQueue(TEST_REDIS_URL, { queueName: QUEUE });
     await queueHandles.queue.waitUntilReady();
     await queueHandles.queue.obliterate({ force: true });
+    layerQueueHandles = [QUEUE_D1, QUEUE_D2].map((queueName) =>
+      createRunQueue(TEST_REDIS_URL, { queueName }),
+    );
+    for (const handles of layerQueueHandles) {
+      await handles.queue.waitUntilReady();
+      await handles.queue.obliterate({ force: true });
+    }
     await seedQueuedRun(knex, SAFE_IDS);
   });
 
@@ -496,6 +533,12 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
       await destroyRunQueue(queueHandles).catch((error) =>
         cleanupErrors.push(error),
       );
+    }
+    for (const handles of layerQueueHandles) {
+      await handles.queue
+        .obliterate({ force: true })
+        .catch((error) => cleanupErrors.push(error));
+      await destroyRunQueue(handles).catch((error) => cleanupErrors.push(error));
     }
     if (knex) {
       await knex.schema
@@ -629,6 +672,93 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
       false,
     );
     await assertManualRecoveryFacts(knex, UNSAFE_IDS);
+    await workerB.terminate('SIGTERM');
+  });
+
+  it('replays a depth-1 child Run on its own reserved layer after SIGKILL', async () => {
+    // 父 Run 已结束：这条 gate 验的是子 Run 所在层的接管与重放，父任务前台等待
+    // 的槽位饥饿由 subagent-slot-starvation.integration.test.js 覆盖。
+    await seedQueuedRun(knex, PARENT_IDS, { seedTenant: false, status: 'SUCCEEDED' });
+    await seedQueuedRun(knex, CHILD_IDS, {
+      seedTenant: false,
+      parentRunId: PARENT_IDS.runId,
+      subagentDepth: 1,
+      queueName: QUEUE_D1,
+    });
+    const [d1Handles] = layerQueueHandles;
+    const childRun = CHILD_IDS.runId;
+
+    // 种子里没有投递作业：只能由 Worker 启动时的恢复扫描经唯一的投递适配器
+    // 按权威深度重投。它必须落在 d1，而不是根队列。
+    const workerA = createWorkerHarness('layer-worker-a', {
+      ids: CHILD_IDS,
+      executorMode: 'hang-before-side-effect',
+    });
+    workers.push(workerA);
+    const ready = await workerA.waitFor((message) => message.type === 'ready');
+    assert.deepEqual(ready.queueNames, [QUEUE, QUEUE_D1, QUEUE_D2]);
+    const activeA = await workerA.waitFor(
+      (message) => message.type === 'active' && message.jobId === childRun,
+    );
+    assert.equal(activeA.queueName, QUEUE_D1);
+    await workerA.waitFor(
+      (message) => message.type === 'executor-entered' && message.runId === childRun,
+    );
+    assert.equal(await queueHandles.queue.getJob(childRun), undefined);
+    assert.ok(await d1Handles.queue.getJob(childRun), 'child job lives in the d1 queue');
+
+    const running = await waitForRunStatus(knex, childRun, 'RUNNING');
+    assert.equal(Number(running.attempt), 1);
+    assert.equal(Number(running.subagent_depth), 1);
+    assert.equal(running.queue_name, QUEUE_D1);
+    assert.ok(await queueHandles.connection.get(runLeaseKey(childRun)));
+
+    const killed = await workerA.terminate('SIGKILL');
+    assert.equal(killed.signal, 'SIGKILL');
+    assert.equal(await readSideEffect(knex, CHILD_IDS.toolCallId), undefined);
+
+    const workerB = createWorkerHarness('layer-worker-b', {
+      ids: CHILD_IDS,
+      executorMode: 'succeed',
+    });
+    workers.push(workerB);
+    await workerB.waitFor((message) => message.type === 'ready');
+
+    const stalled = await workerB.waitFor(
+      (message) => message.type === 'stalled' && message.jobId === childRun,
+      85_000,
+    );
+    assert.equal(stalled.queueName, QUEUE_D1);
+    const completed = await workerB.waitFor(
+      (message) => message.type === 'completed' && message.jobId === childRun,
+      15_000,
+    );
+    assert.equal(completed.queueName, QUEUE_D1);
+    assert.ok(completed.attemptsStarted >= 2);
+    assert.ok(completed.stalledCounter >= 1);
+    assert.equal(completed.result.status, 'SUCCEEDED');
+    assert.equal(
+      workerB.messages.some(
+        (message) =>
+          message.jobId === childRun &&
+          ['active', 'completed'].includes(message.type) &&
+          message.queueName !== QUEUE_D1,
+      ),
+      false,
+      'no other layer may pick up the child Run',
+    );
+
+    const succeeded = await waitForRunStatus(knex, childRun, 'SUCCEEDED', 15_000);
+    assert.equal(succeeded.queue_name, QUEUE_D1);
+    const retrying = await knex('run_events').where({
+      run_id: childRun,
+      event_type: 'run.retrying',
+    });
+    assert.equal(retrying.length, 1, 'exactly one run.retrying event');
+    const sideEffect = await readSideEffect(knex, CHILD_IDS.toolCallId);
+    assert.ok(sideEffect);
+    assert.equal(Number(sideEffect.invocation_count), 1);
+    assert.equal(sideEffect.first_worker, 'layer-worker-b');
     await workerB.terminate('SIGTERM');
   });
 });
