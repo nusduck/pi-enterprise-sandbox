@@ -7,7 +7,7 @@
 > [证据](../../evidence/follow-up-f1-f3-2026-09-16.md)。分层拓扑下 Worker 重启 / 恢复的
 > release gate 仍未重跑，未列为完成。**2026-09-17 补记**：该 gate 自分层提交起因并发写死为 1 而拒启，
 > 已修复并新增深度 1 子 Run 分层重放用例，4/4 通过，见
-> [证据](../../evidence/worker-restart-gate-layered-and-c7-recheck-2026-09-17.md)；`agent-worker-dsh-restart` 仍未跑。
+> [证据](../../evidence/worker-restart-gate-layered-and-c7-recheck-2026-09-17.md)；`agent-worker-dsh-restart` 同日按 DSH 重写并跑通，见[证据](../../evidence/dsh-restart-gate-rewrite-2026-09-17.md)。
 
 2026-09-16，基线 `ab200782`，开始时工作区干净。本轮只读生产代码，核对修复提交及两份验收记录；没有重复执行记录中的 Docker/数据库验收，历史测试数字不作为本轮亲自复现。
 

@@ -376,7 +376,13 @@ docker compose up -d mysql          # 开发栈 MySQL 需已 healthy
 scripts/dev/release-gates.sh
 ```
 
-脚本按当前工作树构建 `scripts/dev/release-gate-runner.Dockerfile`（Node 22 + docker CLI，依赖与源码在镜像内，不挂宿主目录），在开发栈网络里运行，任一项失败即非零退出；自带专用 Redis 容器 `pi-release-gate-redis-dev` 与测试库 `pi_gate_dev` / `pi_gate_dev_side`，结束后删除。依次覆盖：UPRedis 队列放行测试（直连、经路由模拟代理）、Redis 重启、BullMQ Worker 重启、Agent Worker 重启（含深度 1 子 Run 在自己那一层被 SIGKILL 后接管重放，ADR 0012）。Agent Worker gate 的副作用表放在 `_side` 兄弟库，因为被测 Worker 启动时按发布清单核对自己的库。`agent-worker-dsh-restart` 需要独立 sandbox 与 HMAC 资源，不在脚本内。
+脚本按当前工作树构建 `scripts/dev/release-gate-runner.Dockerfile`（Node 22 + docker CLI，依赖与源码在镜像内，不挂宿主目录），在开发栈网络里运行，任一项失败即非零退出；自带专用 Redis 容器 `pi-release-gate-redis-dev` 与测试库 `pi_gate_dev` / `pi_gate_dev_side`，结束后删除。依次覆盖：UPRedis 队列放行测试（直连、经路由模拟代理）、Redis 重启、BullMQ Worker 重启、Agent Worker 重启（含深度 1 子 Run 在自己那一层被 SIGKILL 后接管重放，ADR 0012）。Agent Worker gate 的副作用表放在 `_side` 兄弟库，因为被测 Worker 启动时按发布清单核对自己的库。`agent-worker-dsh-restart` 需要独立 sandbox，单独用下面的脚本跑。
+
+```bash
+scripts/dev/release-gate-dsh-restart.sh   # 前提：开发栈 mysql / dbpm-fake 已 healthy，agent 与 sandbox 镜像为当前代码
+```
+
+它重建专用库 `pi_gate_dsh` 并按发布 DDL 建表（测试本身不迁移、不回滚——独立 sandbox 启动时核对清单），用 `docker compose run` 起连该库的专用 sandbox `pi-release-gate-sandbox-dsh` 与专用 Redis，在运行器里以生产 Worker 组合 + 真实 DSH 运行时 + 假模型跑四个中断场景：模型调用中 SIGKILL、`ask_user_question` 停泊后 Worker 重启、工具派发边界 SIGKILL、命令执行中重启 sandbox（最后一项只钉「不自动重跑、账本到终态」）。结束后删除专用容器与库。
 
 ### 测试结构
 

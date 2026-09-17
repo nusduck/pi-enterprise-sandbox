@@ -1087,3 +1087,20 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   新用例失败、其余通过，已还原。C7 探针（生产 `RemoteShell` → 真实 HMAC → bwrap）5/5。生产 agent 镜像内
   断网跑 5 个插件树测试 41/41。重建后经 BFF 完整链路 11/11。pytest 207。未跑六套业务测试与类型检查
   （无生产代码改动）。详见[证据](evidence/worker-restart-gate-layered-and-c7-recheck-2026-09-17.md)。
+
+## 2026-09-17 — 真实 DSH Worker / Sandbox 中断 gate 重写并首次运行
+
+- **Context：** `agent-worker-dsh-restart` gate 是 Pi 时代写的（拦截已删除的 `executions/bash`、断言已删除的
+  `sandbox_executions`、在测试里回滚迁移），本分支从未跑过；G2 仍引用 2026-07-19 的 Pi 证据。场景 4 依赖的
+  「exec 侧执行记录 → UNKNOWN」在当前架构里不存在（`exec_executions` 无调用方）。
+- **Decision：** 用户选择场景 1–3 按 DSH 重写并跑通，场景 4 只摸现状、不改生产语义。
+- **Action：** 重写 gate（发布 DDL 预建表、`shell/run` 拦截、以工作区副作用 + 正对照替代执行表、只统计带工具
+  的模型轮次、`ask_user_question` / bash 新参数、工作区根与 Compose 一致、场景 4 改为不变量 + 观测输出）；
+  新增 `scripts/dev/release-gate-dsh-restart.sh`（专用库 / Redis / sandbox，结束删除）；`development.md`、
+  STATUS G2、复核报告补记。无生产代码改动。
+- **STATUS IDs：** G2 `unknown` → `partial`（新增 DSH 证据；两处语义偏差未决，不标 done）。
+- **发现（未改，待决策）：** ① DSH 下工具派发时账本停在 PROPOSED、未绑定 request_hash / fence
+  （`fenced-tool-governance-recorder.ts:1009` 的 Pi 时序假设）；恢复按未决处理，未造成重放。② exec 中途重启时
+  工具记 `FAILED/TOOL_ERROR`，模型只看到 `fetch failed` 并继续，而非 UNKNOWN 交人工对账。
+- **验证：** 脚本从零运行 5/5、退出码 0，资源已清理；变异 `REPLAY_SAFE_TOOL_STATUSES` 加入 PROPOSED 时场景 3
+  失败（Worker B 重放），已还原。pytest 207。详见[证据](evidence/dsh-restart-gate-rewrite-2026-09-17.md)。
