@@ -14,7 +14,7 @@ const env = Object.fromEntries(
 
 const base = (env.LLMIO_BASE_URL || '').replace(/\/+$/, '');
 const key = env.LLMIO_API_KEY || '';
-const model = env.MODEL_ID || 'deepseek-v4-flash';
+const model = env.MODEL_ID || 'deepseek-flash';
 if (!base || !key) { console.error('缺 LLMIO_BASE_URL / LLMIO_API_KEY'); process.exit(2); }
 console.log(`网关: ${base}`);
 console.log(`模型: ${model}`);
