@@ -39,7 +39,7 @@ HOTSPOT_LINE_BUDGETS = {
     # 2026-09-06 拆出 durable-policy-replay.ts（DurablePolicyConflictError +
     # assertCompatiblePolicyReplay，不碰仓储/事务/围栏的纯判定），
     # 1_654 -> 1_558，预算收紧。
-    "agent/src/application/fenced-tool-governance-recorder.ts": 1_558,
+    "agent/src/application/fenced-tool-governance-recorder.ts": 1_557,
     # 转 TS 时拆出 pi-run-executor-deps.ts（依赖面类型 + 三个不读 this 的
     # 纯判定），1_597 -> 1_526，预算收紧。改名 dsh-run-executor.ts。
     # 2026-09-06 又拆出 approved-replay-claim.ts（已批准调用的续跑查找与

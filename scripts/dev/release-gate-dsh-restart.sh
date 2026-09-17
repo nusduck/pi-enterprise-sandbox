@@ -10,9 +10,9 @@
 #   2. 重建专用库 pi_gate_dsh，按发布 DDL 建表（schema-apply.sh，与生产同一流程）——
 #      sandbox 启动时核对清单，测试里不能再迁移或回滚；
 #   3. 起专用 Redis 5.0.14 与专用 sandbox（`docker compose run` 沿用 sandbox 服务的
-#      隔离配置、HMAC 与 DBPM，只把库换成 pi_gate_dsh）；
+#      隔离配置、HMAC 与 DBPM，只把库换成 pi_gate_dsh、数据根换成 .runtime/release-gate-dsh）；
 #   4. 在运行器里跑 gate；
-#   5. 不论成败，删除专用容器与专用库；gate 失败则脚本非零退出。
+#   5. 不论成败，删除专用容器、专用库与专用数据根；gate 失败则脚本非零退出。
 #
 # 用法：scripts/dev/release-gate-dsh-restart.sh
 # 前提：开发栈 mysql、dbpm-fake 服务 healthy；agent 与 sandbox 镜像是当前代码构建的。
@@ -26,6 +26,9 @@ REDIS_CONTAINER="pi-release-gate-redis-dsh"
 SANDBOX_CONTAINER="pi-release-gate-sandbox-dsh"
 RUNNER_IMAGE="pi-release-gate-runner:local"
 GATE_REDIS_PASSWORD="gate_dev_only"
+# 专用 sandbox 的数据根。不能复用开发栈的 .runtime/sandbox/*：gate 用固定的工作区 ID，
+# 上一次运行（例如变异验证里真的被重放的命令）留下的文件会让「副作用不存在」的断言误判。
+DATA_ROOT="$ROOT/.runtime/release-gate-dsh"
 
 mysql_root() {
     docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -N -e "$1"' _ "$1"
@@ -42,6 +45,10 @@ APP_USER="$(docker compose exec -T mysql printenv MYSQL_USER)"
 cleanup() {
     docker rm -f "$SANDBOX_CONTAINER" "$REDIS_CONTAINER" >/dev/null 2>&1 || true
     mysql_root "DROP DATABASE IF EXISTS ${GATE_DB};" >/dev/null 2>&1 || true
+    # 文件由容器里的 uid 10001 写出；Linux 宿主上当前用户可能删不掉，退回用容器删。
+    rm -rf "$DATA_ROOT" 2>/dev/null || docker run --rm -v "$DATA_ROOT:/data" --entrypoint sh \
+        enterprise-sandbox:latest -c 'rm -rf /data/* /data/.[!.]*' >/dev/null 2>&1 || true
+    rm -rf "$DATA_ROOT" 2>/dev/null || true
 }
 trap cleanup EXIT
 cleanup
@@ -57,7 +64,12 @@ scripts/dev/schema-apply.sh "$GATE_DB" >/dev/null
 echo "[3/5] Starting dedicated Redis and Sandbox on ${NETWORK}..."
 docker run -d --name "$REDIS_CONTAINER" --network "$NETWORK" redis:5.0.14 \
     redis-server --appendonly yes --maxmemory-policy noeviction --requirepass "$GATE_REDIS_PASSWORD" >/dev/null
+mkdir -p "$DATA_ROOT/workspaces" "$DATA_ROOT/tmp" "$DATA_ROOT/artifacts" "$DATA_ROOT/control"
 # 口令不进 URL：exec 启动时向 DBPM 取（与 compose 默认一致）。
+SANDBOX_WORKSPACES_MOUNT="$DATA_ROOT/workspaces:/var/sandbox/workspaces" \
+SANDBOX_TEMP_MOUNT="$DATA_ROOT/tmp:/var/sandbox/tmp" \
+SANDBOX_ARTIFACTS_MOUNT="$DATA_ROOT/artifacts:/var/sandbox/artifacts" \
+SANDBOX_CONTROL_MOUNT="$DATA_ROOT/control:/var/sandbox/control" \
 docker compose run -d --no-deps --name "$SANDBOX_CONTAINER" \
     -e SANDBOX_DATABASE_URL="mysql+pymysql://${APP_USER}@mysql:3306/${GATE_DB}" \
     sandbox >/dev/null

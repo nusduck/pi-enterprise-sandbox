@@ -1047,24 +1047,21 @@ describeLive(
       'Sandbox barrier did not observe bash dispatch',
     );
     assert.match(heldRequest.path, /\/internal\/v1\/shell\/run$/);
-    // 派发已经发生（请求被拦在执行面之前），账本必须已有一行、且不是终态。
-    // DSH 下这一行目前停在 PROPOSED（策略判定先于 tools/execute，低风险工具没有
-    // 策略指纹，recordToolStarted 不推进到 RUNNING，request_hash / fence 也未绑定）。
-    // 旧 Pi 断言要求 RUNNING + request_hash + fence；这里不固化二者之一，只钉
-    // 「非终态、恢复时按未决处理」这条安全性质，实际状态写进诊断供证据记录。
-    const toolBeforeKill = await waitForRow(
-      agentKnex,
-      'tool_executions',
-      { run_id: TOOL_IDS.runId, tool_call_id: toolCallId },
-      (row) => ['PROPOSED', 'RUNNING'].includes(String(row?.status)),
-      10_000,
-    ).catch((error) => {
-      throw new Error(`${error.message}\nworker stderr:\n${workerA.getStderr()}`);
-    });
-    console.error(
-      `[gate] dispatch-boundary ledger before kill: status=${toolBeforeKill.status} ` +
-        `request_hash=${toolBeforeKill.request_hash ? 'set' : 'null'} ` +
-        `execution_fence_token=${toolBeforeKill.execution_fence_token ?? 'null'}`,
+    // 请求已经发往执行面（被代理拦住）：派发边界必须**先于**派发落库——RUNNING，
+    // 并绑定请求指纹与当前 fence。2026-09-17 修复前 DSH 下这一行停在 PROPOSED、
+    // 两者皆空（Pi 时序假设，见 dsh-restart-gate-rewrite 证据 §3.1）。
+    const toolBeforeKill = await agentKnex('tool_executions')
+      .where({ run_id: TOOL_IDS.runId, tool_call_id: toolCallId })
+      .first();
+    assert.ok(toolBeforeKill, `ledger row must exist before dispatch; stderr=${workerA.getStderr()}`);
+    assert.equal(toolBeforeKill.status, 'RUNNING');
+    assert.match(String(toolBeforeKill.request_hash), /^[0-9a-f]{64}$/);
+    const sessionBeforeKill = await agentKnex('agent_sessions')
+      .where({ agent_session_id: TOOL_IDS.sessionId })
+      .first();
+    assert.equal(
+      Number(toolBeforeKill.execution_fence_token),
+      Number(sessionBeforeKill.execution_fence_token),
     );
     assert.equal(
       await workspaceFileState(TOOL_IDS.workspaceId, 'dispatch-boundary-marker.txt'),
@@ -1117,12 +1114,9 @@ describeLive(
     );
     // 正对照：同一工作区里经真实内部面执行的命令确实会留下文件，
     // 证明上面的 ABSENT 不是路径写错造成的假通过。
-    const session = await agentKnex('agent_sessions')
-      .where({ agent_session_id: TOOL_IDS.sessionId })
-      .first();
     const control = await runInWorkspaceViaInternalPlane(
       TOOL_IDS,
-      Math.max(1, Number(session?.execution_fence_token || 0)),
+      Number(toolBeforeKill.execution_fence_token),
       'printf CONTROL > dispatch-boundary-control.txt',
     );
     assert.equal(control.exitCode, 0);
@@ -1136,15 +1130,14 @@ describeLive(
   });
 
   it(
-    'observes an interrupted real Sandbox execution: no automatic re-execution, terminal ledger',
+    'marks an interrupted real Sandbox execution UNKNOWN and never re-executes it',
     { timeout: 180_000 },
     async () => {
-      // 现状探针（2026-09-17）。Pi 时代这里要求 exec 侧执行记录与 Agent 工具都变成
-      // UNKNOWN；DSH 下 exec 前台命令不落执行记录，Agent 侧 UNKNOWN 只用于并行工具
-      // 停泊。「exec 中途重启时工具应记 UNKNOWN 还是 FAILED」尚未决策，所以这里不固化
-      // 状态，只钉两条无论哪种语义都必须成立的性质，并把实际结果写进诊断：
-      //   1. 被打断的命令不会自动重跑，也不会在重启后补写副作用；
-      //   2. 工具账本最终到达终态，不会永远停在未决。
+      // 命令执行中执行面重启：Agent 拿不到结果，命令可能已经部分执行。
+      //   1. 工具账本记 UNKNOWN / TOOL_OUTCOME_UNKNOWN（2026-09-17 修复前是
+      //      FAILED/TOOL_ERROR，模型只看到 `fetch failed`）；
+      //   2. 模型收到的是「可能已生效、重试前先检查」的明确提示；
+      //   3. 被打断的命令不会自动重跑，也不会在重启后补写副作用。
       const toolCallId = 'call-real-sandbox-restart-gate';
       const marker = 'sandbox-restart-late.txt';
       let providerCalls = 0;
@@ -1169,7 +1162,7 @@ describeLive(
           };
         }
         const toolMessage = (body?.messages || []).find((m) => m.role === 'tool');
-        toolResultSeenByModel = toolMessage ? String(toolMessage.content).slice(0, 300) : null;
+        toolResultSeenByModel = toolMessage ? String(toolMessage.content).slice(0, 600) : null;
         return 'SANDBOX_RESTART_OBSERVED';
       });
 
@@ -1235,6 +1228,9 @@ describeLive(
       );
       const toolRows = await agentKnex('tool_executions').where({ run_id: SANDBOX_IDS.runId });
       assert.equal(toolRows.length, 1, 'no second tool execution may be created');
+      assert.equal(terminal.status, 'UNKNOWN');
+      assert.equal(terminal.error_code, 'TOOL_OUTCOME_UNKNOWN');
+      assert.match(String(toolResultSeenByModel), /may or may not have taken effect/);
 
       const run = await agentKnex('runs').where({ run_id: SANDBOX_IDS.runId }).first();
       const events = await agentKnex('run_events')

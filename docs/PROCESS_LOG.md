@@ -1104,3 +1104,22 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   工具记 `FAILED/TOOL_ERROR`，模型只看到 `fetch failed` 并继续，而非 UNKNOWN 交人工对账。
 - **验证：** 脚本从零运行 5/5、退出码 0，资源已清理；变异 `REPLAY_SAFE_TOOL_STATUSES` 加入 PROPOSED 时场景 3
   失败（Worker B 重放），已还原。pytest 207。详见[证据](evidence/dsh-restart-gate-rewrite-2026-09-17.md)。
+
+## 2026-09-17 — 工具派发边界落 RUNNING 并绑定；执行面断连记 UNKNOWN
+
+- **Context：** DSH 中断 gate 观测到两处偏差：派发时账本停 PROPOSED、未绑定 request_hash / fence；
+  命令执行中重启 sandbox 时工具记 FAILED、模型只看到 `fetch failed`。用户确认「按设计来，考虑实现最优性」。
+- **根因：** `recordToolStarted` 的 Pi 时序占位分支在 DSH 下无人接管；`bindSandboxRequest` 换引擎后无调用方；
+  `tools/execute` 吞掉 `started` 失败照常执行；RPC 客户端把所有传输异常统一成 INTERNAL_ERROR，DSH 序列化结果时
+  不保留非 HarnessError 的错误码，账本层无法区分结果未知。
+- **Decision / Action：** `recordToolStarted` 即派发边界，统一推进 RUNNING 并在同一事务绑定（新
+  `tool-dispatch-binding.ts`）；`started` 失败 fail-closed 不派发，`ended` 失败仍只留痕。结果未知由 RPC 客户端
+  按「有副作用路由 × 请求可能已送达」判定（新 `exec-outcome.ts`），经工具调用 ALS 标记，`tools/execute` 据此
+  调 `recordToolUnknown` 并给模型明确提示；Run 不停下（与 Pi 设计一致）。gate 脚本改用独立数据根（首跑因开发
+  工作区残留变异运行的文件误判）。`architecture.md`、`development.md`、CHANGELOG、STATUS G2 同步；recorder 行数
+  预算 1558 → 1557。
+- **STATUS IDs：** G2 `partial` → `done`（残留非阻塞项见行内）。
+- **验证：** 新增回归修复前失败（账本 4、install 2、RPC 3）、修复后通过；六套测试、四包类型检查、前端 build 全绿
+  （agent 1380 / exec 419 / contract 118 / api-server 160 / frontend 367 / pytest 207）。重建 agent 镜像并核对容器
+  换新；DSH 中断 gate 5/5、release-gates 全绿、镜像内插件树等 56/56、经 BFF 链路 11/11，链路 Run 的 bash 行已绑定
+  指纹与 fence。详见[证据](evidence/tool-dispatch-boundary-and-outcome-unknown-2026-09-17.md)。

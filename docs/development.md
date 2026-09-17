@@ -382,7 +382,7 @@ scripts/dev/release-gates.sh
 scripts/dev/release-gate-dsh-restart.sh   # 前提：开发栈 mysql / dbpm-fake 已 healthy，agent 与 sandbox 镜像为当前代码
 ```
 
-它重建专用库 `pi_gate_dsh` 并按发布 DDL 建表（测试本身不迁移、不回滚——独立 sandbox 启动时核对清单），用 `docker compose run` 起连该库的专用 sandbox `pi-release-gate-sandbox-dsh` 与专用 Redis，在运行器里以生产 Worker 组合 + 真实 DSH 运行时 + 假模型跑四个中断场景：模型调用中 SIGKILL、`ask_user_question` 停泊后 Worker 重启、工具派发边界 SIGKILL、命令执行中重启 sandbox（最后一项只钉「不自动重跑、账本到终态」）。结束后删除专用容器与库。
+它重建专用库 `pi_gate_dsh` 并按发布 DDL 建表（测试本身不迁移、不回滚——独立 sandbox 启动时核对清单），用 `docker compose run` 起连该库的专用 sandbox `pi-release-gate-sandbox-dsh` 与专用 Redis，在运行器里以生产 Worker 组合 + 真实 DSH 运行时 + 假模型跑四个中断场景：模型调用中 SIGKILL、`ask_user_question` 停泊后 Worker 重启、工具派发边界 SIGKILL、命令执行中重启 sandbox（工具记 `UNKNOWN`、不自动重跑）。专用 sandbox 挂独立数据根 `.runtime/release-gate-dsh/`，不碰开发工作区；结束后删除专用容器、库与数据根。
 
 ### 测试结构
 

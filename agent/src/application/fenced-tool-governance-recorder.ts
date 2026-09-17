@@ -56,6 +56,7 @@ import {
   INTERACTION_STATUS,
 } from '../domain/interaction/interaction-status.js';
 import { terminalizeParallelToolsForPark } from './parallel-tool-park.js';
+import { bindDispatchedSandboxRequest } from './tool-dispatch-binding.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -1002,26 +1003,19 @@ export class FencedToolGovernanceRecorder {
           toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED ||
           toolExecution.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL
         ) {
-          if (
-            toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED &&
-            !toolExecution._policyFingerprint
-          ) {
-            // Pi emits this notification before beforeToolCall. Leave a
-            // side-effect-free placeholder for policy to adopt.
-            statusChanged = false;
-          } else {
-            const fromStatus = toolExecution.status;
-            const tr = await repos.toolExecutions.transitionStatus({
-              toolExecutionId: toolExecution.toolExecutionId,
-              orgId: this.context.orgId,
-              userId: this.context.userId,
-              fromStatus,
-              toStatus: TOOL_EXECUTION_STATUS.RUNNING,
-              setStartedAt: true,
-            });
-            toolExecution = tr.toolExecution;
-            statusChanged = tr.changed;
-          }
+          // DSH: this call IS the dispatch boundary (tools/pre-execute already
+          // allowed it). Pi's "leave a PROPOSED placeholder for policy to adopt"
+          // left DSH commands running under PROPOSED (G2 gate, 2026-09-17).
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: toolExecution.status,
+            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            setStartedAt: true,
+          });
+          toolExecution = tr.toolExecution;
+          statusChanged = tr.changed;
         } else if (toolExecution.status === TOOL_EXECUTION_STATUS.RUNNING) {
           if (input.approvalId) {
             // A second worker may observe the same APPROVED row after the
@@ -1043,6 +1037,11 @@ export class FencedToolGovernanceRecorder {
           );
         }
 
+        // Same transaction: bind request hash + fence before anything is dispatched.
+        toolExecution = await bindDispatchedSandboxRequest({
+          repos, toolExecution, toolName, args: input.args ?? {},
+          executionFenceToken: this.executionFenceToken, context: this.context,
+        });
         // Event only when ledger actually moved into RUNNING.
         if (statusChanged) {
           envelope = await this.#appendEventInTrx(repos, {

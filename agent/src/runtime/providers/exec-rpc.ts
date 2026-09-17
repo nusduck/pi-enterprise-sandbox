@@ -22,6 +22,7 @@ import type { WireError } from '@pi/contract/errors.js';
 import { issueInternalToken, internalBindingForHtu } from '@pi/contract/hmac.js';
 import { canonicalQueryBytes, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
 import type { InternalHmacKeyringInput } from '@pi/contract/hmac.js';
+import { classifyExecOutcomeUnknown } from './exec-outcome.js';
 
 /** 客户端必需的身份与签名材料——由 `runtime` 启动时从服务端环境变量注入，不落盘。 */
 export interface ExecRpcConfig {
@@ -281,7 +282,11 @@ export class ExecRpcClient {
     const url = `${this.baseUrl}${htu}`;
     const timeoutMs = resolveDeadlineMs(opts.deadlineMs, cfg.timeoutMs ?? this.config.timeoutMs);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let deadlineHit = false;
+    const timer = setTimeout(() => {
+      deadlineHit = true;
+      controller.abort();
+    }, timeoutMs);
     // 调用方取消要立刻断连，不等截止定时器——否则「模型取消了工具调用」
     // 与「沙箱还在跑」之间会留一个最长等于预算的窗口。
     const onCallerAbort = (): void => controller.abort();
@@ -326,6 +331,12 @@ export class ExecRpcClient {
       throw new ContractError('INTERNAL_ERROR', 'exec returned failure without WireError');
     } catch (err: unknown) {
       if (err instanceof FsError || err instanceof ContractError) throw err;
+      // 有副作用的请求可能已送达却没拿到响应：标记结果未知，并明确告诉模型（exec-outcome.ts）。
+      const unknown = classifyExecOutcomeUnknown(htu, err, {
+        deadlineHit,
+        callerAborted: opts.signal?.aborted === true,
+      });
+      if (unknown !== null) throw new ContractError('INTERNAL_ERROR', unknown, { cause: err });
       // 网络/超时/JSON 解析等未分类错误：无条件脱敏后以 INTERNAL_ERROR 向外抛
       const wire = toWireError(err, { physicalRoots });
       throw fromWireError(wire);

@@ -722,15 +722,15 @@ export class DshRunExecutor {
               }),
             }
           : {}),
-        // 工具执行的 durable 记录（ADR 0009 D11 / 计划 H9.6）。少了它，Run 跑成功、
-        // 文件真的落盘，而 `tool_executions` 一行都没有——2026-08-31 的 compose
-        // 端到端就是这么发现的。与审批、子 Agent、风险表同一族的断链：
-        // 记录器此前只经 `extensionBundleFactory` 到达运行时。
+        // 工具执行的 durable 记录（ADR 0009 D11 / H9.6）。started 是派发边界（RUNNING + 请求
+        // 绑定）；unknown 用于执行面在请求可能已送达后断开（2026-09-17，G2）。
         toolLedger: {
           started: (i: Record<string, unknown>) =>
             (this._governanceRecorder as never as Record<string, any>).recordToolStarted(i),
           ended: (i: Record<string, unknown>) =>
             (this._governanceRecorder as never as Record<string, any>).recordToolEnded(i),
+          unknown: (i: Record<string, unknown>) =>
+            (this._governanceRecorder as never as Record<string, any>).recordToolUnknown(i),
         },
         // ask_user_question 停泊之后**不能**再写 `ended`——WAITING_INPUT 行已经
         // 落库，再推一次终态会让人回答时 CAS 失败（409，compose 2026-09-02）。

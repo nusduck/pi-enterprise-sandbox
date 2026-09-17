@@ -17,7 +17,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { installEnterprisePolicy } from '../../src/runtime/policy/install.js';
-import { currentToolExecutionContext } from '../../src/runtime/providers/tool-execution-context.js';
+import {
+  currentToolExecutionContext,
+  markCurrentToolOutcomeUnknown,
+} from '../../src/runtime/providers/tool-execution-context.js';
 import { InMemoryApprovalStore } from '../../src/runtime/policy/pre-execute.js';
 import type { GuardListener } from '../../src/runtime/policy/guards.js';
 
@@ -591,13 +594,38 @@ test('停泊中的 toolCallId 不写 ended 账本——判据是结构化谓词�
   ]);
 });
 
-test('H9.6 记账失败不影响工具结果——账本是外部副作用', async () => {
+test('派发边界 fail-closed：started 记账失败时不派发工具体', async () => {
+  // 2026-09-17 之前这里断言「记账失败不打死调用」，started 也一样吞掉。可 started
+  // 是派发边界：它失败常见的原因是 fence 已被别的 Worker 接管——这时照样执行
+  // 就是旧 Worker 在别人的 lease 下落副作用，恢复时账本里也查不到这次派发。
   const ctx = new FakeCtx();
+  let bodyCalls = 0;
   installOn(ctx, {
     toolLedger: {
       async started() {
-        throw new Error('mysql down');
+        throw new Error('stale execution fence');
       },
+      async ended() {
+        throw new Error('must not be reached');
+      },
+    },
+  } as never);
+  await assert.rejects(
+    () =>
+      ctx.execute({ name: 'bash', arguments: {}, id: 'c-stale' }, async () => {
+        bodyCalls += 1;
+        return { isError: false };
+      }),
+    /stale execution fence/,
+  );
+  assert.equal(bodyCalls, 0, '派发边界没记上就不能执行');
+});
+
+test('H9.6 ended 记账失败不影响工具结果——副作用已经发生', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx, {
+    toolLedger: {
+      async started() {},
       async ended() {
         throw new Error('mysql down');
       },
@@ -607,5 +635,52 @@ test('H9.6 记账失败不影响工具结果——账本是外部副作用', asy
     isError: false,
     value: 'fine',
   }));
-  assert.equal((out as { value: string }).value, 'fine', '记账失败把一次合法调用打死是本末倒置');
+  assert.equal((out as { value: string }).value, 'fine', '结束记账失败把一次已执行的调用打死是本末倒置');
+});
+
+test('结果未知：执行面在请求送达后断开时记 unknown，不记 ended', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ phase: string; id: string; reason?: string }> = [];
+  installOn(ctx, {
+    toolLedger: {
+      async started({ toolCallId }) {
+        calls.push({ phase: 'started', id: toolCallId });
+      },
+      async ended({ toolCallId }) {
+        calls.push({ phase: 'ended', id: toolCallId });
+      },
+      async unknown({ toolCallId, reason }) {
+        calls.push({ phase: 'unknown', id: toolCallId, reason });
+      },
+    },
+  } as never);
+
+  // 工具体（DSH 的 bash）把传输错误包成 isError 结果返回。
+  const out = await ctx.execute({ name: 'bash', arguments: {}, id: 'c-lost' }, async () => {
+    markCurrentToolOutcomeUnknown('ECONNRESET');
+    return { isError: true, error: { message: 'connection lost' } };
+  });
+  assert.equal((out as { isError: boolean }).isError, true);
+  assert.deepEqual(calls, [
+    { phase: 'started', id: 'c-lost' },
+    { phase: 'unknown', id: 'c-lost', reason: 'ECONNRESET' },
+  ]);
+
+  // 工具体直接抛错的路径同样按未知记。
+  calls.length = 0;
+  await assert.rejects(() =>
+    ctx.execute({ name: 'bash', arguments: {}, id: 'c-lost-throw' }, async () => {
+      markCurrentToolOutcomeUnknown('deadline');
+      throw new Error('connection lost');
+    }),
+  );
+  assert.deepEqual(calls.map((c) => c.phase), ['started', 'unknown']);
+
+  // 对照：普通失败仍记 ended，且标记不会串到下一次调用。
+  calls.length = 0;
+  await ctx.execute({ name: 'bash', arguments: {}, id: 'c-plain' }, async () => ({
+    isError: true,
+    error: { message: 'exit 1' },
+  }));
+  assert.deepEqual(calls.map((c) => c.phase), ['started', 'ended']);
 });

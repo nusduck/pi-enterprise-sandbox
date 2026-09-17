@@ -43,7 +43,10 @@ import {
 import type { AgentVersionAuthorization, AgentToolDecision } from '../../infrastructure/dsh/agent-version-bindings.js';
 import { RunPark, RUN_PARKED_REASON_CODE } from './park.js';
 import { approvalIdOf } from './approval-id.js';
-import { runWithToolExecutionContext } from '../providers/tool-execution-context.js';
+import {
+  runWithToolExecutionContext,
+  toolOutcomeUnknownReason,
+} from '../providers/tool-execution-context.js';
 import { isDurableInteractionPendingError } from '../providers/user-questions.js';
 import { mcpToolName } from '../../infrastructure/mcp/mcp-config-loader.js';
 import { decideFromRiskTable } from './risk-table.js';
@@ -84,6 +87,17 @@ export interface InstallPolicyOptions {
       toolCallId: string;
       toolName: string;
       isError: boolean;
+      result?: unknown;
+      args?: unknown;
+    }): Promise<unknown>;
+    /**
+     * 结果未知（执行面在请求可能已送达后断开，见 `providers/exec-outcome.ts`）：
+     * 记 UNKNOWN 而不是 FAILED，崩溃恢复据此交人工对账、不重放。缺省时退回 `ended`。
+     */
+    unknown?(input: {
+      toolCallId: string;
+      toolName: string;
+      reason: string;
       result?: unknown;
       args?: unknown;
     }): Promise<unknown>;
@@ -369,29 +383,42 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
       const toolCallId = callIdOf(exec);
       const toolName = toolNameOf(exec);
       const args = argsOf(exec);
+      const execution = { callId: toolCallId, toolName, args };
       return runWithToolExecutionContext(
-        { callId: toolCallId, toolName, args },
+        execution,
         async () => {
           const ledger = options.toolLedger;
           if (ledger === undefined) return await wrapExecute(budget, next);
 
-          // 记账失败**不得**打死一次合法的工具调用：账本是外部副作用。
-          // 但**必须留下痕迹**——静默吞掉的后果是 `tool_executions` 里留下永远
-          // RUNNING 的行，而没有任何人知道为什么（2026-08-31 compose 端到端撞到过）。
+          // `started` 是**派发边界**：它返回时账本已是 RUNNING、sandbox 工具已绑定请求
+          // 指纹与 fence（2026-09-17）。它失败就不派发——常见原因是 fence 已被别的
+          // Worker 接管，照样执行等于旧 Worker 在别人的 lease 下落副作用。
+          await ledger.started({ toolCallId, toolName, args });
+
+          // 结束记账失败**不得**打死一次已执行的调用（副作用已发生），但必须留痕——
+          // 静默吞掉会留下永远 RUNNING 的行而没人知道为什么（2026-08-31 compose 端到端）。
           const note = (phase: string, err: unknown): void => {
             console.error(
               `[tool-ledger] ${phase} failed for ${toolName} (${toolCallId}): ` +
                 `${err instanceof Error ? err.message : String(err)}`,
             );
           };
-          await ledger.started({ toolCallId, toolName, args }).catch((e) => note('started', e));
+          const settle = async (isError: boolean, result: unknown, phase: string): Promise<void> => {
+            const reason = toolOutcomeUnknownReason(execution);
+            if (reason !== undefined && ledger.unknown !== undefined) {
+              await ledger
+                .unknown({ toolCallId, toolName, reason, result, args })
+                .catch((e) => note(`unknown${phase}`, e));
+              return;
+            }
+            await ledger
+              .ended({ toolCallId, toolName, isError, result, args })
+              .catch((e) => note(`ended${phase}`, e));
+          };
           try {
             const result = await wrapExecute(budget, next);
             if (options.isInteractionPending?.(toolCallId) !== true) {
-              const isError = (result as { isError?: boolean } | null)?.isError === true;
-              await ledger
-                .ended({ toolCallId, toolName, isError, result, args })
-                .catch((e) => note('ended', e));
+              await settle((result as { isError?: boolean } | null)?.isError === true, result, '');
             }
             return result;
           } catch (err) {
@@ -400,9 +427,7 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
             // as FAILED leaves the tool un-respondable (CAS: have FAILED,
             // expected RUNNING) — compose 2026-09-02, 409 CONFLICT.
             if (!isDurableInteractionPendingError(err)) {
-              await ledger
-                .ended({ toolCallId, toolName, isError: true, result: { error: String(err) }, args })
-                .catch((e) => note('ended(after throw)', e));
+              await settle(true, { error: String(err) }, '(after throw)');
             }
             throw err;
           }

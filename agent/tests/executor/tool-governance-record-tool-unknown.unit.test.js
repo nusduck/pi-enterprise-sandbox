@@ -288,6 +288,22 @@ describe('FencedToolGovernanceRecorder.recordToolUnknown', () => {
       /already terminal as FAILED/i,
     );
 
+    // CANCELLED — force status. Prepared before the approval park below: a
+    // sandbox tool can only be dispatched while the Run is RUNNING.
+    await prepareRunning(gov, 'tc-cancel');
+    const cancelRow = state.tables.tool_executions.find(
+      (t) => t.tool_call_id === 'tc-cancel',
+    );
+    cancelRow.status = TOOL_EXECUTION_STATUS.CANCELLED;
+    cancelRow.completed_at = '2026-07-18 12:00:00.000';
+    await assert.rejects(
+      () =>
+        gov.recordToolUnknown({
+          toolCallId: 'tc-cancel',
+          toolName: 'bash',
+        }),
+      /already terminal as CANCELLED/i,
+    );
     // WAITING_APPROVAL
     await gov.recordPolicyDecision({
       toolCallId: 'tc-appr',
@@ -322,21 +338,6 @@ describe('FencedToolGovernanceRecorder.recordToolUnknown', () => {
       /WAITING_APPROVAL|approval is pending/i,
     );
 
-    // CANCELLED — force status
-    await prepareRunning(gov, 'tc-cancel');
-    const cancelRow = state.tables.tool_executions.find(
-      (t) => t.tool_call_id === 'tc-cancel',
-    );
-    cancelRow.status = TOOL_EXECUTION_STATUS.CANCELLED;
-    cancelRow.completed_at = '2026-07-18 12:00:00.000';
-    await assert.rejects(
-      () =>
-        gov.recordToolUnknown({
-          toolCallId: 'tc-cancel',
-          toolName: 'bash',
-        }),
-      /already terminal as CANCELLED/i,
-    );
   });
 
   it('normal recordToolEnded errors remain FAILED (not UNKNOWN)', async () => {

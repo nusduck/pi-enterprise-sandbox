@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed（工具账本与执行面中断）
+
+- **工具在派发到执行面之前就记为 RUNNING，并绑定请求指纹与 fence**：DSH 下此前整个执行期间账本停在
+  `PROPOSED`、`request_hash` / `execution_fence_token` 为空（Pi 时代的调用顺序假设）。现在绑定失败
+  （例如 fence 已被别的 Worker 接管）时**不派发**，不再「记账失败也照样执行」。
+- **执行面在请求可能已送达后断开时，工具记为 `UNKNOWN`（`TOOL_OUTCOME_UNKNOWN`）**：此前一律记 `FAILED`，
+  模型只看到 `fetch failed`，可能把已经部分执行的命令再跑一遍。现在模型收到「操作可能已生效、重试前先检查」
+  的明确提示；只覆盖有副作用的操作（shell、写 / 编辑文件、提交产物），连不上执行面、主动取消与只读操作仍记失败。
+  前端既有的 UNKNOWN 展示（结果未确认、勿自动重试）随之生效。
+
 ### Changed（破坏性：Worker 容量语义）
 
 - **Run 队列按子任务深度分层，每层保留消费槽**（审查 R3，[ADR 0012](adr/0012-depth-layered-run-queues.md)）：
