@@ -107,30 +107,34 @@ export function readSkillPackageName(packageDir) {
  * @param destination
  * @param [opts]
  */
-async function copyTree(source: string, destination: string, opts: { deadlineAt?: number } = {}) {
+async function copyTree(
+  source: string,
+  destination: string,
+  opts: { deadlineAt?: number; sharedWritable?: boolean } = {},
+) {
   assertBeforeDeadline(opts.deadlineAt);
   const stat = await fsp.lstat(source);
   if (stat.isSymbolicLink()) {
     throw new Error(`Symbolic links are not allowed in Skill packages: ${source}`);
   }
   if (stat.isDirectory()) {
-    await fsp.mkdir(destination, { recursive: true, mode: 0o755 });
+    const mode = opts.sharedWritable ? 0o777 : 0o755;
+    await fsp.mkdir(destination, { recursive: true, mode });
+    if (opts.sharedWritable) await fsp.chmod(destination, mode);
     for (const entry of await fsp.readdir(source)) {
       if (entry.toLowerCase() === '.git') continue;
-      await copyTree(
-        path.join(source, entry),
-        path.join(destination, entry),
-        opts,
-      );
+      await copyTree(path.join(source, entry), path.join(destination, entry), opts);
     }
     return;
   }
   if (!stat.isFile()) {
     throw new Error(`Special filesystem entries are not allowed in Skill packages: ${source}`);
   }
-  await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o755 });
+  const mode = opts.sharedWritable ? 0o777 : 0o755;
+  await fsp.mkdir(path.dirname(destination), { recursive: true, mode });
+  if (opts.sharedWritable) await fsp.chmod(path.dirname(destination), mode);
   await fsp.copyFile(source, destination, fs.constants.COPYFILE_EXCL);
-  await fsp.chmod(destination, 0o644);
+  await fsp.chmod(destination, opts.sharedWritable ? 0o666 : 0o644);
 }
 
 async function rmrf(target) {
@@ -194,15 +198,19 @@ function digestDir(dir: string, opts: { deadlineAt?: number } = {}) {
  *
  * @param skillRoot `<base>/<org>/<user>`
  */
-export async function ensureTraversableUserSkillRoot(skillRoot: string) {
+export async function ensureTraversableUserSkillRoot(
+  skillRoot: string,
+  opts: { sharedWritable?: boolean } = {},
+) {
   const resolved = path.resolve(skillRoot);
-  await fsp.mkdir(resolved, { recursive: true, mode: 0o755 });
+  const mode = opts.sharedWritable ? 0o777 : 0o755;
+  await fsp.mkdir(resolved, { recursive: true, mode });
   // `<org>` first, then `<user>`: repairing top-down keeps every prefix
   // traversable at each step.
   for (const dir of [path.dirname(resolved), resolved]) {
     try {
       const stat = await fsp.stat(dir);
-      if ((stat.mode & 0o755) !== 0o755) await fsp.chmod(dir, 0o755);
+      if ((stat.mode & mode) !== mode) await fsp.chmod(dir, mode);
     } catch {
       // A root we cannot stat is reported by the install that follows.
     }
@@ -271,13 +279,14 @@ function assertDoesNotShadowSystem(name, systemSkillNames) {
  *   systemSkillNames?: Iterable<string>,
  * }} input
  */
-async function installPreparedPackage(input: { packageSource: string, stagingPackage: string, skillRoot: string, deadlineAt: number, systemSkillNames?: Iterable<string>, }) {
+async function installPreparedPackage(input: { packageSource: string, stagingPackage: string, skillRoot: string, deadlineAt: number, systemSkillNames?: Iterable<string>, sharedWritable?: boolean, }) {
   const declaredName = readSkillPackageName(input.packageSource);
   const name = validateSkillName(declaredName);
   assertDoesNotShadowSystem(name, input.systemSkillNames);
 
   await copyTree(input.packageSource, input.stagingPackage, {
     deadlineAt: input.deadlineAt,
+    sharedWritable: input.sharedWritable,
   });
   const meta = validateSkillPackage(input.stagingPackage, { expectedName: name });
   const digest = digestDir(input.stagingPackage, { deadlineAt: input.deadlineAt });
@@ -381,7 +390,7 @@ export function assertSkillArchiveName(raw: unknown, sourceType: 'upload' | 'san
  *   systemSkillNames?: Iterable<string>,
  * }} opts
  */
-export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveName: string, sourceType?: 'upload' | 'sandbox_build', attachmentId?: string, sourcePath?: string, skillRoot: string, timeoutMs?: number, systemSkillNames?: Iterable<string>, }) {
+export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveName: string, sourceType?: 'upload' | 'sandbox_build', attachmentId?: string, sourcePath?: string, skillRoot: string, timeoutMs?: number, systemSkillNames?: Iterable<string>, sharedWritable?: boolean, }) {
   const sourceType = normalizeArchiveSourceType(opts.sourceType);
   const archiveName = assertSkillArchiveName(opts.archiveName, sourceType);
   const attachmentId = String(opts.attachmentId || '').trim();
@@ -402,7 +411,9 @@ export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveN
   try {
     // Before the 0700 staging dir, so its mode is not stamped onto the
     // identity directories the Sandbox has to traverse.
-    await ensureTraversableUserSkillRoot(skillRoot);
+    await ensureTraversableUserSkillRoot(skillRoot, {
+      sharedWritable: opts.sharedWritable,
+    });
     await fsp.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
     const archive = await extractSkillArchive(opts.archiveBytes, extracted, {
       deadlineAt,
@@ -414,6 +425,7 @@ export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveN
       skillRoot,
       deadlineAt,
       systemSkillNames: opts.systemSkillNames,
+      sharedWritable: opts.sharedWritable,
     });
     await rmrf(stagingRoot);
     return {

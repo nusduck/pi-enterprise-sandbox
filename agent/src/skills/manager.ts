@@ -347,6 +347,7 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
           sourceType,
           ...(fromSandbox ? { sourcePath } : { attachmentId }),
           skillRoot: destinationRoot,
+          sharedWritable: Boolean(draftRoot && destinationRoot === draftRoot),
           // 草稿根里叫什么名字都行（它不进任何人的上下文）；遮蔽检查在**启用**
           // 那一刻做。但仍然传进去——直接装的回退路径需要它。
           systemSkillNames: systemSkillNames(),
@@ -394,6 +395,9 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
           archiveName,
           sourceType: 'upload',
           skillRoot: draftRoot,
+          // Agent and Sandbox share the draft tree; both service users must be
+          // able to create and edit the uploaded package.
+          sharedWritable: true,
           systemSkillNames: systemSkillNames(),
         });
         audit({

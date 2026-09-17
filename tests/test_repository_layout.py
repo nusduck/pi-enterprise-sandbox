@@ -48,7 +48,10 @@ HOTSPOT_LINE_BUDGETS = {
     # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
     # 2026-09-16 拆出 container-run-queue.ts（分层 Run 队列的装配、路由与拆卸，
     # ADR 0012），1_065 -> 1_058，预算继续收紧。
-    "agent/src/bootstrap/container.ts": 1_058,
+    # 2026-09-17 AgentCatalogService 注入带 live mcpDiscovery 的
+    # AgentConfigValidator（移植 dsh-rebuild 4ebfe335），否则配置目录回落到
+    # MCP_SERVERS_JSON 的「已配置零工具」投影；1_058 -> 1_066。
+    "agent/src/bootstrap/container.ts": 1_066,
     # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts
     # （/health + /ready），1_439 -> 1_399，预算收紧。
     "agent/src/bootstrap/create-http-server.ts": 1_399,

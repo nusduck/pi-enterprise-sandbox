@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **共享 Skill 草稿目录对 Agent / Sandbox 双方可写**：草稿树由 uid 1000（Agent）与
+  uid 10001（Sandbox）共同写入；上传解包不再用 0755/0644 把另一侧锁在外面。
+  Compose 增加一次性 `skill-draft-init`，把宿主 bind 源先调成 0777，避免 Compose
+  创建出 root 所有的 0755 目录后第一次上传就 EACCES。
+- **配置目录能显示 live MCP 工具名**：`readMcpReadiness()` 投影是蛇形字段
+  （`server_id` / `tools` / `connection_status`），诊断面此前只认驼峰，静默回落到
+  「已配置、零工具」。现在两种形状都读；`AgentCatalogService` 也改用带 live
+  `mcpDiscovery` 的校验器，不再只靠 `MCP_SERVERS_JSON` 的无工具元数据。
 - **沙箱资源限额与子进程磁盘配额真的接线了**（审查 R1）：`SANDBOX_MAX_PROCESS_COUNT`
   / `SANDBOX_MAX_OPEN_FILES` / `SANDBOX_MAX_CPU_TIME_SECONDS` / `SANDBOX_MAX_FILE_SIZE_MB`
   / `SANDBOX_EXECUTION_TIMEOUT_SECONDS` / `SANDBOX_MAX_OUTPUT_CHARS` 此前在 `exec/src`

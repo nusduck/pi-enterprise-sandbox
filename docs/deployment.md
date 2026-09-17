@@ -679,6 +679,12 @@ curl -f http://localhost:4000/health/ready
 | `./.runtime/sandbox/skill-draft` | Agent `/home/sandbox/skill-draft` + exec `/var/sandbox/skill-draft` | owner-scoped Skill 草稿；Compose 显式打开 |
 | `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布版本（按摘要分目录） |
 
+Compose 一次性服务 `skill-draft-init` 会在 agent / agent-worker / sandbox 启动前把
+`./.runtime/sandbox/skill-draft` 建成 `0777`。Agent（uid 1000）与 Sandbox（uid 10001）
+共用这棵树；若不先放开宿主 bind 源，Compose 创建出的 root 所有 `0755` 目录会让
+第一次草稿上传在创建 `<org>/<user>` 前就 EACCES。上传解包进草稿时也会把包内目录 /
+文件写成 `0777` / `0666`，让两侧都能继续改。
+
 ### Skill 挂载与用户生命周期
 
 > **存量部署迁移注意**：api-server 与 agent 容器自 2026-08-23 起以非 root
