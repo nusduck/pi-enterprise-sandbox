@@ -428,7 +428,7 @@ export const config = {
   AGENT_INTERNAL_TOKEN: process.env.AGENT_INTERNAL_TOKEN || '',
   LLMIO_BASE_URL: process.env.LLMIO_BASE_URL || '',
   LLMIO_API_KEY: process.env.LLMIO_API_KEY || '',
-  MODEL_ID: process.env.MODEL_ID || 'deepseek-v4-flash',
+  MODEL_ID: process.env.MODEL_ID || 'deepseek-flash',
   /**
    * Backward-compatible env overrides applied on top of the Model Registry
    * entry for the active MODEL_ID. Registry is the sole capability source on

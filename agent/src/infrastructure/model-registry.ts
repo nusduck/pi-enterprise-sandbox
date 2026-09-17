@@ -71,13 +71,35 @@ export const SEED_MODELS = Object.freeze([
     supports_developer_role: false,
     supports_reasoning: false,
     thinking_levels: Object.freeze([]),
-    default: true,
+    default: false,
     pricing: Object.freeze({
       input_per_mtok: 0.14,
       output_per_mtok: 0.28,
       cache_read_per_mtok: 0.014,
       cache_write_per_mtok: 0.14,
     }),
+    enabled: true,
+  },
+  {
+    provider: 'llmio',
+    model_id: 'deepseek-flash',
+    name: 'DeepSeek Flash',
+    api_protocol: 'openai-completions',
+    input_modalities: Object.freeze(['text']),
+    context_window: DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    supports_tool_call: true,
+    supports_developer_role: false,
+    supports_reasoning: true,
+    thinking_levels: Object.freeze(['low', 'high', 'xhigh']),
+    thinking_wire_map: Object.freeze({ xhigh: 'max' }),
+    pricing: Object.freeze({
+      input_per_mtok: 0,
+      output_per_mtok: 0,
+      cache_read_per_mtok: 0,
+      cache_write_per_mtok: 0,
+    }),
+    default: true,
     enabled: true,
   },
   {
@@ -431,7 +453,7 @@ export function resolveDefaultModelId(registry: Map<string, ModelEntry>) {
     if (entry.default === true) return entry.model_id;
   }
   // Legacy fallback so registries without any `default` flag keep working.
-  return 'deepseek-v4-flash';
+  return 'deepseek-flash';
 }
 
 /**

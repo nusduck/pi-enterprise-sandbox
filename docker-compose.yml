@@ -188,7 +188,7 @@ services:
     image: ${FRONTEND_IMAGE:-pi-enterprise-frontend:latest}
     container_name: ${FRONTEND_CONTAINER:-pi-enterprise-frontend}
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
+      - "0.0.0.0:${FRONTEND_PORT:-3000}:80"
     restart: unless-stopped
     depends_on:
       api-server:
@@ -328,7 +328,7 @@ services:
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
-      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      MODEL_ID: ${MODEL_ID:-deepseek-flash}
       MODEL_CONTEXT_WINDOW: ${MODEL_CONTEXT_WINDOW:-262144}
       MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-65536}
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
@@ -429,7 +429,7 @@ services:
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
-      MODEL_ID: ${MODEL_ID:-deepseek-v4-flash}
+      MODEL_ID: ${MODEL_ID:-deepseek-flash}
       MODEL_CONTEXT_WINDOW: ${MODEL_CONTEXT_WINDOW:-262144}
       MODEL_MAX_TOKENS: ${MODEL_MAX_TOKENS:-65536}
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}

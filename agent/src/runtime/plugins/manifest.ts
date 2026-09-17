@@ -96,6 +96,7 @@ const FACTORY_TUNING: readonly PatchEntry[] = [
       defaultContextWindow: 262144,
       models: [
         { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 262144 },
+        { id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 262144, reasoning: true },
         { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 262144, reasoning: true },
         {
           id: 'deepseek-v4-flash-vision-exp',

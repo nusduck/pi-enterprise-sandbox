@@ -14,12 +14,42 @@
       "supports_developer_role": false,
       "supports_reasoning": false,
       "thinking_levels": [],
-      "default": true,
+      "default": false,
       "pricing": {
         "input_per_mtok": 0.14,
         "output_per_mtok": 0.28,
         "cache_read_per_mtok": 0.014,
         "cache_write_per_mtok": 0.14
+      },
+      "enabled": true
+    },
+    {
+      "provider": "llmio",
+      "model_id": "deepseek-flash",
+      "name": "DeepSeek Flash",
+      "api_protocol": "openai-completions",
+      "input_modalities": [
+        "text"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "supports_tool_call": true,
+      "supports_developer_role": false,
+      "supports_reasoning": true,
+      "thinking_levels": [
+        "low",
+        "high",
+        "xhigh"
+      ],
+      "thinking_wire_map": {
+        "xhigh": "max"
+      },
+      "default": true,
+      "pricing": {
+        "input_per_mtok": 0,
+        "output_per_mtok": 0,
+        "cache_read_per_mtok": 0,
+        "cache_write_per_mtok": 0
       },
       "enabled": true
     },
