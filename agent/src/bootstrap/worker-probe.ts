@@ -76,6 +76,29 @@ export async function pingDependencies(
   return { mysql, redis };
 }
 
+/**
+ * Agent HTTP `/ready` 的 data plane 判定：容器已启动且本次 `SELECT 1` / `PING` 都成功。
+ * 与 Worker 同一口径；只看客户端对象是否已建会让依赖中断时仍报就绪。
+ */
+export async function isDataPlaneReachable(
+  container: {
+    isDataPlaneReady(): boolean;
+    knex: { raw(sql: string): Promise<unknown> } | null;
+    redis: { ping(): Promise<unknown> } | null;
+  },
+  checkTimeoutMs = DEFAULT_AGENT_WORKER_PROBE_CHECK_TIMEOUT_MS,
+): Promise<boolean> {
+  if (!container.isDataPlaneReady()) return false;
+  const { mysql, redis } = await pingDependencies(
+    {
+      pingMysql: () => container.knex!.raw('select 1'),
+      pingRedis: () => container.redis!.ping(),
+    },
+    checkTimeoutMs,
+  );
+  return mysql && redis;
+}
+
 export async function evaluateWorkerReadiness(
   state: WorkerProbeState,
   checkTimeoutMs = DEFAULT_AGENT_WORKER_PROBE_CHECK_TIMEOUT_MS,

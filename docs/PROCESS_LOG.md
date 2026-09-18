@@ -1138,3 +1138,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   ② Run 执行期间的 follow-up 直接 `FAILED / session lock busy`，不排队（与 plan §12、`follow-up-service.ts`
   注释不符，单副本同样复现）；③ Agent HTTP `/ready` 不探活依赖，与 deployment.md 不一致；④ 新组织首次并发建会话
   可能 409（默认 Agent 惰性创建撞唯一键后在 RR 快照里重读不到）；⑤ BullMQ 锁续期失败被记成 Redis 连接错误。
+
+## 2026-09-18 — Agent `/ready` 探活；K8s 为主的本地运行；默认 Agent 并发 409 复现
+
+- **Context：** 用户对上一轮发现的决定：③ `/ready` 不麻烦就改；④ 先测试；本地运行改成 K8s 为主、保留 Compose；
+  目标环境要求镜像以 up_docker（1000:1000）运行。
+- **Action：** `/ready` 改为复用 Worker 的 `pingDependencies`（`worker-probe.ts` 新增 `isDataPlaneReachable`，
+  `http-main.ts` 接线；`container.ts` 行数预算已满未动）。`scripts/dev/k8s-sim/` 改名 `scripts/dev/k8s/`，
+  `up.sh dev|sim`：dev 为日常本地运行（真实模型，Compose 只留依赖与 exec），sim 为多副本演练；环境变量改取
+  `docker compose config`；新增 sandbox-mcp 部署、dev 的 LoadBalancer 端口映射；所有 Pod 关 `enableServiceLinks`。
+  `development.md`、`deployment.md`、CHANGELOG 同步。默认 Agent 竞争写了集成测试复现，未修、未提交。
+- **STATUS IDs：** 无状态变化。
+- **验证：** 回归测试修复前失败、修复后 13/13；sim 真机 Redis 暂停时 Agent HTTP 两副本均摘除（4/4）；
+  dev 模式真实链路 11/11；六套测试、类型检查、前端 build 见[证据](evidence/k8s-local-run-and-ready-probe-2026-09-18.md)。
+- **未完成：** up_docker 改造被自动审批以「削弱安全」拦下（sandbox-mcp 由 10001 改 1000 触及 AGENTS.md §2），
+  未落盘，待用户确认范围；follow-up 排队缺陷、默认 Agent 竞争均未修。

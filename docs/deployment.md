@@ -723,7 +723,7 @@ AgentVersion 的 `configJson.toolPolicy` 是下层，**只能收紧**。
 |------|------|------|----------|
 | Sandbox liveness | `GET /health` | 200 | 进程无响应 |
 | Sandbox readiness | `GET /ready`（同 `/health/ready`） | 200 | **503** = 已进入关停；数据库 `SELECT 1` 失败或 2s 超时；workspaces / tmp / artifacts / control 任一根不是可读写目录；或启动期 Bubblewrap 预检未通过（`isolation: unchecked / unavailable`）。响应只含 `database`、`storage.<名>`、`isolation` 的 ok / unavailable，不含路径与错误文本。bwrap 不在每次请求中重跑，只读启动期结果 |
-| Agent readiness | `GET /ready`（Agent port） | 200 | **503** = Agent data plane、Sandbox，或任一 `enabled` MCP Server 不可用；响应含 MCP Server/tool 数量与状态 |
+| Agent readiness | `GET /ready`（Agent port） | 200 | **503** = Agent data plane 不可用（容器未启动，或本次 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败，与 Worker 同一判定）、Sandbox 不可达，或任一 `enabled` MCP Server 不可用；响应含 MCP Server/tool 数量与状态 |
 | Agent Worker liveness | `GET /health`（`AGENT_WORKER_PROBE_PORT`，默认 4101） | 200 | Worker 事件循环无响应；不查依赖 |
 | Agent Worker readiness | `GET /ready`（同上） | 200 | **503** = 未完成启动（含 schema 核对、恢复扫描、消费者创建）、已进入关停、BullMQ 消费者未运行或被依赖守卫暂停（`consumer: paused`），或 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败；响应只含各项 ok/unavailable，不含错误详情 |
 | sandbox-mcp liveness | `GET /health`（8082） | 200 | facade 进程无响应；不查依赖 |

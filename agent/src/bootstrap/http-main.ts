@@ -23,6 +23,7 @@ import {
   resolveSkillVersionGcGraceMs,
 } from '../application/skill-enablement-service.js';
 import { createAgentHttpServer } from './create-http-server.js';
+import { isDataPlaneReachable } from './worker-probe.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { BrowserAuthService } from '../application/browser-auth-service.js';
@@ -534,8 +535,9 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     browserAuthService,
     config,
     sandboxHealthCheck: sandboxHealthCheck || undefined,
-    // /ready requires data plane (MySQL+Redis started). Health-only mode → 503.
-    dataPlaneReady: () => container.isDataPlaneReady(),
+    // /ready requires a reachable data plane: MySQL `SELECT 1` + Redis `PING` (same as
+    // the Worker probe). Health-only mode (container not started) → 503.
+    dataPlaneReady: () => isDataPlaneReachable(container),
     mcpReadiness: () => container.getMcpReadiness(),
     getExtensionDiagnostics,
     mutateSkill,

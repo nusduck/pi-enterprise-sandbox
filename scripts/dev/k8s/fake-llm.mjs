@@ -1,4 +1,4 @@
-// K8s 本地演练用的可控假模型（OpenAI 兼容 chat/completions）。只在 scripts/dev/k8s-sim 里用，
+// K8s 多副本演练（up.sh sim）用的可控假模型（OpenAI 兼容 chat/completions）。只在 scripts/dev/k8s 的 sim 模式里用，
 // 生产与开发 Compose 都不加载它。
 //
 // 行为由用户消息里的标记决定：`[[SIM id=<id> mode=<mode>]]`

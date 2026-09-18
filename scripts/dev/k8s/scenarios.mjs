@@ -1,6 +1,6 @@
-// K8s 本地演练的多副本场景驱动（宿主机 Node 22 运行；先 up.sh）。
+// K8s 多副本演练的场景驱动（宿主机 Node 22 运行；先 `up.sh sim`）。
 //
-//   node scripts/dev/k8s-sim/scenarios.mjs [场景...]     默认按顺序全跑
+//   node scripts/dev/k8s/scenarios.mjs [场景...]     默认按顺序全跑
 //
 // 场景（每个都经 frontend → BFF → Agent 的真实入口建 Run，模型是 fake-llm）：
 //   exactly-once   8 个 Run 同时提交：每个只执行一次（模型首轮 1 次、工具账本 1 行、工作区副作用 1 行），两个副本都在消费
@@ -10,7 +10,7 @@
 //   cancel         Run 在某个副本上执行时经 BFF 取消：Run 取消、模型调用被中断、放行后不再继续
 //   same-session   同一会话第一个 Run 在跑时发 follow-up：排在第一个之后执行，不会在另一个副本上并行
 //   rolling-restart 在途 Run 时 rollout restart：原副本 SIGTERM 后排空完成，不重放
-//   redis-outage   暂停专用 Redis：Worker 摘流量（Agent HTTP 的行为单独记录），恢复后自动就绪且 Run 可用
+//   redis-outage   暂停专用 Redis：Worker 与 Agent HTTP 都摘流量，恢复后自动就绪且 Run 可用
 //
 // SIM_WORKERS=<n> 指定期望的 Worker 副本数（默认 2）；SIM_RESULT_FILE=<path> 把结果写成 JSON。
 //
@@ -432,16 +432,14 @@ const scenarios = {
       do {
         await sleep(3_000);
         during = await readiness();
-      } while (Date.now() < deadline && during.some((p) => p.app === 'agent-worker' && p.ready));
-      await sleep(12_000); // 再观察一个探针窗口，看 Agent HTTP 是否跟着摘流量
+      } while (Date.now() < deadline && during.some((p) => p.ready));
     } finally {
       await sh('docker', ['unpause', 'pi-k8s-sim-redis']);
     }
     const workers = during.filter((p) => p.app === 'agent-worker');
     const agents = during.filter((p) => p.app === 'agent');
     record(S, 'workers_unready_during_outage', workers.every((p) => !p.ready), { before, during: workers });
-    // deployment.md 写「Agent data plane 不可用即 503」，但 isDataPlaneReady() 只看客户端对象是否已建、不 ping，
-    // 这一条记录实际行为，失败即说明文档与实现不一致（2026-09-18 演练发现，待决定改哪一边）。
+    // Agent HTTP /ready 也要 ping MySQL / Redis（2026-09-18 演练发现此前只看客户端对象，已修）。
     record(S, 'agent_http_unready_during_outage', agents.every((p) => !p.ready), { during: agents });
     const deadline = Date.now() + 90_000;
     let after;

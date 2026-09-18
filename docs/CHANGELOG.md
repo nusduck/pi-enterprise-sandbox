@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed（探针）
+
+- **Agent HTTP `/ready` 真正探测 MySQL 与 Redis**：此前只看客户端对象是否已建，依赖中断时仍报就绪，
+  编排不会摘流量。现在与 Worker 探针同一判定（`SELECT 1` / `PING`，各 2s 超时），失败返回 503。
+
 ### Fixed（工具账本与执行面中断）
 
 - **工具在派发到执行面之前就记为 RUNNING，并绑定请求指纹与 fence**：DSH 下此前整个执行期间账本停在
