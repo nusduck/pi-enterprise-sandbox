@@ -103,14 +103,18 @@ export class AgentCatalogRepository {
     return row ? mapAgentDefinition(row) : null;
   }
 
-  async getDefinitionByOrgAndName(orgId: string, name: string) {
+  /**
+   * `lockForShare`: 加锁读（LOCK IN SHARE MODE）读最新已提交版本，不受 REPEATABLE READ
+   * 快照影响。撞唯一键后的重读必须用它——普通读看不到并发事务刚提交的那一行。
+   */
+  async getDefinitionByOrgAndName(orgId: string, name: string, opts: { lockForShare?: boolean } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     if (typeof name !== 'string' || !name.trim()) {
       throw new Error('name must be a non-empty string');
     }
-    const row = await this.db('agent_definitions')
-      .where({ org_id: oid, name: name.trim() })
-      .first();
+    let q = this.db('agent_definitions').where({ org_id: oid, name: name.trim() });
+    if (opts.lockForShare) q = q.forShare();
+    const row = await q.first();
     return row ? mapAgentDefinition(row) : null;
   }
 
@@ -325,7 +329,7 @@ export class AgentCatalogRepository {
         });
       } catch (err) {
         if (!(err instanceof ConflictError)) throw err;
-        def = await this.getDefinitionByOrgAndName(orgId, name);
+        def = await this.getDefinitionByOrgAndName(orgId, name, { lockForShare: true });
         if (!def) throw err;
       }
     }
@@ -358,8 +362,10 @@ export class AgentCatalogRepository {
         });
       } catch (err) {
         if (!(err instanceof ConflictError)) throw err;
+        // 同上：加锁读才能看到并发事务刚提交的版本 1。
         const raced = await this.db('agent_versions')
           .where({ agent_id: def.agentId, version_no: 1 })
+          .forShare()
           .first();
         if (!raced) throw err;
         version = mapAgentVersion(raced);

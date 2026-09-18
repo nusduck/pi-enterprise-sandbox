@@ -1164,3 +1164,15 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **STATUS IDs：** 无状态变化（H4 说的是执行面 10001，未变）。
 - **验证：** 新测试修复前 6 失败、修复后 7/7；pytest 214、exec 419/0；K8s dev 与纯 Compose 两种方式下容器均为
   up_docker，真实链路 11/11（含经前端代理）。详见[证据](evidence/container-user-up-docker-2026-09-18.md)。
+
+## 2026-09-18 — 默认 Agent 惰性创建的并发 409
+
+- **Context：** K8s 演练发现、集成测试复现（组织与用户已存在、默认 Agent 未建时 8 并发建会话 7 个
+  `ConflictError`）。用户同意修复。
+- **根因：** `ensureTenantDefaultAgent` 撞 `uk_agent_definitions_org_name` 后在同一事务里普通读重读；事务内早先的
+  普通读已建立 REPEATABLE READ 快照，看不到并发事务刚提交的行，于是抛出原 ConflictError（HTTP 409，不可重试）。
+  版本 1 的撞键重读同理。
+- **Action：** 两处撞键后的重读改为加锁读（`forShare()`，5.7 下为 `LOCK IN SHARE MODE`），读最新已提交版本；
+  `getDefinitionByOrgAndName` 增加 `lockForShare` 选项。新增 `agent/tests/mysql/default-agent-race.integration.test.js`。
+- **验证：** 集成测试修复前 1 失败（7/8 并发冲突）、修复后在 release-gate 运行器里对专用库连跑 4 次均 3/3；
+  相关单元测试 31/31。

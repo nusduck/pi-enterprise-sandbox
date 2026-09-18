@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **frontend 容器改听 8080**：非 root 绑不了 80。Compose 映射改为 `3000:8080`，边缘 nginx 的 `proxy_pass` 改为
   `frontend:8080`；自建的部署清单要同步 containerPort、探针与 Service targetPort。
 
+### Fixed（并发）
+
+- **新组织第一次被并发建会话 / 建 Run 时不再返回 409**：租户默认 Agent 在首次使用时惰性创建，并发请求撞
+  唯一键后在同一事务里重读，REPEATABLE READ 快照看不到对方刚提交的行，于是把冲突抛给调用方（8 个并发里 7 个 409）。
+  重读改为加锁读（`LOCK IN SHARE MODE`），读到最新已提交版本。
+
 ### Fixed（探针）
 
 - **Agent HTTP `/ready` 真正探测 MySQL 与 Redis**：此前只看客户端对象是否已建，依赖中断时仍报就绪，
