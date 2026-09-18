@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed（破坏性：容器用户与前端端口）
+
+- **K8s 内的镜像统一以 `up_docker`（1000:1000）运行**（目标环境要求）：agent / agent-worker、api-server 由同 uid 的
+  `node` 改名，sandbox-mcp 由 uid 10001 改为 1000，frontend 由 root 主进程改为非 root。`USER` 写数字，Pod 可直接开
+  `runAsNonRoot`。执行面镜像与 VM 上的 exec 不变（10001 / `pi-exec`）。
+- **frontend 容器改听 8080**：非 root 绑不了 80。Compose 映射改为 `3000:8080`，边缘 nginx 的 `proxy_pass` 改为
+  `frontend:8080`；自建的部署清单要同步 containerPort、探针与 Service targetPort。
+
 ### Fixed（探针）
 
 - **Agent HTTP `/ready` 真正探测 MySQL 与 Redis**：此前只看客户端对象是否已建，依赖中断时仍报就绪，

@@ -58,8 +58,9 @@
   例如 Agent `/internal/*` 空 token 关闭平面；不能为了启动成功绕过必需的鉴权配置。
 - **跨租户一律 404**，不用 403——存在性本身不能泄漏。
 - **令牌比较用常量时间**（`timingSafeEqual`）。
-- **容器非 root 运行**：`api-server`/`agent` 以 `node` 用户运行；`sandbox`/`sandbox-mcp`
-  以 uid 10001 运行。exec 进程自身若带着 capabilities，会在 exec bwrap 之前用
+- **容器非 root 运行**：K8s 内的镜像（`api-server`、`agent`/`agent-worker`、`sandbox-mcp`、`frontend`）
+  以 `up_docker`（1000:1000，目标环境要求）运行，`USER` 写数字；执行面 `sandbox` 以 uid 10001 运行
+  （bwrap 隔离内的 uid 映射依赖它）。exec 进程自身若带着 capabilities，会在 exec bwrap 之前用
   `setpriv --inh-caps=-all --ambient-caps=-all` 剥掉——镜像里缺 `setpriv` 时
   **fail-closed 拒绝执行**，不是降级放行。
 - **所有出站调用有超时**：无界 fetch 会让一个挂起的依赖拖垮全站。

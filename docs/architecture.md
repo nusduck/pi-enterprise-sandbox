@@ -372,7 +372,7 @@ Agent 与 exec 各自产生一份进程身份。
 | **Docker** | 容器隔离；`backend_internal`（internal）与 `service_egress`；Sandbox 无 NET_ADMIN/NET_RAW |
 | **执行网络** | 生产 `network_mode=disabled` + Bubblewrap `--unshare-net`；无 per-child egress proxy 时禁止 allowlist 伪装隔离 |
 | **入站 HTTP** | exec 内部面 `EXEC_INTERNAL_ALLOW_CIDR`（空值拒绝全部）+ HMAC；公共会话面 `SANDBOX_API_TOKEN`；MCP 窄桥独立 token（与出站执行策略分离） |
-| **non-root** | Sandbox 子进程以 `sandbox` 用户运行；api-server 与 agent 容器自 2026-08-23 起以基础镜像 `node` 用户运行（存量 `agent_user_skills` 卷需 chown 一次） |
+| **non-root** | Sandbox 子进程以 `sandbox` 用户（10001）运行；K8s 内的 api-server、agent / agent-worker、sandbox-mcp、frontend 容器以 `up_docker`（1000:1000）运行（2026-09-18 起；此前 agent / api-server 为同 uid 的 `node`，sandbox-mcp 为 10001，frontend 为 root 主进程） |
 | **BFF 出站边界** | 所有 BFF→Agent/Sandbox 调用受超时约束（`AGENT_REQUEST_TIMEOUT_MS` / `SANDBOX_REQUEST_TIMEOUT_MS`，默认 15s；SSE 长连接除外），挂起的依赖不会钉死浏览器请求与 socket |
 | **ulimit** | CPU 300s、内存 512MB、进程数 20、文件大小 50MB |
 | **Path validation** | `resolve()` + `is_relative_to()` — 防止路径逃逸；每 session 物理根隔离 |

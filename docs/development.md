@@ -114,8 +114,8 @@ scripts/dev/k8s/down.sh dev                                # 删命名空间并�
 - 集群外依赖经 EndpointSlice 按容器 IP 接入；Compose 容器重建后 IP 会变，重新执行 `up.sh dev`。
 - 宿主到 ClusterIP 不通（路由走局域网网关），调试单个服务用 `kubectl -n pi-dev port-forward` 或 `kubectl -n pi-dev logs`。
 
-清单里有两处在目标环境同样要注意：Pod 的 `runAsUser` 必须写数字（镜像 `USER node` 是名字，`runAsNonRoot`
-校验不了会拒绝建容器）；Pod 要关 `enableServiceLinks`，否则名为 `sandbox-mcp` / `sandbox` / `agent` 的 Service
+清单里有两处在目标环境同样要注意：镜像以 `up_docker`（1000:1000）运行且 `USER` 写数字，`runAsNonRoot`
+才能校验（写名字会被拒绝建容器）；frontend 听 8080；Pod 要关 `enableServiceLinks`，否则名为 `sandbox-mcp` / `sandbox` / `agent` 的 Service
 会注入 `SANDBOX_MCP_PORT=tcp://…` 等变量，覆盖应用同名配置（facade 读到 NaN 端口拒启）。
 
 ### 运行（本地四进程）

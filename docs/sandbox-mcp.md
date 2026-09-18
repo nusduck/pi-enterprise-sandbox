@@ -4,7 +4,7 @@
 （`--target facade`，默认 `enterprise-sandbox-mcp:latest`）与独立进程的 Streamable HTTP
 MCP 服务（实现在 `exec/src/mcp/`，入口 `dist/mcp-main.js`）。镜像只含该入口的 import 图
 （`mcp/`、`http/node-listener.js` 与 contract 的 DBPM 取密模块）和对应生产依赖，不带模型工具链、
-Bubblewrap、Python、执行面代码或数据库驱动，以 uid 10001 运行。它不依赖 Agent
+Bubblewrap、Python、执行面代码或数据库驱动，以 `up_docker`（1000:1000）运行。它不依赖 Agent
 Runtime，也不挂载 workspace、tmp 或 Artifact 目录；所有有状态操作都只经
 exec 的私有 `/internal/mcp/v1/*` 桥接完成。
 

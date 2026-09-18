@@ -7,8 +7,8 @@
 # 拓扑照目标环境摆：agent、agent-worker、api-server、frontend、sandbox-mcp 在 K8s 里；
 # MySQL、Redis、DBPM 与 exec（目标环境是 VM）在集群外，用无 selector 的 Service + EndpointSlice
 # 接入，服务名与 Compose 相同，所以各服务的环境变量不用改主机名。
-# agent / api-server 镜像是 `USER node`（非数字），runAsNonRoot 无法校验会拒绝建容器，
-# 所以这里显式写 runAsUser: 1000（镜像里 node 的 uid）。目标环境清单同样需要。
+# K8s 内的镜像都以 up_docker（1000:1000）运行，镜像 USER 写的是数字，runAsNonRoot 可以校验；
+# 清单里仍显式写 runAsUser / runAsGroup，与目标环境要求一致。
 # 所有 Pod 都关掉 enableServiceLinks：否则 K8s 按 Service 名注入 SANDBOX_MCP_PORT=tcp://…、
 # SANDBOX_PORT、AGENT_PORT 等变量，覆盖应用自己的同名配置（sandbox-mcp 因此读到 NaN 端口拒启）。
 apiVersion: v1
@@ -204,17 +204,18 @@ spec:
           image: pi-enterprise-frontend:latest
           imagePullPolicy: Never
           env: [{ name: API_UPSTREAM, value: "http://api-server:4000" }]
-          ports: [{ containerPort: 80 }]
-          readinessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 5 }
+          ports: [{ containerPort: 8080 }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          readinessProbe: { httpGet: { path: /, port: 8080 }, periodSeconds: 5 }
 ---
 apiVersion: v1
 kind: Service
 metadata: { name: frontend, namespace: __NS__ }
 spec:
   selector: { app: frontend }
-  ports: [{ name: http, port: 80, targetPort: 80 }]
+  ports: [{ name: http, port: 80, targetPort: 8080 }]
 ---
-# ── Sandbox MCP facade（与 Compose 一致：uid 10001、丢弃全部 capability、只拿显式列出的变量）──
+# ── Sandbox MCP facade（与 Compose 一致：up_docker、丢弃全部 capability、只拿显式列出的变量）──
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: sandbox-mcp, namespace: __NS__ }
@@ -234,8 +235,8 @@ spec:
           ports: [{ containerPort: 8082 }]
           securityContext:
             runAsNonRoot: true
-            runAsUser: 10001
-            runAsGroup: 10001
+            runAsUser: 1000
+            runAsGroup: 1000
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
           livenessProbe: { httpGet: { path: /health, port: 8082 }, periodSeconds: 10, failureThreshold: 3 }

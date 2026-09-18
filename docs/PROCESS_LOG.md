@@ -1153,3 +1153,14 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   dev 模式真实链路 11/11；六套测试、类型检查、前端 build 见[证据](evidence/k8s-local-run-and-ready-probe-2026-09-18.md)。
 - **未完成：** up_docker 改造被自动审批以「削弱安全」拦下（sandbox-mcp 由 10001 改 1000 触及 AGENTS.md §2），
   未落盘，待用户确认范围；follow-up 排队缺陷、默认 Agent 竞争均未修。
+
+## 2026-09-18 — K8s 内镜像改为 up_docker（1000:1000）
+
+- **Context：** 目标环境要求容器以 up_docker 运行。用户确认：用户名 up_docker，uid / gid 统一 1000:1000
+  （sandbox-mcp 一起改，更新 AGENTS.md §2），VM 上的 exec 不改。
+- **Action：** agent / api-server / sandbox-mcp 把基础镜像的 `node` 改名 up_docker、`USER 1000:1000`；frontend
+  改非 root 并听 8080，Compose 映射与边缘 nginx 跟改；K8s 清单同步；AGENTS.md §2、architecture、deployment、
+  sandbox-mcp、development、design §2.1、CHANGELOG 同步。新增 `tests/test_container_users.py`。
+- **STATUS IDs：** 无状态变化（H4 说的是执行面 10001，未变）。
+- **验证：** 新测试修复前 6 失败、修复后 7/7；pytest 214、exec 419/0；K8s dev 与纯 Compose 两种方式下容器均为
+  up_docker，真实链路 11/11（含经前端代理）。详见[证据](evidence/container-user-up-docker-2026-09-18.md)。

@@ -225,7 +225,7 @@ Chrome for Testing 的一次性 `--screenshot` 模式在该环境挂起，产品
                            └──────┬────────────────┘
                                   │
                   ┌───────────────▼──────────────┐
-                  │   frontend (Nginx:80)         │
+                  │   frontend (Nginx:8080)       │
                   │   Static SPA + /api/* proxy   │
                   └───────────────┬──────────────┘
                                   │
@@ -680,16 +680,21 @@ curl -f http://localhost:4000/health/ready
 | `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布版本（按摘要分目录） |
 
 Compose 一次性服务 `skill-draft-init` 会在 agent / agent-worker / sandbox 启动前把
-`./.runtime/sandbox/skill-draft` 建成 `0777`。Agent（uid 1000）与 Sandbox（uid 10001）
+`./.runtime/sandbox/skill-draft` 建成 `0777`。Agent（up_docker，uid 1000）与 Sandbox（uid 10001）
 共用这棵树；若不先放开宿主 bind 源，Compose 创建出的 root 所有 `0755` 目录会让
 第一次草稿上传在创建 `<org>/<user>` 前就 EACCES。上传解包进草稿时也会把包内目录 /
 文件写成 `0777` / `0666`，让两侧都能继续改。
 
 ### Skill 挂载与用户生命周期
 
-> **存量部署迁移注意**：api-server 与 agent 容器自 2026-08-23 起以非 root
-> （`node` 用户）运行。此前创建的 `agent_user_skills` 卷属主为 root，需重建
-> 该卷或手动 chown 一次，否则用户 Skill 上传会因权限失败。
+> **存量部署迁移注意**：api-server 与 agent 容器自 2026-08-23 起以非 root 运行
+> （2026-09-18 起用户名为 `up_docker`，uid 仍是 1000，已有卷属主不受影响）。更早创建的
+> `agent_user_skills` 卷属主为 root，需重建该卷或手动 chown 一次，否则用户 Skill 上传会因权限失败。
+>
+> **容器用户（2026-09-18）**：K8s 内的 agent / agent-worker、api-server、sandbox-mcp、frontend 镜像都以
+> `up_docker`（1000:1000）运行，`USER` 写数字，Pod 可以直接开 `runAsNonRoot`。frontend 因此改听 **8080**
+> （非 root 绑不了 80），Compose 映射与边缘 nginx 的 `proxy_pass` 已随之改为 `frontend:8080`；K8s 清单的
+> containerPort / 探针 / Service targetPort 要写 8080。执行面镜像与 VM 上的 exec 不变。
 
 Skill 分三层：
 

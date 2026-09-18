@@ -182,7 +182,7 @@ services:
       # frontend nginx 的 /api/ 上游（design §2.2）；启动时校验，只接受 http://host[:port]。
       API_UPSTREAM: ${API_UPSTREAM:-http://api-server:4000}
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:8080"
     restart: unless-stopped
     depends_on:
       api-server:
@@ -728,7 +728,7 @@ services:
     # entrypoint and credentials. No Bubblewrap, no workspace mounts: it never
     # executes anything itself, it calls the narrow bridge.
     command: ["node", "dist/mcp-main.js"]
-    user: "10001:10001"
+    user: "1000:1000"
     # **不挂 env_file**：facade 是唯一对外暴露的进程，只能拿到下面显式列出的变量。
     # 挂 `.env` 会把整份开发配置带进来——内部面 HMAC keyring、模型 API key、
     # 业务库口令等都曾出现在这个容器里（2026-09-16 发现）。`${VAR}` 插值仍读 `.env`，

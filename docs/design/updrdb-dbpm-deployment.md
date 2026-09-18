@@ -65,6 +65,10 @@ VM exec                         --> 本地 workspace / tmp / artifact / control
 | sandbox-mcp | 每集群一个 Deployment；新增 slim 镜像目标；Redis 存映射 | uid 10001；零数据卷；无完整 HMAC/Agent 内部凭据 |
 | sandbox / exec | **单 VM、单实例、systemd 托管**；本地执行字节与进程有状态 | 专用非 root 账号，宿主 UID 可与容器不同；隔离内 UID/GID 另验 |
 
+> **2026-09-18 细化（容器用户）**：目标环境要求 K8s 内的容器以 `up_docker`（1000:1000）运行。agent / agent-worker、
+> api-server、sandbox-mcp、frontend 镜像均已改为数字 `USER 1000:1000`（上表「`node` 用户」「uid 10001」两处以此为准）；
+> frontend 改为非 root、监听 8080。sandbox / exec 行不变。
+
 > **2026-09-15 实施细化（S2e）**：slim facade 是 `exec/Dockerfile` 的 `facade` 阶段（`node:22-slim` + facade import 图的 dist + `npm ci --omit=dev` 后移除 `mysql2` 与 `@deepseek-ai/dsh-*`），开发栈实测 302MB（执行面镜像 2.84GB），uid 10001，发布文件只读，无 bwrap / Python / curl / 模型工具链。facade 入口原先经 `startup-credentials.ts` 间接加载 `db/client.ts` 与 `mysql2`，已拆出 `mcp/startup-credentials.ts`；`exec/test/mcp-import-boundary.test.ts` 同时核对 import 图允许清单与 Dockerfile 复制清单。基础镜像自带的 `apt-get`、`setpriv` 未删除；是否换 distroless 等更小基础镜像未定。
 
 初始按**每集群每个 Deployment 1 个 Pod**编制资源清单，两集群合计 2 个；这是设计默认值，不是已分配容量。扩容前计算连接池总数、Worker 并发和单 VM 执行上限，不能只提高 Worker 副本数。

@@ -116,11 +116,12 @@ describe('Dockerfile facade stage matches the import graph', () => {
     }
   });
 
-  test('不带执行面工具链，以 uid 10001 运行 facade 入口', () => {
+  test('不带执行面工具链，以 up_docker（1000:1000）运行 facade 入口', () => {
     for (const forbidden of ['apt-get', 'bubblewrap', 'pi-python', 'bun', 'skill-runtime', 'chromium']) {
       assert.ok(!stage.includes(forbidden), `facade stage mentions ${forbidden}`);
     }
-    assert.match(stage, /^USER 10001:10001$/m);
+    assert.match(stage, /^USER 1000:1000$/m);
+    assert.match(stage, /up_docker/);
     assert.match(stage, /^CMD \["node", "dist\/mcp-main\.js"\]$/m);
     assert.ok(!stage.includes('/app/exec/dist/main.js'));
   });

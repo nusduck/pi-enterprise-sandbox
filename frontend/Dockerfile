@@ -18,5 +18,12 @@ COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --chmod=0755 nginx/05-validate-api-upstream.sh nginx/25-verify-rendered-config.sh /docker-entrypoint.d/
 ENV API_UPSTREAM=http://api-server:4000 \
     NGINX_ENVSUBST_FILTER=^API_UPSTREAM$
-EXPOSE 80
+# 目标环境要求以 up_docker（1000:1000）运行：非 root 绑不了 80，改听 8080；
+# 去掉 `user` 指令，pid 放 /tmp，入口脚本要写的 conf.d 与临时目录交给 1000。
+RUN addgroup -S -g 1000 up_docker \
+    && adduser -S -D -H -u 1000 -G up_docker -s /sbin/nologin up_docker \
+    && sed -i -e '/^user /d' -e 's#^pid .*#pid /tmp/nginx.pid;#' /etc/nginx/nginx.conf \
+    && chown -R 1000:1000 /etc/nginx/conf.d /var/cache/nginx
+USER 1000:1000
+EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]

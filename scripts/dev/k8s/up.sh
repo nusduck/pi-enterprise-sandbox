@@ -165,7 +165,7 @@ render() {
         -e "s#__DBPM_IP__#$(ip_on "$(dc ps -q dbpm-fake)" "$NETWORK")#" \
         -e "s#__REDIS_IP__#$(ip_on "$REDIS_CONTAINER" "$NETWORK")#" \
         -e "s#__SANDBOX_IP__#$(ip_on "$SANDBOX_CONTAINER" "$NETWORK")#" \
-        -e "s#__FRONTEND_PORT__#$(published_port frontend 80)#" \
+        -e "s#__FRONTEND_PORT__#$(published_port frontend 8080)#" \
         -e "s#__API_PORT__#$(published_port api-server 4000)#" \
         -e "s#__AGENT_PORT__#$(published_port agent 4100)#" \
         -e "s#__MCP_PORT__#$(published_port sandbox-mcp 8082)#" \
@@ -188,5 +188,5 @@ for d in $DEPLOYMENTS; do
 done
 K -n "$NS" get pods -o wide
 if [ "$MODE" = dev ]; then
-    echo "Frontend: http://127.0.0.1:$(published_port frontend 80)  (back to Compose: scripts/dev/k8s/down.sh dev)"
+    echo "Frontend: http://127.0.0.1:$(published_port frontend 8080)  (back to Compose: scripts/dev/k8s/down.sh dev)"
 fi

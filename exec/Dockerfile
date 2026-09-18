@@ -72,9 +72,10 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     rm -rf node_modules/mysql2 node_modules/@deepseek-ai
 
 FROM node:22-slim AS facade
-RUN groupadd --gid 10001 sandbox && \
-    useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
-        --shell /usr/sbin/nologin sandbox
+# 目标环境要求 K8s 内的容器以 up_docker（1000:1000）运行：把基础镜像自带的 node
+# （同为 1000）改名。执行面镜像仍是 10001（bwrap 隔离内的 uid 映射依赖它）。
+RUN groupmod -n up_docker node && \
+    usermod -l up_docker -d /nonexistent -s /usr/sbin/nologin node
 # 发布文件归 root、对运行用户只读。
 COPY --from=ts-build /app/contract/package.json /app/contract/package.json
 COPY --from=ts-build \
@@ -88,7 +89,7 @@ COPY --from=facade-deps /app/exec/node_modules ./node_modules
 COPY --from=ts-build /app/exec/dist/mcp-main.js ./dist/mcp-main.js
 COPY --from=ts-build /app/exec/dist/mcp/ ./dist/mcp/
 COPY --from=ts-build /app/exec/dist/http/node-listener.js ./dist/http/node-listener.js
-USER 10001:10001
+USER 1000:1000
 ENV NODE_ENV=production \
     SANDBOX_MCP_PORT=8082
 EXPOSE 8082

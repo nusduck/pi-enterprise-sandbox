@@ -44,8 +44,14 @@ RUN mkdir -p /home/sandbox/workspace /home/sandbox/skill-user /tmp/pi-enterprise
 # /home/sandbox/skill-user is a named volume at runtime. Docker seeds a fresh
 # volume from the image directory, ownership included — a volume created
 # before this change stays root-owned and must be recreated or chowned once.
-RUN chown -R node:node /app /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime
-USER node
+#
+# 目标环境要求 K8s 内的容器以 up_docker（1000:1000）运行：把基础镜像自带的 node
+# （同为 1000）改名，uid 不变，已有卷的属主不受影响。USER 写数字，K8s 的
+# runAsNonRoot 才能校验（写名字会被拒绝建容器）。
+RUN groupmod -n up_docker node \
+    && usermod -l up_docker -d /home/up_docker -m node \
+    && chown -R 1000:1000 /app /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime
+USER 1000:1000
 
 EXPOSE 4100
 CMD ["node", "dist/server.js"]
