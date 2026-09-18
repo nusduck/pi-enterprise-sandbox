@@ -8,7 +8,9 @@
 //   kill-takeover  模型调用中 SIGKILL 所在 Worker Pod：Run 被接管、模型调用重放一次、工具只执行一次
 //   freeze-fence   冻结（docker pause）所在 Worker，另一副本接管并完成；解冻后旧 Worker 不得再派发工具
 //   cancel         Run 在某个副本上执行时经 BFF 取消：Run 取消、模型调用被中断、放行后不再继续
-//   same-session   同一会话第一个 Run 在跑时发 follow-up：排在第一个之后执行，不会在另一个副本上并行
+//   shared-skill   A 发布 Skill：两个 Agent Pod 可见、两个 Worker 的 Run 在 exec 里读到；跨 owner 隔离；新版本、
+//                  侧车被改坏时排除、停用
+//   same-session   同一会话第一个 Run 在跑时连发两个 follow-up：保持 QUEUED，第一个结束后按提交顺序执行
 //   rolling-restart 在途 Run 时 rollout restart：原副本 SIGTERM 后排空完成，不重放
 //   redis-outage   暂停专用 Redis：Worker 与 Agent HTTP 都摘流量，恢复后自动就绪且 Run 可用
 //
@@ -20,7 +22,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const sh = promisify(execFile);
@@ -87,10 +89,11 @@ async function waitWorkersReady(count = Number(process.env.SIM_WORKERS || 2), ti
 function client() {
   let cookie = '';
   return async function call(method, p, body, headers = {}) {
+    const raw = Buffer.isBuffer(body);
     const r = await fetch(`http://127.0.0.1:${BFF_PORT}${p}`, {
       method,
-      headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}), ...headers },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: { ...(raw ? {} : { 'content-type': 'application/json' }), ...(cookie ? { cookie } : {}), ...headers },
+      body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
     const sc = r.headers.getSetCookie?.() || [];
@@ -161,6 +164,14 @@ async function sideEffectLines(id) {
   return stdout.split('\n').filter(Boolean).length;
 }
 
+async function sideEffectText(id) {
+  const { stdout } = await sh('docker', [
+    'exec', SANDBOX_CONTAINER, 'sh', '-c',
+    'find /var/sandbox/workspaces -name "$1" -exec cat {} +', '_', `sim-${id}.log`,
+  ]);
+  return stdout;
+}
+
 // ── 业务动作 ─────────────────────────────────────────────────
 async function newUser(name) {
   const c = client();
@@ -181,6 +192,14 @@ async function submit(c, convId, id, mode) {
     { 'Idempotency-Key': `sim-${id}` },
   );
   return { status: r.s, runId: r.b?.run_id || r.b?.runId, body: r.b };
+}
+/** 让 fake-llm 以 bash 执行 `command`（新会话里的一个 Run），返回终态、输出与执行它的 Worker Pod。 */
+async function runCommand(c, id, command) {
+  const b64 = Buffer.from(command, 'utf8').toString('base64');
+  const r = await submit(c, await newConversation(c), id, `sh cmd=${b64}`);
+  const final = await waitTerminal(c, r.runId);
+  const entry = (await llm.entries(id)).find((e) => e.turn === 1);
+  return { runId: r.runId, final, output: await sideEffectText(id), pod: podOf(entry?.remote) };
 }
 async function runStatus(c, runId) {
   const r = await c('GET', `/api/runs/${runId}`);
@@ -455,38 +474,147 @@ const scenarios = {
     record(S, 'runs_work_after_recovery', final === 'SUCCEEDED' && (await sideEffectLines(id)) === 1, { final });
   },
 
+  async 'shared-skill'(S) {
+    const NAME = 'sim-probe';
+    const skillZip = async (marker) => {
+      const { stdout } = await sh('python3', ['-c', `
+import io, sys, zipfile, base64
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, 'w') as z:
+    z.writestr('SKILL.md', '---\\nname: ${NAME}\\ndescription: K8s sim cross-pod probe skill. Use only in tests.\\n---\\n# probe\\n${marker}\\n')
+sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
+`]);
+      return Buffer.from(stdout, 'base64');
+    };
+    const publish = async (c, marker) => {
+      const up = await c('POST', '/api/capabilities/skills/drafts', await skillZip(marker), {
+        'content-type': 'application/octet-stream',
+        'X-Filename': `${NAME}.zip`,
+      });
+      const en = await c('POST', `/api/capabilities/skills/${NAME}/enable`, {});
+      return { upload: up.s, enable: en.s, digest: en.b?.contentDigest, publishedPath: en.b?.publishedPath };
+    };
+    const hostPath = (p) => p.replace('/home/sandbox/skill-user', path.join(ROOT, '.runtime/k8s-sim/skill-user'));
+    const READ = `cat /home/sandbox/skill-user/${NAME}/SKILL.md`;
+    const a = await newUser('ska');
+    const b = await newUser('skb');
+
+    // 1. A 发布 v1：两个 Agent Pod 都看得到同一个版本目录（共享存储）。
+    const v1 = await publish(a, 'PROBE_MARKER_V1');
+    const { stdout: agentPods } = await kubectl('get', 'pods', '-l', 'app=agent', '-o', 'jsonpath={.items[*].metadata.name}');
+    const visible = [];
+    for (const pod of agentPods.split(' ').filter(Boolean)) {
+      const r = await kubectl('exec', pod, '--', 'test', '-f', `${v1.publishedPath}/SKILL.md`).then(() => true, () => false);
+      visible.push({ pod, visible: r });
+    }
+    record(S, 'published_version_visible_on_every_agent_pod',
+      v1.upload === 201 && v1.enable === 200 && visible.length === 2 && visible.every((v) => v.visible), { v1, visible });
+
+    // 2. A 的 4 个 Run 分到两个 Worker，都在 exec（VM 替身）里读到 v1。
+    const reads = await Promise.all([0, 1, 2, 3].map((i) => runCommand(a, `skr-${tag}-${i}`, READ)));
+    const pods = new Set(reads.map((r) => r.pod));
+    record(S, 'every_worker_run_reads_enabled_skill',
+      reads.every((r) => r.final === 'SUCCEEDED' && r.output.includes('PROBE_MARKER_V1')) && pods.size === 2,
+      reads.map((r) => ({ final: r.final, sees: r.output.includes('PROBE_MARKER_V1'), pod: r.pod })));
+
+    // 3. 跨 owner：B 看不到、也停用不了 A 的 Skill。
+    const bRead = await runCommand(b, `skb-${tag}`, READ);
+    const bList = await b('GET', '/api/capabilities/skills');
+    const bDisable = await b('POST', `/api/capabilities/skills/${NAME}/disable`, {});
+    const aAfter = await runCommand(a, `ska-${tag}`, READ);
+    record(S, 'other_owner_isolated',
+      bRead.final === 'SUCCEEDED' && !bRead.output.includes('PROBE_MARKER') &&
+        !(bList.b?.skills || []).some((x) => x.name === NAME) && aAfter.output.includes('PROBE_MARKER_V1'),
+      { bSees: bRead.output.slice(0, 120), bListed: (bList.b?.skills || []).some((x) => x.name === NAME), bDisableHttp: bDisable.s, aStillSees: aAfter.output.includes('PROBE_MARKER_V1') });
+
+    // 4. 发布 v2：新摘要新目录，新 Run 读到 v2。
+    const v2 = await publish(a, 'PROBE_MARKER_V2');
+    const r2 = await runCommand(a, `sk2-${tag}`, READ);
+    record(S, 'new_version_reaches_new_runs',
+      v2.enable === 200 && v2.digest !== v1.digest && r2.output.includes('PROBE_MARKER_V2'),
+      { v1: v1.digest?.slice(0, 12), v2: v2.digest?.slice(0, 12), sees: r2.output.trim().slice(-40) });
+
+    // 5. 共享存储上的侧车被改坏：Worker 核对不过，本次 Run 排除该 Skill；恢复后又可见。
+    // 侧车发布后只读（属主 up_docker）；以属主身份在 Agent Pod 里临时加写权限篡改，结束后原样恢复。
+    const sidecar = `${path.dirname(v2.publishedPath)}.json`;
+    const pod = agentPods.split(' ').filter(Boolean)[0];
+    const inPod = (script) => kubectl('exec', pod, '--', 'sh', '-c', script, '_', sidecar);
+    const { stdout: mode } = await inPod('stat -c %a "$1"');
+    const original = readFileSync(hostPath(sidecar), 'utf8');
+    await inPod('chmod u+w "$1" && printf "{}" > "$1"');
+    let tampered;
+    try {
+      tampered = await runCommand(a, `skt-${tag}`, READ);
+    } finally {
+      // 原内容经 stdin 写回，再恢复原权限。
+      await sh('sh', ['-c',
+        `printf %s "$1" | kubectl --context orbstack -n ${NS} exec -i ${pod} -- sh -c 'cat > "$1" && chmod "$2" "$1"' _ "$2" "$3"`,
+        '_', original, sidecar, mode.trim()]);
+    }
+    const restored = await runCommand(a, `skf-${tag}`, READ);
+    let excludedLog = [];
+    for (const pod of (await workerPods()).map((p) => p.name)) {
+      const { stdout } = await kubectl('logs', pod, '--since=10m').catch(() => ({ stdout: '' }));
+      excludedLog = excludedLog.concat(stdout.split('\n').filter((l) => l.includes(`"${NAME}"`) && l.includes('excluded')));
+    }
+    record(S, 'mismatched_version_excluded_then_restored',
+      tampered.final === 'SUCCEEDED' && !tampered.output.includes('PROBE_MARKER') && restored.output.includes('PROBE_MARKER_V2') && excludedLog.length > 0,
+      { tamperedSees: tampered.output.slice(0, 100), restoredSees: restored.output.includes('PROBE_MARKER_V2'), excludedLog: excludedLog.slice(-1) });
+
+    // 6. 停用：新 Run 不再挂载该 Skill。
+    const dis = await a('POST', `/api/capabilities/skills/${NAME}/disable`, {});
+    const r3 = await runCommand(a, `skd-${tag}`, READ);
+    record(S, 'disabled_skill_gone_from_new_runs',
+      dis.s === 200 && r3.final === 'SUCCEEDED' && !r3.output.includes('PROBE_MARKER'),
+      { disableHttp: dis.s, sees: r3.output.slice(0, 100) });
+  },
+
   async 'same-session'(S) {
     const c = await newUser('ses');
     const conv = await newConversation(c);
     const id1 = `ses1-${tag}`;
-    const id2 = `ses2-${tag}`;
+    const followIds = [`ses2-${tag}`, `ses3-${tag}`];
     const r1 = await submit(c, conv, id1, 'hold-text');
     await llm.waitFor((e) => e.id === id1 && e.state === 'held', 30_000, 'first run held');
-    // 计划 §12：Run 执行期间用户再发消息走 follow-up，等当前 Run 完成后自动执行。
-    const fu = await c(
-      'POST',
-      `/api/conversations/${conv}/follow-ups`,
-      { text: `[[SIM id=${id2} mode=text]] 追问。` },
-      { 'Idempotency-Key': `sim-${id2}` },
-    );
-    const r2 = { status: fu.s, runId: fu.b?.run_id || fu.b?.runId, body: fu.b };
-    if (r2.status !== 202) {
-      record(S, 'second_run_rejected_while_first_active', r2.status === 409, { status: r2.status, body: r2.body });
-      await llm.release(id1);
-      await waitTerminal(c, r1.runId);
-      return;
+    // 计划 §12：Run 执行期间用户再发消息走 follow-up，等当前 Run 完成后按提交顺序自动执行。
+    const follows = [];
+    for (const id of followIds) {
+      const fu = await c(
+        'POST',
+        `/api/conversations/${conv}/follow-ups`,
+        { text: `[[SIM id=${id} mode=text]] 追问。` },
+        { 'Idempotency-Key': `sim-${id}` },
+      );
+      follows.push({ status: fu.s, runId: fu.b?.run_id || fu.b?.runId });
     }
     await sleep(10_000);
-    const early = await llm.entries(id2);
+    const early = (await llm.log()).filter((e) => followIds.includes(e.id));
+    const queued = await Promise.all(follows.map((f) => runRow(f.runId).then((r) => r?.status)));
     const releasedAt = Date.now();
     await llm.release(id1);
-    const finals = [await waitTerminal(c, r1.runId), await waitTerminal(c, r2.runId)];
-    const second = await llm.entries(id2);
+    const finals = [
+      await waitTerminal(c, r1.runId),
+      ...(await Promise.all(follows.map((f) => waitTerminal(c, f.runId)))),
+    ];
+    const log = await llm.log();
+    const firstAt = followIds.map((id) => Date.parse(log.find((e) => e.id === id)?.at));
     record(
       S,
-      'serialized_within_session',
-      early.length === 0 && finals.every((s) => s === 'SUCCEEDED') && Date.parse(second[0]?.at) >= releasedAt - 1_000,
-      { r2: r2.status, secondRunModelCallsWhileFirstActive: early.length, finals, second: await runRow(r2.runId) },
+      'follow_ups_wait_then_run_in_order',
+      follows.every((f) => f.status === 202) &&
+        early.length === 0 &&
+        queued.every((q) => q === 'QUEUED') &&
+        finals.every((x) => x === 'SUCCEEDED') &&
+        firstAt[0] >= releasedAt - 1_000 &&
+        firstAt[0] <= firstAt[1],
+      {
+        http: follows.map((f) => f.status),
+        modelCallsWhileFirstActive: early.length,
+        statusWhileFirstActive: queued,
+        finals,
+        order: followIds.map((id, i) => ({ id: id.slice(0, 4), at: log.find((e) => e.id === id)?.at, pod: podOf(log.find((e) => e.id === id)?.remote) })),
+        firstFollowUpAfterReleaseMs: firstAt[0] - releasedAt,
+      },
     );
   },
 };

@@ -66,6 +66,8 @@ function fakeContainer({ redis, knex, topology = SHRUNK }) {
     redis,
     knex,
     runQueueTopology: topology,
+    // Worker 在消费前问 session-turn-gate：替身只需提供会话锁的读接口。
+    createSessionLockManager: async () => ({ getOwner: async () => null }),
     async start() {
       return this;
     },

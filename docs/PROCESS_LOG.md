@@ -1176,3 +1176,17 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   `getDefinitionByOrgAndName` 增加 `lockForShare` 选项。新增 `agent/tests/mysql/default-agent-race.integration.test.js`。
 - **验证：** 集成测试修复前 1 失败（7/8 并发冲突）、修复后在 release-gate 运行器里对专用库连跑 4 次均 3/3；
   相关单元测试 31/31。
+
+## 2026-09-18 — 追问排队；共享 Skill 跨 Pod 演练
+
+- **Context：** 用户同意修 follow-up 排队、补共享 Skill 跨 Pod 场景。
+- **根因：** follow-up 与普通 Run 走同一执行路径，执行器拿不到 session 锁即 `FAILED / session lock busy`，没有「等前一个
+  Run 结束」的环节（plan §12 与 `follow-up-service.ts` 注释都要求排队）。
+- **Action：** 新增 `session-turn-gate.ts`，作业处理外壳加 `shouldWait`（锁被占或同会话有更早排队的顶层 Run → 放回
+  delayed 2s，判定出错也放回）；worker-main 接线。热点文件行数预算已满，未改执行器。fake-llm 增加 `sh` 模式并改为取
+  最后一个标记；新增 `shared-skill` 场景；same-session 场景改为两个追问并校验顺序。api / architecture / development /
+  CHANGELOG 同步。
+- **STATUS IDs：** 无状态变化。
+- **验证：** 处理外壳回归修复前失败；判定集成 6/6；sim 修复前对照 FAILED、修复后按序成功；dev 真实模型追问排队成功；
+  sim 全量 24/24；agent 1389/1389；api-server 偶发 2 cancelled（未改该包，不记通过）。详见
+  [证据](evidence/follow-up-queue-and-shared-skill-2026-09-18.md)。

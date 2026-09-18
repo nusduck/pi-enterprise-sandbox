@@ -168,6 +168,7 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - Redis **不得**成为 Run 状态或对话事实的唯一来源
 - **清空 Redis 的后果**：仅丢失运行态协调（queue job、lease、live stream 游标、短期 cache）；MySQL 中 Conversation / Run / `run_events` / 审计事实保留
 - **恢复路径**：Outbox publisher 从 `domain_outbox` 重试未发布事件；SSE/历史从 MySQL `run_events` 重放；Worker 按 MySQL Run 状态 + 幂等记录决定重试或失败
+- **同会话顶层 Run 依次执行**（plan §12 follow-up，2026-09-18 起）：Worker 取到作业、执行之前先问 `session-turn-gate`——该会话的 session 锁被占（前一个 Run 仍在执行，或崩溃残留的锁未过期），或同会话有更早、仍在排队（`ACCEPTED` / `QUEUED` / `RETRYING`）的顶层 Run 时，把作业放回 delayed（2s 后再看，不消耗 attempts），Run 保持 `QUEUED`。不等 `WAITING_*` 挂起的 Run 和失去锁的孤儿 `RUNNING`；子代理 Run 不参与。此前 follow-up 在前一个 Run 执行期间直接 `FAILED / session lock busy`；执行器里拿不到锁即失败的分支保留为兜底
 - **工具派发边界**：`tools/execute` 在调用执行面之前把 `tool_executions` 行推进到 `RUNNING`，sandbox 工具在同一事务里绑定 `request_hash` 与当前 `execution_fence_token`；这一步失败（如 fence 已被别的 Worker 接管）就不派发。执行面在有副作用的请求可能已送达后断开（连接被重置、传输截止到期）时，工具记 `UNKNOWN` / `TOOL_OUTCOME_UNKNOWN`，模型收到「可能已生效、重试前先检查」的提示；连不上（请求未送达）、调用方取消、只读操作仍记 `FAILED`。崩溃恢复只重放全部工具行都是 `SUCCEEDED` / `FAILED` / `CANCELLED` 的 Run，其余（含 `RUNNING` / `UNKNOWN`）交人工对账
 - 生产：`REDIS_PASSWORD` 必填（compose fail-fast）；禁止无密码生产 Redis
 - **应用口令只来自 DBPM**（ADR 0011 D10，2026-09-14 起）：Agent / Agent Worker 取 UPDRDB 与服务 Redis 口令，exec 只取 UPDRDB，sandbox-mcp 只取服务 Redis；启动时取一次、只放内存，连接串带口令或 DBPM 不可用即拒绝启动。`REDIS_PASSWORD` / `MYSQL_PASSWORD` 只配置服务端自身。开发由 `dbpm-fake` 真协议假服务端提供

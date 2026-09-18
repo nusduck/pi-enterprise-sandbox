@@ -30,6 +30,8 @@ describe('startWorkerMain', () => {
       // 账本里也没有超深的非终态 Run。
       redis: { type: async () => 'none' },
       knex: emptyLedger(),
+      // Worker 在消费前问 session-turn-gate：替身只需提供会话锁的读接口。
+      createSessionLockManager: async () => ({ getOwner: async () => null }),
       // 分层拓扑（ADR 0012）：消费者按层建，容器必须把拓扑交出来。
       runQueueTopology: {
         maxDepth: 0,
@@ -111,6 +113,8 @@ describe('startWorkerMain', () => {
       // 账本里也没有超深的非终态 Run。
       redis: { type: async () => 'none' },
       knex: emptyLedger(),
+      // Worker 在消费前问 session-turn-gate：替身只需提供会话锁的读接口。
+      createSessionLockManager: async () => ({ getOwner: async () => null }),
       // 生产默认拓扑（ADR 0012）：maxDepth=2、总预算 4 → 2 / 1 / 1。
       runQueueTopology: {
         maxDepth: 2,
@@ -174,6 +178,8 @@ describe('startWorkerMain', () => {
     assert.equal(options.stalledInterval, 500);
     assert.equal(options.maxStalledCount, 2);
     assert.equal(options.prefix, '{pi-test-bull}');
+    // 生产接线：每个消费者都带同会话依次执行的判定（plan §12 follow-up）。
+    assert.equal(typeof options.shouldWait, 'function');
 
     let defaultOptions;
     await assert.rejects(

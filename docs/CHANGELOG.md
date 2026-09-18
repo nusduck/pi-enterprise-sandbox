@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed（并发）
 
+- **Run 执行期间发的追问会排队，等前一个 Run 结束后按提交顺序自动执行**（plan §12）：此前追问进 Worker 后
+  拿不到 session 锁，立即以 `FAILED / session lock busy` 结束，前端的「排队追问」因此总是失败。现在 Worker 执行
+  前先检查同会话是否有正在执行或更早排队的 Run，有就把作业延后 2 秒再看，Run 保持 `QUEUED`。
+
 - **新组织第一次被并发建会话 / 建 Run 时不再返回 409**：租户默认 Agent 在首次使用时惰性创建，并发请求撞
   唯一键后在同一事务里重读，REPEATABLE READ 快照看不到对方刚提交的行，于是把冲突抛给调用方（8 个并发里 7 个 409）。
   重读改为加锁读（`LOCK IN SHARE MODE`），读到最新已提交版本。

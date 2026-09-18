@@ -93,4 +93,51 @@ describe('createRunJobHandler', () => {
     await assert.rejects(() => handler(job, 't'), /Connection is closed/);
     assert.equal(processed, 0);
   });
+
+  // 同一会话前一个 Run 还没结束时，follow-up 排在后面执行，而不是以 `session lock busy` 失败（plan §12）。
+  it('delays a job that must wait for an earlier run of its session, without running it', async () => {
+    let processed = 0;
+    const asked = [];
+    const handler = createRunJobHandler(async () => { processed += 1; }, {
+      queueName: 'agent-runs',
+      DelayedError,
+      shouldDefer: () => false,
+      shouldWait: async (ref) => { asked.push(ref.runId); return true; },
+      waitDelayMs: 2000,
+      now: () => 1_000_000,
+    });
+    const job = fakeJob();
+    await assert.rejects(() => handler(job, 'worker-1:9'), (err) => err instanceof DelayedError);
+    assert.equal(processed, 0);
+    assert.deepEqual(asked, [REF.runId]);
+    assert.deepEqual(job.moves, [{ timestamp: 1_002_000, token: 'worker-1:9' }]);
+  });
+
+  it('runs the job once its session is free', async () => {
+    let processed = 0;
+    const handler = createRunJobHandler(async () => { processed += 1; }, {
+      queueName: 'agent-runs',
+      DelayedError,
+      shouldWait: async () => false,
+    });
+    const job = fakeJob();
+    await handler(job, 't');
+    assert.equal(processed, 1);
+    assert.equal(job.moves.length, 0);
+  });
+
+  it('keeps the job queued when the wait check itself fails', async () => {
+    let processed = 0;
+    const handler = createRunJobHandler(async () => { processed += 1; }, {
+      queueName: 'agent-runs',
+      DelayedError,
+      shouldWait: async () => { throw new Error('mysql down'); },
+      waitDelayMs: 2000,
+      now: () => 5_000,
+    });
+    const job = fakeJob();
+    await assert.rejects(() => handler(job, 't'), (err) => err instanceof DelayedError);
+    assert.equal(processed, 0);
+    assert.deepEqual(job.moves, [{ timestamp: 7_000, token: 't' }]);
+  });
 });

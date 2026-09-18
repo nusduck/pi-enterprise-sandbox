@@ -6,6 +6,7 @@
 //   mode=hold-tool  第一轮挂住，直到 POST /_sim/release {id} 才回 bash 工具调用；之后同 tool。
 //   mode=hold-text  第一轮挂住，放行后回文本。
 //   mode=text       立即回文本。
+//   mode=sh         标记里带 `cmd=<base64>`：第一轮回一个 bash 工具调用执行该命令，输出写到工作区 sim-<id>.log。
 // 没有工具的请求（DSH 每轮另发的标题生成）立即回固定文本，不计入模型轮次。
 //
 // 控制面（同端口）：GET /_sim/log、POST /_sim/release {id}、POST /_sim/reset。
@@ -19,20 +20,23 @@ import {
 } from '/repo/agent/tests/support/fake-openai-provider.js';
 
 const PORT = Number(process.env.PORT || 8080);
-const MARKER = /\[\[SIM id=([A-Za-z0-9_-]+) mode=([a-z-]+)\]\]/;
+const MARKER = /\[\[SIM id=([A-Za-z0-9_-]+) mode=([a-z-]+)(?: cmd=([A-Za-z0-9+/=]+))?\]\]/g;
 
 let seq = 0;
 let log = [];
 let held = [];
 
-function toolCall(id) {
+function toolCall(id, cmd = null) {
+  const out = `/home/sandbox/workspace/sim-${id}.log`;
   return {
     toolCalls: [
       {
         id: `call_${id}_${seq}`,
         name: 'bash',
         arguments: {
-          command: `echo "$(date +%s%N) ${id}" >> /home/sandbox/workspace/sim-${id}.log`,
+          command: cmd
+            ? `( ${Buffer.from(cmd, 'base64').toString('utf8')} ) > ${out} 2>&1; true`
+            : `echo "$(date +%s%N) ${id}" >> ${out}`,
           description: `sim ${id}`,
           timeoutMs: 20000,
         },
@@ -110,7 +114,8 @@ const server = http.createServer(async (req, res) => {
   if (tools.length === 0) return send(res, body, { content: 'sim title' });
 
   const messages = Array.isArray(body?.messages) ? body.messages : [];
-  const match = MARKER.exec(JSON.stringify(messages));
+  // 会话历史里有前几轮的标记，本轮用户消息在最后：取最后一个。
+  const match = [...JSON.stringify(messages).matchAll(MARKER)].at(-1);
   const toolResults = messages.filter((m) => m?.role === 'tool').length;
   seq += 1;
   const entry = {
@@ -125,9 +130,10 @@ const server = http.createServer(async (req, res) => {
   log.push(entry);
 
   if (!match) return send(res, body, { content: 'sim: no marker' });
-  const [, id, mode] = match;
+  const [, id, mode, cmd] = match;
   if (toolResults > 0 || mode === 'text') return send(res, body, { content: `done ${id}` });
   if (mode === 'tool') return send(res, body, toolCall(id));
+  if (mode === 'sh' && cmd) return send(res, body, toolCall(id, cmd));
   if (mode === 'hold-tool' || mode === 'hold-text') {
     entry.state = 'held';
     const h = { id, mode, res, body, entry };

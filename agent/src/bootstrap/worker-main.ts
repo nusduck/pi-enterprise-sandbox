@@ -246,7 +246,15 @@ async function runWorkerMain(
       container.runQueueTopology,
       resolveWorkerConcurrency(env),
     );
+    // 同一会话的顶层 Run 按提交顺序执行：前一个还没结束时 follow-up 放回 delayed（plan §12）。
+    const { createSessionTurnGate } = await import('../application/session-turn-gate.js');
+    const sessionLocks = await container.createSessionLockManager();
+    const sessionTurnGate = createSessionTurnGate({
+      db: container.knex,
+      sessionLockOwner: (agentSessionId: string) => sessionLocks.getOwner(agentSessionId),
+    });
     const commonOptions = {
+      shouldWait: sessionTurnGate,
       // 必须与 HTTP 进程的 Queue 同一 prefix，否则投递与消费落在两个 key 空间。
       prefix: env.AGENT_RUN_QUEUE_PREFIX || undefined,
       // 容器启动时已向 DBPM 取到；消费者连接不从 URL 读口令。

@@ -190,7 +190,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
 | `GET` | `/api/conversations/{id}/events` | Conversation 维度 SSE |
 | `POST` | `/api/conversations/{id}/runs` | 在指定 Conversation 下创建 Run |
-| `POST` | `/api/conversations/{id}/follow-ups` | 追问 |
+| `POST` | `/api/conversations/{id}/follow-ups` | 追问；当前 Run 未结束时新 Run 保持 `QUEUED`，结束后按提交顺序自动执行 |
 | `GET` `POST` | `/api/conversations/{id}/datasets` | 列出 / 上传 Dataset |
 | `POST` | `/api/conversations/{id}/artifact-imports` | 跨会话导入已有 Artifact |
 | `GET` `POST` | `/api/runs` | 列出 / 创建 Run |

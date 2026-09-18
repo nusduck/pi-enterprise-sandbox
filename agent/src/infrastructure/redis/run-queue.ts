@@ -283,6 +283,9 @@ export type RunJobProcessor = (ref: RunJobRef, job: import('bullmq').Job) => Pro
  * 2026-09-15 在开发栈实测：MySQL 不可用、消费者已暂停时入队的作业被立即执行并以
  * `needs reconciliation` 失败。这里在执行前再看一次暂停状态，暂停中就原样放回 delayed，
  * 恢复后再取；`DelayedError` 由 BullMQ 识别为非失败，不消耗 attempts。
+ *
+ * `shouldWait`：同一会话前一个 Run 还没结束时，follow-up 同样放回 delayed、按 `waitDelayMs` 再看
+ * （`application/session-turn-gate.ts`）。判定本身出错时也放回，Run 保持排队，不按失败处理。
  */
 export function createRunJobHandler(
   processor: RunJobProcessor,
@@ -291,16 +294,28 @@ export function createRunJobHandler(
     DelayedError: new (message?: string) => Error;
     shouldDefer?: (() => boolean) | undefined;
     deferDelayMs?: number | undefined;
+    shouldWait?: ((ref: RunJobRef) => Promise<boolean>) | undefined;
+    waitDelayMs?: number | undefined;
     now?: (() => number) | undefined;
   },
 ) {
   const deferDelayMs = options.deferDelayMs ?? 5000;
+  const waitDelayMs = options.waitDelayMs ?? 2000;
   const now = options.now ?? Date.now;
   return async (job: import('bullmq').Job, token?: string) => {
     const ref = assertRunJobRef(job.data);
     if (options.shouldDefer?.() === true) {
       await job.moveToDelayed(now() + deferDelayMs, token);
       throw new options.DelayedError();
+    }
+    if (options.shouldWait) {
+      const wait = await Promise.resolve()
+        .then(() => options.shouldWait!(ref))
+        .catch(() => true);
+      if (wait) {
+        await job.moveToDelayed(now() + waitDelayMs, token);
+        throw new options.DelayedError();
+      }
     }
     const receiveSpan = startSpan(
       'agent.queue.process',
@@ -328,7 +343,7 @@ export function createRunJobHandler(
   };
 }
 
-export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, password?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number, shouldDefer?: () => boolean, deferDelayMs?: number } = {}) {
+export function createRunWorker(connectionUrl: string, processor: RunJobProcessor, options: { queueName?: string, prefix?: string, password?: string, concurrency?: number, lockDuration?: number, stalledInterval?: number, maxStalledCount?: number, shouldDefer?: () => boolean, deferDelayMs?: number, shouldWait?: (ref: RunJobRef) => Promise<boolean>, waitDelayMs?: number } = {}) {
   assertRedisConnectionUrl(connectionUrl);
   const prefix = resolveRunQueuePrefix(options.prefix);
   assertBullmqInstalled();
@@ -367,6 +382,8 @@ export function createRunWorker(connectionUrl: string, processor: RunJobProcesso
       DelayedError,
       shouldDefer: options.shouldDefer,
       deferDelayMs: options.deferDelayMs,
+      shouldWait: options.shouldWait,
+      waitDelayMs: options.waitDelayMs,
     }),
     workerOpts,
   );

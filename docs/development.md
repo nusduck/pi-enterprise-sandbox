@@ -420,7 +420,7 @@ scripts/dev/k8s/up.sh sim                                  # 前提：镜像为�
 scripts/dev/k8s/down.sh sim
 ```
 
-`up.sh sim` 在命名空间 `pi-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend、sandbox-mcp 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `pi_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、同会话 follow-up。这是本地演练，结果不代替目标环境验收；驱动经 `kubectl port-forward` 访问。
+`up.sh sim` 在命名空间 `pi-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend、sandbox-mcp 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `pi_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、共享 Skill 跨 Pod 发布（跨 owner、新版本、侧车不一致排除、停用）、同会话 follow-up 排队。这是本地演练，结果不代替目标环境验收；驱动经 `kubectl port-forward` 访问。
 
 ### 测试结构
 
