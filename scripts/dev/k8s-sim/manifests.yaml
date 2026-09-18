@@ -1,0 +1,241 @@
+# OrbStack 单节点 K8s 本地演练清单（不是生产清单；目标环境的清单归平台团队）。
+# 由 up.sh 渲染后 apply：__REPO__ 换成仓库绝对路径，__*_IP__ 换成 Docker 里「集群外依赖」的地址。
+#
+# 拓扑照目标环境摆：
+#   K8s 内   agent ×2、agent-worker ×2、api-server ×2、frontend ×1、fake-llm ×1（替代 LLM 网关）
+#   K8s 外   mysql / dbpm-fake（开发栈容器）、专用 Redis、专用 exec 容器（模拟 VM）
+# 集群外依赖用无 selector 的 Service + EndpointSlice 接入，服务名与 Compose 相同，
+# 所以各服务的环境变量不用改主机名。
+# 共享 Skill 存储用宿主目录 hostPath（exec 容器 bind 同一目录）模拟共享文件存储。
+# agent / api-server 镜像是 `USER node`（非数字），runAsNonRoot 无法校验会拒绝建容器，
+# 所以这里显式写 runAsUser: 1000（镜像里 node 的 uid）。目标环境清单同样需要。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pi-sim
+---
+# ── 集群外依赖 ──────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata: { name: mysql, namespace: pi-sim }
+spec:
+  ports: [{ name: mysql, port: 3306, targetPort: 3306 }]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: mysql-ext
+  namespace: pi-sim
+  labels: { kubernetes.io/service-name: mysql }
+addressType: IPv4
+ports: [{ name: mysql, port: 3306, protocol: TCP }]
+endpoints: [{ addresses: ["__MYSQL_IP__"] }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis, namespace: pi-sim }
+spec:
+  ports: [{ name: redis, port: 6379, targetPort: 6379 }]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: redis-ext
+  namespace: pi-sim
+  labels: { kubernetes.io/service-name: redis }
+addressType: IPv4
+ports: [{ name: redis, port: 6379, protocol: TCP }]
+endpoints: [{ addresses: ["__REDIS_IP__"] }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: dbpm-fake, namespace: pi-sim }
+spec:
+  ports:
+    - { name: primary, port: 7000, targetPort: 7000 }
+    - { name: standby, port: 7001, targetPort: 7001 }
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: dbpm-fake-ext
+  namespace: pi-sim
+  labels: { kubernetes.io/service-name: dbpm-fake }
+addressType: IPv4
+ports:
+  - { name: primary, port: 7000, protocol: TCP }
+  - { name: standby, port: 7001, protocol: TCP }
+endpoints: [{ addresses: ["__DBPM_IP__"] }]
+---
+# 执行面（目标环境是 VM）。
+apiVersion: v1
+kind: Service
+metadata: { name: sandbox, namespace: pi-sim }
+spec:
+  ports: [{ name: http, port: 8081, targetPort: 8081 }]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: sandbox-ext
+  namespace: pi-sim
+  labels: { kubernetes.io/service-name: sandbox }
+addressType: IPv4
+ports: [{ name: http, port: 8081, protocol: TCP }]
+endpoints: [{ addresses: ["__SANDBOX_IP__"] }]
+---
+# ── 假模型 ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: fake-llm, namespace: pi-sim }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: fake-llm } }
+  template:
+    metadata: { labels: { app: fake-llm } }
+    spec:
+      containers:
+        - name: fake-llm
+          image: node:22-slim
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/repo/scripts/dev/k8s-sim/fake-llm.mjs"]
+          ports: [{ containerPort: 8080 }]
+          securityContext: { runAsUser: 1000, runAsNonRoot: true, allowPrivilegeEscalation: false }
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 2 }
+          volumeMounts:
+            - { name: repo-sim, mountPath: /repo/scripts/dev/k8s-sim, readOnly: true }
+            - { name: repo-support, mountPath: /repo/agent/tests/support, readOnly: true }
+      volumes:
+        - { name: repo-sim, hostPath: { path: __REPO__/scripts/dev/k8s-sim, type: Directory } }
+        - { name: repo-support, hostPath: { path: __REPO__/agent/tests/support, type: Directory } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: fake-llm, namespace: pi-sim }
+spec:
+  selector: { app: fake-llm }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+# ── Agent HTTP ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: agent, namespace: pi-sim }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: agent } }
+  template:
+    metadata: { labels: { app: agent } }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: agent
+          image: pi-enterprise-agent:latest
+          imagePullPolicy: Never
+          command: ["node", "dist/server.js"]
+          envFrom: [{ secretRef: { name: agent-env } }]
+          ports: [{ containerPort: 4100 }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          livenessProbe: { httpGet: { path: /health, port: 4100 }, periodSeconds: 10, failureThreshold: 3 }
+          readinessProbe: { httpGet: { path: /ready, port: 4100 }, periodSeconds: 5, failureThreshold: 2 }
+          volumeMounts:
+            - { name: skills, mountPath: /home/sandbox/skill, readOnly: true }
+            - { name: skill-user, mountPath: /home/sandbox/skill-user }
+            - { name: skill-draft, mountPath: /home/sandbox/skill-draft }
+            - { name: agent-config, mountPath: /app/config/agent, readOnly: true }
+      volumes:
+        - { name: skills, hostPath: { path: __REPO__/skills, type: Directory } }
+        - { name: skill-user, hostPath: { path: __REPO__/.runtime/k8s-sim/skill-user, type: Directory } }
+        - { name: skill-draft, hostPath: { path: __REPO__/.runtime/k8s-sim/skill-draft, type: Directory } }
+        - { name: agent-config, hostPath: { path: __REPO__/config/agent, type: Directory } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: agent, namespace: pi-sim }
+spec:
+  selector: { app: agent }
+  ports: [{ name: http, port: 4100, targetPort: 4100 }]
+---
+# ── Agent Worker（不注册任何 Service；探针打 Pod IP）────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: agent-worker, namespace: pi-sim }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: agent-worker } }
+  template:
+    metadata: { labels: { app: agent-worker } }
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: agent-worker
+          image: pi-enterprise-agent:latest
+          imagePullPolicy: Never
+          command: ["node", "dist/worker.js"]
+          envFrom: [{ secretRef: { name: agent-worker-env } }]
+          ports: [{ containerPort: 4101, name: probe }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          # 冻结接管场景（docker pause 一个副本）要比租约过期 + 接管更久才重启容器，阈值放宽到 60s。
+          livenessProbe: { httpGet: { path: /health, port: 4101 }, periodSeconds: 10, failureThreshold: 6 }
+          readinessProbe: { httpGet: { path: /ready, port: 4101 }, periodSeconds: 5, failureThreshold: 2 }
+          volumeMounts:
+            - { name: skills, mountPath: /home/sandbox/skill, readOnly: true }
+            - { name: skill-user, mountPath: /home/sandbox/skill-user }
+            - { name: skill-draft, mountPath: /home/sandbox/skill-draft }
+            - { name: agent-config, mountPath: /app/config/agent, readOnly: true }
+      volumes:
+        - { name: skills, hostPath: { path: __REPO__/skills, type: Directory } }
+        - { name: skill-user, hostPath: { path: __REPO__/.runtime/k8s-sim/skill-user, type: Directory } }
+        - { name: skill-draft, hostPath: { path: __REPO__/.runtime/k8s-sim/skill-draft, type: Directory } }
+        - { name: agent-config, hostPath: { path: __REPO__/config/agent, type: Directory } }
+---
+# ── BFF ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: api-server, namespace: pi-sim }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: api-server } }
+  template:
+    metadata: { labels: { app: api-server } }
+    spec:
+      containers:
+        - name: api-server
+          image: pi-enterprise-api:latest
+          imagePullPolicy: Never
+          envFrom: [{ secretRef: { name: api-server-env } }]
+          ports: [{ containerPort: 4000 }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          livenessProbe: { httpGet: { path: /health/live, port: 4000 }, periodSeconds: 10, failureThreshold: 3 }
+          readinessProbe: { httpGet: { path: /health/ready, port: 4000 }, periodSeconds: 5, failureThreshold: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api-server, namespace: pi-sim }
+spec:
+  selector: { app: api-server }
+  ports: [{ name: http, port: 4000, targetPort: 4000 }]
+---
+# ── 前端 ────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: frontend, namespace: pi-sim }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: frontend } }
+  template:
+    metadata: { labels: { app: frontend } }
+    spec:
+      containers:
+        - name: frontend
+          image: pi-enterprise-frontend:latest
+          imagePullPolicy: Never
+          env: [{ name: API_UPSTREAM, value: "http://api-server:4000" }]
+          ports: [{ containerPort: 80 }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 5 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: frontend, namespace: pi-sim }
+spec:
+  selector: { app: frontend }
+  ports: [{ name: http, port: 80, targetPort: 80 }]

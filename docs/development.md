@@ -384,6 +384,16 @@ scripts/dev/release-gate-dsh-restart.sh   # 前提：开发栈 mysql / dbpm-fake
 
 它重建专用库 `pi_gate_dsh` 并按发布 DDL 建表（测试本身不迁移、不回滚——独立 sandbox 启动时核对清单），用 `docker compose run` 起连该库的专用 sandbox `pi-release-gate-sandbox-dsh` 与专用 Redis，在运行器里以生产 Worker 组合 + 真实 DSH 运行时 + 假模型跑四个中断场景：模型调用中 SIGKILL、`ask_user_question` 停泊后 Worker 重启、工具派发边界 SIGKILL、命令执行中重启 sandbox（工具记 `UNKNOWN`、不自动重跑）。专用 sandbox 挂独立数据根 `.runtime/release-gate-dsh/`，不碰开发工作区；结束后删除专用容器、库与数据根。
 
+多副本与 K8s 编排行为另有一套本地演练（OrbStack 自带的单节点 K8s，`orb config set k8s.enable true` 后重启 OrbStack）：
+
+```bash
+scripts/dev/k8s-sim/up.sh                                  # 前提：开发栈在运行、镜像为当前代码
+/opt/homebrew/opt/node@22/bin/node scripts/dev/k8s-sim/scenarios.mjs [场景...]
+scripts/dev/k8s-sim/down.sh
+```
+
+`up.sh` 在命名空间 `pi-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `pi_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储。各服务的环境变量取自开发栈容器（即 Compose 渲染值），只改库名、模型地址，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、同会话 follow-up。这是本地演练，结果不代替目标环境验收；宿主到 ClusterIP 不通，驱动经 `kubectl port-forward` 访问。
+
 ### 测试结构
 
 Python `tests/` 现在只做**仓库卫生**（Python 执行面的契约测试已随 `sandbox/` 删除，

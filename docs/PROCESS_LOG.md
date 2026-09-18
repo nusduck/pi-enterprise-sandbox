@@ -1123,3 +1123,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   （agent 1380 / exec 419 / contract 118 / api-server 160 / frontend 367 / pytest 207）。重建 agent 镜像并核对容器
   换新；DSH 中断 gate 5/5、release-gates 全绿、镜像内插件树等 56/56、经 BFF 链路 11/11，链路 Run 的 bash 行已绑定
   指纹与 fence。详见[证据](evidence/tool-dispatch-boundary-and-outcome-unknown-2026-09-17.md)。
+
+## 2026-09-18 — OrbStack K8s 本地演练：多 Worker 副本与编排行为
+
+- **Context：** 用户问分支能否拉到真实环境部署；复核发现「多 Worker 副本」一直未测。用户同意开启 OrbStack
+  自带 K8s 做本地演练（明确它不替代目标环境 T1–T8 验收），演练清单放 `scripts/dev/k8s-sim/`。
+- **Action：** 新增 `scripts/dev/k8s-sim/`（`up.sh` / `down.sh` / `manifests.yaml` / 可控假模型 `fake-llm.mjs` /
+  场景驱动 `scenarios.mjs`）；agent、agent-worker、api-server 各 2 副本，集群外依赖用 EndpointSlice 接入，exec 用
+  专用容器代替 VM。`development.md` 补使用说明。无生产代码改动。
+- **STATUS IDs：** G2 残留项更新（多 Worker 副本已有本地演练证据，目标环境未测），状态不变。
+- **验证：** 生产默认时长 13/15 + 拆分重跑；缩短时长下冻结接管 2/2；SIGKILL 接管生产时长 5 次全过。pytest 207。
+  详见[证据](evidence/k8s-sim-multi-replica-2026-09-18.md)。
+- **发现（未改，待决策）：** ① agent / api 镜像 `USER node` 与 `runAsNonRoot` 不兼容，清单须写 `runAsUser: 1000`；
+  ② Run 执行期间的 follow-up 直接 `FAILED / session lock busy`，不排队（与 plan §12、`follow-up-service.ts`
+  注释不符，单副本同样复现）；③ Agent HTTP `/ready` 不探活依赖，与 deployment.md 不一致；④ 新组织首次并发建会话
+  可能 409（默认 Agent 惰性创建撞唯一键后在 RR 快照里重读不到）；⑤ BullMQ 锁续期失败被记成 Redis 连接错误。
