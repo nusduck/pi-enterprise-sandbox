@@ -48,3 +48,38 @@ test('H7.8 真实 MCP 服务器：连上 → 注册成 mcp__<server>__<tool> →
   );
   assert.match(out, /^OK: /m);
 });
+
+test('K2 就绪投影：连不上的已启用服务器保留在清单里并使 ready=false', () => {
+  const env = {
+    ...process.env,
+    MCP_SERVERS_JSON: JSON.stringify([
+      { serverId: 'echo', command: 'node', args: [fixture] },
+      // 端口 9（discard）在测试容器里没有监听：连接立即被拒。
+      { serverId: 'dead', url: 'http://127.0.0.1:9/mcp' },
+      { serverId: 'off', url: 'http://127.0.0.1:9/mcp', enabled: false },
+    ]),
+    SANDBOX_INTERNAL_HMAC_KEYRING: '{"k1":"a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"}',
+    SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'k1',
+    LLMIO_API_KEY: 'mcp-readiness-probe',
+  };
+
+  const out = execFileSync('npx', ['tsx', join(agentDir, 'scripts/probe-mcp-readiness.ts')], {
+    cwd: agentDir,
+    env,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  const line = out.split('\n').find((l) => l.startsWith('READINESS '));
+  assert.ok(line, `probe printed no READINESS line:\n${out}`);
+  const readiness = JSON.parse(line.slice('READINESS '.length));
+
+  assert.equal(readiness.ready, false, '一台已启用的服务器不可用，就绪必须为 false');
+  assert.equal(readiness.serverCount, 2, '停用的服务器不计入；连不上的必须计入');
+  const byId = Object.fromEntries(readiness.servers.map((s) => [s.server_id, s]));
+  assert.equal(byId.dead?.connection_status, 'unavailable');
+  assert.deepEqual(byId.dead?.tools, []);
+  // 正对照：真 stdio 服务器照常连上并列出工具。
+  assert.equal(byId.echo?.connection_status, 'connected');
+  assert.ok(byId.echo.tools.includes('echo'));
+  assert.equal(byId.off, undefined);
+});

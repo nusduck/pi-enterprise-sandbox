@@ -216,6 +216,107 @@ describe('startWorkerMain', () => {
     assert.equal(defaultOptions.deferDelayMs, 5000);
   });
 
+  it('SIGTERM stops intake at once and bounds the whole shutdown even when outbox hangs (K4)', async () => {
+    // K8s 部署评审 K4：旧实现先 await outbox 循环再关消费者，outbox 在 MySQL 挂起时
+    // 永不返回，期限计时器从未启动，消费者也一直在取任务。
+    let publishCalls = 0;
+    let containerShutdowns = 0;
+    const closedAt = [];
+    const fakeContainer = {
+      env: {},
+      redis: { type: async () => 'none', ping: async () => 'PONG' },
+      knex: emptyLedger(),
+      createSessionLockManager: async () => ({ getOwner: async () => null }),
+      runQueueTopology: {
+        maxDepth: 1,
+        totalConcurrency: 2,
+        layers: [
+          { depth: 0, queueName: 'agent-runs', concurrency: 1 },
+          { depth: 1, queueName: 'agent-runs-d1', concurrency: 1 },
+        ],
+      },
+      async start() {
+        return this;
+      },
+      async createWorkerServices() {
+        return {
+          workerRuntime: {
+            async processJob() {},
+            async start() {},
+            async shutdown() {},
+            isStarted: () => true,
+            isShutdown: () => false,
+          },
+          recoveryService: { async scanAndRequeue() { return { actions: [] }; } },
+        };
+      },
+      async createOutboxPublisher() {
+        // 第一次正常，之后挂住——模拟 MySQL 挂起时 publishOnce 无上限。
+        return {
+          publishOnce: () => (++publishCalls === 1 ? Promise.resolve({}) : new Promise(() => {})),
+        };
+      },
+      async shutdown() {
+        containerShutdowns += 1;
+      },
+    };
+    const fakeWorker = () => ({
+      isRunning: () => true,
+      isPaused: () => false,
+      pause: async () => {},
+      resume: () => {},
+      close: async () => {
+        closedAt.push(Date.now());
+      },
+    });
+
+    const originalExit = process.exit;
+    const exited = new Promise((resolve) => {
+      process.exit = (code) => resolve(code);
+    });
+    const before = new Set(process.listeners('SIGTERM'));
+    const beforeInt = new Set(process.listeners('SIGINT'));
+    try {
+      await startWorkerMain(
+        {
+          AGENT_DATABASE_URL: 'mysql://u:p@h/db',
+          AGENT_REDIS_URL: 'redis://localhost:6379/0',
+          AGENT_ALLOW_STUB_EXECUTOR: 'true',
+          NODE_ENV: 'development',
+          AGENT_OUTBOX_IDLE_MS: '1',
+          AGENT_WORKER_DRAIN_TIMEOUT_MS: '1000',
+        },
+        {
+          createContainer: () => fakeContainer,
+          startProbeServer: async () => ({ listening: false }),
+          startDependencyGuard: () => ({ pausedByGuard: () => false, checkNow: async () => {}, stop: async () => {} }),
+          createRunWorker: () => ({ worker: fakeWorker(), connection: null }),
+        },
+      );
+      // 等 outbox 进入挂起的第二次 publishOnce。
+      while (publishCalls < 2) await new Promise((r) => setTimeout(r, 5));
+      const handler = process.listeners('SIGTERM').find((l) => !before.has(l));
+      assert.ok(handler, 'worker registered a SIGTERM handler');
+      const signalledAt = Date.now();
+      handler();
+      const code = await Promise.race([
+        exited,
+        new Promise((resolve) => setTimeout(() => resolve('no-exit'), 5_000)),
+      ]);
+      const elapsed = Date.now() - signalledAt;
+
+      assert.equal(closedAt.length, 2, 'every layer closed');
+      assert.ok(closedAt.every((t) => t - signalledAt < 200), 'intake stopped right away, not after outbox');
+      assert.equal(code, 1, 'hung background loop hits the drain deadline');
+      assert.ok(elapsed >= 900 && elapsed < 3_000, `bounded by the 1s budget, took ${elapsed}ms`);
+      assert.equal(containerShutdowns, 0, 'no teardown while the outbox may still write');
+    } finally {
+      process.exit = originalExit;
+      for (const l of process.listeners('SIGTERM')) if (!before.has(l)) process.removeListener('SIGTERM', l);
+      for (const l of process.listeners('SIGINT')) if (!beforeInt.has(l)) process.removeListener('SIGINT', l);
+    }
+  });
+
   it('createWorkerServices assembly fails closed without MySQL/Redis start', async () => {
     const { createServiceContainer } = await import(
       '../../src/bootstrap/container.js'

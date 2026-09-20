@@ -44,6 +44,10 @@ import {
   INTERACTION_RESUME_PHASE,
 } from '../domain/interaction/interaction-status.js';
 import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
+import { createSerialTimeoutLoop } from './serial-timeout-loop.js';
+
+// Re-exported: callers and tests import the loop from here.
+export { createSerialTimeoutLoop };
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -61,63 +65,6 @@ export type ExecuteRunResult = {
   error?: string | null;
   cleanupError?: string | null;
 };
-
-/**
- * Serial setTimeout loop: at most one async tick in flight; stop waits for it.
- * @param {{
- *   intervalMs: number,
- *   tick: () => Promise<void>,
- *   isStopped: () => boolean,
- * }} opts
- */
-export function createSerialTimeoutLoop(opts: { intervalMs: number, tick: () => Promise<void>, isStopped: () => boolean, }) {
-  const intervalMs = Math.max(1, Number(opts.intervalMs) || 1);
-  let stopped = false;
-  let timer = null;
-  let inFlight: Promise<void> | null = null;
-
-  const schedule = () => {
-    if (stopped || opts.isStopped()) return;
-    timer = setTimeout(() => {
-      timer = null;
-      if (stopped || opts.isStopped()) return;
-      const tickPromise = (async () => {
-        try {
-          if (stopped || opts.isStopped()) return;
-          await opts.tick();
-        } finally {
-          // only clear if we are still the current inFlight
-        }
-      })();
-      inFlight = tickPromise.finally(() => {
-        if (inFlight === tickPromise) inFlight = null;
-        if (!stopped && !opts.isStopped()) schedule();
-      });
-    }, intervalMs);
-    if (typeof timer.unref === 'function') timer.unref();
-  };
-
-  return {
-    start() {
-      if (stopped) return;
-      schedule();
-    },
-    async stop() {
-      stopped = true;
-      if (timer != null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (inFlight) {
-        try {
-          await inFlight;
-        } catch {
-          /* tick errors are owned by the tick body */
-        }
-      }
-    },
-  };
-}
 
 /**
  * Thrown / returned when another worker holds the run lease.

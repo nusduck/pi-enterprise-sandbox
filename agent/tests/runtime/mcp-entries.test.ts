@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  DEFAULT_MCP_RECONNECT_MAX_ATTEMPTS,
   buildMcpPatchEntries,
   buildMcpRuntimePatches,
   readMcpServersFromEnv,
@@ -103,4 +104,29 @@ test('boot 时缺密钥的 MCP 服务器被跳过，不让整个 Agent 起不来
     ]),
   } as NodeJS.ProcessEnv;
   assert.deepEqual(buildMcpRuntimePatches(env), []);
+});
+
+test('K2 重连默认不设次数上限：出厂 10 次预算耗尽后永不再连，/ready 会永久 503', () => {
+  const [entry] = buildMcpPatchEntries([{ serverId: 'exa', url: 'https://mcp.exa.ai/mcp' }]);
+  assert.deepEqual((entry?.config as Record<string, unknown>)['reconnect'], {
+    maxAttempts: DEFAULT_MCP_RECONNECT_MAX_ATTEMPTS,
+  });
+  assert.equal(DEFAULT_MCP_RECONNECT_MAX_ATTEMPTS, Number.MAX_SAFE_INTEGER);
+});
+
+test('K2 reconnect 可按服务器覆盖，非法值启动即拒', () => {
+  const [entry] = buildMcpPatchEntries([
+    { serverId: 'loop', command: 'node', args: ['x.mjs'], reconnect: { maxAttempts: 3, initialDelayMs: 100 } },
+  ]);
+  assert.deepEqual((entry?.config as Record<string, unknown>)['reconnect'], {
+    maxAttempts: 3,
+    initialDelayMs: 100,
+  });
+  const bad = (reconnect: unknown) => () =>
+    buildMcpPatchEntries([{ serverId: 's', url: 'https://x/mcp', reconnect }]);
+  assert.throws(bad('forever'), /reconnect must be an object/);
+  assert.throws(bad({ retries: 3 }), /reconnect\.retries is not a reconnect option/);
+  assert.throws(bad({ maxAttempts: 0 }), /reconnect\.maxAttempts/);
+  assert.throws(bad({ maxDelayMs: 1.5 }), /reconnect\.maxDelayMs/);
+  assert.throws(bad({ enabled: 'yes' }), /reconnect\.enabled/);
 });

@@ -32,7 +32,13 @@ export {
   runWithToolExecutionContext,
   currentToolExecutionContext,
 } from './providers/tool-execution-context.js';
-export { sharedEnterpriseRuntime, readMcpReadiness } from './boot.js';
+export {
+  sharedEnterpriseRuntime,
+  readMcpReadiness,
+  createMcpReadinessReader,
+  projectMcpReadiness,
+} from './boot.js';
+export type { McpReadinessProjection } from './boot.js';
 export type { RunServices } from './providers/run-services.js';
 export { createEnabledSkillsProvider, isSkillVisible } from './providers/enabled-skills.js';
 export { evaluatePreExecute, InMemoryApprovalStore } from './policy/pre-execute.js';

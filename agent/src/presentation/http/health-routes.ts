@@ -33,8 +33,35 @@ export interface HealthRouteInput {
   readonly path: string;
   readonly activeRunHint?: (() => number) | undefined;
   readonly dataPlaneReady?: boolean | (() => boolean | Promise<boolean>) | undefined;
-  readonly sandboxHealthCheck?: (() => Promise<{ status?: string } | null>) | undefined;
+  /** 执行面 `/ready` 探针；只有 `status: 'ready'` 算就绪（K8s 部署评审 K1）。 */
+  readonly sandboxReadyCheck?: (() => Promise<{ status?: string } | null>) | undefined;
   readonly mcpReadiness?: (() => McpReadiness) | undefined;
+}
+
+async function checkDataPlane(dataPlaneReady: HealthRouteInput['dataPlaneReady']): Promise<boolean> {
+  if (dataPlaneReady === false) return false;
+  if (typeof dataPlaneReady === 'function') {
+    try {
+      return Boolean(await dataPlaneReady());
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** `ok` / `not_ready`（执行面答了但未就绪）/ `unreachable`（没答上）。 */
+async function checkSandbox(
+  sandboxReadyCheck: HealthRouteInput['sandboxReadyCheck'],
+): Promise<'ok' | 'not_ready' | 'unreachable'> {
+  if (!sandboxReadyCheck) return 'ok';
+  try {
+    const result = await sandboxReadyCheck();
+    if (result?.status === 'ready') return 'ok';
+    return result?.status === 'not_ready' ? 'not_ready' : 'unreachable';
+  } catch {
+    return 'unreachable';
+  }
 }
 
 export async function handleHealthRoute(input: HealthRouteInput): Promise<boolean> {
@@ -52,29 +79,13 @@ export async function handleHealthRoute(input: HealthRouteInput): Promise<boolea
   }
 
   if (req.method === 'GET' && path === '/ready') {
-    let dataPlaneOk = true;
-    if (input.dataPlaneReady === false) {
-      dataPlaneOk = false;
-    } else if (typeof input.dataPlaneReady === 'function') {
-      try {
-        dataPlaneOk = Boolean(await input.dataPlaneReady());
-      } catch {
-        dataPlaneOk = false;
-      }
-    } else if (input.dataPlaneReady === undefined) {
-      // Default: require explicit data plane when not injected as ready.
-      dataPlaneOk = true;
-    }
-
-    let sandboxOk = true;
-    if (input.sandboxHealthCheck) {
-      try {
-        const h = await input.sandboxHealthCheck();
-        sandboxOk = h?.status === 'ok';
-      } catch {
-        sandboxOk = false;
-      }
-    }
+    // data plane 与执行面并行探测：两者各自有超时，串行会把最坏耗时相加，
+    // 超过 kubelet 探针的 timeoutSeconds。
+    const [dataPlaneOk, sandboxStatus] = await Promise.all([
+      checkDataPlane(input.dataPlaneReady),
+      checkSandbox(input.sandboxReadyCheck),
+    ]);
+    const sandboxOk = sandboxStatus === 'ok';
 
     let mcp: McpReadiness = { ready: true, serverCount: 0, toolCount: 0, servers: [] };
     if (typeof input.mcpReadiness === 'function') {
@@ -90,7 +101,7 @@ export async function handleHealthRoute(input: HealthRouteInput): Promise<boolea
     json(res, ready ? 200 : 503, {
       status: ready ? 'ready' : 'not_ready',
       data_plane: dataPlaneOk ? 'ok' : 'unavailable',
-      sandbox: sandboxOk ? 'ok' : 'unreachable',
+      sandbox: sandboxStatus,
       mcp: {
         status: mcpOk ? 'ok' : 'unreachable',
         server_count: Number(mcp.serverCount) || 0,

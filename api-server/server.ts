@@ -85,8 +85,8 @@ import {
   handleListAgents,
   handleSetAgentActiveVersion,
 } from './src/routes/agents.js';
-import { authFromRequest, checkHealth } from './src/services/sandbox-client.js';
-import { checkAgentHealth } from './src/services/agent-client.js';
+import { authFromRequest, checkSandboxReady } from './src/services/sandbox-client.js';
+import { checkAgentReady } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
 import { sendError } from './src/http/response.js';
 import {
@@ -115,18 +115,18 @@ try {
 async function startupCheck(): Promise<void> {
   const MAX_RETRIES = 10;
   for (let i = 0; i < MAX_RETRIES; i++) {
-    const health = await checkHealth();
-    if (health?.status === 'ok') {
-      console.log(`[server] Sandbox healthy (v${health.version}, ${health.sessions_active} sessions active)`);
+    const sandbox = await checkSandboxReady();
+    if (sandbox.status === 'ready') {
+      console.log('[server] Sandbox ready');
       break;
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
-  const agent = await checkAgentHealth();
-  if (agent?.status === 'ok') {
-    console.log(`[server] Agent healthy (active_runs=${agent.active_runs ?? '?'})`);
+  const agent = await checkAgentReady();
+  if (agent.status === 'ready') {
+    console.log('[server] Agent ready');
   } else {
-    console.warn('[server] Agent not responding after startup — will retry on demand');
+    console.warn(`[server] Agent ${agent.status} after startup — /health/ready stays 503 until it is`);
   }
 }
 

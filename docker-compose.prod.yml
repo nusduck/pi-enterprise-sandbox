@@ -357,6 +357,8 @@ services:
     command: ["node", "dist/server.js"]
 
   agent-worker:
+    # 大于 AGENT_WORKER_DRAIN_TIMEOUT_MS（默认 150s）加关停尾部；Compose 默认 10s 会在排空途中 SIGKILL。
+    stop_grace_period: 180s
     environment:
       DEPLOYMENT_ENV: production
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}

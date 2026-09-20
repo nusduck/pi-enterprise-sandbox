@@ -87,7 +87,7 @@ export interface AgentHttpServerDeps {
   a2aHandler?: { handle: Loose } | null;
   a2aAdminHandler?: { handle: Loose } | null;
   config?: { AGENT_INTERNAL_TOKEN?: string; PORT?: number; A2A_PUBLIC_BASE_URL?: string };
-  sandboxHealthCheck?: () => Promise<{ status?: string } | null>;
+  sandboxReadyCheck?: () => Promise<{ status?: string } | null>;
   dataPlaneReady?: boolean | (() => boolean | Promise<boolean>);
   mcpReadiness?: () => McpReadiness;
   getExtensionDiagnostics?: Loose;
@@ -161,7 +161,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           path,
           activeRunHint: deps.activeRunHint,
           dataPlaneReady: deps.dataPlaneReady,
-          sandboxHealthCheck: deps.sandboxHealthCheck,
+          sandboxReadyCheck: deps.sandboxReadyCheck,
           mcpReadiness: deps.mcpReadiness,
         })
       ) {

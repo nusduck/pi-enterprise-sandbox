@@ -31,6 +31,7 @@ import {
   startWorkerDependencyGuard,
 } from './worker-dependency-guard.js';
 import { assertWorkerTopologyDrained } from './worker-drain-gate.js';
+import { resolveDrainTimeout, runWorkerShutdown } from './worker-drain.js';
 
 /** Foreground durable subagents need a slot while their child Run executes. */
 export const DEFAULT_AGENT_WORKER_CONCURRENCY = 4;
@@ -60,6 +61,7 @@ export async function startWorkerMain(
   const dependencyCheckIntervalMs = resolveDependencyCheckInterval(
     env.AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS,
   );
+  const drainTimeoutMs = resolveDrainTimeout(env.AGENT_WORKER_DRAIN_TIMEOUT_MS);
   const probe = {
     started: false,
     shuttingDown: false,
@@ -87,7 +89,7 @@ export async function startWorkerMain(
     { port: probePort, host: env.AGENT_WORKER_PROBE_HOST || undefined },
   );
   try {
-    return await runWorkerMain(env, hooks, probe, server, dependencyCheckIntervalMs);
+    return await runWorkerMain(env, hooks, probe, server, dependencyCheckIntervalMs, drainTimeoutMs);
   } catch (err) {
     probe.shuttingDown = true;
     await closeWorkerProbeServer(server).catch(() => {});
@@ -107,6 +109,7 @@ async function runWorkerMain(
   },
   probeServer: Awaited<ReturnType<typeof startWorkerProbeServer>>,
   dependencyCheckIntervalMs: number,
+  drainTimeoutMs: number,
 ) {
   const telemetry = await startTelemetry(env, {
     serviceName: 'pi-enterprise-agent-worker',
@@ -313,6 +316,7 @@ async function runWorkerMain(
     throw err;
   }
 
+  let shuttingDown = false;
   // 依赖不可用时暂停取新任务（design §9.2）。与 /ready 共用同一套 ping。
   const dependencyGuard = (hooks.startDependencyGuard || startWorkerDependencyGuard)({
     intervalMs: dependencyCheckIntervalMs,
@@ -325,59 +329,51 @@ async function runWorkerMain(
     pause: async () => {
       await Promise.all(workerHandles.map((h) => h.worker.pause(true)));
     },
+    // 关停中不恢复：close() 之后再 resume 会让消费者重新取任务。
     resume: () => {
+      if (shuttingDown) return;
       for (const h of workerHandles) h.worker.resume();
     },
     log: (level, message) =>
       (level === 'warn' ? console.warn : console.log)(`[agent-worker] ${message}`),
   });
 
-  let shuttingDown = false;
+  // 关停时要同步发起 close()，模块提前载入，不在信号处理里再 await import。
+  const { destroyRunWorker } = await import('../infrastructure/redis/run-queue.js');
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    // 先摘除就绪，再停守卫、调度与消费；探针 listener 最后关，关停期间 liveness 仍可答。
-    probe.shuttingDown = true;
-    await dependencyGuard.stop().catch(() => {});
-    console.log(`[agent-worker] ${signal} — shutting down`);
-    clearInterval(recoveryTimer);
-    await cronScheduler?.shutdown().catch(() => {});
-    outboxAbort.abort();
-    try {
-      await outboxLoop;
-    } catch {
-      /* ignore */
-    }
-    if (workerHandles.length > 0) {
-      try {
-        const { destroyRunWorker } = await import(
-          '../infrastructure/redis/run-queue.js'
-        );
+    // 顺序与期限见 worker-drain.ts：信号起算总期限，关消费者与停后台循环并行发起。
+    await runWorkerShutdown(
+      signal,
+      {
+        markNotReady: () => {
+          probe.shuttingDown = true;
+        },
         // 逐层关停，一个失败不阻断其余。
-        await Promise.all(
-          workerHandles.map((h) => destroyRunWorker(h).catch(() => undefined)),
-        );
-      } catch {
-        /* ignore */
-      }
-    }
-    try {
-      await workerRuntime.shutdown();
-    } catch {
-      /* ignore */
-    }
-    try {
-      await container.shutdown();
-    } catch {
-      /* ignore */
-    }
-    try {
-      await telemetry.shutdown();
-    } catch {
-      /* ignore */
-    }
-    await closeWorkerProbeServer(probeServer).catch(() => {});
-    process.exit(0);
+        stopIntake: () =>
+          Promise.all(workerHandles.map((h) => destroyRunWorker(h).catch(() => undefined))),
+        stopBackground: async () => {
+          clearInterval(recoveryTimer);
+          outboxAbort.abort();
+          await Promise.all([
+            dependencyGuard.stop().catch(() => {}),
+            cronScheduler?.shutdown().catch(() => {}),
+            outboxLoop.catch(() => {}),
+          ]);
+        },
+        teardown: async () => {
+          await workerRuntime.shutdown().catch(() => {});
+          await container.shutdown().catch(() => {});
+          await telemetry.shutdown().catch(() => {});
+        },
+        closeProbe: () => closeWorkerProbeServer(probeServer),
+        exit: (code) => process.exit(code),
+        log: (level, message) =>
+          (level === 'error' ? console.error : console.log)(`[agent-worker] ${message}`),
+      },
+      { drainTimeoutMs },
+    );
   };
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
   process.once('SIGINT', () => void shutdown('SIGINT'));

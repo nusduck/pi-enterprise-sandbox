@@ -65,7 +65,7 @@ describe('thin BFF agent relay', () => {
   });
 
   it('agent-client exposes create / events / cancel', () => {
-    for (const name of ['createAgentRun', 'openAgentRunEvents', 'cancelAgentRun', 'getAgentRunTrace', 'checkAgentHealth']) {
+    for (const name of ['createAgentRun', 'openAgentRunEvents', 'cancelAgentRun', 'getAgentRunTrace', 'checkAgentReady']) {
       assert.match(agentClientSrc, new RegExp(`export async function ${name}\\(`));
     }
   });

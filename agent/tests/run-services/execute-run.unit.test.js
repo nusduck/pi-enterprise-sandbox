@@ -127,6 +127,36 @@ describe('createSerialTimeoutLoop', () => {
     assert.ok(ticks >= 1);
     assert.equal(maxConcurrent, 1);
   });
+
+  it('a failing tick never becomes an unhandled rejection and the loop keeps polling (K4 sim)', async () => {
+    // K8s 部署评审 K4 sim 演练：MySQL 故障时 cancel 轮询的 tick 抛错，旧实现把 rejected 的
+    // finally 链留给 stop() 才 await，成了未处理 rejection，整个 Worker 进程崩溃。
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    const errors = [];
+    let ticks = 0;
+    const loop = createSerialTimeoutLoop({
+      intervalMs: 5,
+      isStopped: () => false,
+      onError: (err) => errors.push(err),
+      tick: async () => {
+        ticks += 1;
+        if (ticks <= 2) throw Object.assign(new Error('mysql down'), { code: 'ALL_ENDPOINTS_FAILED' });
+      },
+    });
+    try {
+      loop.start();
+      await new Promise((r) => setTimeout(r, 80));
+      await loop.stop();
+      await new Promise((r) => setImmediate(r));
+      assert.deepEqual(unhandled, []);
+      assert.equal(errors.length, 2);
+      assert.ok(ticks >= 3, `loop must keep polling after failures, got ${ticks} ticks`);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
 });
 
 describe('ExecuteRunService', () => {

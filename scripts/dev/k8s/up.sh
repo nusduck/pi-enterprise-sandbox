@@ -175,13 +175,17 @@ render() {
     render "$HERE/manifests.yaml"
     if [ "$MODE" = sim ]; then echo "---"; render "$HERE/fake-llm.yaml"; else echo "---"; render "$HERE/expose.yaml"; fi
 } | K apply -f - >/dev/null
-# 再次运行时 Secret 可能变了而 Deployment 模板没变，apply 不会滚动；重启一次确保读到新环境。
+# 应用镜像都是固定 :latest + imagePullPolicy: Never：重建同名镜像不改 Pod 模板，apply 不会滚动，
+# Secret 变了也一样。再次运行时显式重启**所有**用本地镜像的 Deployment，确保读到新镜像与新环境
+# （frontend 曾漏在这张表外，重建后 rollout status 直接对旧 Pod 报成功）。fake-llm 用公共镜像，不在此列。
+APP_DEPLOYMENTS="agent agent-worker api-server frontend sandbox-mcp"
 if [ "$EXISTED" = true ]; then
-    K -n "$NS" rollout restart deployment/agent deployment/agent-worker deployment/api-server deployment/sandbox-mcp >/dev/null
+    # shellcheck disable=SC2086 # 按空格拆成多个 deployment/<name>
+    K -n "$NS" rollout restart $(printf 'deployment/%s ' $APP_DEPLOYMENTS) >/dev/null
 fi
 
 echo "[4/4] Waiting for rollouts..."
-DEPLOYMENTS="agent agent-worker api-server frontend sandbox-mcp"
+DEPLOYMENTS="$APP_DEPLOYMENTS"
 [ "$MODE" = sim ] && DEPLOYMENTS="fake-llm $DEPLOYMENTS"
 for d in $DEPLOYMENTS; do
     K -n "$NS" rollout status "deployment/$d" --timeout=240s

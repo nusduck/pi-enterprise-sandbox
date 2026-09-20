@@ -14,6 +14,13 @@
 //   rolling-restart 在途 Run 时 rollout restart：原副本 SIGTERM 后排空完成，不重放
 //   redis-outage   暂停专用 Redis：Worker 与 Agent HTTP 都摘流量，恢复后自动就绪且 Run 可用
 //
+// 有界关停（K4，默认 150s 排空 / 180s 宽限；只在点名时跑）：对承载 Run 的 Worker Pod 发 SIGTERM，
+// 核对退出码与时刻、排空期间是否还领取新 Run、账本与副作用：
+//   drain-clean        两段 20s 工具，期限内排空，退出码 0，原副本完成
+//   drain-deadline     三段 70s 工具，约 150s 时到期退出（码 1），不自动重放，人工取消后 CANCELLED
+//   drain-subrun       前台子 Run（子 Run 60s 工具）期间关停父 Run 所在副本
+//   drain-redis-outage SIGTERM 后暂停专用 Redis；drain-mysql-outage SIGTERM 后只让 pi-sim 失去 MySQL
+//
 // SIM_WORKERS=<n> 指定期望的 Worker 副本数（默认 2）；SIM_RESULT_FILE=<path> 把结果写成 JSON。
 //
 // 宿主机到 ClusterIP 不通（OrbStack 下走了局域网路由），所以 HTTP 经 kubectl port-forward；
@@ -170,6 +177,121 @@ async function sideEffectText(id) {
     'find /var/sandbox/workspaces -name "$1" -exec cat {} +', '_', `sim-${id}.log`,
   ]);
   return stdout;
+}
+
+// ── Worker 关停观测（K4）────────────────────────────────────
+/** 对指定 Worker Pod 发 SIGTERM（delete），跟踪日志与容器退出，直到 Pod 消失。 */
+async function terminatePod(pod) {
+  let logs = '';
+  const follower = spawn('kubectl', ['--context', 'orbstack', '-n', NS, 'logs', '-f', pod], { stdio: ['ignore', 'pipe', 'pipe'] });
+  follower.stdout.on('data', (d) => { logs += String(d); });
+  // Pod 在容器退出后很快被删除，轮询抓不到退出码；用 watch 的事件流取 terminated 状态。
+  let code = null;
+  let finishedAt = null;
+  let buffer = '';
+  const watcher = spawn('kubectl', ['--context', 'orbstack', '-n', NS, 'get', 'pod', pod, '-w', '--output-watch-events', '-o', 'json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  watcher.stdout.on('data', (d) => {
+    buffer += String(d);
+    // 事件是连续的多行 JSON 对象；按顶层对象边界切分。
+    let depth = 0;
+    let start = -1;
+    let consumed = 0;
+    for (let i = 0; i < buffer.length; i += 1) {
+      const ch = buffer[i];
+      if (ch === '{') { if (depth === 0) start = i; depth += 1; }
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0 && start >= 0) {
+          try {
+            const ev = JSON.parse(buffer.slice(start, i + 1));
+            const term = ev.object?.status?.containerStatuses?.[0]?.state?.terminated;
+            if (term && code === null) { code = term.exitCode; finishedAt = Date.parse(term.finishedAt); }
+          } catch {}
+          consumed = i + 1;
+        }
+      }
+    }
+    buffer = buffer.slice(consumed);
+  });
+  await sleep(1_000);
+  const t0 = Date.now();
+  await kubectl('delete', 'pod', pod, '--wait=false');
+  let gone = false;
+  while (Date.now() - t0 < 240_000) {
+    const got = await kubectl('get', 'pod', pod, '-o', 'json').then((r) => JSON.parse(r.stdout), () => null);
+    if (!got) { gone = true; break; }
+    await sleep(1_000);
+  }
+  await sleep(1_000);
+  watcher.kill();
+  follower.kill();
+  const exitAt = finishedAt ?? Date.now();
+  return {
+    t0,
+    code,
+    gone,
+    elapsedS: Math.round((exitAt - t0) / 100) / 10,
+    deadlineLogged: logs.includes('drain deadline'),
+    teardownDeadline: logs.includes('teardown exceeded'),
+    shutdownLines: logs.split('\n').filter((l) => /shutting down|deadline|teardown/.test(l)),
+    logTail: logs.split('\n').filter((l) => l && !/Redis version|Current: /.test(l)).slice(-25),
+  };
+}
+
+/**
+ * 一个 Run 在某副本执行工具时对该副本发 SIGTERM，并在排空期间投递探针 Run，最后收集账本与副作用。
+ */
+async function drainScenario({ name, mode, waitTool = 'bash', probes = true, onPod, duringDrain, afterExit, settleMs = 20_000 }) {
+  const c = await newUser(name);
+  const id = `${name}-${tag}`;
+  const run = await submit(c, await newConversation(c), id, mode);
+  const [first] = await llm.waitFor((e) => e.id === id && e.turn === 1, 60_000, `${id} first turn`);
+  await refreshIpNames();
+  const pod = podOf(first.remote);
+  const toolStarted = Date.now() + 60_000;
+  while (Date.now() < toolStarted) {
+    if ((await toolRows(run.runId)).some((t) => t.startsWith(`${waitTool}:RUNNING`))) break;
+    await sleep(500);
+  }
+  if (onPod) await onPod(pod);
+  const exitPromise = terminatePod(pod);
+  const extra = duringDrain ? duringDrain() : Promise.resolve();
+  const probeRuns = [];
+  if (probes) {
+    for (const delay of [5_000, 30_000]) {
+      await sleep(delay === 5_000 ? 5_000 : 25_000);
+      const pc = await newUser(`${name}p${probeRuns.length}`);
+      const pid = `${name}-probe-${probeRuns.length}-${tag}`;
+      const pr = await submit(pc, await newConversation(pc), pid, 'tool');
+      probeRuns.push({ pc, pid, runId: pr.runId });
+    }
+  }
+  const exit = await exitPromise;
+  await extra;
+  if (afterExit) await afterExit();
+  const turnsAtExit = (await llm.entries(id)).length;
+  const lines = await sideEffectLines(id);
+  const final = await waitTerminal(c, run.runId, settleMs);
+  const probeResults = [];
+  await refreshIpNames();
+  for (const p of probeRuns) {
+    const pf = await waitTerminal(p.pc, p.runId);
+    const entry = (await llm.entries(p.pid)).find((e) => e.turn === 1);
+    probeResults.push({ final: pf, pod: podOf(entry?.remote) });
+  }
+  await sleep(30_000);
+  const entries = await llm.entries(id);
+  return {
+    c, id, runId: run.runId, pod, exit, final,
+    probes: probeResults,
+    firstTurns: entries.filter((e) => e.turn === 1).length,
+    turnPods: entries.map((e) => podOf(e.remote)),
+    turnsAfterExit: entries.length - turnsAtExit,
+    tools: await toolRows(run.runId),
+    lines,
+    linesLater: await sideEffectLines(id),
+    run: await runRow(run.runId),
+  };
 }
 
 // ── 业务动作 ─────────────────────────────────────────────────
@@ -617,10 +739,122 @@ sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
       },
     );
   },
+
+  // ── Worker 有界关停（K8s 部署评审 K4）：默认 150s 排空 / 180s 宽限，只在点名时跑 ──
+  async 'drain-clean'(S) {
+    const r = await drainScenario({ name: 'dcl', mode: 'chain n=2 s=20' });
+    record(S, 'drained_within_budget_exit_0',
+      r.exit.code === 0 && !r.exit.deadlineLogged && r.exit.elapsedS < 60, r.exit);
+    record(S, 'draining_pod_took_no_new_runs', r.probes.every((p) => p.pod !== r.pod && p.final === 'SUCCEEDED'), r.probes);
+    record(S, 'run_completed_on_original_pod_without_replay',
+      r.final === 'SUCCEEDED' && r.firstTurns === 1 && r.turnPods.every((p) => p === r.pod) &&
+        r.tools.length === 2 && r.tools.every((t) => t.includes(':SUCCEEDED:')) && r.lines === 2 && r.run?.attempt === 1,
+      r);
+  },
+
+  async 'drain-deadline'(S) {
+    const r = await drainScenario({ name: 'ddl', mode: 'chain n=3 s=70', settleMs: 60_000 });
+    record(S, 'exit_1_at_drain_deadline_before_grace',
+      r.exit.code === 1 && r.exit.deadlineLogged && r.exit.elapsedS >= 148 && r.exit.elapsedS < 178, r.exit);
+    record(S, 'draining_pod_took_no_new_runs', r.probes.every((p) => p.pod !== r.pod && p.final === 'SUCCEEDED'), r.probes);
+    // 退出时第 3 段工具在执行：账本 RUNNING，恢复扫描不重放（不再有模型轮次、attempt 不变）。
+    record(S, 'no_automatic_replay_after_exit',
+      r.firstTurns === 1 && r.turnsAfterExit === 0 && r.run?.attempt === 1 && r.run?.status === 'RUNNING' &&
+        r.tools.some((t) => t.includes(':RUNNING:')),
+      { run: r.run, tools: r.tools, turnsAfterExit: r.turnsAfterExit });
+    // 工具副作用：前两段已完成；第 3 段是前台命令，Worker 退出后执行面随连接断开中止它——
+    // 没有落副作用，账本却停在 RUNNING（结果未知，需人工核对）。
+    record(S, 'side_effects_exactly_completed_steps', r.lines === 2 && r.linesLater === 2,
+      { linesAtExit: r.lines, linesLater: r.linesLater });
+    const cancel = await r.c('POST', `/api/runs/${r.runId}/cancel`, {}, { 'Idempotency-Key': `cancel-${r.id}` });
+    const final = await waitTerminal(r.c, r.runId, 60_000);
+    record(S, 'operator_cancel_terminalizes', cancel.s === 200 && final === 'CANCELLED',
+      { cancel: cancel.s, final, run: await runRow(r.runId) });
+  },
+
+  async 'drain-subrun'(S) {
+    const childId = `dsc-${tag}`;
+    const child = Buffer.from(`[[SIM id=${childId} mode=chain n=1 s=60]] 子任务。`).toString('base64');
+    const r = await drainScenario({ name: 'dsp', mode: `sub cmd=${child}`, waitTool: 'subagent' });
+    const [childRun] = await query(`SELECT run_id, status, attempt FROM runs WHERE parent_run_id = '${ulid(r.runId)}'`);
+    const childTurns = await llm.entries(childId);
+    record(S, 'drained_within_budget_exit_0', r.exit.code === 0 && !r.exit.deadlineLogged && r.exit.elapsedS < 120, r.exit);
+    record(S, 'parent_and_child_succeed_without_replay',
+      r.final === 'SUCCEEDED' && r.firstTurns === 1 && childRun?.[1] === 'SUCCEEDED' && Number(childRun?.[2]) === 1 &&
+        childTurns.filter((e) => e.turn === 1).length === 1 && (await sideEffectLines(childId)) === 1,
+      { parent: r.run, child: childRun, childPod: podOf(childTurns[0]?.remote), parentPod: r.pod, tools: r.tools });
+    record(S, 'draining_pod_took_no_new_runs', r.probes.every((p) => p.pod !== r.pod && p.final === 'SUCCEEDED'), r.probes);
+  },
+
+  async 'drain-redis-outage'(S) {
+    const r = await drainScenario({
+      name: 'drd',
+      mode: 'chain n=1 s=30',
+      probes: false,
+      duringDrain: async () => {
+        await sleep(2_000);
+        await sh('docker', ['pause', 'pi-k8s-sim-redis']);
+      },
+      afterExit: async () => sh('docker', ['unpause', 'pi-k8s-sim-redis']),
+      settleMs: 90_000,
+    });
+    record(S, 'bounded_exit_despite_redis_outage', r.exit.gone && r.exit.elapsedS < 178, r.exit);
+    record(S, 'ledger_after_recovery', true, { final: r.final, run: r.run, tools: r.tools, lines: r.linesLater, firstTurns: r.firstTurns, turnsAfterExit: r.turnsAfterExit });
+    record(S, 'tool_side_effect_once', r.linesLater === 1 && r.tools.length === 1, { lines: r.linesLater, tools: r.tools });
+    await waitWorkersReady();
+  },
+
+  async 'drain-mysql-outage'(S) {
+    // 只让 pi-sim 的 K8s 应用层失去 MySQL：EndpointSlice 指向黑洞地址，并断开 pi_k8s_sim 上除 sim 执行面
+    // 以外的全部连接（Pod 出向经 NAT，MySQL 看到的来源地址不是 Pod IP，无法只断一个副本）。开发栈库不受影响。
+    const { stdout: sliceJson } = await kubectl('get', 'endpointslice', 'mysql-ext', '-o', 'json');
+    const mysqlIp = JSON.parse(sliceJson).endpoints[0].addresses[0];
+    const setMysql = (ip) =>
+      kubectl('patch', 'endpointslice', 'mysql-ext', '--type=json', '-p',
+        JSON.stringify([{ op: 'replace', path: '/endpoints/0/addresses/0', value: ip }]));
+    const { stdout: execIp } = await sh('docker', ['inspect', SANDBOX_CONTAINER, '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}']);
+    const execHosts = execIp.trim().split(/\s+/).filter(Boolean);
+    const killed = [];
+    const r = await drainScenario({
+      name: 'dmy',
+      mode: 'chain n=1 s=30',
+      probes: false,
+      duringDrain: async () => {
+        await sleep(2_000);
+        await setMysql('10.255.255.1');
+        const rows = await query(`SELECT id, host FROM information_schema.processlist WHERE db = 'pi_k8s_sim'`);
+        for (const [cid, host] of rows) {
+          if (execHosts.includes(String(host).split(':')[0])) continue;
+          await query(`KILL ${Number(cid)}`).then(() => killed.push(host), () => {});
+        }
+      },
+      afterExit: async () => setMysql(mysqlIp),
+      settleMs: 90_000,
+    });
+    // 进程不得因 MySQL 故障崩溃（曾因 cancel 轮询的未处理 rejection 在数秒内退出）：要么排空完成（码 0），
+    // 要么到期退出（码 1 且有 deadline 日志）。
+    record(S, 'bounded_exit_without_crash',
+      r.exit.gone && r.exit.elapsedS < 178 && (r.exit.code === 0 || (r.exit.code === 1 && r.exit.deadlineLogged)),
+      { ...r.exit, logTail: undefined, killedConnections: killed.length });
+    // 续租写不进 MySQL → 执行器按 fencing 中止 Run，前台命令随之中止；账本写不进去，工具停在 RUNNING。
+    // 约束是：副作用不重复、不自动重放、人工取消可终结。
+    record(S, 'no_duplicate_side_effect_or_replay',
+      r.linesLater <= 1 && r.tools.length === 1 && r.firstTurns === 1 && r.turnsAfterExit === 0,
+      { run: r.run, tools: r.tools, lines: r.linesLater, firstTurns: r.firstTurns, turnsAfterExit: r.turnsAfterExit });
+    if (!TERMINAL.includes(r.final)) {
+      const cancel = await r.c('POST', `/api/runs/${r.runId}/cancel`, {}, { 'Idempotency-Key': `cancel-${r.id}` });
+      const final = await waitTerminal(r.c, r.runId, 60_000);
+      record(S, 'operator_cancel_terminalizes', cancel.s === 200 && final === 'CANCELLED', { cancel: cancel.s, final });
+    }
+    await waitWorkersReady();
+  },
 };
 
 // ── 主流程 ───────────────────────────────────────────────────
-const selected = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(scenarios);
+// drain-* 每个要 1–5 分钟，只在点名时跑。
+const selected = process.argv.slice(2).length
+  ? process.argv.slice(2)
+  : Object.keys(scenarios).filter((n) => !n.startsWith('drain-'));
 const forwards = [await portForward('svc/frontend', BFF_PORT, 80), await portForward('svc/fake-llm', LLM_PORT, 8080)];
 try {
   await waitWorkersReady();

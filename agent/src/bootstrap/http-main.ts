@@ -196,12 +196,14 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     );
   }
 
-  let sandboxHealthCheck: (() => Promise<{ status?: string } | null>) | null = null;
+  // 执行面 readiness 看 exec `/ready`，不是 liveness 的 `/health`（K8s 部署评审 K1）。
+  // 模块加载失败时 fail-closed：探针恒报 unreachable，而不是跳过这一项。
+  let sandboxReadyCheck: () => Promise<{ status?: string } | null>;
   try {
     const mod = await import('../infrastructure/sandbox/sandbox-client.js');
-    sandboxHealthCheck = () => mod.checkHealth();
+    sandboxReadyCheck = () => mod.checkReady();
   } catch {
-    sandboxHealthCheck = null;
+    sandboxReadyCheck = async () => null;
   }
 
   // Skills are per-caller: the bundled tier plus that user's own directory.
@@ -534,7 +536,7 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     listToolExecutions,
     browserAuthService,
     config,
-    sandboxHealthCheck: sandboxHealthCheck || undefined,
+    sandboxReadyCheck,
     // /ready requires a reachable data plane: MySQL `SELECT 1` + Redis `PING` (same as
     // the Worker probe). Health-only mode (container not started) → 503.
     dataPlaneReady: () => isDataPlaneReachable(container),
@@ -563,17 +565,15 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     '[agent-server] Run authority: MySQL Create/Get/Cancel/Steer/Follow-up services',
   );
 
-  if (sandboxHealthCheck) {
-    try {
-      const health = await sandboxHealthCheck();
-      if (health?.status === 'ok') {
-        console.log('[agent-server] Sandbox healthy');
-      } else {
-        console.warn('[agent-server] Sandbox not ready — will retry on demand');
-      }
-    } catch {
-      console.warn('[agent-server] Sandbox health check failed');
+  try {
+    const readiness = await sandboxReadyCheck();
+    if (readiness?.status === 'ready') {
+      console.log('[agent-server] Sandbox ready');
+    } else {
+      console.warn('[agent-server] Sandbox not ready — /ready stays 503 until it is');
     }
+  } catch {
+    console.warn('[agent-server] Sandbox readiness check failed');
   }
 
   let shuttingDown = false;

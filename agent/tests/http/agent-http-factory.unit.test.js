@@ -692,7 +692,7 @@ describe('createAgentHttpServer factory', () => {
       cancelRunService: { execute: async () => ({}) },
       eventQueryService: { listEvents: async () => ({ events: [] }) },
       dataPlaneReady: false,
-      sandboxHealthCheck: async () => ({ status: 'ok' }),
+      sandboxReadyCheck: async () => ({ status: 'ready' }),
       config: { ALLOW_UNAUTHENTICATED_INTERNAL: true },
     });
     const p = await listen(srv);
@@ -713,7 +713,7 @@ describe('createAgentHttpServer factory', () => {
       cancelRunService: { execute: async () => ({}) },
       eventQueryService: { listEvents: async () => ({ events: [] }) },
       dataPlaneReady: true,
-      sandboxHealthCheck: async () => ({ status: 'ok' }),
+      sandboxReadyCheck: async () => ({ status: 'ready' }),
       mcpReadiness: () => ({
         ready: false,
         serverCount: 1,

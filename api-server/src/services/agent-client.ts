@@ -4,6 +4,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
+import { probeReadiness, type DownstreamReadiness } from './downstream-readiness.js';
 import {
   boundRequestTraceContext,
   normalizeTraceId,
@@ -929,17 +930,12 @@ export async function openAgentRunEvents(
 }
 
 /**
- * Agent service liveness probe.
- * @returns {Promise<object|null>}
+ * Agent readiness probe（`/ready`，不是 liveness 的 `/health`）。
+ *
+ * Agent `/ready` 并行检查 data plane（2s）与执行面 `/ready`（3s），这里多留 1s。
  */
-export async function checkAgentHealth(): Promise<any> {
-  try {
-    const resp = await fetch(`${config.AGENT_BASE_URL}/health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!resp.ok) return null;
-    return resp.json();
-  } catch {
-    return null;
-  }
+const AGENT_READY_TIMEOUT_MS = 4_000;
+
+export async function checkAgentReady(): Promise<DownstreamReadiness> {
+  return probeReadiness(`${config.AGENT_BASE_URL}/ready`, {}, AGENT_READY_TIMEOUT_MS);
 }

@@ -467,6 +467,6 @@ Exec internal plane (TypeScript)
 | `GET /health` | 进程存活（liveness） | 无响应 |
 | `GET /ready` | 工作区可写 + DB 可 ping（readiness） | **HTTP 503** `status=not_ready` |
 | `GET /health/live` | API Server BFF 进程存活 | 非 200 |
-| `GET /health/ready` | BFF、Agent、Sandbox 均可用 | 503 |
+| `GET /health/ready` | BFF 在跑，且 Agent `/ready` 与 Sandbox `/ready` 都报 `status: ready`（不看下游 liveness） | 503 |
 
 探针响应不包含密钥、连接串或环境 dump。

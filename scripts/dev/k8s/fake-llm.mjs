@@ -7,6 +7,10 @@
 //   mode=hold-text  第一轮挂住，放行后回文本。
 //   mode=text       立即回文本。
 //   mode=sh         标记里带 `cmd=<base64>`：第一轮回一个 bash 工具调用执行该命令，输出写到工作区 sim-<id>.log。
+//   mode=chain      标记里带 `n=<次数> s=<秒>`：连续 n 轮，每轮一个前台 bash `sleep s` 后往 sim-<id>.log 追加
+//                   `step-<k>`；第 n 个工具结果回来后回文本。用来构造「一个 Run 含多次长工具」。
+//   mode=sub        标记里带 `cmd=<base64>`：第一轮回一个前台 subagent 调用，子任务 prompt 为解码后的文本
+//                   （可再带一个 SIM 标记驱动子 Run）；子任务结果回来后回文本。
 // 没有工具的请求（DSH 每轮另发的标题生成）立即回固定文本，不计入模型轮次。
 //
 // 控制面（同端口）：GET /_sim/log、POST /_sim/release {id}、POST /_sim/reset。
@@ -20,7 +24,9 @@ import {
 } from '/repo/agent/tests/support/fake-openai-provider.js';
 
 const PORT = Number(process.env.PORT || 8080);
-const MARKER = /\[\[SIM id=([A-Za-z0-9_-]+) mode=([a-z-]+)(?: cmd=([A-Za-z0-9+/=]+))?\]\]/g;
+const MARKER = /\[\[SIM id=([A-Za-z0-9_-]+) mode=([a-z-]+)((?: [a-z]+=[A-Za-z0-9+/=]+)*)\]\]/g;
+const params = (raw) =>
+  Object.fromEntries(String(raw || '').trim().split(/\s+/).filter(Boolean).map((kv) => kv.split(/=(.*)/s).slice(0, 2)));
 
 let seq = 0;
 let log = [];
@@ -40,6 +46,35 @@ function toolCall(id, cmd = null) {
           description: `sim ${id}`,
           timeoutMs: 20000,
         },
+      },
+    ],
+  };
+}
+
+function chainCall(id, step, seconds) {
+  const out = `/home/sandbox/workspace/sim-${id}.log`;
+  return {
+    toolCalls: [
+      {
+        id: `call_${id}_${step}_${seq}`,
+        name: 'bash',
+        arguments: {
+          command: `sleep ${Number(seconds)} && echo "step-${step} $(date +%s)" >> ${out}`,
+          description: `sim ${id} step ${step}`,
+          timeoutMs: (Number(seconds) + 30) * 1000,
+        },
+      },
+    ],
+  };
+}
+
+function subagentCall(id, prompt) {
+  return {
+    toolCalls: [
+      {
+        id: `call_${id}_sub_${seq}`,
+        name: 'subagent',
+        arguments: { description: `sim ${id} child`, prompt, run_in_background: false },
       },
     ],
   };
@@ -114,8 +149,10 @@ const server = http.createServer(async (req, res) => {
   if (tools.length === 0) return send(res, body, { content: 'sim title' });
 
   const messages = Array.isArray(body?.messages) ? body.messages : [];
-  // 会话历史里有前几轮的标记，本轮用户消息在最后：取最后一个。
-  const match = [...JSON.stringify(messages).matchAll(MARKER)].at(-1);
+  // 会话历史里有前几轮的标记，本轮用户消息在最后：取最后一个。只看 user 消息——
+  // subagent 调用的参数（含子任务的标记）会出现在父 Run 的 assistant 历史里。
+  const userText = JSON.stringify(messages.filter((m) => m?.role === 'user'));
+  const match = [...userText.matchAll(MARKER)].at(-1);
   const toolResults = messages.filter((m) => m?.role === 'tool').length;
   seq += 1;
   const entry = {
@@ -130,7 +167,17 @@ const server = http.createServer(async (req, res) => {
   log.push(entry);
 
   if (!match) return send(res, body, { content: 'sim: no marker' });
-  const [, id, mode, cmd] = match;
+  const [, id, mode, rawParams] = match;
+  const p = params(rawParams);
+  const cmd = p.cmd;
+  if (mode === 'chain') {
+    const n = Number(p.n || 1);
+    if (toolResults < n) return send(res, body, chainCall(id, toolResults + 1, p.s || 10));
+    return send(res, body, { content: `done ${id}` });
+  }
+  if (mode === 'sub' && toolResults === 0 && cmd) {
+    return send(res, body, subagentCall(id, Buffer.from(cmd, 'base64').toString('utf8')));
+  }
   if (toolResults > 0 || mode === 'text') return send(res, body, { content: `done ${id}` });
   if (mode === 'tool') return send(res, body, toolCall(id));
   if (mode === 'sh' && cmd) return send(res, body, toolCall(id, cmd));

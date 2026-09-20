@@ -33,6 +33,11 @@ type Loose = any;
 
 const BASE = config.SANDBOX_BASE_URL;
 
+/** 执行面 readiness 的投影；不带执行面 body，避免把存储项名以外的细节外传。 */
+export interface SandboxReadiness {
+  readonly status: 'ready' | 'not_ready' | 'unreachable';
+}
+
 /**
  * AGENTS.md §2: every outbound call is bounded. A hung Sandbox must not pin a
  * conversation-delete GC, an operator process call or a health probe forever.
@@ -44,7 +49,8 @@ const BASE = config.SANDBOX_BASE_URL;
  */
 const DEFAULT_SANDBOX_TIMEOUT_MS = 30_000;
 const DEFAULT_SANDBOX_STREAM_HEADERS_TIMEOUT_MS = 60_000;
-const SANDBOX_HEALTH_TIMEOUT_MS = 3_000;
+/** exec `/ready` 每项检查自身 2s 封顶；多留 1s 给响应。 */
+const SANDBOX_READY_TIMEOUT_MS = 3_000;
 
 /**
  * Path of one managed process under the session that owns it.
@@ -445,34 +451,41 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       });
     },
 
-    // ── Health ──────────────────────────────────────
-    async checkHealth() {
+    // ── Readiness ───────────────────────────────────
+    // 看执行面 `/ready`（数据库、四个数据根、隔离预检、关停），不是 liveness 的
+    // `/health`（K8s 部署评审 K1，2026-09-19）。HTTP 2xx 且 body `status: ready`
+    // 才算就绪；超时、网络错误归为 unreachable。
+    async checkReady(): Promise<SandboxReadiness> {
+      let resp: Response;
       try {
-        const resp = await fetch(`${BASE}/health`, {
+        resp = await fetch(`${BASE}/ready`, {
           headers: resolveSandboxAuthHeader(),
-          signal: AbortSignal.timeout(SANDBOX_HEALTH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(SANDBOX_READY_TIMEOUT_MS),
         });
-        if (!resp.ok) return null;
-        return resp.json();
       } catch {
-        return null;
+        return { status: 'unreachable' };
       }
+      let body: Loose = null;
+      try {
+        body = await resp.json();
+      } catch {
+        body = null;
+      }
+      return resp.ok && body?.status === 'ready' ? { status: 'ready' } : { status: 'not_ready' };
     },
   };
 }
 
 // ── Module-level helpers ─────────────────────────────────────────────────
-// Only the /health probe still has a module-level caller (`http-main.js`
+// Only the /ready probe still has a module-level caller (`http-main.js`
 // imports it dynamically). Everything else goes through `createSandboxClient`
 // so trace state stays request-scoped; the old per-route wrappers pointed at
 // retired Sandbox routes and are gone. Do not add one back without a caller.
 
 /**
- * Sandbox `/health` 探针。返回 null 表示不可达（超时/非 2xx/网络错误都归一到
- * null），而不是抛错——调用方是 `/ready`，它只需要"健不健康"。
- *
- * @returns {Promise<{ status?: string } | null>}
+ * 执行面 `/ready` 探针。不抛错：超时/网络错误归为 unreachable，非 2xx 或 body
+ * 不是 `status: ready` 归为 not_ready——调用方是 Agent `/ready`。
  */
-export async function checkHealth() {
-  return createSandboxClient().checkHealth();
+export async function checkReady(): Promise<SandboxReadiness> {
+  return createSandboxClient().checkReady();
 }

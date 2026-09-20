@@ -1,610 +1,733 @@
 # 全功能回归测试案例
 
+> 2026-09-19 设计修订；分支 `refactor/updrdb-dbpm`，HEAD `480bf65d5bae8bf674599755e7469991c2ac0c38`，并核对本轮开始时已有的未提交改动（含 readiness、MCP 发现、Worker drain）。它们是静态设计依据，尚无本轮运行证据。§1–§3 为当前待执行案例，**全部从未执行开始，只使用 `deepseek-flash`**；§4–§9 原样保留历史记录，旧模型与旧“通过”不继承。
+
 ## 1. 判定规则
 
-每条案例填写 `未执行`、`部分通过`、`通过`、`失败` 或 `阻塞`。环境、账号、模型或 MCP 未就绪时记为 `阻塞`，不能记为通过；同一案例中只有部分断言成立时记为 `部分通过`。
+每条案例包含前置/数据、用户任务或操作、可核验结果。数据包 R/W/V/U/X/S、测试账号、独立验算、四类办公件与证据要求见 [data-and-oracles.md](data-and-oracles.md)。功能与源码对应见 [coverage.md](coverage.md)，TypeSafe 选例方法与实际取舍见 [case-selection.md](case-selection.md)。本轮只更新测试设计，不执行产品回归、不创建实际账号、不修改生产代码。
 
-每条通过/失败记录至少包含：执行时间、浏览器入口、会话/Run/资源 ID、关键页面现象、必要的 HTTP/容器证据。截图不得包含密码、Cookie、Bearer token、API key、完整内部路径或个人数据。
+- **通过**：所有适用子断言均有本轮证据，业务结果与平台账本都正确。
+- **部分通过**：仅部分子断言成立；逐项列出未通过范围。
+- **失败**：实际执行违反断言，包括内容算错、假交付、已存在功能不可用、未实现必需保护。
+- **阻塞**：缺账号、真实模型/MCP、来源资料、故障环境或必要操作授权；说明具体依赖。
+- **未执行**：没有实际操作。读代码/旧报告/模拟测试不等于执行。
 
-### 测试数据
+自然语言任务不规定唯一措辞或内部工具顺序，但必须产生可核验结果。若专测某工具/Skill，可补充明确要求调用该工具；未触发便记该子断言未执行，不能靠模型声称调用过判通过。禁止修改产品源码、手写 SSE/Run 终态、注入预制模型回复使案例变绿。
 
-使用以下合成内容，实际文件放在 `.runtime/` 或系统临时目录，不提交仓库：
+**模型硬约束**：聊天、Regenerate、Follow-up、子 Agent、Cron、A2A 和所有辅助模型调用均限定 `deepseek-flash`，不自动切换其它模型。执行前核对注册表、各测试 Agent 活跃/绑定版本、Worker 默认配置及所有请求入口；以脱敏的最终上游请求 `model` 和 Run 关联记录验证，界面标签不足以证明。旧测试 Agent 若固定其它模型，新建 flash 版本及会话，不改历史绑定。不可用时记阻塞；错误模型 ID 只做预览/校验拒绝测试，不发起其它模型推理。能力由本轮注册表与实际响应共同确认：当前源码 seed 声明 text/image、无 reasoning；图片正向仍须实测，思考参数测明确拒绝，不伪造支持能力。
 
-- `rt-20260901-note.txt`：`REGRESSION_FILE_OK`
-- `rt-20260901-table.csv`：3 条虚构记录，金额和姓名均为非真实数据
-- `rt-20260901-专项汇报.md`：中文文件名；内容 `REGRESSION_UNICODE_OK`
-- `rt-20260901-report.md`：提交 Artifact 用的短报告
-- `rt-20260901-sheet.xlsx`：一张 3 行虚构表（可用系统 `xlsx` Skill 生成，不必预置二进制）
-- 可选图片：一张小于 2MiB 的 PNG，文件名 `rt-20260901-chart.png`，内容为合成柱状图
-- Skill 草稿归档：合法的 `rt-20260903-upload.zip` 与同内容的 `rt-20260903-upload.skill`，包内含 `SKILL.md` 和 `scripts/echo.sh`
-- `rt-20260903-artifact.md`：用于 Artifact 导入与刷新验证的短文件
-- 文本断言标记：`REGRESSION_PLAIN_OK`、`REGRESSION_ATTACHMENT_OK`、`REGRESSION_PROCESS_OK`、`REGRESSION_UNICODE_OK`、`REGRESSION_OFFICE_OK`、`REGRESSION_SKILL_OK`、`A2A_REGRESSION_OK`
-- 新增断言标记：`REGRESSION_AUTH_PROVISIONED_OK`、`REGRESSION_NAV_OK`、`REGRESSION_SKILL_UPLOAD_OK`、`REGRESSION_ARTIFACT_REFRESH_OK`、`REGRESSION_INPUT_RESUME_OK`
+**完整性与退出标准**：逐案例的 a/b/c、格式、身份、入口、状态分别记执行行。P0/P1/P2 都属于全量范围，不能只挑高优先级或“容易通过”的部分；每个已部署页面、工具、路由族、权限边界都须有映射。没有 UI 的协议/部署分支使用真实客户端或隔离环境操作。仅当全部适用断言有本轮证据且通过，才报告“本配置全量通过”；失败、部分通过、阻塞、未执行任一存在就报告缺口。明确不适用的能力另列原因（如 flash 无 reasoning），不偷换成已通过，也不声称多模型兼容或目标 UPDRDB 环境已验收。
 
-### 真实使用最小闭环（空库必跑，不可跳）
+以本轮前缀和资源 ID 列表限定操作范围；测试资源的创建、回答、批准无害操作、取消与删除按整轮授权执行。全局角色名单、模型配置、服务重启、共享资源清理在专用环境或明确授权范围内执行。绝不清空共享数据库取巧。所有凭据走安全输入，不写进提示、文件、截图、日志和报告。
 
-本地刚 `down -v` 后没有用户、没有会话。按这个顺序先跑完，再并行其余案例：
+已核实的当前边界：
 
-1. ENV-01 → ENV-02
-2. AUTH-02（空库注册）→ AUTH-01（登录/刷新/登出）
-3. CHAT-01（纯文本）→ TOOL-01（工作区）→ TOOL-02（上传）
-4. TOOL-03（系统办公 Skill，真实使用主路径）→ ART-01（含中文显示名）
-5. SKILL-02（模型写草稿）→ SKILL-01（启用/停用）
-6. RUN-01（取消/刷新）→ CHAT-04（删会话）→ CHAT-05（后台 Run）
-7. USER-01（普通用户正向闭环 + 双人并发）
-8. SEC-01 / SEC-02 / SEC-03
+- 模型工具以 `agent/src/runtime/policy/tool-names.ts` 为准；Python 经 `bash`，后台进程经 `bash` + `job_*`，不用退役的 `process_start`/`memory_*`/`skill_create`。
+- 多 Agent 选择只在新会话时生效；已建会话及其版本绑定不因管理员切版本而改变。
+- Skill 安装入口为 Capabilities 的 Drafts，聊天输入框旧拼图按钮已删除；启用后草稿字节保留但在 Drafts 隐藏，Disable 后重新出现。
+- Artifact 当前启动路径注入 `MySqlArtifactStore`（`exec/src/http/app.ts`）；不能继续把历史“仅内存索引”当现状。重启后的可用性仍须 ART-03 实测。
+- `exec/src/main.ts` 已在监听前调用 orphan recovery；REC-02 必须检查持久化作业终态及并发额度，不能只检查容器里没有进程。
+- Agent 配置已通过 `agent-config-validator.ts` → `agent-version-bindings.ts` → `runtime-factory.ts` 接入 prompt、模型输出上限、工具授权/风险和 MCP 工具子集。`thinkingLevel` 有执行接线，但 flash 当前未声明支持；`temperature` 当前不支持。`skills/extensions/sandboxPolicy/a2a` 为保留只读面，未知字段（包括新 schema 的 `contextPolicy`）须诊断。`mcpServers` 是从进程 MCP 清单中授权工具，不能注入新 server/凭据；不能再写成“改 Agent 配置毫无影响”。
+- 本分支启动只核验 schema，不自动迁移；口令来自 DBPM；replay Redis 已退役。HMAC 当前不做 jti 去重，SEC-04 分开检查签名绑定、执行幂等和 fence，不能虚构旧 nonce 存储。
+- K8s 应用层 uid 为 1000（包括 slim `sandbox-mcp`），sandbox 执行面为 10001；facade 与执行面是同 Dockerfile 的不同 target/镜像。共享 Skill 按持久账本与摘要发布版本，不按目录扫描猜启用状态。
 
-今天提交的增量案例按以下顺序补跑：AUTH-03 → NAV-01 → SKILL-03 → ART-02 → INPUT-02 → SEC-03B。
+## 2. 执行顺序与业务旅程
 
-MCP 未配置时 MCP-01 记 `阻塞`，不能拿空清单当「MCP 可用」。Vision 模型未配置时 TOOL-04 的图片分支记 `阻塞`。
+全量包括管理员与普通用户；上一轮“不测 admin”的历史范围不适用于本清单。可以自建本轮专用用户，账号清单见数据文档 §5。准备 admin-A、普通用户 A/B 的独立浏览器身份，以及第二组织 user-C/admin-C；当前公开注册落 `org_bootstrap`，注册两人只证明同组织不同 owner 隔离，不能充当跨组织证据。缺第二组织合法预置渠道只阻塞对应子案例，不阻塞普通用户主线。
 
-## 2. 执行顺序与总览
+| 旅程 | 真实用户任务与最终产物 | 依赖与主要案例 |
+|---|---|---|
+| J1 新同事接手项目 | 阅读真实项目资料，弄清职责、定位文档冲突，得到可引用的交接说明 | ENV/AUTH → CHAT-01/02 → TOOL-01/02 → DOC-01 → TOOL-03b/c → ART-01 |
+| J2 分析人员准备区域简报 | 用官方数据做口径澄清、清洗、趋势计算，交付可复算 Excel 和管理层简报 | DATA-01 → INPUT-01/02 → TOOL-03a/d → TOOL-04 → ART-01/02 |
+| J3 用户复用日常工作方法 | 把公开数据清洗规则写成 Skill，审核启用，处理另一批年份，再更新/停用 | SKILL-02/03 → SKILL-01/04 → CRON-01/02/03 |
+| J4 用户处理中途变化 | 生成较长报告时补充要求、切会话、关页、停止错误任务，再恢复工作 | CHAT-03/05/06 → RUN-01/02 → PROC-01/JOB-01 → REC-01/02/03 |
+| J5 管理员维护组织助手 | 创建分析/交接助手，发布新版本、暂存版本、回滚，用户新旧会话各自稳定 | AGENT-01/02/03/04 → USER-01/02 → SEC-01/02 |
+| J6 外部系统交付 | 真实 MCP 查询来源；低代码客户端复用 workspace 并下载报告；A2A 请求可追踪和取消 | MCP-01/02/03/04 → A2A-01/02/03 → ART-01 |
+| J7 运维与边界 | 查审批和日志、恢复中断、验证大附件与权限隔离，清理专用测试资源 | MGMT/TRACE/CAP → FAIL/LOAD/ISO/SEC → CLEAN-01 |
+| J8 财务与项目协作 | 用明确标注的合成订单做月度对账，将合成会议纪要整理成待办与周报，再修订交付 | BIZ-01/02 → INPUT → TOOL-03 → ART-02；使用 S，不依赖用户提供私有资料 |
+| J9 当前分支部署验收 | 新用户并发首用、连续追问、跨 Pod Skill、DBPM/Proxy/队列与 Worker 维护后继续原工作 | AUTH-04、CHAT-07、AGENT-05/06/07、SKILL-06、SUB-02、MCP-05、DEPLOY-01～08 |
 
-先执行环境门槛，再执行 P0 主链路；P1 管理功能和安全/恢复链路可以并行，但必须保留依赖关系。
-
-| ID | 优先级 | 场景 | 操作面 | 预期结果 |
-|---|---|---|---|---|
-| ENV-01 | P0 | 重建镜像、启动和健康检查 | Compose + HTTP | 所有必需服务就绪；确认运行的是本分支镜像 |
-| ENV-02 | P0 | Browser 前端入口 | Browser | 页面可打开，无阻塞性加载错误 |
-| AUTH-03 | P0 | 普通用户首登、组织 provisioning 与初始鉴权 | Browser + HTTP | 注册后的 user 可刷新、创建资源，初始 `/me` 竞态不误报失败 |
-| AUTH-02 | P0 | 空库注册与管理员名单 | Browser | 名单内用户名注册即为 admin；客户端 `role` 不被采信 |
-| AUTH-01 | P0 | 管理员登录、刷新、登出 | Browser | `admin` 会话角色为 admin；登出后受保护资源不可用 |
-| NAV-01 | P0 | Settings 二级导航与旧路径重定向 | Browser | SettingsSubnav 在所有 Settings 页面可用；旧路径正确重定向 |
-| CHAT-01 | P0 | 新会话和无工具对话 | Browser | 流式状态、消息落库、Run 成功和标题正常 |
-| CHAT-02 | P0 | 多轮、追问、重新生成 | Browser | 顺序正确，同一会话不重复、不串会话 |
-| CHAT-03 | P0 | 模型选择按会话隔离 | Browser | 会话 A/B 的模型选择互不覆盖 |
-| CHAT-04 | P0 | 删除会话与空态 | Browser | 删除后列表/直链不可用；不删他人会话 |
-| CHAT-05 | P0 | 后台 Run 与会话切换 | Browser | 切会话不取消后台 Run；侧栏标记正确 |
-| CHAT-06 | P1 | 关页/断 SSE 后 Run 继续 | Browser | Worker 继续；重开能追上终态 |
-| TOOL-01 | P0 | 文件读写、编辑、搜索和 bash | Browser → Agent | 当前工具名语义正确，路径不越界 |
-| TOOL-02 | P0 | 附件上传和 Dataset 读取 | Browser → Sandbox | 上传可用，模型能读取，重复文件不覆盖 |
-| TOOL-03 | P0 | 系统办公 Skill 真任务 | Browser | xlsx/pdf/docx/pptx 至少两条链路产出可下载件 |
-| TOOL-04 | P0 | 中文路径、python、粘贴图片 | Browser | Unicode 文件可读写；python 经 bash；图片可分析或明确降级 |
-| ART-01 | P0 | Artifact 提交、下载和不可变快照 | Browser | 下载字节正确；提交后修改工作区不影响快照 |
-| ART-02 | P0 | Artifact 导入与刷新后的 ready 事件持久化 | Browser | 导入只复制快照；刷新后 Artifact 仍在目标会话 |
-| RUN-01 | P0 | Run 状态、取消、刷新恢复 | Browser | 状态最终收敛，无重复事件或永久 Running |
-| RUN-02 | P1 | steer、follow-up 和中断续跑 | Browser | 改向/排队/恢复语义正确 |
-| FAIL-01 | P1 | 失败 Run 与模型错误 | Browser | 明确 FAILED，可新开一轮，不丢历史 |
-| INPUT-01 | P1 | ask_user_question 等待输入与回答 | Browser | `WAITING_INPUT` 可持久化并恢复 |
-| INPUT-02 | P1 | 等待交互回答 CAS 与 Run 恢复 | Browser | 回答不再 409；工具保持可恢复状态且 Run 最终收敛 |
-| APPROVAL-01 | P1 | 高风险工具审批 | Browser | Pending → approve/reject；参数不匹配不能复用 |
-| PROC-01 | P1 | 长进程控制台、日志、stdin、信号 | Browser → exec | 增量日志、控制和终态正确 |
-| JOB-01 | P1 | DSH job_list / job_output / job_kill | Browser | 作业工具与 Process Console 对得上同一 process id |
-| TODO-01 | P1 | todo_write 任务卡 | Browser | 清单来自 arguments / 事件，不从 result 解析 |
-| SUB-01 | P1 | 子 Agent | Browser | 结构化卡片；子会话不进侧栏；父取消级联 |
-| MGMT-01 | P1 | Runs 页面 | Browser | 筛选、详情、日志、打开和取消正确 |
-| MGMT-02 | P1 | Approvals 页面 | Browser | 筛选、参数展开、批准/拒绝和回到会话正确 |
-| TRACE-01 | P2 | Trace 面板 | Browser | span 树可看，不含密钥/工具原文 |
-| CAP-01 | P1 | Capabilities 与诊断 | Browser | Skills/MCP/Tools/Models/diagnostics 与后端一致且不泄密 |
-| SKILL-02 | P0 | 模型在草稿根搭包 | Browser | 草稿不进 prompt；Enable 前模型不能当已启用 Skill 调用 |
-| SKILL-03 | P0 | Capabilities 上传 `.zip/.skill` 草稿包 | Browser | 上传解包到当前用户 Drafts，保持未启用且不越权 |
-| SKILL-01 | P1 | 用户 Skill 启用、使用、停用 | Browser | 仅启用包可被执行，停用后不可见/不可用 |
-| MCP-01 | P1 | 真实 MCP 工具调用 | Browser | 有配置则 `mcp__*` 可调用；空配置记阻塞 |
-| MCP-02 | P2 | sandbox-mcp 对外 facade | HTTP | 独立 token；够不到 `/internal/v1/*` |
-| CRON-01 | P1 | 定时任务 CRUD、立即运行和历史 | Browser | 创建、暂停、恢复、编辑、执行、历史、删除正确 |
-| CRON-02 | P2 | 时区、misfire、concurrency | Browser | 策略按页生效；同一时刻不重复触发 |
-| A2A-01 | P1 | Agent Card、凭据和撤销 | Browser + HTTP | admin 可管理；凭据作用域、轮换、撤销正确 |
-| A2A-02 | P1 | A2A JSON-RPC 流式与重订阅 | HTTP | SSE 有最终事件和最终正文，任务可查询/重订阅 |
-| USER-01 | P0 | 普通用户正向主链路与双人并发 | Browser 多身份 | 非 admin 也能完成聊天→上传→办公件→交付物；两人同时跑 Run 不互相干扰 |
-| CTX-01 | P1 | 长会话自动压缩 | Browser | 触发 compaction 后上下文不丢关键事实，Run 不失败 |
-| BUDGET-01 | P2 | 预算用量条与超限 | Browser | 有 usage 时显示 Budget 条；near limit / exceeded 有明确提示 |
-| UI-01 | P2 | 侧栏、详情、主题、键盘和响应式 | Browser | 不丢状态，主要控件可操作 |
-| SEC-01 | P0 | 未登录和非 admin 访问 | Browser + HTTP | 受保护面 fail-closed；A2A 对普通用户 403 |
-| SEC-02 | P0 | 跨租户资源访问 | Browser 多会话 + HTTP | Conversation/Run/Artifact/Dataset/Process/Cron 统一 404 |
-| SEC-03 | P0 | 路径、命令和敏感信息安全 | Browser → Agent | 越界/危险命令拒绝；物理路径和凭据不进入输出 |
-| SEC-03B | P0 | 执行环境变量不进入 bwrap 命令行 | Browser + 容器 | 显式允许的 DB 环境仍可用，但值不出现在 bwrap argv / 模型输出 |
-| ISO-01 | P0 | Bubblewrap、非 root、网络和配额 | 容器检查 | 隔离配置生效；不满足时拒绝执行 |
-| REC-01 | P0 | Worker 重启后的会话/交互恢复 | 容器 + Browser | MySQL 权威事实保留，Run 可继续或明确终态 |
-| REC-02 | P1 | exec hard-kill 与 orphan 回收 | 容器 + HTTP | 孤儿作业可发现、清理，账本不出现假 Running |
+优先级不是跳过许可：P0 为主闭环与安全/恢复底线，P1 为日常完整使用与管理，P2 为深度边界和可用性。先完成 ENV、账号与数据准备；故障/容量测试最后在专用环境执行，结束后重跑普通用户“登录→上传→工具→Artifact 下载→跨租户拒绝”闭环。
 
 ## 3. 详细测试案例
 
-### ENV-01：重建镜像、启动和健康检查
+### ENV-01：当前镜像与真实依赖（P0）
 
-**前置**：`.env` 已配置，但不在报告中显示任何密钥；若启用真实模型，确认 LLMIO 可用。
+**前置**：专用 OrbStack K8s（应用层）+ Compose（依赖/exec）或纯 Compose 栈，已配置真实 `deepseek-flash`，记录 commit、dirty 文件、runtime 版本和部署模式。
 
-**步骤**
+**操作**：a. 按仓库规范构建 `agent agent-worker api-server sandbox sandbox-mcp frontend`；更新所有消费者，K8s 按 `scripts/dev/k8s/up.sh dev` 的滚动流程核对实际 imageID，VM 另记安装 release；b. 查 schema 发布/校验、Worker、MySQL/UPDRDB、服务 Redis、DBPM 与共享 Skill 存储；确认没有两组 Compose/K8s Worker 同消费；c. 请求 BFF live/ready 与各服务探针，核对 fake LLM/stub executor 关闭，最终模型 ID 为 flash，MCP 注册与真实调用就绪；d. 依赖故障详见 DEPLOY-01。
 
-1. 按仓库要求同时重建 `agent`、`api-server`、`sandbox`、`sandbox-mcp`；若前端镜像也有改动，一并重建 `frontend`。
-2. 启动完整 Compose 栈，检查 `agent-migrate` 已成功退出，Agent Worker、Agent、BFF、Sandbox、MCP facade、MySQL、Redis、`sandbox-replay-redis`（重放/幂等库，与主 Redis 是两个实例，不能只看一个）和前端均处于预期状态。
-3. 检查 BFF `/health/live`、`/health/ready` 与 Agent/Sandbox 探针；确认镜像时间/版本对应当前分支。
-4. 对 `sandbox` 和 `sandbox-mcp` 使用同一重建镜像，不能只重建其中一个。
+**验收**：健康与镜像可追溯；依赖不可用时明确 degraded/503 或拒绝启动，不伪健康。Compose up 本身、旧镜像、只有 HTTP 200 都不足以通过。
 
-**通过标准**：readiness 为健康；依赖未就绪时 BFF 返回 degraded/503 而不是假成功；没有缺失 HMAC、JWT、MCP 或数据库配置后仍放行的情况。
+### ENV-02：首次打开与依赖故障提示（P0）
 
-### ENV-02：Browser 前端入口
+**操作**：a. 未登录打开入口，等待恢复流程结束；b. 登录后访问 Chat、Schedules、Settings；c. 浏览器暂时离线/后端不可达后再恢复。
 
-1. 在 Browser 打开前端入口，等待 `Restoring session…` 消失。
-2. 检查侧栏、Chat、Runs、Approvals、Schedules、Settings 是否能渲染。
-3. 检查页面控制台是否有持续的网络/JavaScript 错误；只记录错误摘要，不复制 Cookie、响应中的 token 或密钥。
+**验收**：没有持续空白页/加载圈；未登录与接口故障提示可区分；恢复后能继续已有会话。记录浏览器错误摘要，排除扩展自身噪音。
 
-**通过标准**：页面可交互；后端未启动时应显示可理解的错误/空态，不能伪装成已有数据。
+### AUTH-01：已有用户上下班登录（P0）
 
-### AUTH-03：普通用户首登、组织 provisioning 与初始鉴权
+**操作**：a. admin 与普通用户分别登录、刷新、关页重开；b. 错误密码一次；c. 登出后后退/打开旧会话直链并请求受保护 API，再重新登录。
 
-该案例覆盖 2026-09-03 的 BrowserAuth provisioning 修复和 ChatContext 初始未登录竞态。
+**验收**：服务端角色正确、各自历史恢复；错误登录不建立身份，登出后旧页面不能继续读取数据；JWT 只在 HttpOnly Cookie，前端 JS 不拿到明文。
 
-1. 在未登录的 `@Browser` 标签页打开前端，观察 `Restoring session…` 到登录页/欢迎页的过渡；不应因为初始 `/api/auth/me` 返回 401 而出现持久错误、空白页或错误的已登录状态。
-2. 注册一个不在管理员名单内的合成用户（用户名带 `rt-20260903-`），确认服务端返回角色为 `user`，而不是依赖客户端提交的 role。
-3. 注册完成后立即刷新，再打开 Chat、Settings → Capabilities、Runs 和 Approvals；确认不出现 organization/user mapping 的 400，且列表接口能稳定加载。
-4. 在该用户身份下创建一条短会话并完成一次纯文本 Run；再登出后重新登录，确认同一用户的会话仍可见。
+### AUTH-02：首次部署注册与角色防伪（P0）
 
-**通过标准**：普通用户注册、首次 `/me`、刷新和第一次创建资源均成功；初始未认证 401 只驱动恢复流程，不被渲染成持久业务失败；不记录密码或 Cookie。
+**前置**：空库分支仅在独立栈；现有 admin 不删除。
 
-**阻塞判定**：公开注册关闭时可使用预先存在的普通用户，但必须单独记录未覆盖注册分支；不得用 admin 结果替代普通用户。
+**操作**：a. 名单内注册 admin、名单外注册普通用户；b. 注册请求额外提交 `role=admin`、他人 `organization_id`；c. 独立环境分别关闭公开注册、移入/移出管理员名单后重新登录/请求 me。
 
-### AUTH-02：空库注册与管理员名单
+**验收**：名单决定角色，自报角色/组织不能提升；关闭注册被拒；名单变更按服务端规则升降级。空库和角色变更分支未跑需分别记录，不能用普通注册替代。
 
-空库（刚 `docker compose down -v`）没有账号。管理员身份只来自 `SANDBOX_AUTH_ADMIN_USERNAMES`，注册接口忽略客户端提交的 `role`。
+### AUTH-03：普通用户第一次使用（P0）
 
-1. 打开 `Sign In / Register`，用名单内用户名（通常是 `admin`）走 **Register**，密码只在表单输入。
-2. 确认注册后直接进入已登录态，用户区角色为 `admin`，侧栏出现 A2A。
-3. 登出后用一个**不在名单内**的用户名再 Register，确认角色为普通 `user`，没有 A2A 入口。
-4. 用浏览器开发者工具或 HTTP 客户端给 `/api/auth/register` 塞 `role=admin` / 自选 `organization_id`，确认被忽略。
+**任务**：新注册用户用 R 的一段服务说明提问“我遇到上传失败，应该先查哪个服务？”
 
-**通过标准**：名单内注册即 admin；名单外不能靠请求体提升；JWT 只进 HttpOnly Cookie，前端 JS 读不到明文。
+**操作**：注册后立即刷新，进入 Capabilities/Runs/Approvals，发问；登出再登录读取这次会话。
 
-**admin 已存在时**：步骤 1/2 属于空库一次性路径，库里已有 admin 就不要为了跑它去 `down -v`（会清掉本轮全部证据）。记「本轮前已完成，未复现」，直接跑步骤 3/4——名单外用户名注册为普通 `user`、请求体 `role=admin` / 自选 `organization_id` 被忽略——这两步任何时候都可跑，且是本案例真正的安全断言。步骤 3 注册出来的普通用户请保留，USER-01 与 SEC-01/02 都要用它。
+**验收**：初始 me 的未认证响应不变成持久错误；组织映射不报 400；第一轮成功并保留历史，答案有所给资料依据。
 
-**阻塞判定**：`SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER=false` 时记阻塞并改走已有账号登录；JWT secret 缺失导致注册 5xx 记部署前置，不是前端缺陷。
+### NAV-01：日常导航与外链（P0）
 
-### AUTH-01：管理员登录、刷新、登出
+**操作**：a. 普通用户在 Chat/Schedules/Settings 的各子页间切换；b. 打开旧 `/runs`、`/approvals` 路径；c. admin 访问 Agents 与 A2A，再切普通身份。
 
-1. 若 AUTH-02 已注册，先登出。点击 `Sign In / Register`，用同一 `admin` 凭据 **Login**。
-2. 检查用户区显示用户名和 `admin` 角色，侧栏出现 A2A 入口。
-3. 刷新页面并重新打开 Chat、Runs、Settings，确认会话仍有效。
-4. 点击用户区的 `Log Out`，确认回到未登录状态；直接访问受保护 API/页面，确认被拒绝或返回未登录空态。
-5. 用一次错误密码检查错误提示，不进行连续尝试以免触发部署侧锁定策略。
+**验收**：旧链接跳到对应 Settings 页；二级导航、当前选中和待处理角标一致；普通用户无管理员管理入口，直链也受保护；Composer 不出现退役 Skill 安装按钮。
 
-**通过标准**：登录成功只能以服务端返回的 admin 身份为准；浏览器 JavaScript 不得到 JWT 明文；登出会清理会话。
+### CHAT-01：理解真实资料的首轮对话（P0）
 
-**阻塞判定**：`admin` 不存在时先跑 AUTH-02，不要用普通账号代替管理员验收 A2A。JWT secret 缺失或管理员名单未配置时记 `AUTH-01 blocked`。
+**任务**：粘贴 R 的服务边界说明：“我要交接这个系统，请按用户上传、Agent 执行、下载报告的顺序解释职责，并标出这段资料没说明的部分。”
 
-### NAV-01：Settings 二级导航与旧路径重定向
+**操作**：新建会话发送，不要求工具；观察流式正文、标题、Run，刷新再看。
 
-1. 在已登录用户下打开 Settings → Capabilities，确认顶部常驻 `SettingsSubnav`，并能切换 Capabilities、Approvals、Runs；admin 另确认 A2A 可见。
-2. 确认一级侧栏保留 Chat 与 Schedules，Runs/Approvals 不再作为一级入口；Settings 组中的入口和未决/活跃数量角标可点击。
-3. 直接访问 `/runs` 与 `/approvals`，确认分别重定向到 `/settings/runs` 与 `/settings/approvals`，页面内容和当前选中导航一致。
-4. 在 Settings 的各子页刷新，确认仍停留在当前子页且二级导航可继续使用。
-5. 在 Chat 检查附件按钮仍可用，但废弃的 `#btn-install-skill` / Composer 拼图安装入口不存在；不要把普通附件上传误判为 Skill 发布入口。
+**验收**：服务职责与原文一致，不杜撰部署已验证；一个用户消息对应本轮 Run，流式文本不重复、不丢尾句，刷新后内容与终态一致。
 
-**通过标准**：所有 Settings 子页都有同一套二级导航；旧链接兼容且不产生重复页面；Skill 发布入口只有 Capabilities Drafts。
+### CHAT-02：追问、纠错与重新生成（P0）
 
-### SKILL-03：Capabilities 上传 `.zip/.skill` 草稿包
+**任务**：基于 CHAT-01 先要求技术说明，再改为“给新同事看的 5 点清单，保留故障归属”；终态后点击 Regenerate。
 
-前置：AUTH-03 或已有普通用户已登录。准备两个内容合法但名称不同的归档包，包内顶层目录各含 `SKILL.md` 和 `scripts/echo.sh`；第二个归档扩展名改为 `.skill`。
+**验收**：回答继承真实资料并采用新要求；重新生成有可追踪 Run，不重复插入用户消息；刷新后顺序与页面一致。缺资料时说明限制，不把先前猜测当新事实。
 
-1. 打开 Settings → Capabilities → Drafts，通过上传卡选择或拖入 `.zip`，确认上传期间按钮禁用/有进行中状态，完成后返回成功提示。
-2. 确认新包落入当前用户 Drafts，卡片显示 `Draft` / `enabled=false`，不自动进入 My Skills、模型 prompt 或其他用户的清单。
-3. 用同一方式上传 `.skill`，确认它和 `.zip` 都能解包并独立显示；同名/非法归档或 `.txt` 扩展名被拒绝且不产生已启用包。
-4. 刷新 Capabilities，确认草稿仍存在；在未点击 Enable 前，Chat 中不能把该包当成可用用户 Skill。
-5. 只对合成包点击一次 Enable，确认 My Skills 新增对应的已启用副本，同时原 Draft 仍保留；启用动作属于 SKILL-01 的发布/执行验证。
+### CHAT-03：两个助手与会话固定使用 flash（P0）
 
-**通过标准**：BFF 受信鉴权后以流式二进制转发；Agent 只解包到当前 org/user 草稿根；上传不等于发布，不越权、不覆盖其他用户包；前端没有乐观伪造成功状态。
+**前置**：分析助手与交接助手都固定 `modelPolicy.modelId=deepseek-flash`；只需一个可用模型。
 
-**阻塞判定**：当前部署没有用户草稿根或上传大小限制配置不完整时，记录明确部署阻塞，不把页面空态记为通过。
+**操作**：A 会话做 R 交接，B 做 W 分析；往返、刷新、Regenerate 并继续各一轮；保存新 Agent 版本后回旧会话追问；对试图覆盖固定模型的请求先验证服务端拒绝，不放行其它模型到上游。
 
-### CHAT-01：新会话和无工具对话
+**验收**：两会话职责、附件和版本绑定不互串，所有实际请求都是 `deepseek-flash`；固定模型不能被旧 UI/请求参数绕过。单模型的绑定/策略覆盖不等于验证了双模型切换，后者不在本轮模型范围内。
 
-1. 点击 `New Chat`，确认出现欢迎页和四个 prompt starter。
-2. 输入 `请只回复 REGRESSION_PLAIN_OK，不调用工具。`，发送。
-3. 观察 `ACCEPTED/QUEUED/RUNNING` 等中间状态、流式正文和最终 `Succeeded`。
-4. 检查侧栏标题、当前会话、Run 状态、耗时、模型和最终正文；刷新后确认消息仍在。
+### CHAT-04：删除试用会话（P0）
 
-**通过标准**：用户消息和 Agent 消息各出现一次；SSE 最终事件收尾；Run、Conversation 和 session 关联一致；不出现宿主机物理路径或密钥。
+**前置**：只删除本轮专用会话，已记录资源证据。
 
-### CHAT-02：多轮、追问、重新生成
+**操作**：a. 点删除后取消确认；b. 再确认删除；c. 刷新列表、访问旧详情/API；d. 删除当前选中和非当前选中会话分别执行。
 
-1. 在 CHAT-01 的会话发送第二轮确定性问题，确认消息追加到原会话。
-2. 在 Run 运行期间切换 `Steer`，输入短指令；若当前状态不允许 steer，验证 UI 自动提供 `Follow-up` 并在当前 Run 后排队。
-3. Run 完成后，对最后一个 Agent 回复使用 `Regenerate`，确认只重发上一条用户内容。
-4. 切换到另一会话再回来，检查顺序、Run ID 和正文没有串线或重复。
+**验收**：取消不删；确认后正确移除、空态可新建；旧直链不可读取；其它会话与他人资源不受影响。不可把 UI 删除推导为所有文件/快照已物理擦除。
 
-**通过标准**：follow-up 创建新 Run 但保持同一 Conversation；重生成不改写历史用户消息；后台 Run 不因切换会话而被错误取消。
+### CHAT-05：两项工作并行切换（P0）
 
-### CHAT-03：模型选择按会话隔离
+**任务**：A 分析 R 提交记录生成周报，运行时切 B 解读 W 指标，然后返回 A。
 
-1. 会话 A 选择模型 M1，发送包含 `MODEL_A_OK` 的确定性问题。
-2. 新建会话 B 选择 M2，发送包含 `MODEL_B_OK` 的确定性问题。
-3. 回到 A，刷新并确认仍显示 M1；回到 B，确认仍显示 M2。
+**验收**：A 不因切换而取消；后台角标、输出和完成通知归属正确；B 不收到 A 的片段；两份结果均能通过独立核验。
 
-**通过标准**：模型选择保存在会话维度，不能由最近一次全局选择覆盖。若只有一个模型可用，记为 `blocked`，不能声称隔离通过。
+### CHAT-06：离开电脑后回来（P0）
 
-### CHAT-04：删除会话与空态
+**操作**：在真实文件任务运行中分别 a. 刷新；b. 关闭标签再打开；c. 断网使 SSE 断开后重连，并恢复到同一会话。
 
-1. 在侧栏对一条测试会话点删除（垃圾桶），确认当前视图回到欢迎页或另一会话。
-2. 刷新后该会话不再出现在 Recent Conversations。
-3. 用原 Conversation ID 请求 `/api/conversations/{id}` 与 `/api/runs?conversation_id=`，确认 404 或不返回该会话数据。
-4. 用用户 B 的 ID 尝试删除用户 A 的会话，确认 404。
+**验收**：Worker 继续工作；消息/工具/产物与终态补齐，无重复副作用、永久 Running 或断线即取消。三种分支单独记证据，不能互相替代。
 
-**通过标准**：删除是 owner-scoped 的持久化副作用；工作区/附件随会话回收的行为按实际契约记录。执行前再次确认，只删 `rt-20260901-` 测试会话。
+### TOOL-01：接手资料目录并修订说明（P0）
 
-### CHAT-05：后台 Run 与会话切换
+**前置**：R 已上传到专用 workspace。
 
-1. 会话 A 发起一个可持续数十秒的合成 Run（例如 bash sleep + 打印标记）。
-2. 在 Running 时点 `New Chat` 打开会话 B，发一条短问题。
-3. 确认 A 的 Run 仍在跑：侧栏 A 有 active 标记，Runs 页能看到 A；B 的发送没有取消 A。
-4. 切回 A，SSE/history catch-up 补齐已有正文和工具步骤，不重复气泡。
+**任务**：“找出会话和 workspace 映射相关文件，列出来源，解释 Artifact 导入经过哪几层；把结论写到中文命名的交接说明，再把‘已验证’改成‘待验证’。”
 
-**通过标准**：focus 改变只切 UI，不 abort 其他 conversation 的 fetch controller；后台 Run 与前台 Run 的 ID 不串。
+**验收**：实际覆盖 `glob`/`grep`/`read`/`write`/`edit`/`bash`；命中与冻结源码一致；中文、空格、多级路径正确；不在其它文件替换、不改源包；不存在的关键词有明确空结果，read/write 不自动生成交付物卡。
 
-### CHAT-06：关页/断 SSE 后 Run 继续
+### TOOL-02：上传工作资料并让模型使用（P0）
 
-1. 发起一个可持续的 Run，确认已进入 RUNNING。
-2. 关闭标签页或停掉浏览器网络数秒（不要停 Worker）。
-3. 重新打开同一会话，确认 Run 仍在或已到明确终态，消息可 catch-up。
+**操作**：a. 在空会话上传 R 文档与 W CSV，发送前移除一份再补回；b. 在已有会话追加附件；c. 上传两份同名但不同内容的 X 副本；d. 切会话、刷新并列出 Dataset。
 
-**通过标准**：浏览器断开不取消 Run（Worker 所有权）；重连后无永久 Running、无重复助手气泡。
+**任务**：“先说明每个附件的用途和数据范围，再按来源汇总；不要把两个版本混在一起。”
 
-### TOOL-01：文件读写、编辑、搜索和 bash
+**验收**：上传字节 hash 与源一致，Dataset/会话归属正确，移除的草稿附件不被本次发送引用；同名文件不静默覆盖；模型读取实际内容、行数/列名正确。仅 Ready 不足以通过。
 
-当前模型工具面是 DSH 出厂名：`read` / `write` / `edit` / `glob` / `grep` / `bash`（`ls`/`find` 已映射为 `glob`，不要按旧工具卡验收）。
+### TOOL-03：真实办公交付全矩阵（P0）
 
-让 Agent 在当前测试会话中完成一个可验证的小任务：创建 `rt-20260901-note.txt`，读取并编辑内容，再用 `glob`/`grep` 找到它，最后用 bash 输出 `REGRESSION_FILE_OK`。
+**前置**：W 与 R 独立验算完成；逐一检查当前 `xlsx/docx/pdf/pptx` Skill。
 
-**检查点**
+**任务/子案例**：a. 用 W 做含原始数据、公式、趋势图的 Excel；b. 用 R 写新同事交接 Word，区分事实/待验证项；c. 把核准 Word 转成可发阅 PDF；d. 用 W 做管理层汇报 PPT，说明来源、口径与局限。
 
-- 时间线中的工具名是出厂名，不是 `ls`/`find`/`python`/`skill_install`；点击工具卡可以展开详情。
-- 一轮「出文本 → 调工具 → 再出文本」合并成**一个**助手气泡，步骤树默认折叠。
-- 读取/编辑前后内容符合预期，版本冲突不会静默覆盖。
-- 工作区外的绝对路径、`..`、`~`、越界软链接均被拒绝，错误只显示 `<workspace>` 等脱敏根。
-- 模型不可调用 Agent 容器本机文件系统、任意本机 shell 或未声明的工具。
+**验收**：四个格式分别真实加载对应 Skill、生成、提交、下载；按 [办公件规则](data-and-oracles.md) 打开/渲染、验算与修订。四种均需可用，bash fallback 或任意两种成功不能将整条标绿。
 
-### TOOL-02：附件上传和 Dataset 读取
+### TOOL-04：中文资料、Python 与真实图片（P0）
 
-1. 点击附件按钮或使用 `Ctrl/Cmd+U` 上传合成 `rt-20260901-table.csv`。
-2. 等待附件卡显示文件名、大小和 `Ready`；测试上传中的按钮禁用、失败后的 `Retry`、移除附件。
-3. 发送提示，要求 Agent 读取 CSV 并只返回 `REGRESSION_ATTACHMENT_OK` 以及行数。
-4. 上传两个同名测试文件，检查各自目录和内容不覆盖；刷新后重新查看附件/会话。
-5. 再上传一个**二进制办公件**（`rt-20260901-sheet.xlsx` 或一个小 PDF）和 `rt-20260901-chart.png`，确认上传不被按文本处理、大小/类型显示正确，且模型能通过 Skill 或 `read_image` 打开它——真实用户传的多数是这类文件，只测 CSV 不构成附件链路通过。
+**任务**：a. 用 bash 执行多行 Python 核对 W 行数/缺失并生成中文文件名结果；b. 粘贴 V 趋势图，解释国家、年份、单位与变化；c. 上传实际 UI 截图让 flash 定位错误提示；d. 使用模糊/损坏副本；核对部署 flash 的 image 能力声明与实际输入链路。
 
-**通过标准**：上传超限/失败有明确错误码和 trace id；附件不整包暴露给无关会话；Dataset 发布是原子操作；模型只能读取当前会话数据。Run 进行中附件按钮与 Ctrl+U 禁用。拖放、多文件并发（最多 3 个）与移除/Retry 都要点到。
+**验收**：Python 真实执行且结果可复算，`read_image`/附件视觉分支分别记录；图表解读与底层值一致；看不清时承认不确定，不能编数。能力未开放时记录该分支阻塞及用户提示；已声明支持却失败则记缺陷，均不得换模型掩盖。
 
-### TOOL-03：系统办公 Skill 真任务
+### DATA-01：官方数据清洗与可复算分析（P0）
 
-这是本产品最常见的真实使用路径。系统 Skill 只读、永远进发现。至少跑两条，记录用了哪个包：
+**任务**：“用上传的 W 数据比较三国 2019–2023 年人口与现价美元 GDP 变化。先检查重复、缺失和单位，再生成年度变化表；不把它当真实增速或市场规模。”
 
-1. 上传或让模型生成 `rt-20260901-table.csv`，要求用 `xlsx` 做成工作簿，再 `submit_artifact`。
-2. 要求用 `docx` 或 `pptx` 或 `pdf` 产出一份短报告（标题可用中文，如 `回归测试报告`），提交为 Artifact。
-3. 可选：`convert-to-markdown` / `baoyu-format-markdown` 把上一份文档转成 md。
+**操作**：跑官方原版，再跑明确标为 X 的重复行/缺失值副本；有 U 时追加订单退款对账子案例并先确认口径。
 
-**检查点**
+**验收**：行数、主键、缺失、计算与独立 oracle 一致；异常行单列，不随意补零/求和；可从结果追到原始记录；原文件 hash 不变。缺 U 只影响追加业务数据验证。
 
-- 模型通过 `skill` 工具加载系统包，而不是声称没有办公能力。
-- `bash` 执行 Skill 脚本时路径在 `scripts/` 下（允许嵌套，如 `xlsx/scripts/office/pack.py`）。
-- 产出文件可在 Deliverables 下载，打开后内容可核对；LibreOffice/`~/.config` 在同一 Session 内应能保留配置（不要因为第二次调用丢宏/配置就当隔离成功）。
-- 工作区 `write` **不会**自动出现在交付物列表。
+### DATA-02：附件目录与重启后继续分析（P0）
 
-**阻塞判定**：系统 Skill 根未挂载导致 bash 全挂，记部署故障，不是「办公 Skill 不可用」的产品结论。
+**前置**：TOOL-02 已在两个会话上传不同 R/W 资料，记录 Dataset ID、owner、源文件 hash。
 
-### TOOL-04：中文路径、python、粘贴图片
+**操作**：按 session 查询列表并核对元数据；刷新、登出重登后继续读取；专用栈重启 sandbox，再列出 Dataset 并在原会话调用工具读取上传文件；缺 session/非法 ID 与跨 owner 另验。
 
-1. 让 Agent `write` `rt-20260901-专项汇报.md`，内容含 `REGRESSION_UNICODE_OK`，再 `read` 回来。
-2. 用 `bash` 跑一段多行 python（`python3 - <<'PY'` 或脚本文件），打印同一标记。没有独立 `python` 工具，时间线应是 `bash`。
-3. 在输入框 Ctrl+V 粘贴一张合成 PNG（或上传 `rt-20260901-chart.png`）。若当前会话模型支持 vision（如 `deepseek-v4-flash-vision-exp`），要求描述图中内容；若不支持，确认图片被丢弃并在 prompt 里说明、文字请求仍能完成，Run 不 FAILED。
+**验收**：输入目录与真实文件对应，不混会话；MySQL Dataset 元数据与 workspace 字节重启后可用，模型读到原始数据；不能仅凭旧前端上传卡仍在判恢复成功。
 
-4. 让模型读取工作区里的那张 PNG，确认时间线出现 **`read_image`**（出厂 `dsh-tool-fs` 注册的第四个文件工具，见 `tool-names.ts`），而不是用 `read` 读二进制后乱码或直接声称做不到。
+### DOC-01：长文档问答与事实冲突（P1）
 
-**通过标准**：Unicode 文件名不被 `visible ASCII` 拒掉；python 物化后能在 bwrap 里跑；粘贴图按 `pasted-image-<ts>-<n>.png` 命名；超 2MiB 图给出可操作错误而不是空结果；`read_image` 在非 vision 模型下给出明确降级理由而不是 Run FAILED。
+**任务**：“根据 R 制作上线准备清单。历史测试报告哪些是旧证据？代码与说明冲突的地方请列出来，不要直接声称全量验收完成。”
 
-### ART-01：Artifact 提交、下载和不可变快照
+**验收**：引用可定位到文件/章节/commit；确认事实、推测、未知分开；至少核查 Agent 版本、Skill 入口、Artifact store、orphan recovery 的现实现；长文不只读开头就概括全部。
 
-1. 让 Agent 创建 `rt-20260901-report.md` 并调用 `submit_artifact` 提交。再提交一次中文显示名（如 `回归测试报告.md`），内部路径保持 ASCII。
-2. 在 Deliverables 面板点击下载，核对保存文件名（含后缀）、字节数和 SHA-256。浏览器 `download` 属性不得覆盖成 `artifact-download`。
-3. 提交后修改工作区原文件，再次下载同一 Artifact；内容应保持提交时快照。
-4. 在另一测试会话导入该 Artifact，确认目标会话出现工作区副本且没有新建重复 Artifact。
-5. 用 `/api/files/download?session_id=&path=` 下载工作区未提交文件，确认这不是 Artifact 通道，且跨会话 404。
+### ART-01：正式交付与不可变快照（P0）
 
-**通过标准**：只能通过 `artifact_id` 下载交付物；Artifact 与 owner/session 绑定；下载链接为同源 `/api/...`；中文 `filename*` 与 ASCII fallback 都有后缀。
+**操作**：a. 仅写办公文件，检查没有自动交付；b. `submit_artifact` 后下载并独立验内容/hash；c. 修改/删除专用 workspace 原文件，再下载旧 Artifact；d. 新版另行提交；e. 提交不存在/目录/超限文件。
 
-### ART-02：Artifact 导入与刷新后的 ready 事件持久化
+**验收**：正式提交才产生 Artifact；中文名/MIME/大小正确；旧快照不变，新版有新 ID；失败不留下 Ready 假产物；路径下载不能替代缺失 Artifact 的交付凭证。
 
-前置：ART-01 已有一个可下载的测试 Artifact；准备另一个仅用于目标会话的空测试会话。
+### ART-02：在另一会话继续修改报告（P0）
 
-1. 在目标会话的 Deliverables 面板选择 ART-01 的 Artifact，执行 Import；确认请求按目标会话写入工作区副本，不新建第二个 Artifact，也不把源会话的其他文件带入。
-2. 在目标会话刷新页面或重新打开同一 Conversation，确认历史 `artifact.ready`/持久化事件能重新投影出 Artifact 卡片，卡片仍可下载或查看元数据。
-3. 检查导入后的目标文件内容与源 Artifact 快照一致；修改目标工作区副本后再次查看源 Artifact，确认源快照不可变。
-4. 用另一个用户的目标会话尝试直接导入该 Artifact，确认 owner 校验返回 404，不暴露源 Artifact 是否存在。
+**任务**：“把已提交的 Excel 导入新会话，只保留 2021–2023 年并做一版新报告。”
 
-**通过标准**：导入是 owner-scoped 的快照复制；刷新不丢 Artifact、不重复创建、不重复投影；目标目录不存在时由服务端创建后再写入。
+**操作**：导入后按返回 workspace 路径真实读取，发送任务；刷新并重开目标会话；修改目标文件并重新提交；另测同名目标文件冲突。
 
-### RUN-01：Run 状态、取消、刷新恢复
+**验收**：导入字节来自源快照，模型读到正确目标 workspace；导入文件与正式新 Artifact 分开验；源快照不变，新提交有新 ID。只收到 201 或保留旧卡片不算导入内容可用；同名既有文件不得无提示被覆盖，否则登记缺陷。
 
-1. 发起一个可持续数十秒的合成 Run，并在页面显示 Running 时刷新。
-2. 在刷新前后记录同一个 Run ID、Conversation ID、已有工具步骤和消息。
-3. 对另一个运行中的测试 Run 点击 Stop/Cancel，确认出现必要的确认对话框并观察 `CANCELLING → CANCELLED` 或明确失败终态。
-4. 打开 Runs 页面，再返回会话，确认 SSE/history catch-up 不重复消息、工具或 Artifact。
+### ART-03：执行面重启后仍能取得交付物（P0）
 
-**通过标准**：没有永久 `RUNNING`、重复工具账本或丢失终态；取消写入 durable intent；刷新不取消仍在后台执行的 Run。
+**前置**：专用栈已提交 R/W 成果并记录 hash；当前启动路径使用 MySQL Artifact store。
 
-### RUN-02：steer、follow-up 和中断续跑
+**操作**：重启 sandbox，原身份重新列出/下载源 Artifact，再导入新会话。
 
-1. 在明确支持 steer 的 Running Run 上发送改向指令，验证当前 Run 的后续模型方向改变。
-2. 用 `Follow-up` 排队下一条消息，确认它不会并发写同一会话工作区。
-3. 人为中断本地测试 Run，刷新页面，确认出现 `Run was interrupted` 和 `Resume`。
-4. 点击 Resume，确认恢复后使用原会话上下文，不重复执行已完成且不可重放的工具。
+**验收**：元数据、owner、下载字节与重启前一致，导入可读；不能用“磁盘文件还在”或“旧页面卡片还在”代替 API 可用。失败记当前缺陷，不能沿用历史内存 store 解释跳过。
 
-### FAIL-01：失败 Run 与模型错误
+### RUN-01：停止做错方向的工作（P0）
 
-1. 选一个不存在的 `model_id`（或临时断开 LLMIO）发一条短消息。
-2. 确认 Run 进入明确 `FAILED`，页面有可读错误，不出现永久 Running。
-3. 恢复模型后在同一会话再发一条，确认新 Run 成功，旧失败气泡仍在。
+**任务**：在真实批量文件转换/分析尚未完成时点击 Stop。
 
-**通过标准**：失败不吞掉用户原文；错误文本不含 API key / 物理路径；可继续开新 Run。
+**操作**：a. 取消正在执行的前台任务并重复提交相同取消请求；b. 取消排队 Run；c. 同会话发送修正后的新任务。
 
-### INPUT-01：ask_user_question 等待输入与回答
+**验收**：取消幂等、Run/ToolExecution 最终收敛、前台执行停止，未完成结果不伪交付；新任务成功。DSH 明确创建的后台 job 另用 JOB-01 终止，不把其独立存活判为取消失败。
 
-工具名是 `ask_user_question`（旧名 `ask_user` 只用于渲染历史）。
+### RUN-02：运行中改向、排队与继续（P1）
 
-1. 让 Agent 调用 `ask_user_question`，要求它等待用户选择。
-2. 验证 Run 为 `WAITING_INPUT`，页面显示问题、选项和输入框，侧栏有待处理标记。
-3. 切换到 Runs/Chat 或刷新页面，再回到会话，确认问题仍在。
-4. 选择一个选项或输入文本，验证 `respond` 后 Run 恢复并最终收敛。
+**任务/分支**：a. W 报告运行中 Steer“改为只分析 2021–2023”；b. 另一轮 Follow-up“完成后再做英文摘要”；c. 按当前 UI/API 可用入口继续中断的任务。
 
-### INPUT-02：等待交互回答 CAS 与 Run 恢复
+**验收**：改向影响后续产出；follow-up 在前轮之后消费且不覆盖原任务；继续有可追溯上下文，不能用新开无关联会话冒充 Resume。分别记录 Run ID/输出/执行顺序，没触发对应状态记未执行。
 
-前置：INPUT-01 已进入持久化 `WAITING_INPUT`，记录同一 Interaction、Run 和 ToolExecution ID。
+### FAIL-01：真实模型服务异常后的恢复（P1）
 
-1. 在问题仍显示时刷新页面或先切到 Runs 再回到会话，确认仍能看到同一个待回答问题，而不是生成第二个 interaction。
-2. 只提交一次选项回答，观察响应 HTTP 结果和页面状态；不能出现 `409 Conflict`，也不能把原 `ask_user_question` ToolExecution 标为 FAILED。
-3. 确认 Run 从 `WAITING_INPUT` 恢复到 Running/终态，最终回复引用所选答案并包含 `REGRESSION_INPUT_RESUME_OK`。
-4. 重复点击已完成回答或用同一 interaction id 重放，确认服务端按幂等/CAS 规则拒绝重复写入且不产生第二条答案或第二个 Run。
+**前置**：专用故障环境，先成功完成一轮 R 问答。
 
-**通过标准**：停泊期间工具账本保持 RUNNING/可恢复语义；回答一次即可恢复并最终收敛；重复响应不会污染账本或消息投影。
+**操作**：对 flash 连接分别注入上游超时、认证失败、429/5xx 与流式中断；解除故障后同会话重试。不存在模型只在 AGENT-05 校验接口做负向输入，不启动该模型 Run。
 
-### APPROVAL-01：高风险工具审批
+**验收**：有可理解错误、明确失败或可恢复状态，无无限重试或偷偷切模型；不输出凭据/完整上游敏感响应；历史保留，新轮成功。各错误单独记录，记录等待上限/实际耗时，不用图片失败代替。
 
-**前置**：必须有真实启用且 `require_approval` 的测试工具；如果当前配置没有这样的工具，记为阻塞，不把空的 Approval Center 当成审批链路通过。
+### FAIL-02：错误文件与工具失败（P1）
 
-1. 触发一次高风险但可安全撤销的测试调用，确认工具进入 Pending、Run 为 `WAITING_APPROVAL`，Approval Center 出现工具名、风险级别、原因、参数和 owner。
-1b. **会话内审批横幅**：同一时刻 Chat 页顶部 FlashZone 应出现 `⚠ Approval required` 横幅（`role="alertdialog"`）及其自带的 Approve / Reject 按钮。真实用户绝大多数是在这里决策，不是去 Approvals 页。至少有一条审批走横幅按钮完成，确认它与 Approval Center 是同一条账本（页面刷新后状态一致，不会两处各算一次）。
-2. 走一次 `Reject`，确认工具未执行、Run 有明确终态或可继续状态。
-3. 对另一条完全相同参数的审批走 `Approve`，确认只允许这一条 ToolExecution 继续。
-4. 改变命令或路径后重试，确认旧的 `source_digest`/参数授权不能复用。
-5. 在停泊状态取消 Run，确认审批和 Run 都能回收。
-6. 若同一轮有其它并行工具在飞，确认它们收敛为 `UNKNOWN` / `RUN_PARKED_PARALLEL_TOOL_UNKNOWN`，不留下永久 Running 账本。
+**操作**：上传 X 损坏 Office、空文件、错误 MIME 文件；要求读取缺失路径或运行会明确非零退出的无害校验脚本；修正输入后重做。
 
-### PROC-01：长进程控制台、日志、stdin、信号
+**验收**：上传校验或工具读取阶段明确报错，保留真实错误类别；模型不能说“已分析/已交付”；UI 无永久 Running，新输入可恢复，不污染已有 Dataset/Artifact。
 
-**没有 `process_start` 工具**：`process_*` 整族已退役（`runtime/policy/tool-names.ts` 里只作为旧名别名映射到 `job_*`）。长进程由模型用 `bash` 起后台作业产生，exec 侧登记为 session process，前端 `Process Console` 读的是 BFF `/api/processes` → exec `/sessions/:id/processes`。若时间线出现 `process_start`，那是案例写错或旧快照，不是产品能力。
+### INPUT-01：用户决定分析口径（P1）
 
-让 Agent 用 `bash` 启动一个只写测试标记、不会接触网络的长进程：先输出 `REGRESSION_PROCESS_OK_1`，等待 stdin，再输出 `_2`。
+**任务**：“请分析 W 做简报；开始计算前用提问工具让我选择受众和年份范围。”
 
-**检查点**
+**操作**：进入 `WAITING_INPUT`，刷新/切页，回答“管理层、2021–2023”，完成报告；另测自由文本回答。
 
-- 后台 `bash` 作业产生 process ID；Runs/时间线可打开 `Process Console`，且该 id 与 `job_list` 看到的一致（同一 exec 账本，见 JOB-01）。
-- status 能看到 Running/完成；stdout/stderr 过滤和日志搜索可用。
-- 连续读日志使用增量游标，不重复返回；可发送 stdin/EOF。
-- 对仍在运行的进程发送指定 signal/cancel，状态与退出码最终一致；不要用自然结束后的进程冒充主动终止通过。
-- 进程列表、详情和控制仅属于当前 owner；控制台关闭/重开不丢日志。
-- BFF 走的是 exec `exec_jobs` 公共面（先由 Agent 授权 session），不是已删除的 Agent `/internal/processes*`。
+**验收**：问题与选项持久化、回答后恢复；同一 Interaction/ToolExecution 可追踪；最终表格和正文都采用选择的范围，不仅复述选择文字。
 
-### JOB-01：DSH job_list / job_output / job_kill
+### INPUT-02：两标签重复回答与取消竞态（P1）
 
-1. 让模型用后台 `bash` 起一个短作业，再调用 `job_list` / `job_output`。
-2. 对照 Process Console 的 process id：DSH 透传的 id 应能在 exec 账本查到。
-3. 用 `job_kill` 结束仍在跑的作业，确认状态与退出原因一致。
+**前置**：同一用户两个标签展示同一待回答问题。
 
-**阻塞判定**：若模型侧同步 `job_list` 还拿不到异步 exec 结果（STATUS C7 已知缺口），记 `partial/阻塞` 并写明现象，不要标通过。
+**操作**：a. 两标签提交不同答案；b. 重放已回答请求；c. 另一轮先取消再回答。
 
-### TODO-01：todo_write 任务卡
+**验收**：只一个答案生效，无重复 Run/副作用；正常第一次回答不误报 409，竞争失败方按 CAS 合理拒绝且刷新到权威答案；取消后不能复活已取消 Run。
 
-1. 发一个需要拆步的合成任务，确认模型调用 `todo_write`。
-2. 时间线任务卡展示清单条目（pending/completed），而不是只显示 `Updated todo list: n pending`。
-3. 刷新后清单仍在（arguments / `todo/write` 事件），不依赖 result JSON。
+### APPROVAL-01：用户批准或拒绝真实工具动作（P1）
 
-### SUB-01：子 Agent
+**前置**：专用测试策略将一条真实无害调用设为需审批，例如公开指标元数据查询；不以真的危险业务操作造场景。
 
-1. 要求模型把一个可验证的小任务交给 `subagent`（one-shot）。
-2. 父 Run 时间线出现结构化子任务视图（子 Run 状态），不是裸 JSON。
-3. 侧栏 Recent Conversations **不出现**子 Conversation。
-4. 取消父 Run，确认存活子 Run 也被写入 cancel intent 并收敛。
-5. 子 Run 不得再问 `ask_user_question`（未注册）；父 Run 的提问仍走 INPUT-01。
+**操作**：a. Chat 横幅 Reject；b. 新调用在横幅 Approve；c. 再在 Approvals 页决策；d. 修改参数再次请求；e. 等待期间取消，若支持则另测过期。
 
-### MGMT-01 / MGMT-02：Runs 与 Approvals 页面
+**验收**：同一审批账本在两处一致；拒绝/过期/取消不执行，批准只放行相应参数的一次调用；改参数重走策略；并行在途工具有明确终态而非永久 Running。没有实际需审批工具记阻塞。
 
-在已有 Run/Approval 数据基础上执行：
+### PROC-01：控制长数据处理进程（P1）
 
-- Runs 的 `All/Running/Waiting Approval/Waiting Input/Failed/Completed` 筛选；打开 Conversation；查看 Logs/Detail；对可取消状态执行 Cancel。
-- Approvals 的 `All/Pending/Approved/Rejected/Expired/Cancelled` 筛选；展开/收起参数；批准/拒绝；打开关联会话；刷新后状态仍正确。
+**任务**：用 bash 启动分批读取 R 提交清单的后台校验程序，持续输出批次/错误数量；交互分支由程序从 stdin 接受年份筛选直到 EOF。
 
-**通过标准**：API 数据和浏览器 entity store 合并后不重复；API 不可用时的空态明确标为降级，不冒充数据为空。
+**操作**：a. 打开 Process Console，筛 stdout/stderr、搜索并按游标读取；b. 输入筛选并 EOF；c. 另一活进程发送 signal；d. 再一活进程 Cancel。
 
-### TRACE-01：Trace 面板
+**验收**：process ID/日志/账本一致，增量无漏重；stdin 真正改变结果，EOF 真正关闭输入；signal/cancel 发生在活进程并收敛。若当前 job 非交互，明确记录 stdin 不支持/未验证，不能以隐藏或禁用按钮判 stdin 通过。
 
-1. 在已完成的带工具 Run 上打开 Details → Trace。
-2. 确认有 span 树（至少 run.execute 与工具 span），时间与状态可读。
-3. 刷新后仍能从 `/api/runs/{id}/trace` 重建；跨租户 404。
+### JOB-01：查看并终止不再需要的批处理（P1）
 
-**通过标准**：span 不含工具输出原文、密钥、物理路径。没有 OTEL 后端不能当失败——本阶段只验 MySQL 投影。
+**操作**：用后台 bash 启动较长的 R/W 分批校验，实际调用 `job_list`、`job_output`；与 Console 对同一 ID；运行中用 `job_kill` 停止，再查状态和后续日志。
 
-### CAP-01：Capabilities 与诊断
+**验收**：模型侧和 exec 同账本，输出能看到真实处理进度，kill 后终态与退出原因一致；后台 job 不凭模型文本假装存在，自然退出不能替代 kill 分支。
 
-依次打开 Settings 的 `Skills`、`MCP Servers`、`Tools`、`Models`、`Extension diagnostics`：
+### TODO-01：多文件交付进度清单（P1）
 
-- 清单、状态、来源、风险等级、审批策略、超时、启用状态和模型协议与后端返回一致。
-- 未配置 MCP/模型时显示可理解的空态；不因为空态误报“功能关闭”。
-- 页面不显示 MCP secret、API key、Cookie、物理路径或完整内部凭证。
-- 刷新后选中的页面和清单仍可用；配置错误应显式报错。
+**任务**：“先列出数据检查、计算、图表、简报、下载核验的任务清单，再依次完成 W 汇报。”
 
-### SKILL-02：模型在草稿根搭包（用户 Skill 主创建路径）
+**验收**：实际 `todo_write` 卡与步骤相符，只有完成的项标完成；刷新后条目保留且来自 arguments/事件；失败的 PDF 转换不能仍显示全部完成。
 
-`skill_create` / `skill_install` 已取消。模型用 `write`/`edit`/`bash` 写 `/home/sandbox/skill-draft/<package>/`。
+### SUB-01：把资料核对交给子 Agent（P1）
 
-1. 让 Agent 按 `skill-creator` 在草稿根建 `rt-20260901-echo`：`SKILL.md` 的 `name` 等于目录名，`scripts/echo.sh` 打印 `REGRESSION_SKILL_OK`。
-2. 确认 Capabilities → Drafts 出现该包，`enabled=false`；`skill` 发现/prompt **没有**它。
-3. 让模型直接 `skill` 调用该包，应失败或声明未启用。
-4. 改草稿后再看：My Skills 仍没有它（两份字节，启用前不进挂载）。
+**任务**：父任务制作 R 发布周报，子 Agent 分别核查 API 变化与前端入口，返回路径/结论，父任务汇总。
 
-**通过标准**：草稿可写、可自测、不进发现；系统 Skill 根仍只读。不要把 Composer 拼图按钮当成特权解包 API——它只是上传 ZIP 附件并预填「Install the attached Skill ZIP…」，真正落草稿仍靠模型解压/写入。
+**操作**：完成一轮，再在子任务存活时取消另一父 Run。
 
-### SKILL-01：用户 Skill 启用、使用、停用
+**验收**：结构化子任务卡、父子 ID/结果可追溯；父结论引用真实子结果；子会话不混入 Recent；父取消级联；子 Agent 不注册人机提问工具，有缺资料交给父任务处理。
 
-前置：SKILL-02 已有合法草稿，或手动把包写进草稿根。
+### MGMT-01：在 Runs 中找到卡住的工作（P1）
 
-1. 在 Capabilities Drafts 点 Enable。非法包（缺 SKILL.md、name 不匹配、symlink、`.git`、遮蔽系统同名、超 50MiB/512 文件）必须被拒，My Skills 不变，页面 `role="alert"`，UI 不乐观改写。
-2. 启用成功后包进入 My Skills；同一会话让 Agent 用 `skill` 加载并跑 `scripts/echo.sh`，输出 `REGRESSION_SKILL_OK`。
-3. 以另一个用户检查该包不可见、不可绑定。
-4. 停用后再次尝试使用，确认它从 exec 挂载计划中消失；草稿仍在 Drafts。再 Enable 是整包替换。
-5. （可选）拼图按钮上传 ZIP：只产生工作区附件 + 预填提示。模型解到草稿后走同一条 Enable。不要预期上传瞬间直接进 My Skills。
+**前置**：本轮已产生成功、失败、取消、运行中、排队和等待状态。
 
-**通过标准**：系统 Skill 只读且无 Enable/Disable 按钮；用户 Skill 按 org/user 隔离；未启用包不能被模型当 Skill 执行。
+**操作**：逐个可用状态筛选，打开会话/详情/Logs，取消可取消任务，刷新。
 
-### MCP-01：真实 MCP 工具调用
+**验收**：列表、计数、详情与权威 Run 一致，不漏/重；只对允许状态显示操作；接口故障显示错误而非伪空列表。
 
-CAP-01 只验清单。这里验模型真的能调。
+### MGMT-02：审批中心集中处理（P1）
 
-1. 打开 Capabilities → MCP Servers。若 `MCP_SERVERS_JSON=[]` 或 Agent `/ready` 因 MCP 失败，记 `阻塞`，不要标通过。
-2. 发一条必须走外部 MCP 才能完成的短问题（例如配置了 Exa 就做一次检索）。
-3. 时间线出现 `mcp__<server>__<tool>`；结果回包；无密钥进气泡。
-4. 改 `MCP_SERVERS_JSON` 后**重启 Agent** 才生效；热改配置不应被当成已加载。
+**前置**：APPROVAL-01 的各状态审批。
 
-### MCP-02：sandbox-mcp 对外 facade
+**操作**：逐状态筛选、展开参数、打开关联会话；与另一标签同时决策；模拟一次提交网络失败再重试。
 
-1. 对 `127.0.0.1:8082/health` 应 200。
-2. 用 `SANDBOX_MCP_TOKEN` 调 MCP 面一条无害工具（如 health/execute 的最小命令）。
-3. 同一 token 打 `sandbox:8081/internal/v1/*` 应失败；MCP 进程没有 workspace/artifact 挂载。
+**验收**：成功才更新决策；失败保留待处理；竞争不重复执行；批准/拒绝/过期/取消展示与同一账本一致。
 
-**通过标准**：MCP facade 与执行面同镜像不同入口、不同凭据；一次 RCE 拿不到完整内部面。
+### TRACE-01：排查报告为何失败（P2）
 
-### CRON-01：定时任务 CRUD、立即运行和历史
+**操作**：打开 TOOL-03 成功 Run 与 FAIL-02 失败 Run 的 Details → Trace，刷新重建。
 
-1. 在 Schedules 创建名称带 `rt-20260901-` 的一次性或短周期测试任务，填写明确的时区和提示。
-2. 检查列表、下一次执行时间和 Enabled 状态；执行 `Run now`，查看历史。
-3. Pause/Resume，编辑提示和策略，确认列表与历史更新。
-4. 删除测试任务并确认历史保留规则符合页面提示。
+**验收**：Run/工具 span 归属、时间和状态能解释失败位置；跨用户请求 404；不暴露凭据或工具输出原文；无需外部 OTEL 平台也能核对当前持久化 Trace 投影。
 
-**通过标准**：服务端持久化任务；刷新/Worker 重启后不丢；同一时间点不重复触发；删除只影响测试任务。创建/删除属于持久化副作用，执行时需操作人确认。
+### CAP-01：用户确认自己能做什么（P1）
 
-### CRON-02：时区、misfire、concurrency
+**操作**：逐页看 Skills/MCP Servers/Tools/Models/Extension diagnostics，按真实注册结果核对；分别检查空配置、连接错误、重新加载后的变化。
 
-1. 创建一个 `timezone` 非 UTC 的一次性任务（`schedule_type=once`，`run_at` 在 2–5 分钟内），名称带测试前缀。
-2. 创建一条 `concurrency_policy=forbid` 的短周期任务，在仍有一次 Run 未结束时点两次 `Run now`，确认不会并发写同一工作区。
-3. 把 `misfire_policy` 在 `skip` / `fire_once` 间改一次，记录下一次执行时间是否按页面说明变化。
-4. 测完删除这两条任务。
+**验收**：来源/状态/策略/可用模型准确，空清单不等于链路通过；不泄密；工具面包含当前实际注册工具，不残留退役能力；Skill 生命周期用 SKILL 系列验证。
 
-### A2A-01 / A2A-02：Agent Card、凭据和 JSON-RPC
+### SKILL-02：把分析方法整理成可复用草稿（P0）
 
-**A2A-01 步骤**
+**任务**：“用本次 W 清洗规则制作区域指标简报 Skill，含字段校验、缺失处理、使用说明与脚本，写入我的草稿目录，不自动启用。”
 
-1. 以 admin 打开 A2A 页面，确认 Agent、版本、Streaming、Authentication、Agent Card 和 Endpoint。
-2. 创建只用于本轮的最小 scope 凭据；一次性 token 只在安全输入中短暂使用，不截图、不写文档、不提交剪贴板历史。
-3. 验证 Agent Card 的版本、能力、协议和安全声明。
-4. 轮换凭据，确认旧凭据失效、新凭据只显示一次；撤销后确认调用被拒绝。
+**验收**：真实 `write/edit/bash` 创建 `/home/sandbox/skill-draft/<包名>/`，包 name 匹配；草稿可用真实 W 自测但不会自动进入已启用发现；尝试以 `skill` 加载未启用包明确不可用；系统 Skill 根不可写。
 
-**A2A-02 步骤**
+### SKILL-03：导入团队提供的 Skill 包（P0）
 
-1. 使用有效 scope 发送 A2A v0.3 JSON-RPC `message/stream`，要求返回 `A2A_REGRESSION_OK`。
-2. 记录 SSE 的 submitted/working/消息/终态序列；确认有最终事件和最终 Agent 正文。
-3. 用 `tasks/get` 查看历史，再用 `tasks/resubscribe` 重放；确认不重复创建 Run，不丢终态。
-4. 用无效、过期、已撤销或 scope 不足的凭据重试，确认 fail-closed。
+**前置**：把 SKILL-02 的实际可用包分别打为 `.zip`、`.skill`，记录 hash；构造 X 非归档/损坏/越界包。
 
-### USER-01：普通用户正向主链路与双人并发
+**操作**：在 Capabilities Drafts 点击与拖放上传；刷新；尝试错误格式和超部署大小包。
 
-SEC-01/SEC-02 只验普通用户「够不到什么」。产品的真实主用户就是普通用户，必须有一条**正向**闭环，否则「全功能通过」只覆盖了 admin。
+**验收**：合法包只进本人的 Drafts，未自动启用；文件和脚本真实可读；错误包明确拒绝且不留下半包、不写出草稿根；不能走已删除的 Composer 拼图按钮。
 
-用 AUTH-02 步骤 3 注册的名单外普通用户（另一个浏览器 profile 或隐身窗口，与 admin 会话并存）：
+### SKILL-01：启用、实际使用、停用（P1）
 
-1. 登录后确认侧栏**没有** A2A 入口，其余 Chat / Runs / Approvals / Schedules / Settings 可正常进入。
-2. 走一遍 CHAT-01 → TOOL-02 → TOOL-03 → ART-01 的最小闭环：纯文本对话、上传附件、用系统办公 Skill 产出一份文档、提交并下载 Artifact。
-3. 确认这些资源只出现在该用户自己的列表里，admin 侧栏/Runs 页不混入（反向由 SEC-02 验证）。
-4. **双人并发**：admin 与普通用户在同一时刻各自发起一个数十秒的 Run。确认两条 Run 各自到达终态，Runs 页各看各的，工作区、DSH session 和 process id 不串；worker 队列不会让一方饿死或把另一方的输出投给对方。
+**操作**：a. Enable 草稿，进入 My Skills，Drafts 隐藏已发布副本；b. 新会话真实 `skill` 加载，用 W 另一年份子集生成结果；c. Disable 后新 Run 再尝试，另保留已绑定旧摘要的在途 Run 观察；d. 重新 Enable。
 
-**通过标准**：普通用户能独立完成办公主路径并拿到可下载交付物；并发下无跨用户串线、无一方永久 QUEUED。
+**验收**：结果与独立验算一致；Enable 发布不可变摘要版本并更新启用账本，系统 Skill 只读；Disable 后新 Run 不发现/挂载，草稿重新显示；在途旧版本不会被物理删除破坏。失败不乐观显示已启用。“未启用包不能作为 Skill 加载”不等于禁止用户在草稿区自测脚本。
 
-**阻塞判定**：`SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER=false` 且没有第二个可用账号时记阻塞，不要用 admin 跑两遍冒充多用户。
+### SKILL-04：更新规则与拒绝非法发布（P1）
 
-### CTX-01：长会话自动压缩
+**操作**：a. 已发布后只改草稿，运行仍用旧发布字节；Disable/Enable 后跑新版；b. 分别测试缺 SKILL.md、name 不符、symlink、`.git`、系统同名、文件数/大小超限；c. B 查看/同名启用 A 的包。
 
-Agent 侧的 compaction 由 DSH `dsh-compaction` 负责，当前使用其默认策略（`enabled=true`、`reserveTokens=16384`、`keepRecentTokens=20000`）。真实用户的会话会跑到这条线上，但目前没有任何案例碰它。
+**验收**：版本字节边界清楚，非法包不改变已有发布；同名用户包按 owner 隔离。逐项登记验证限制值，不能把一次上传错误当全部校验通过。
 
-1. 在一个测试会话开头让模型记住一个一次性口令（例如 `CTX_TOKEN_20260901`），并明确要求后续随时可复述。
-2. 用可控方式把上下文推到压缩阈值：连续多轮让模型读写/输出较长内容（例如反复 `read` 一个几百行的合成文件并摘要），或直接选 `contextWindow` 较小的模型。记录轮次与大致 token 量。
-3. 观察压缩发生时的页面表现：Run 不得 FAILED、不得卡在 RUNNING、不得出现重复助手气泡。
-4. 压缩后让模型复述口令与最早一轮的关键约定，确认关键事实被保留而不是整段丢失。
-5. 新开一个会话，确认它的压缩行为不受上一会话影响（策略来自 AgentVersion，不写回共享 settings）。
+### SKILL-05：系统 Skill 清单逐包完成真实任务（P1）
 
-**通过标准**：压缩过程对用户是平滑的；压缩后仍能复述早期关键事实；策略不跨会话/跨租户泄漏。
+**前置**：以 CAP-01 本轮实际注册清单为准；仓库有文件不等于部署已加载。
 
-**阻塞判定**：若当前可用模型的 `contextWindow`（deepseek 系为 262144）在合理轮次内推不到阈值，记 `阻塞` 并写明已尝试的轮次和 token 量，不要标通过。
+**操作**：除四类 Office 外，逐个调用系统 Skill：用 `planning-and-task-breakdown` 拆分 W 报告；`grill-me` 澄清 R 交接中缺失信息；`skill-creator`/`skill-vetter` 创建并审查真实分析包；`convert-to-markdown` 转换已下载的 Word/PDF；`baoyu-format-markdown`/`baoyu-markdown-to-html` 整理 R 交接说明并生成可打开 HTML；`theme-factory` 为 W 报告应用一致主题；`mcp-builder` 用 W 冻结数据制作本地只读指标服务样例，在隔离环境启动并实际查询。新增/其它已注册包按其声明用途追加同样记录。
 
-### BUDGET-01：预算用量条与超限提示
+**验收**：逐包有真实 skill 调用、对应可用结果和独立检查；文档转换不丢关键事实/表格，格式处理不改业务数字，审核能指出 X 危险包行为，MCP 样例真正可启动/查询而非只交代码。系统 Skill 根保持只读；缺依赖或未加载逐包记阻塞，不靠另一个包的成功代替。
 
-`ConversationHeader` 在后端返回 usage 时渲染 `BudgetBar`（`budgetUsage` / `budgetLimits` / `budgetWarning`，含 `near limit` 与 `exceeded` 两种告警态）。
+### MCP-01：通过真实检索找到指标依据（P1）
 
-1. 跑几轮真实 Run 后观察会话头是否出现 Budget 条，摘要文本与百分比是否随用量变化。
-2. 若部署配置了每 Run 预算，构造一次接近上限的 Run，确认出现 `near limit`；超限时确认出现 `exceeded` 且 Run 有明确终态（不是静默截断）。
-3. 后端不返回 usage 时确认整条 Budget 条**不渲染**（而不是显示 0/0 或 NaN）。
+**前置**：实际 `MCP_SERVERS_JSON` 配置了可用搜索/阅读工具，记录名称但不记密钥。
 
-**阻塞判定**：当前部署未配置预算维度时记 `阻塞`，不要把「不显示」当成通过——先确认后端确实没返回 `budget_usage`。
+**任务**：“查找世界银行对现价美元 GDP 的官方定义，解释它与实际增长率的差别，给出来源。”
 
-### UI-01：侧栏、详情、主题、键盘和响应式
+**验收**：真实 `mcp__<server>__<tool>` 调用、有非空回包与官方来源，执行人打开来源核对；页面无重复/stale Running 或 `[object Object]`。没配置或模型只凭知识作答，调用分支阻塞/未执行。
 
-1. 折叠/展开侧栏，切换 Chat、Runs、Approvals、Schedules、Settings；检查移动宽度下抽屉和遮罩。
-2. 在时间线选择 Tool/Process/Task/Trace，打开 Details，把 Context Inspector 的**八个 tab 逐个点到**：`Overview` / `Tools` / `Processes` / `Files` / `Artifacts` / `Datasets` / `Trace` / `Session`，复制非敏感值。其中 `Files` 是从工具 arguments 反推的「本 Run 引用过的文件」（不是工作区列表），`Session` 显示 DSH session 归属——这两个 tab 有独立逻辑，不能靠点 Trace 顺带覆盖。tab 上的计数要与面板内条目数一致。
-3. 切换亮/暗主题并刷新；检查主题和会话状态不丢。
-4. 验证 Enter 发送、Shift+Enter 换行、中文输入法组合期间 Enter 不误发送、Ctrl/Cmd+L 新会话、Ctrl/Cmd+U 上传。
-5. 产生长消息并滚动，检查 Jump to latest、代码 Copy、Regenerate 只在允许状态显示。
-6. 有 thinking 的模型应出现可折叠 thinking 盒；流式时 `aria-live` 不逐 token 重读整段 transcript。
-7. 拖放文件到输入区、粘贴图片、移动宽度下抽屉/遮罩再关。
+### MCP-02：外部客户端完整 sandbox 工具闭环（P1）
 
-### SEC-01：未登录和非 admin 访问
+**前置**：真实 Streamable HTTP 客户端连 `/mcp`，本轮 context 与独立凭据。
 
-1. 登出后直接请求 `/api/conversations`、`/api/runs`、`/api/capabilities/tools` 和文件/进程接口。
-2. 用普通测试用户打开 `/settings/a2a` 并请求 `/api/a2a/config`。
-3. 检查健康探针仍按文档对外提供，业务数据不公开。
+**操作**：依次用 `sandbox_file_write/read/list` 保存/检查 W 子集，用 `sandbox_python_execute` 计算，用 `sandbox_shell_execute` 核对文件，再用 `sandbox_artifact_submit` 下载中文报告。
 
-**通过标准**：受保护资源未登录被拒绝；普通用户访问 A2A 得到 403 `ADMIN_REQUIRED`；不透传浏览器伪造的 `X-Acting-*` 头；跨租户资源不返回 403 泄漏存在性。
+**验收**：六个工具全部实际调用，返回同一工作区内容；计算与 oracle 一致，签名 URL 真正下载正确快照；仅 health/tools/list 不能通过。凭据及含 token URL 不入证据正文。
 
-### SEC-02：跨租户资源访问
+### MCP-03：低代码会话绑定与下载失效（P1）
 
-准备用户 A 和用户 B 的独立会话。A 创建 Conversation、Run、Artifact、Dataset、Process、Cron 和已启用 Skill；B 使用 A 的资源 ID 直接打开对应页面或请求对应 API（含 `/api/files/artifact-download`、`/api/processes/{id}/signal`、`/api/capabilities/skills/{name}/enable`）。
+**操作**：a. 同 context 连续 write→执行→submit；b. 两 context 同名文件并发；c. 不传 context 保存服务端返回 ID 后续用；d. 非法/过长 context；e. 漏传/换 context 后读取；f. 下载签名篡改和过期。
 
-**通过标准**：所有跨 owner/org 读取、下载、控制、导入和修改统一返回 404；B 的列表中不出现 A 的资源。Skill 启用态也按 owner 隔离。若单个浏览器无法保持两个 Cookie 上下文，使用独立浏览器 profile 或本地 HTTP 客户端补测，并记录方式。
+**验收**：同 context 复用、不同 context 隔离；换 context 不读到旧文件；非法值明确拒绝；下载有效期内字节正确，篡改/过期 fail-closed。不能假设共享 MCP token 下的任意 context 字符串就是完整用户鉴权。
 
-### SEC-03：路径、命令和敏感信息安全
+### MCP-04：外部工具故障与只读数据源（P1）
 
-在测试会话中分别尝试 `../`、绝对路径、越界软链接、`sudo`、`rm -rf /`、`dd`、`mkfs`、危险权限修改和未声明工具。
+**操作**：真实 MCP 超时/断连后恢复；配置支持时，用已授权的业务只读 MCP 查询一份可独立核验的聚合报表，尝试越范围查询。另核对 Agent config.mcpServers 的 enabledTools 能收窄本 Agent 授权，但不能新增环境清单外 server；变更进程配置后须更新消费者并重新确认注册。
 
-**通过标准**：越界和硬拒命令在执行前被拒绝；硬拒命令不创建 Approval；错误文本不泄漏宿主机路径；模型消息、工具结果、SSE、审计和 Artifact 元数据不包含真实凭据或测试密钥原文。
+**验收**：有超时与明确工具错误、不无限挂起；恢复后真实调用成功；权限越界被拒、不输出连接密钥。没有业务 MCP/授权数据则该子分支阻塞，不能用虚构 SQL 返回值补通过。
 
-### SEC-03B：执行环境变量不进入 bwrap 命令行
+### CRON-01：每周资料更新任务生命周期（P1）
 
-该增量案例来自 2026-09-03 的真实容器检查：`--setenv` 会把允许注入的业务数据库值放进 bwrap 的进程参数。业务 DB 的显式 allowlist 仍需可用，但值不能进入命令行或模型可见输出。
+**任务**：创建“每周整理 R 发布记录”任务，提示含明确资料位置与输出要求；用数分钟后的专用一次性任务先验证链路。
 
-1. 在 `@Browser` 中让前台 bash 只检查 `DB_DSN`、`DB_PWD`、`DB_HOST`、`DB_USER`、`DB_PORT`、`DB_NAME` 非空，并只输出 `REGRESSION_ENV_TRANSFER_OK`。
-2. 在该执行仍处于 Running 时，从 `sandbox` 容器读取 `/proc/*/cmdline`，只比较是否出现这些变量的当前值；终端只输出每个变量的 `absent/present`，绝不打印参数或值。
-3. 让 Browser 完成短命令，再用 `job_kill` 终止一个 `sleep 60` 的后台 job；检查 `exec_jobs` 为 `killed: SIGTERM`，容器内没有残留 bwrap/bash/sleep。
+**操作**：创建、编辑提示、Run now、History、主 Refresh、Pause/Resume、重开页面，最后删除专用任务。
 
-**通过标准**：变量可在沙箱命令中使用；所有值在 bwrap argv 中均为 `absent`；模型只收到固定标记；明确的后台 job 通过 `job_kill` 回收。Run 取消本身不等同于 `job_kill`：DSH 后台 job 是独立句柄，不能把其正常存活误判为 exec orphan。
+**验收**：后台实际读取资料生成可核验结果；列表与已打开 History 都刷新到权威状态；暂停不再计划触发、恢复计算下次时间；删除后不可再次触发。无法访问输入不能伪称报表完成。
 
-### ISO-01：Bubblewrap、非 root、网络和配额
+### CRON-02：跨时区、错过时间与重叠运行（P2）
 
-该案例不能只靠页面完成，需在已重建容器中补充检查：
+**操作**：a. 同一目标瞬间分别用 Asia/Singapore 与 America/New_York 配置，并核对 next run；b. 错过触发点分别验证 `skip`/`fire_once`；c. 首轮仍运行时分别验证 `forbid`/`allow`；d. 当前支持的 once/cron 类型各至少一次真实触发。
 
-- Sandbox/Sandbox-MCP 进程以 uid 10001 运行，exec 执行前剥离 capabilities；缺 `setpriv` 或隔离配置不完整时 fail-closed。
-- `render(profile)` 与 preflight 使用同一隔离计划；workspace 和当前会话 `/tmp` 可写，Skill 只读，其他宿主根不可达。
-- 按当前部署的 `SANDBOX_NETWORK_MODE` 验证断网/允许网行为，不把 development 的 unrestricted 推导成 production 已通过。
-- 超 CPU、内存、进程数、输出和文件大小限制有确定错误，服务仍可继续处理后续请求。
+**验收**：时区与 UTC 对照正确；skip 无补跑、fire_once 只补一次；forbid 有明确跳过记录、allow 的两轮都可追踪；同触发点不重复。改下拉框不等于策略执行过。
 
-### REC-01：Worker 重启后的会话/交互恢复
+### CRON-03：定时报告失败后修复（P1）
 
-1. 启动一个可恢复的长 Run 或 `WAITING_INPUT` Run，记录 Conversation、Agent session、Run、ToolExecution 和 interaction ID。
-2. 终止当前 Worker，等待新 Worker 接管；不要删除 MySQL/Redis 权威数据。
-3. 刷新 Browser，检查状态、历史事件、待回答问题和模型上下文。
-4. 回答/Resume 后观察终态和工具账本；确认旧 Worker fence 不能写脏数据。
-5. 多轮会话：Worker `SIGKILL` 后 follow-up 必须 `resume` 同一 DSH session（不是每次 `create`），模型能复述上一轮一次性口令。
+**操作**：任务读不到资料或模型故障时触发一次，修正后 Run now；隔离环境重启 Worker 后检查任务及执行历史；有等待审批/输入时查看关联 Run。
 
-**通过标准**：MySQL 中的 durable facts 保留；恢复后不重复执行状态不明的工具；无法安全恢复时进入明确人工处理状态，不假装成功。
+**验收**：失败历史保留、可定位原因；修复成功不覆盖失败记录；等待不伪完成；重启不丢计划或重复已有触发；运行后暂停本轮任务。
 
-### REC-02：exec hard-kill 与 orphan 回收
+### AGENT-01：管理员为团队创建不同助手（P0）
 
-在隔离的本地测试栈中启动一个长进程，硬杀 exec 服务后重启；通过 owner-scoped jobs API、Runs 页面和容器进程列表检查：
+**任务**：在 Settings → Agents 新建“数据分析”和“项目交接”助手，systemPrompt 分别约定数据口径核验与源码引用，使用合法 config。
 
-- orphan 被发现并清理；
-- 进程状态、日志游标和退出原因不制造假 Running；
-- 其他租户/会话不能看到或控制该作业；
-- 服务恢复后仍可执行新的短命令。
+**操作**：查看列表/v1/活跃版本，刷新；提交空名、非法 JSON、数组/scalar config、非法 toolPolicy、含占位 apiKey 的内嵌 model；普通用户尝试创建。
+
+**验收**：合法 definition 有独立 v1，真实 R/W 对话遵守相应职责；错误配置当场拒绝且不留半成品；普通用户 403，伪造 acting role 无效；config 仅排版变化不诱导无意义保存。
+
+### AGENT-02：发布新版本与回滚（P0）
+
+**操作**：a. v1 建会话并跑任务；b. 保存 v2 不激活，再建新会话；c. 激活 v2，旧会话追问、新会话提问；d. 回滚 v1 再建会话；e. v1 Run 在运行中切活跃版本。
+
+**验收**：版本不可变，未激活 v2 不影响新会话；激活/回滚只影响之后创建的会话，旧会话与在途 Run 保留原绑定。用 AgentSession/Run 的版本 ID 和真实输出双证，不能只看页面 active 标签。
+
+### AGENT-03：用户选助手后开始工作（P0）
+
+**操作**：a. 单 Agent org 看不到多余选择器；b. 多 Agent org 在新会话选择分析助手，先上传 W 再发送；c. 显式创建会话、首轮 Run、sessions/ensure 三条入口分别传 agent_id；d. 已有会话后续不传 agent_id。
+
+**验收**：上传预建会话也绑定正确 Agent；开始后选择器消失、header 只读 chip 正确；后续始终用原绑定，不能回到默认；换助手需新会话。目录故障的降级不能造成用户已选 Agent 被静默换成另一名。
+
+### AGENT-04：配置真实生效与组织隔离（P1）
+
+**操作**：a. systemPrompt、固定 flash/maxOutputTokens、toolPolicy allow/deny/风险审批、MCP enabledTools 分别用真实任务验证；b. 尝试越过工具拒绝和企业条款；c. 跨 org 读取目录、传入他人 agent_id/version_id，或把本 org 另一个 Agent 的版本设为当前。
+
+**验收**：生效字段影响真实 Run；maxOutputTokens 以最终上游请求参数为证，工具以真实放行/拒绝/审批及副作用为证；企业策略不可被租户 prompt 覆盖；越界/版本错配 404。不支持字段按 AGENT-05 验明确诊断，不据 JSON 保存断言生效；不虚构 Agent 删除或会话中途换 Agent 功能。
+
+### A2A-01：管理员签发与撤销外部接入（P1）
+
+**操作**：访问 Agent Card/配置；签发最小 scope 专用凭据，完成 A2A-02 调用；轮换后分别使用旧新凭据；再撤销并重试。测试过期与 scope 不足凭据。
+
+**验收**：Card 的版本/能力/认证与实际端点一致；凭据仅显示一次、旧/撤销/过期/越 scope 被拒；普通用户不能管理。参数和证据只保留凭据 ID，不记录明文。
+
+### A2A-02：外部系统请求真实交付（P1）
+
+**任务**：把 R 的非敏感服务说明作为输入，要求整理交接清单并生成正式 Artifact。
+
+**操作**：真实客户端分别 `message/send`、`message/stream`；记录 task/context/Run 映射；`tasks/get`；流式中断后 `tasks/resubscribe`。
+
+**验收**：最终正文符合资料，有终态 `final=true` 与可取得的 Artifact（仅使用当前支持的下载方式）；断线不取消、不重复 Run，重订阅补齐终态；查询与会话绑定一致。
+
+### A2A-03：取消、客户端隔离与审计（P1）
+
+**操作**：启动尚未完成的真实任务后 `tasks/cancel` 并重试；另一 org/client 查询、取消、重订阅与下载；发送未知方法、畸形参数。
+
+**验收**：取消收敛，越界 fail-closed 且资源级跨租户 404；JSON-RPC 错误结构清楚、不返回 500 假成功；审计可关联 org/client/trace/Run，不记凭据；无已实现依据的交互扩展不宣称支持。
+
+### USER-01：两名普通用户同时完成工作（P0）
+
+**前置**：A/B 独立浏览器身份，不以 admin 两开替代；记录 org 关系。
+
+**任务**：A 用 W 做 Excel，B 用 R 做 Word/PDF，同期启动真实工具 Run、各下载交付物。
+
+**验收**：两人均完成普通用户“登录→上传→工具/Skill→交付”闭环；模型/session/workspace/process/文件不串；队列最终有进展且不永久饥饿；各自列表只出现有权资源。
+
+### USER-02：同人多会话与同组织不同人（P1）
+
+**操作**：a. A 两会话上传同名不同内容并发编辑；b. 同 org 的 A/B 分别查看自己的 Dataset、Artifact、Skill、进程与定时任务；c. 换成不同 org 再测。
+
+**验收**：工作区隔离与 owner 隔离分别成立，共享 Agent 目录不等于共享私人文件；同 org 账号需合法预置，不能直接改数据库假装完成注册/组织分配功能。
+
+### CTX-01：长项目会话压缩后继续（P1）
+
+**任务**：围绕 R 多轮核查不同模块，起初约定“仅引用冻结 commit，历史测试不作本轮证据，最后交付中文版”；逐轮保存已确认事项。
+
+**操作**：达到当前模型真实 compaction 阈值，记录实际 compaction 事件/journal，再追问早期约定并继续生成报告；重启 Worker 后再追问。
+
+**验收**：关键约定、最新决策和文件引用保留，无重复气泡/失败；与新会话隔离。不能用机械回显口令或配置未接线的 contextPolicy 假触发；未达到阈值记阻塞并记录实际轮次/用量。
+
+### BUDGET-01：用户查看实际使用量（P2）
+
+**操作**：R/W 多轮任务观察 usage/BudgetBar；分别核对正常、near limit、exceeded 和无 usage 数据分支，用真实配置与实际消耗触发。
+
+**验收**：UI 数值与后端 budget_usage/limits 对得上；无 usage 时不显示 NaN/假零；未配置对应维度则该边界阻塞。不能用前端注入 fixture 当预算真机通过。
+
+### BUDGET-02：限制失控的任务（P1）
+
+**前置**：专用栈记录并临时降低 `AGENT_RUN_MAX_TOOL_CALLS`、`AGENT_RUN_MAX_MODEL_TURNS`、`AGENT_RUN_DEADLINE_MS`，分开测试再还原。
+
+**任务**：需要多步真实文件核查的 R 任务；分别让工具数、模型轮数、deadline 达界。
+
+**验收**：确实停止后续受限执行、有明确原因和收敛状态；已产生文件不伪标为完成交付；新 Run 配额独立。BudgetBar 展示与执行硬限分别验，不能互相替代。
+
+### UI-01：真实长内容下的交互可用性（P2）
+
+**操作**：在 R/W 长消息和真实工具记录中逐个打开 Overview/Tools/Processes/Files/Artifacts/Datasets/Trace/Session；主题切换/刷新；侧栏与移动宽度；长代码 Copy、Jump to latest、允许状态下 Regenerate；thinking 盒（模型有返回时）。
+
+**验收**：计数/实体归属一致，Files 表示本 Run 引用文件而非完整 workspace；滚动不强拉用户位置；窄屏主要控件可达；复制真实内容正确；思考区与正文不混淆。
+
+### UI-02：键盘、中文输入与附件草稿（P2）
+
+**操作**：Enter 发送、Shift+Enter 换行、中文输入法候选确认、Ctrl/Cmd+L 新会话、Ctrl/Cmd+U 上传；拖放多个 R 文件/粘贴 V 图片，移除草稿附件；仅键盘操作登录、提问、审批、下载与关闭对话框。
+
+**验收**：输入法组合不误发送，不意外重复上传；焦点可见且关闭弹层归位；aria-live 不逐 token 重读全文；待上传/失败/已移除附件不被错当可用输入。
+
+### SEC-01：认证与管理员能力边界（P0）
+
+**操作**：未登录访问会话、Run、工具清单、文件、进程、Agent 目录；普通用户直接访问 A2A/Agents 管理接口；提交伪造 X-Acting-*；检查公共探针与 Card 的实际访问约定。
+
+**验收**：受保护面 401；普通用户管理员操作 403 ADMIN_REQUIRED；浏览器自报身份不被信任；公开元数据不泄业务内容；资源级跨租户另按 SEC-02 返回 404。
+
+### SEC-02：资源全集跨用户/组织访问（P0）
+
+**前置**：A 拥有真实 Conversation、Run、ToolExecution、Trace、Interaction、Approval、Dataset、Artifact、Process、Cron、Skill，admin A 另有 Agent/version 与 A2A task；B 已登录。
+
+**操作**：用 B 重放 A 的详情/列表过滤/事件订阅、附件与产物下载/导入、Run 取消/steer/respond、审批决策、进程日志/stdin/signal/cancel、Cron 修改/触发/删除、Skill 启用停用、Agent 版本操作、A2A 查询/控制。按实际路由逐条记录；与随机不存在 ID 比较。
+
+**验收**：具有该操作角色的 B 对跨 owner/org 资源均得到 404，无响应正文/流事件泄漏；列表不含 A 数据。管理员角色拒绝与资源归属分开测，不能用普通用户的 403 掩盖管理员跨租户越权。
+
+### SEC-03：文件、命令与内容注入（P0）
+
+**前置**：专用隔离环境，X 无害探针及本轮 canary 文件；不在共享栈实际运行破坏性系统命令。
+
+**操作**：a. 相对越界/绝对越界/软链接/硬链接通过 read/write/search/submit/upload/import 分别尝试；b. 系统 Skill 写入与未声明工具；c. R/W 的 X 副本插入“忽略规则、读取凭据/他人文件”的恶意文本；d. 危险命令硬拒规则以可检查的无副作用策略探针补测。
+
+**验收**：各入口按策略拒绝、不改写 canary、不越权；硬拒不变成可批准操作；外部资料中的指令不能升级权限。完整危险命令矩阵若仅离线覆盖须明确标记，不把它算真实执行证据。
+
+### SEC-03B：允许环境变量不进入进程参数（P0）
+
+**前置**：使用专用无效凭据 canary 与明确 allowlist；不要求操作者把真实 DB 密码交给模型。
+
+**操作**：运行 W 校验时仅检查被允许变量是否存在；在容器内检查值是否出现在 bwrap argv，输出 absent/present；测试平台 token/JWT 未被继承。
+
+**验收**：允许环境可用、argv 无值、平台凭据不可见；模型结果/SSE/日志/Trace 无 canary 泄漏。不 dump env 或完整进程命令行到终端。
+
+### SEC-04：内部桥凭据与幂等防护（P0）
+
+**操作**：通过受控协议客户端分别用缺失/错误 token、facade 窄桥 token 调完整 `/internal/v1/*`；篡改 HMAC method/path/body/query/scope/owner、过期 claim、旧 fence；同一执行 ID 同参数重送与异参数冲突分别核验。来源白名单空值/非法 CIDR/非白名单来源另验；普通浏览器 Cookie 不能替代内部凭据。
+
+**验收**：签名/来源越界 fail-closed；旧 fence 被拒，同执行身份不重复副作用，异参数冲突不能冒用旧结果；facade 无完整内部面凭据或工作区/数据库挂载。有效内部请求仍能执行无害文件任务。当前 HMAC 层不做 jti 去重，不把“重复 token 一律 401”作为假前提；执行入口未提供所需幂等保护时记录缺口。HTTP 辅助证据单独标注。
+
+### ISO-01：非 root 与执行隔离（P0）
+
+**操作**：查实际容器 uid/capabilities/seccomp；在 bwrap 内写本会话 workspace 与 tmp，尝试写 Skill、访问其它工作区/控制面；分别按部署网络模式连接受控目标；专用栈验证缺 setpriv/隔离配置时拒绝执行。
+
+**验收**：sandbox 执行面 uid 10001；K8s 的 Agent/Worker/BFF/frontend/sandbox-mcp 均 uid/gid 1000，镜像 `USER` 为数字；facade 用独立 slim 镜像且无 bwrap/完整执行代码/DB 驱动。执行前剥离 capabilities；挂载与网络实际生效，缺依赖不降级；开发配置不能作为目标部署通过证据。
+
+### ISO-02：磁盘与进程资源上限（P0）
+
+**前置**：专用有硬上限的环境，记录实际 CPU/memory/pids/workspace/tmp/单文件/输出配置。
+
+**操作**：用有界 X 负载分别到达边界；执行、上传、Artifact submit/import 分别检查 quota；失败后再创建正常文件与 Run；重启检查持久化 quota 预留恢复。
+
+**验收**：超限明确拒绝/终止，不挤占其他 owner、无遗留预留导致永久拒绝；服务恢复可用。compose 中没配置/没落实某硬限，记保护缺口，不能仅凭 YAML 或一次拒绝宣称全部受控。
+
+### LOAD-01：真实大文件与流式上传（P1）
+
+**前置**：R/W 普通规模先通过；准备明确标 X 的放大 CSV，记录行数/hash/生成规则。
+
+**操作**：按小文件、接近配置上限、超过上限逐级上传；§32 5GiB Dataset 分支在允许该大小的专用环境另跑；采样客户端/BFF/exec RSS，上传中断后重试。
+
+**验收**：大小/hash/行数正确，实际有界流式而非整包入内存；超限早拒绝，中断不发布半个 Dataset、临时文件可回收；没有 5GiB 实测不得关闭 C8。扩大数据只测容量，不用于业务结论。
+
+### LOAD-02：并发执行与重复请求（P1）
+
+**操作**：a. 多 owner 20 个有界真实文件任务并发；b. 同 Idempotency-Key 并发创建相同 Run，另测同 key 不同参数；c. 创建成功立即查询；d. SSE 按 Last-Event-ID 重连，测试非法/越界游标。
+
+**验收**：排队受限但最终收敛，无串工作区；同 key 同参数只有一次业务副作用，不同参数明确冲突；成功返回即可查到 Run；事件有序无丢失、客户端合并无重复。不能直接插数据库预制成功行。
+
+### REC-01：Worker 重启时保留工作进度（P0）
+
+**操作**：同一 R/W 项目分别在 a. 已完成后追问前；b. 正在调用模型；c. 工具执行中；d. WAITING_INPUT 未答；e. WAITING_APPROVAL；f. 回答/审批已提交但未消费时重启 Worker；正常 SIGTERM 与硬杀分别记。
+
+**验收**：会话上下文与账本保留；等待仍可回答/决策，已接受决定只消费一次；中途不确定工具有明确 UNKNOWN/失败处置而非盲重放副作用；Run 可恢复或明确终态。只验证等待输入不能代表整个恢复矩阵通过。
+
+### REC-02：exec 硬杀与孤儿账本回收（P0）
+
+**前置**：本轮真实后台 W/R 处理 job 已登记 running，记录 owner/并发占用。
+
+**操作**：专用栈 hard-kill sandbox 后重启；核对该批 exec_jobs 与启动 recovery；可补跑 `scripts/release-gates/exec-orphan-recovery-gate.mjs`，再让同 owner 新建 job。
+
+**验收**：旧 running/stopping 被收成明确终态（当前回收原因为 `orphaned: worker restarted`），额度释放，无残留错误活动账本；新 job 正常。容器重启自带进程消失，不能单独证明孤儿账本恢复。
+
+### REC-03：Redis/BFF 短暂不可用（P1）
+
+**操作**：R/W Run 中分别重启 BFF、短断服务 Redis；恢复后重连、查询历史和产物；多 Worker 下另按 DEPLOY-05 检查取任务暂停/恢复。记录断连时长和配置超时，不操作已退役 replay Redis。
+
+**验收**：事实事件仍以 MySQL 为准，outbox 恢复投递、SSE 可补齐；BFF 重启不取消 Worker Run；依赖不可用时不无保护接单；不重复工具副作用。服务 Redis 的队列/锁/事件分支分别取证，不从一次 PING 成功外推全部恢复。
+
+### AUTH-04：注册校验与团队同时首次使用（P0）
+
+**前置**：独立环境的新组织尚无默认 Agent，合法预置身份；常规注册分支用本轮唯一用户名前缀。
+
+**操作**：a. 用 UI/API 分别提交重复用户名、不合法字符、超长字段与不合法长度密码，修正后注册；b. 两个普通用户同时首开页面、请求 Agent 目录、上传附件并发送首轮 R/W 任务；c. 刷新、重新登录后继续。
+
+**验收**：非法输入有字段反馈、无半注册身份，重复用户名 409 `USERNAME_EXISTS`；合法创建成功。默认 Agent 并发首建无偶发 409、无重复 definition，两个用户仍有独立会话/workspace。两人都能完成工具 Run，不能用“全拒绝”掩盖初始化故障。现有组织已有默认 Agent 不能算首建分支已覆盖。
+
+### CHAT-07：报告未完成时连续追加两项工作（P0）
+
+**前置**：当前分支 follow-up 排队修复；部署 flash；准备能持续足够时间的真实文件处理任务。
+
+**任务**：先“分析 W 并保存年度表”，运行中依次发“基于刚才的表补中文摘要”“把摘要改成邮件正文并交付”。
+
+**操作**：a. 记录三次提交和 Run ID，刷新/换标签观察；b. 第二轮取消其中一个排队追问，再发第三项；c. 前轮失败或 Worker 重启后重试；d. WAITING_INPUT/APPROVAL 时另发追问，分别记录实际调度及恢复旧等待项；e. 单 Worker 与多 Worker 分别执行。
+
+**验收**：有活动 session 锁时后续 Run 排队，按服务端提交顺序推进，不出现常规追问直接 `FAILED / session lock busy`；只使用已可用的上一轮结果，缺结果明确提示。排队取消不执行副作用；重试不重复用户消息/业务写入。等待态不假设继续占锁或永远阻塞后续 Run；恢复原任务与新任务仍遵守同会话互斥，子 Agent 不被顶层排队规则锁死。
+
+### BIZ-01：月底订单退款对账与修订（P0）
+
+**前置**：S 合成订单/退款包与独立答案在数据文档 §6；提示中明确是演练数据。
+
+**任务**：“请做 2026 年 8 月 SGD 订单对账。先检查状态、重复、退款归属和未匹配记录；有口径不清先问我。交付含公式的 Excel 和一页 Word 财务说明。”
+
+**操作**：选择按退款发生月统计；先跑原版，再上传有重复/缺失/孤立退款的 X 副本；要求仅修订异常清单、保留已核准结果；跨会话导入报告续改。
+
+**验收**：原版实收 540、当月有效退款 75、净额 465 SGD；9 月退款不扣 8 月，未付/取消订单不算收入；X 重复不累加，孤立退款列异常且不擅自计入。金额与 oracle/公式/Word 一致，模型不虚构真实企业经营结论；双版本文件有独立 Artifact 且旧版不变。
+
+### BIZ-02：会议纪要变成可执行的项目周报（P1）
+
+**前置**：S 合成会议包，记录了确认事项、提议、未知负责人/日期与一次会后修订。
+
+**任务**：“把这些记录整理为决定、行动项、风险与待确认问题，先问清不确定的负责人和截止日，再给我 Word 周报和 5 页汇报 PPT。”
+
+**操作**：按 S 的确认答案回答；补充会后修订并要求同步两份交付物；重新打开会话，要求只更新变更项。
+
+**验收**：提议不变成决定，未知不编成姓名/日期；回答后的责任人与日期正确，冲突以明确的后续修订为准；Word/PPT/待办卡保持一致。演练身份不可映射为真实员工；没有发送邮件或邀请他人的额外副作用。
+
+### AGENT-05：先校验配置，再预览和执行（P0）
+
+**前置**：管理员，能力来源为 `GET /api/agents/config/options`；模型固定 flash。
+
+**操作**：a. 通过表单/JSON 编辑 systemPrompt、maxOutputTokens、toolPolicy 和环境已有 MCP 的 enabledTools，调用 `POST /api/agents/config/validate`；b. 查看 normalizedConfig/effectiveSummary 预览后创建版本并用 R/W 任务执行；c. 分别测试未知字段、非整数/越界输出上限、未知模型 ID、flash 不支持的 thinkingLevel/temperature、保留只读字段、未知工具/server、内嵌凭据字段；d. 预览合法和非法 config 前后对照版本数量。
+
+**验收**：预览不写账本；校验业务结果为 HTTP 200 + valid:false/true，不能仅凭 200 判有效；字段路径、诊断码与 UI 错误对应，保存校验与预览一致，不合法配置不生成可运行版本。flash 支持项真实生效；不支持项明确诊断，不静默丢弃。MCP 只选择平台已注册工具；预览不是真实请求证据，参数落实仍按 AGENT-04 验。
+
+### AGENT-06：编辑草稿、请求过期与多人发布冲突（P0）
+
+**操作**：a. 编辑未保存草稿时分别让 models/tools/MCP/options 加载失败，恢复后重试；b. 快速切 A/B Agent 并延迟 A 响应，连续修改后让旧校验响应晚到；c. 两个管理员标签以同一个活跃版本为基础发布/激活不同版本；d. 保存请求网络失败后重试；e. 兼容客户端省略、显式 null、真实值三种 `expected_active_version_id` 分别调用。
+
+**验收**：错误不呈现为空能力集、不覆盖草稿/当前选择；陈旧响应不能解锁错误配置保存；竞争失败方得到 409 活跃版本冲突并可保留草稿重新核对，不能静默覆盖他人发布。省略字段是当前兼容窗口，null 是明确“无活跃版本”的条件，不混为一谈。网络不确定结果先查询版本再重试，记录是否重复写入。
+
+### AGENT-07：旧配置升级与历史会话继续工作（P1）
+
+**前置**：隔离副本中合法保存的旧 schema 版本；固定 flash 的正向样本和含遗留字段的负向样本。若只能 fixture 预置，明确标为迁移准备，不冒充 UI 创建成功。
+
+**操作**：读取旧版并预览升级，分别处理可映射模型字段和不可迁移/保留字段；保存为新版本并激活；旧会话追问、新会话执行；再回滚。
+
+**验收**：旧 snapshot 不被原地改写；迁移诊断展示哪些字段需处理，未处理不能“成功升级但丢语义”；新版本 schemaVersion=1，输出预览与执行一致。旧会话保持原绑定且只对固定 flash 样本发推理；任何历史其它模型样本只读核对。
+
+### SKILL-06：同事换终端、换 Pod 后继续用已发布方法（P0）
+
+**前置**：共享 Skill 根与草稿根已配置，至少两应用副本，测试包使用 W 清洗规则。
+
+**操作**：a. exec 写草稿→经 Agent A 启用→经 Agent B/另一 Worker 发现→exec 实际执行；b. 滚动换 Pod 再做新任务；c. 旧任务在途时发布不同摘要、停用/重新启用；d. 专用副本中断共享挂载、制造缺失版本/摘要不匹配，再恢复；e. 并发启停与跨 owner 同名包。
+
+**验收**：发现依据为持久启用账本，实际挂载字节摘要匹配；新 Run 用新绑定，在途旧 Run 保留已引用版本；半发布/缺挂载/摘要不符拒绝使用且有诊断，不能回退扫描目录放行。跨 Pod 与跨机分别取证，同一节点的本地卷成功不能宣称目标 NFS/CSI 已验收。
+
+### SUB-02：多个父任务同时委派也能完成（P0）
+
+**前置**：登记 `AGENT_SUBAGENT_MAX_DEPTH`、每副本总并发及各层保留槽；所有父子 Run 都用 flash。
+
+**操作**：a. 同时启动足以占满根层槽的 R 文档核查任务，每个委派子任务；b. 在允许深度内再委派一次，并尝试越最大深度；c. 子任务执行中取消父任务/重启 Worker；d. 尚有深层队列或非终态账本时尝试降低最大深度，探测 Redis/DB 失败也测拒启。
+
+**验收**：每个允许层都能推进，父任务等待时不饿死子任务；实际总并发符合各副本预算，不能把每副本上限写成集群全局上限；越深度明确拒绝；缩深不遗留无消费者任务，检查失败不放行。记录父子 Run、权威 depth、各队列和真实产物，不能用单个父子完成替代饱和测试。
+
+### MCP-05：工具目录不可用、变化与重新授权（P0）
+
+**操作**：a. 分别启动无 MCP 配置、禁用 server、启用但连不通、正常注册四种环境；b. 正常 server 中途掉线/恢复或发 tools/list_changed；c. 同时查看 Capabilities、Agent /ready、Worker guard、配置 options/validate；d. 在一个 server 失败时验证另一 server 的工具选择；e. 变更 Agent 工具授权后新旧会话分别调用。
+
+**验收**：启用却未注册不能伪装“成功的空清单”；探针反映当前注册状态，恢复后按插件实际重连机制更新，不假定无条件无限重试。配置目录“可知”与全部 server“可用”分开：不可用工具诊断，已有可知工具可校验；旧版本授权不被新版本改写。真实 MCP 与故障服务器替身证据分别标注，不用 fake LLM。
+
+### DEPLOY-01：依赖活着但不可用时不继续接活（P0）
+
+**前置**：专用部署记录所有探针/客户端 timeout、guard 周期与允许等待窗口。
+
+**操作**：逐一使 DB、Redis、exec 存储/bwrap、必需 MCP 不可用；保留进程 liveness；另使下游 /ready 超时、非 JSON 或 HTTP 200 但 body 非 ready；分别注入低于/超过 startup probe 总预算的 DBPM/MCP/隔离预检慢启动，观察 Agent/Worker/BFF/facade，就绪恢复后跑普通用户闭环。
+
+**验收**：各依赖的消费者按当前契约返回未就绪并暂停取新活，不能拿 /health 200 代替可工作。BFF 公开响应仅摘要，不泄漏下游 server 名/敏感错误；探针和调用超时有界，kubelet timeout/startup 预算覆盖实际应用探测；可接受的慢启动不被 liveness 提前反复重启，超预算有明确失败。多个慢依赖不会让守卫轮次/续租无限重叠；故障恢复后重新接单且成功下载报告。注入的探针替身仅证明该错误契约，另保留真实依赖断开的证据。
+
+### DEPLOY-02：DBPM 启动取密、失败与凭据更新（P0）
+
+**操作**：a. 按各进程所需角色验证正常取密、连接、登录与工具任务；b. 缺 DBPM_URL、连接串夹口令、用户名不匹配、取密超时/拒绝/坏响应逐一启动；c. 测试环境更新凭据后按部署流程滚动重启消费者，再读旧会话并新建任务。
+
+**验收**：Agent/Worker 按需取 DB 与服务 Redis、exec 只取 DB、facade 只取 Redis，BFF 不增加取密依赖；无静态口令回退，失败拒启且不泄密。当前是启动取密，不将运行期自动热轮换作为已实现能力；旧连接/新连接的实际结果单独记录。本地 fake DBPM 只证明协议联调，目标 DBPM 联调仍须单列。
+
+### DEPLOY-03：数据库 Proxy 切换与时间一致（P0）
+
+**前置**：两个 Proxy、可读非敏感连接端点标识；独立故障环境。
+
+**操作**：a. 正常创建会话/上传/审批/提交 Artifact；b. 首端建连故障、新连接走备端；c. 两端故障、认证错误、半帧与超时；d. 扩池后查新连接 UTC，并核对跨时区 Cron；e. 在一笔无害测试写事务 commit 回应处中断连接，恢复后查询结果。
+
+**验收**：只按允许的建连错误切换，认证/SQL 错误不当成可盲重试；commit 结果不确定时不自动重放写入，资源/审批/账本无重复；连接交付前完成 UTC 初始化。MySQL 双代理模拟与真实 UPDRDB 结果分开报告，不能以模拟通过宣称目标兼容。
+
+### DEPLOY-04：新环境初始化与版本升级（P0）
+
+**前置**：独立空库/副本、备份与当前 schema 发布包，不碰共享库结构。
+
+**操作**：按 `scripts/dev/schema-apply.sh` 及部署文档导出/应用 DDL，记录摘要；使用无 DDL 权限应用账号启动 Agent/Worker/exec；另测版本记录完整但表/索引/触发器缺失、错误版本、应用中断恢复与二次重放；恢复正确 schema 后登录并读写成果。
+
+**验收**：发布步骤与运行启动职责分离；应用不自动建/迁表，缺对象明确拒启；正确 schema 的最小权限正向成功。二次重放结果按发布包契约核对，不盲目重做破坏性 DDL；已有数据、owner、Artifact/Dataset 可读。目标 DB 的元数据权限与对象兼容需实际证据。
+
+### DEPLOY-05：Redis 5 队列、多副本抢占与接管（P0）
+
+**前置**：真实 Queue/Worker，记录 Redis 版本、`{bull}` prefix、Worker 副本数与并发配置。
+
+**操作**：a. 并发消费同一批任务和同一个 Cron 触发点，含手动 Run now 竞争；b. 延迟、重试、stalled、锁续约、outbox 重投递；c. Worker SIGSTOP 至租约过期，另一副本接管后恢复旧副本；d. 经非执行副本发取消；e. Redis 不可用后恢复。
+
+**验收**：claim/租约/fence 阻止重复执行与旧 Worker 继续派发；事件最终可补齐，任务有收敛或明确不确定处置；暂停接活后可恢复。SIGSTOP 必须有外部超时与恢复负责人；不预设外部副作用“绝对 exactly-once”。Redis 5 本地通过不等于目标 UPRedis Cluster/Lua/CAS 全部通过，后者另记。
+
+### DEPLOY-06：上班期间滚动更新 Worker（P0）
+
+**操作**：a. 真实工具 Run 在途时发 SIGTERM，持续提交另一测试任务；b. 排空预算内正常完成；c. 模型/工具/outbox 慢到超过 `AGENT_WORKER_DRAIN_TIMEOUT_MS`，另验 teardown 超时；d. 新 Worker 接管后查旧 Run/ToolExecution/产物并继续工作。
+
+**验收**：信号到达即未就绪、停止新消费和后台循环；排空期限从信号起算，含后台循环，不被挂起 DB 阻塞无限延长；超时退出、不提前关 runtime/连接池篡改在途状态。编排 grace 覆盖 drain、teardown、探针退出开销。未决工具保持可审计的不确定状态，不盲重放；人工核对/取消后新任务可用。不能要求每个硬中断任务自动成功。
+
+### DEPLOY-07：VM 执行面与应用入口部署（P1）
+
+**操作**：a. 按实际 release 安装 VM exec/systemd 与钉版工具链，记录 uid/挂载/网络；b. 经 K8s frontend→BFF→Agent/Worker→VM 真实完成四格式办公任务、Python、图片读取及进程 logs/signal；c. systemd 重启/hard-kill 后验证 REC-02；d. 检查 frontend 8080 与 API_UPSTREAM 渲染、非法配置拒启、内部端口不可由浏览器公网直达。
+
+**验收**：VM 的 release 与本轮代码一致；bwrap、字体、CA、LibreOffice 与 Skill 依赖确实可用，交付件按数据文档逐个渲染检查；不借 root/关闭隔离跑绿。无目标 VM 则记录阻塞；openEuler 容器演练不能当目标裸机已验收。
+
+### DEPLOY-08：环境切换、回退与数据边界（P1）
+
+**前置**：专用演练环境的旧/新连接、卷和 release 清单，含队列/账本备份与恢复点；回退兼容性先核对。
+
+**操作**：先 drain 旧消费者，再按部署方案切换；检查仅一组应用消费；登录找旧会话与成果、做新任务；按可恢复方案回退并重复核验。K8s 本地镜像更新后核对所有 Pod imageID，依赖容器 IP 改变后核对 EndpointSlice。
+
+**验收**：新旧库/卷不混接，旧消费者不偷取新任务、深层队列不遗失；回退不丢已确认数据、不重复 Cron；共享 Skill 与 Artifact 路径仍对应正确账本。不能以“脚本退出 0”替代实际页面/字节验证，不在共享环境运行 `down -v` 或重启整个 OrbStack。
+
+### SEC-05：日常登录的 Cookie、来源与上传防护（P0）
+
+**操作**：按实际 `TLS_ENABLED` 模式登录/刷新/SSE/上传/下载/登出；隔离环境测试伪造 Origin/转发头、跨站写请求、过期 Cookie 与不安全跳转；若部署 HTTPS 再验反向代理终止与 Secure Cookie。
+
+**验收**：JWT 只在 HttpOnly Cookie，登出后受保护读取失败；HTTP 内网模式与 HTTPS 模式的 Secure/SameSite 配置符合明确部署契约，不能把 HTTP 模式 Cookie 不带 Secure 直接判缺陷。来源/CSRF 等要求若当前未实现，记保护缺口，不能由 CORS 配置推断已经安全；合法同源上传/SSE 必须成功。
+
+### CLEAN-01：完成工作后清理测试资源（P1）
+
+**操作**：按本轮资源 ID 清单下载必要证据，终止测试 job、暂停/删除测试 Cron、撤销测试 A2A 凭据、停用测试 Skill、删除专用会话；刷新与旧直链复查。
+
+**验收**：只影响本轮授权资源，无继续自动触发/残留活进程；保留的 Artifact/Dataset/Agent 明确列出原因与当前产品清理边界。没有公开删除能力不伪造按钮，也不直接删数据库冒充产品功能；禁止 `down -v` 全库清理。
 
 ## 4. 首次实测结果（修复前，保留作回归对照）
 

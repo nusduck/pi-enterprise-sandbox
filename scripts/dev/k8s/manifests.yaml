@@ -106,8 +106,12 @@ spec:
           envFrom: [{ secretRef: { name: agent-env } }]
           ports: [{ containerPort: 4100 }]
           securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
-          livenessProbe: { httpGet: { path: /health, port: 4100 }, periodSeconds: 10, failureThreshold: 3 }
-          readinessProbe: { httpGet: { path: /ready, port: 4100 }, periodSeconds: 5, failureThreshold: 2 }
+          # 启动链（MCP 预检、DBPM 取密、建连、schema 核对）走完才 listen；MCP SDK 对无响应服务器的
+          # 初始化超时是 60s。startupProbe 给 180s 预算，通过前 liveness 不生效，慢启动不会被反复杀掉。
+          startupProbe: { httpGet: { path: /health, port: 4100 }, periodSeconds: 5, failureThreshold: 36, timeoutSeconds: 2 }
+          livenessProbe: { httpGet: { path: /health, port: 4100 }, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 2 }
+          # /ready 并行检查 data plane（2s）与执行面 /ready（3s），探针超时留余量。
+          readinessProbe: { httpGet: { path: /ready, port: 4100 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 5 }
           volumeMounts:
             - { name: skills, mountPath: /home/sandbox/skill, readOnly: true }
             - { name: skill-user, mountPath: /home/sandbox/skill-user }
@@ -137,7 +141,9 @@ spec:
     metadata: { labels: { app: agent-worker } }
     spec:
       enableServiceLinks: false
-      terminationGracePeriodSeconds: 60
+      # 必须大于 AGENT_WORKER_DRAIN_TIMEOUT_MS（默认 150s）加关停尾部：排空期限到了由 Worker 自己
+      # 退出并交给租约过期 + 恢复接管，而不是被 SIGKILL 打断在不确定的位置。
+      terminationGracePeriodSeconds: 180
       containers:
         - name: agent-worker
           image: pi-enterprise-agent:latest
@@ -146,9 +152,11 @@ spec:
           envFrom: [{ secretRef: { name: agent-worker-env } }]
           ports: [{ containerPort: 4101, name: probe }]
           securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          # 探针 listener 先于启动链起来，启动期间 liveness 可答，不需要 startupProbe。
           # 冻结接管场景（docker pause 一个副本）要比租约过期 + 接管更久才重启容器，阈值放宽到 60s。
-          livenessProbe: { httpGet: { path: /health, port: 4101 }, periodSeconds: 10, failureThreshold: 6 }
-          readinessProbe: { httpGet: { path: /ready, port: 4101 }, periodSeconds: 5, failureThreshold: 2 }
+          livenessProbe: { httpGet: { path: /health, port: 4101 }, periodSeconds: 10, failureThreshold: 6, timeoutSeconds: 2 }
+          # /ready 并行 MySQL / Redis 各 2s。
+          readinessProbe: { httpGet: { path: /ready, port: 4101 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 3 }
           volumeMounts:
             - { name: skills, mountPath: /home/sandbox/skill, readOnly: true }
             - { name: skill-user, mountPath: /home/sandbox/skill-user }
@@ -178,8 +186,9 @@ spec:
           envFrom: [{ secretRef: { name: api-server-env } }]
           ports: [{ containerPort: 4000 }]
           securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
-          livenessProbe: { httpGet: { path: /health/live, port: 4000 }, periodSeconds: 10, failureThreshold: 3 }
-          readinessProbe: { httpGet: { path: /health/ready, port: 4000 }, periodSeconds: 5, failureThreshold: 2 }
+          livenessProbe: { httpGet: { path: /health/live, port: 4000 }, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 2 }
+          # /health/ready 并行访问 Agent /ready（4s）与执行面 /ready（3s）。
+          readinessProbe: { httpGet: { path: /health/ready, port: 4000 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 6 }
 ---
 apiVersion: v1
 kind: Service
@@ -206,7 +215,7 @@ spec:
           env: [{ name: API_UPSTREAM, value: "http://api-server:4000" }]
           ports: [{ containerPort: 8080 }]
           securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
-          readinessProbe: { httpGet: { path: /, port: 8080 }, periodSeconds: 5 }
+          readinessProbe: { httpGet: { path: /, port: 8080 }, periodSeconds: 5, timeoutSeconds: 2 }
 ---
 apiVersion: v1
 kind: Service
@@ -239,8 +248,9 @@ spec:
             runAsGroup: 1000
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
-          livenessProbe: { httpGet: { path: /health, port: 8082 }, periodSeconds: 10, failureThreshold: 3 }
-          readinessProbe: { httpGet: { path: /ready, port: 8082 }, periodSeconds: 5, failureThreshold: 2 }
+          livenessProbe: { httpGet: { path: /health, port: 8082 }, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 2 }
+          # /ready 并行 Redis PING 与执行面 /ready，各 2s。
+          readinessProbe: { httpGet: { path: /ready, port: 8082 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 3 }
 ---
 apiVersion: v1
 kind: Service

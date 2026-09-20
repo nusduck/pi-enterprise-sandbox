@@ -111,6 +111,9 @@ scripts/dev/k8s/down.sh dev                                # 删命名空间并�
 - 端口经 LoadBalancer 映射到宿主 `127.0.0.1`（`k8s.expose_services=false` 时不对局域网开放），端口号取 Compose 的发布端口。
 - 已启用 Skill 直接挂 Compose 的命名卷 `agent_user_skills`（OrbStack 的 K8s 节点就是 Docker 所在的 VM），
   草稿挂 `.runtime/sandbox/skill-draft`，两种运行方式数据互通。
+- 应用镜像都是固定 `:latest` + `imagePullPolicy: Never`，重建同名镜像不会改 Pod 模板；再次执行 `up.sh` 时
+  对 agent / agent-worker / api-server / frontend / sandbox-mcp 全部 `rollout restart`，新增用本地镜像的
+  Deployment 要加进脚本的 `APP_DEPLOYMENTS`（`tests/test_k8s_dev_manifests.py` 守着）。
 - 集群外依赖经 EndpointSlice 按容器 IP 接入；Compose 容器重建后 IP 会变，重新执行 `up.sh dev`。
 - 宿主到 ClusterIP 不通（路由走局域网网关），调试单个服务用 `kubectl -n pi-dev port-forward` 或 `kubectl -n pi-dev logs`。
 
@@ -420,7 +423,7 @@ scripts/dev/k8s/up.sh sim                                  # 前提：镜像为�
 scripts/dev/k8s/down.sh sim
 ```
 
-`up.sh sim` 在命名空间 `pi-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend、sandbox-mcp 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `pi_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、共享 Skill 跨 Pod 发布（跨 owner、新版本、侧车不一致排除、停用）、同会话 follow-up 排队。这是本地演练，结果不代替目标环境验收；驱动经 `kubectl port-forward` 访问。
+`up.sh sim` 在命名空间 `pi-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend、sandbox-mcp 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `pi_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、共享 Skill 跨 Pod 发布（跨 owner、新版本、侧车不一致排除、停用）、同会话 follow-up 排队。另有只在点名时跑的 Worker 有界关停场景 `drain-clean`、`drain-deadline`、`drain-subrun`、`drain-redis-outage`、`drain-mysql-outage`（默认 150s 排空 / 180s 宽限，每个 1–5 分钟），核对退出码与时刻、排空期间是否仍领取新 Run、租约接管、工具副作用与最终账本。宿主没有 Node 22 时，驱动放在带 kubectl 与 docker CLI 的 `node:22-slim` 容器里跑（`--network host`、挂 `~/.kube` 与 docker socket、仓库挂到同一绝对路径）。这是本地演练，结果不代替目标环境验收；驱动经 `kubectl port-forward` 访问。
 
 ### 测试结构
 

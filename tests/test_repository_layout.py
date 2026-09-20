@@ -31,8 +31,8 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
 # reason in the commit message — never silently.
 HOTSPOT_LINE_BUDGETS = {
     # W2-D 曾为 @ts-expect-error 横幅抬到 1_493；Wave 6 换成 JSDoc 形状后收回
-    # 1_482；转 TS 又收回 16 行。
-    "agent/src/application/execute-run-service.ts": 1_466,
+    # 1_482；转 TS 又收回 16 行；2026-09-19 抽出 serial-timeout-loop.ts 收到 1_413。
+    "agent/src/application/execute-run-service.ts": 1_413,
     # W2-D 曾抬到 1_672；去掉 expect-error 后收回 1_663；转 TS 又收回 9 行
     # （提升上去的 JSDoc @param 块比加上的类型声明更长）。仍是全仓最长的
     # 文件，阶段 D 收尾时应当拆。

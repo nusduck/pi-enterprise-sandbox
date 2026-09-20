@@ -12,7 +12,7 @@
  * Checks:
  *   - Sandbox /health + /ready
  *   - Agent /health
- *   - BFF /health/ready (agent + sandbox reachable)
+ *   - BFF /health/ready (agent + sandbox /ready)
  *   - Conversation creation through BFF → Agent MySQL
  *   - Run creation, immediate GET, and durable event query
  *   - Optional end-to-end Worker execution with the fake provider
@@ -523,13 +523,13 @@ async function main() {
     path.join(ROOT, 'api-server'),
   );
 
-  // Readiness is the real probe: 200 only when both dependencies answer.
+  // Readiness is the real probe: 200 only when both dependencies' /ready answer ready.
   const statusRes = await waitHttp(`http://127.0.0.1:${bffPort}/health/ready`);
   const status = await statusRes.json();
-  if (status.agent?.status !== 'ok') {
+  if (status.agent?.status !== 'ready') {
     throw new Error(`agent not ok in status: ${JSON.stringify(status.agent)}`);
   }
-  if (status.sandbox?.status !== 'ok') {
+  if (status.sandbox?.status !== 'ready') {
     throw new Error(`sandbox not ok in status: ${JSON.stringify(status.sandbox)}`);
   }
   console.log('[smoke] /health/ready ok', { status: status.status });

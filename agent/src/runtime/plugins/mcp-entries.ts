@@ -33,6 +33,7 @@ export interface McpServerInput {
   readonly authTokenRef?: unknown;
   readonly envRefs?: unknown;
   readonly headerRefs?: unknown;
+  readonly reconnect?: unknown;
 }
 
 /**
@@ -59,6 +60,38 @@ function refMap(raw: unknown, kind: 'env' | 'bearer'): Record<string, string> {
     const name = String(ref ?? '').trim();
     if (name === '') continue;
     out[key] = `!!js:${kind}:${name}`;
+  }
+  return out;
+}
+
+/**
+ * 出厂默认的重连预算是「连续 10 次失败后放弃并注销工具」（间隔 0.5s 起翻倍、封顶 30s，
+ * 约 2 分钟）。放弃后只有重载插件或重启进程才会再连——而 `/ready` 要求每台启用的
+ * MCP 都可用（K8s 部署评审 K2），liveness 又不会重启 Agent：一台 MCP 故障超过约两分钟，
+ * Agent 就永久未就绪，BFF 随之摘流量，必须人工重启（2026-09-19 真插件树实测）。
+ *
+ * 所以默认**不设次数上限**，只保留出厂的退避与 30s 间隔上限；需要出厂语义的服务器
+ * （例如会崩溃循环的 stdio 子进程）在 `MCP_SERVERS_JSON` 里显式写 `reconnect`。
+ */
+export const DEFAULT_MCP_RECONNECT_MAX_ATTEMPTS = Number.MAX_SAFE_INTEGER;
+const RECONNECT_KEYS = new Set(['enabled', 'initialDelayMs', 'maxDelayMs', 'maxAttempts']);
+
+function reconnectPolicy(serverId: string, raw: unknown): Record<string, unknown> {
+  if (raw === undefined || raw === null) return { maxAttempts: DEFAULT_MCP_RECONNECT_MAX_ATTEMPTS };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`MCP server "${serverId}": reconnect must be an object`);
+  }
+  const out: Record<string, unknown> = { maxAttempts: DEFAULT_MCP_RECONNECT_MAX_ATTEMPTS };
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!RECONNECT_KEYS.has(key)) {
+      throw new Error(`MCP server "${serverId}": reconnect.${key} is not a reconnect option`);
+    }
+    if (key === 'enabled') {
+      if (typeof value !== 'boolean') throw new Error(`MCP server "${serverId}": reconnect.enabled must be a boolean`);
+    } else if (!Number.isSafeInteger(value) || (value as number) < (key === 'maxAttempts' ? 1 : 0)) {
+      throw new Error(`MCP server "${serverId}": reconnect.${key} must be a non-negative integer`);
+    }
+    out[key] = value;
   }
   return out;
 }
@@ -114,6 +147,7 @@ export function buildMcpPatchEntries(servers: readonly McpServerInput[]): PatchE
 
     const timeoutMs = Number(server.timeoutMs);
     if (Number.isFinite(timeoutMs) && timeoutMs > 0) config['toolCallTimeoutMs'] = timeoutMs;
+    config['reconnect'] = reconnectPolicy(serverId, server.reconnect);
 
     // `failOnStartupError` 保持出厂默认 false：一台 MCP 服务器连不上不该让整个
     // Agent 起不来。连接失败会被记日志，那台的工具就是不存在——而不存在的工具

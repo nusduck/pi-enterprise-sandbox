@@ -740,7 +740,7 @@ export class ServiceContainer {
       // deployment config has server metadata but no discovered tool names.
       configValidator: new AgentConfigValidator({
         env: this.env,
-        mcpDiscovery: this.getMcpReadiness(),
+        mcpDiscovery: this.#mcp.inventory(),
       }),
     });
     const getRunService = new GetRunService({

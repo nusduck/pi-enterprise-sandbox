@@ -79,7 +79,7 @@ test('a caller abort is not reported as a Sandbox timeout', async () => {
   }
 });
 
-test('sandbox /health probe carries a deadline', async () => {
+test('sandbox /ready probe carries a deadline', async () => {
   const originalFetch = globalThis.fetch;
   /** @type {AbortSignal | undefined} */
   let seenSignal;
@@ -91,10 +91,10 @@ test('sandbox /health probe carries a deadline', async () => {
     });
   };
   try {
-    await createSandboxClient().checkHealth();
+    await createSandboxClient().checkReady();
     assert.ok(
       seenSignal instanceof AbortSignal,
-      '/health probe must pass an AbortSignal',
+      '/ready probe must pass an AbortSignal',
     );
   } finally {
     globalThis.fetch = originalFetch;

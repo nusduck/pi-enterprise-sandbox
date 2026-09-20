@@ -347,15 +347,18 @@ Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不
 ### BFF 健康检查
 
 - `GET /health/live`：仅检查 BFF 进程，正常返回 200。
-- `GET /health/ready`：检查 Agent 与 Sandbox，任一不可用返回 503。
+- `GET /health/ready`：并行访问 Agent `GET /ready` 与 Sandbox `GET /ready`（不是它们的 liveness
+  `/health`），两者都返回 2xx 且 body `status: "ready"` 才返回 200，否则 503。
+  下游状态只投影为 `ready` / `not_ready`（答了但未就绪）/ `unreachable`（超时或网络错误）；
+  本端点免鉴权，不转发下游 body（MCP Server 名、错误文本）。
 
 ```json
-// Response (HTTP 200；依赖不可达时 503 且 status 为 "degraded"，不含密钥)
+// Response (HTTP 200；任一依赖未就绪时 503 且 status 为 "degraded"，不含密钥)
 {
   "status": "ok",
   "version": "4.0.0",
-  "agent": { "status": "ok" },
-  "sandbox": { "status": "ok" }
+  "agent": { "status": "ready" },
+  "sandbox": { "status": "ready" }
 }
 ```
 
@@ -699,7 +702,7 @@ metadata，也不触发 `artifact.ready/file_ready`。目标会话如需正式�
 
 ### MCP (Model Context Protocol)
 
-Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Server，并在进程启动时对每个 `enabled=true` 的 `MCP_SERVERS_JSON` 条目执行 `tools/list`。发现的工具直接注册为 `mcp__{serverId}__{toolName}`，并默认走 approval；配置不支持热加载。任一启用 Server 不可连接时，Agent `GET /ready` 返回 503，避免将故障静默降级为没有 MCP 工具。
+Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Server，并在进程启动时对每个 `enabled=true` 的 `MCP_SERVERS_JSON` 条目执行 `tools/list`。发现的工具直接注册为 `mcp__{serverId}__{toolName}`，并默认走 approval；配置不支持热加载。任一启用 Server 不可连接时，Agent `GET /ready` 返回 503，该 Server 以 `status: "unavailable"`、`tool_count: 0` 留在 `mcp.servers` 里，避免将故障静默降级为没有 MCP 工具。`/ready` 每次按当前工具注册表重算，Server 恢复或重连预算耗尽后无需重启即反映。
 
 另外，执行面镜像提供**第二个入口** `sandbox-mcp`（Streamable HTTP，`/mcp`），用于不经过 Agent 的受限 Python、文件和 Artifact 工作流。它是独立进程、独立凭据，只能经 `/internal/mcp/v1/*` 窄桥访问执行面，够不到 HMAC 内部面；不挂载任何工作区卷。详细部署与认证边界见 [`sandbox-mcp.md`](./sandbox-mcp.md)。
 

@@ -17,10 +17,10 @@ test('existing Sandbox client resolves the service token for every request', asy
   try {
     process.env.SANDBOX_API_TOKEN = 'service-token-before-rotation';
     const client = createSandboxClient();
-    await client.checkHealth();
+    await client.checkReady();
 
     process.env.SANDBOX_API_TOKEN = 'service-token-after-rotation';
-    await client.checkHealth();
+    await client.checkReady();
 
     assert.deepEqual(observed, [
       'service-token-before-rotation',

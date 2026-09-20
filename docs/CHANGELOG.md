@@ -25,6 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   唯一键后在同一事务里重读，REPEATABLE READ 快照看不到对方刚提交的行，于是把冲突抛给调用方（8 个并发里 7 个 409）。
   重读改为加锁读（`LOCK IN SHARE MODE`），读到最新已提交版本。
 
+### Fixed（K8s 部署评审 2026-09-19，K1–K5）
+
+- **BFF `/health/ready` 与 Agent `/ready` 改看下游的 `/ready`**：此前访问的是 Agent / 执行面的 `/health`
+  （只表示进程活着），执行面存储或数据库故障、进入关停时上游仍报就绪。现在要求下游 2xx 且 `status: ready`；
+  BFF 响应里 `agent.status` / `sandbox.status` 由 `ok` 改为 `ready` / `not_ready` / `unreachable`，且不再转发下游
+  body。两路检查改为并行。
+- **Agent `/ready` 不再把连不上的 MCP Server 当成「没配置」**：就绪投影改为「启用清单 × 当前工具注册表」，
+  没有工具注册的启用 Server 以 `unavailable` 列出并使 `/ready` 503；每次请求重读注册表，Server 恢复无需重启。
+  AgentVersion 校验在部分 Server 不可用时仍按已知清单校验其他 Server 的引用。
+- **`scripts/dev/k8s/up.sh` 重新执行时也滚动 frontend**：此前重建前端镜像后 Pod 不会更新。
+- **Worker 关停有界**：新增 `AGENT_WORKER_DRAIN_TIMEOUT_MS`（默认 150s），**从收到信号起算**：立即关消费者（停止
+  取新任务）并同时停依赖守卫 / cron / outbox，两者都受这一期限约束（outbox 在 MySQL 挂起时的无限等待也被覆盖），
+  之后清理另有 15s 上限；关停中守卫不再 resume 消费者。到期仍有 Run 在跑即直接退出，交给既有崩溃恢复（工具仍在
+  执行的 Run 不自动重放，需人工核对后取消）。
+- **Run 执行期间 MySQL 故障不再让 Worker 进程崩溃**：cancel 轮询的 tick 读库失败时成为未处理的 Promise rejection，
+  Node 直接退出，所有在执行的 Run 被中止（K4 sim 演练发现）。循环现在接住 tick 错误、记日志并按间隔继续。
+- **MCP 重连默认不设次数上限**：出厂 `dsh-mcp-client` 连续 10 次失败（约 2 分钟）后放弃且不再重连，配合「任一启用
+  MCP 不可用即 /ready 503」会让 Agent 永久未就绪、只能人工重启。本仓库生成的条目默认 `reconnect.maxAttempts`
+  不设上限（间隔仍封顶 30s）；`MCP_SERVERS_JSON` 条目可用 `reconnect` 覆盖，非法值拒绝启动。本地 K8s 清单 Worker 终止宽限 60s → 180s，生产 Compose `stop_grace_period: 180s`。
+- **本地 K8s 清单给 Agent HTTP 加 startupProbe（180s 预算）**，所有探针显式 `timeoutSeconds` 并覆盖应用内依赖检查预算。
+
 ### Fixed（探针）
 
 - **Agent HTTP `/ready` 真正探测 MySQL 与 Redis**：此前只看客户端对象是否已建，依赖中断时仍报就绪，

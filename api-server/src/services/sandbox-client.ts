@@ -16,11 +16,12 @@ import {
   traceCarrierHeaders,
   type RequestTraceContext,
 } from '../application/trace-context.js';
+import { probeReadiness, type DownstreamReadiness } from './downstream-readiness.js';
 
 const BASE = config.SANDBOX_BASE_URL;
 
-/** Readiness probe deadline — matches the Agent-client probe in agent-client.js. */
-const SANDBOX_HEALTH_TIMEOUT_MS = 3_000;
+/** exec `/ready` 自身每项检查 2s 封顶；多留 1s 给响应。 */
+const SANDBOX_READY_TIMEOUT_MS = 3_000;
 
 function createClientTraceContext(traceId: string, traceState?: string | null): RequestTraceContext {
   const context = resolveRequestTraceContext({
@@ -97,7 +98,7 @@ export interface SandboxClient {
   getProcessLogs(sessionId: string, processId: string, query?: Record<string, any>): Promise<any>;
   readProcess(sessionId: string, processId: string, query?: Record<string, any>): Promise<any>;
   processAction(sessionId: string, processId: string, action: string, body?: Record<string, any>): Promise<any>;
-  checkHealth(): Promise<any>;
+  checkReady(): Promise<DownstreamReadiness>;
 }
 
 /**
@@ -280,17 +281,10 @@ export function createSandboxClient({
       return resp.json();
     },
 
-    async checkHealth() {
-      try {
-        const resp = await fetch(`${BASE}/health`, {
-          headers: AUTH_HEADER,
-          signal: AbortSignal.timeout(SANDBOX_HEALTH_TIMEOUT_MS),
-        });
-        if (!resp.ok) return null;
-        return resp.json();
-      } catch {
-        return null;
-      }
+    async checkReady() {
+      // readiness 看执行面的 `/ready`（数据库、四个数据根、隔离预检、关停），
+      // 不是 `/health`——后者只表示进程活着。见 exec/src/http/readiness.ts。
+      return probeReadiness(`${BASE}/ready`, AUTH_HEADER, SANDBOX_READY_TIMEOUT_MS);
     },
   };
 }
@@ -299,7 +293,7 @@ export function artifactDownloadPath(workspaceId: string, artifactId: string): s
   return `/sessions/${encodeURIComponent(workspaceId)}/artifacts/${encodeURIComponent(artifactId)}/download`;
 }
 
-export async function checkHealth(): Promise<any> {
-  return createSandboxClient().checkHealth();
+export async function checkSandboxReady(): Promise<DownstreamReadiness> {
+  return createSandboxClient().checkReady();
 }
 

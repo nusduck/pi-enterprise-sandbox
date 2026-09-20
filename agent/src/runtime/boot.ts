@@ -22,7 +22,11 @@ import { RemoteShell } from './providers/remote-shell.js';
 import { RemoteJobs } from './providers/remote-jobs.js';
 import { readExecRpcFromEnv } from './providers/exec-rpc.js';
 import type { ExecRpcConfig } from './providers/exec-rpc.js';
-import { buildMcpRuntimePatches } from './plugins/mcp-entries.js';
+import {
+  buildMcpPatchEntries,
+  buildMcpRuntimePatches,
+  readMcpServersFromEnv,
+} from './plugins/mcp-entries.js';
 export type { ExecRpcConfig } from './providers/exec-rpc.js';
 export { runWithExecRpc, readExecRpcFromEnv } from './providers/exec-rpc.js';
 import {
@@ -266,28 +270,49 @@ export function sharedEnterpriseRuntime(): Promise<Context> {
   return sharedCtx;
 }
 
-/**
- * 从已起的插件树里读 MCP 就绪度（ADR 0009 D9 §「/ready」/ 计划 H7.6）。
- *
- * 投影的是 **DSH 的工具注册表**——也就是模型真正看得见的那一份。
- * 以前投影的是自建 adapter 的快照：那套要自己重探、自己维护缓存，
- * 而它和循环上实际注册了什么并没有强制关系。
- */
-export async function readMcpReadiness(): Promise<{
+/** 单台 MCP server 的就绪投影（蛇形字段，/ready 与诊断端点共用）。 */
+export interface McpServerReadinessProjection {
+  server_id: string;
+  connection_status: 'connected' | 'unavailable';
+  tools: string[];
+}
+
+export interface McpReadinessProjection {
   ready: boolean;
   serverCount: number;
   toolCount: number;
-  servers: Array<{ server_id: string; connection_status: string; tools: string[] }>;
-}> {
-  const ctx = await sharedEnterpriseRuntime();
-  const tools = (ctx as unknown as { get(n: string): any }).get('tools');
-  const names: string[] =
-    tools === undefined || typeof tools.schemas !== 'function'
-      ? []
-      : tools.schemas().map((s: { name?: unknown }) => String(s?.name ?? ''));
+  servers: McpServerReadinessProjection[];
+}
 
+/** 插件树注册表里现有的全部工具名。 */
+function registeredToolNames(ctx: Context): string[] {
+  const tools = (ctx as unknown as { get(n: string): any }).get('tools');
+  return tools === undefined || typeof tools.schemas !== 'function'
+    ? []
+    : tools.schemas().map((s: { name?: unknown }) => String(s?.name ?? ''));
+}
+
+/**
+ * 启用的 MCP 配置清单 × 当前工具注册表 → 就绪投影（K8s 部署评审 K2，2026-09-19）。
+ *
+ * 出厂 `dsh-mcp-client` 不对外暴露逐台连接状态，它能观察到的事实只有「注册表里
+ * 有没有这台的工具」：连上并完成 `tools/list` 才会注册；启动失败（默认
+ * `failOnStartupError: false`）或重连预算耗尽后工具被注销。所以：
+ *
+ * - 已启用且有工具 → `connected`；
+ * - 已启用但没有工具（连不上、引用的 env 缺失被跳过、预算耗尽）→ `unavailable`，
+ *   **保留在清单里**，不能因为没工具就当成「没配置」；
+ * - 任何一台 `unavailable` → `ready: false`（deployment.md 的 /ready 契约）。
+ *
+ * 已知盲区：重连期间出厂保留上一代工具，这段时间仍报 `connected`；一台真的
+ * 只暴露零个工具的服务器会被报成 `unavailable`。
+ */
+export function projectMcpReadiness(
+  toolNames: readonly string[],
+  configuredServerIds: readonly string[],
+): McpReadinessProjection {
   const byServer = new Map<string, string[]>();
-  for (const name of names) {
+  for (const name of toolNames) {
     if (!name.startsWith('mcp__')) continue;
     const rest = name.slice('mcp__'.length);
     const sep = rest.indexOf('__');
@@ -298,21 +323,50 @@ export async function readMcpReadiness(): Promise<{
     byServer.set(server, list);
   }
 
-  const servers = [...byServer.entries()].map(([server_id, list]) => ({
-    server_id,
-    // 注册表里有工具 = 那台服务器连上了并完成了 tools/list。
-    // 连不上的服务器在出厂默认（failOnStartupError: false）下就是没有工具，
-    // 所以它根本不会出现在这里——这正是「就绪度」想表达的事。
-    connection_status: 'connected',
-    tools: list.sort(),
-  }));
+  const ids = [...new Set([...configuredServerIds, ...byServer.keys()])].sort();
+  const servers = ids.map((server_id): McpServerReadinessProjection => {
+    const list = (byServer.get(server_id) ?? []).sort();
+    return {
+      server_id,
+      connection_status: list.length > 0 ? 'connected' : 'unavailable',
+      tools: list,
+    };
+  });
 
   return {
-    ready: true,
+    ready: servers.every((server) => server.connection_status === 'connected'),
     serverCount: servers.length,
     toolCount: servers.reduce((n, s) => n + s.tools.length, 0),
     servers,
   };
+}
+
+/** `MCP_SERVERS_JSON` 里启用的 serverName（与 boot 叠进插件树的是同一份生成逻辑）。 */
+export function configuredMcpServerIds(env: NodeJS.ProcessEnv = process.env): string[] {
+  return buildMcpPatchEntries(readMcpServersFromEnv(env)).map((entry) =>
+    String((entry.config as { serverName?: unknown } | undefined)?.serverName ?? entry.id),
+  );
+}
+
+/**
+ * 起（或复用）插件树后，返回一个**每次调用都重读注册表**的同步投影函数。
+ *
+ * /ready 走这里：MCP 服务器恢复、重连预算耗尽、`tools/list_changed` 都直接反映，
+ * 不再停留在启动那一刻的快照上；也不另起一套连接管理器——事实源仍是 DSH 注册表。
+ */
+export async function createMcpReadinessReader(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<() => McpReadinessProjection> {
+  const ctx = await sharedEnterpriseRuntime();
+  const configured = configuredMcpServerIds(env);
+  return () => projectMcpReadiness(registeredToolNames(ctx), configured);
+}
+
+/** 读一次 MCP 就绪度（ADR 0009 D9 §「/ready」/ 计划 H7.6）。 */
+export async function readMcpReadiness(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<McpReadinessProjection> {
+  return (await createMcpReadinessReader(env))();
 }
 
 export async function bootEnterpriseRuntime(
