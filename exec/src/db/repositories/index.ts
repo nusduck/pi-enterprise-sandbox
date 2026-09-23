@@ -7,8 +7,5 @@
 
 export * from './exec-jobs.js';
 export * from './workspace-quotas.js';
-export * from './workspaces.js';
-export * from './executions.js';
 export * from './artifacts.js';
 export * from './datasets.js';
-export * from './session-events.js';

@@ -11,10 +11,8 @@
 一直跑在 `InMemoryArtifactStore` 上，`GET /api/artifacts` 在每次重启后返回空
 列表。这条守卫把"接了就必须能建表"钉死：不跑 MySQL，只读源码。
 
-注意方向：它只要求**已接线**的表有迁移。仓储层里还有几张只有 DDL、没有任何
-消费者的表（`exec_workspaces` / `exec_executions` / `session_events` /
-`workspace_quota_reservations`），那是尚未落地的设计，不在本守卫范围内——
-它们一旦被接进 `createExecAppFromEnv`，这条测试就会立刻要求补迁移。
+注意方向：它只要求**已接线**的表有迁移。以后新写的仓储一旦被接进
+`createExecAppFromEnv`，这条测试就会立刻要求补迁移。
 """
 
 from __future__ import annotations

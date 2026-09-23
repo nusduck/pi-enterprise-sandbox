@@ -10,19 +10,13 @@ import { test } from 'node:test';
 import {
   WORKSPACE_QUOTA_RESERVATIONS_DDL,
   EXEC_JOBS_DDL,
-  EXEC_WORKSPACES_DDL,
-  EXEC_EXECUTIONS_DDL,
   EXEC_ARTIFACTS_DDL,
   EXEC_DATASETS_DDL,
-  SESSION_EVENTS_DDL,
 } from '../src/db/index.js';
 import { InMemoryQuotaStore } from '../src/workspace/quota-store.js';
 import {
-  InMemoryWorkspaceStore,
-  InMemoryExecutionStore,
   InMemoryArtifactStore,
   InMemoryDatasetStore,
-  InMemorySessionEventStore,
 } from '../src/db/repositories/index.js';
 import { sqlLimit } from '../src/db/client.js';
 
@@ -38,15 +32,6 @@ test('DDLs contain required columns and indexes', () => {
   assert.match(EXEC_JOBS_DDL, /start_identity/);
   assert.match(EXEC_JOBS_DDL, /pgid/);
 
-  // exec_workspaces: 后续 W3-A 需要
-  assert.match(EXEC_WORKSPACES_DDL, /workspace_id/);
-  assert.match(EXEC_WORKSPACES_DDL, /workspace_root/);
-  assert.match(EXEC_WORKSPACES_DDL, /temp_root/);
-
-  // exec_executions
-  assert.match(EXEC_EXECUTIONS_DDL, /execution_id/);
-  assert.match(EXEC_EXECUTIONS_DDL, /command/);
-
   // exec_artifacts / exec_datasets
   assert.match(EXEC_ARTIFACTS_DDL, /artifact_id/);
   assert.match(EXEC_ARTIFACTS_DDL, /name/);
@@ -58,11 +43,6 @@ test('DDLs contain required columns and indexes', () => {
   assert.match(EXEC_ARTIFACTS_DDL, /identity/);
   assert.match(EXEC_ARTIFACTS_DDL, /session_id/);
   assert.match(EXEC_DATASETS_DDL, /dataset_id/);
-
-  // session_events: ADR 0005 决策 2
-  assert.match(SESSION_EVENTS_DDL, /agent_session_id/);
-  assert.match(SESSION_EVENTS_DDL, /seq/);
-  assert.match(SESSION_EVENTS_DDL, /PRIMARY KEY.*agent_session_id.*seq/s);
 });
 
 test('InMemoryQuotaStore: sumReserved / put / delete', async () => {
@@ -74,44 +54,6 @@ test('InMemoryQuotaStore: sumReserved / put / delete', async () => {
   await s.deleteReservation('ws1', 'r1');
   assert.equal(await s.sumReserved('ws1'), 200);
   assert.equal(await s.getReservationBytes('ws1', 'r1'), 0);
-});
-
-test('InMemoryWorkspaceStore: ensure is idempotent', async () => {
-  const s = new InMemoryWorkspaceStore();
-  const r1 = await s.ensure({
-    workspaceId: 'ws1',
-    orgId: 'o1',
-    userId: 'u1',
-    workspaceRoot: '/tmp/ws1',
-    tempRoot: '/tmp/ws1-tmp',
-  });
-  const r2 = await s.ensure({
-    workspaceId: 'ws1',
-    orgId: 'o1',
-    userId: 'u1',
-    workspaceRoot: '/tmp/ws1',
-    tempRoot: '/tmp/ws1-tmp',
-  });
-  assert.equal(r1.workspaceId, r2.workspaceId);
-  assert.equal(r1.createdAt.getTime(), r2.createdAt.getTime());
-  await s.deleteById('ws1');
-  assert.equal(await s.getById('ws1'), null);
-});
-
-test('InMemoryExecutionStore: insert and updateStatus', async () => {
-  const s = new InMemoryExecutionStore();
-  await s.insert({
-    executionId: 'e1',
-    workspaceId: 'ws1',
-    orgId: 'o1',
-    userId: 'u1',
-    command: 'echo hi',
-  });
-  const before = await s.getById('e1');
-  assert.equal(before?.status, 'running');
-  await s.updateStatus('e1', 'completed');
-  const after = await s.getById('e1');
-  assert.equal(after?.status, 'completed');
 });
 
 test('InMemoryArtifactStore: 按 session + owner 列举，跨租户当作不存在', async () => {
@@ -177,22 +119,6 @@ test('InMemoryDatasetStore: 幂等键查得到，跨租户当作不存在', asyn
   const other = { orgId: 'o2', userId: 'u2' };
   assert.equal(await s.getOwned('d1', other), null);
   assert.equal(await s.findByIdempotencyKey('sess1', other, 'k1'), null);
-});
-
-test('InMemorySessionEventStore: appendBatch and list fromSeq', async () => {
-  const s = new InMemorySessionEventStore();
-  await s.appendBatch([
-    { agentSessionId: 'sess1', seq: 1, eventType: 'a', payloadJson: '{}' },
-    { agentSessionId: 'sess1', seq: 2, eventType: 'b', payloadJson: '{}' },
-    { agentSessionId: 'sess1', seq: 3, eventType: 'c', payloadJson: '{}' },
-  ]);
-  const all = await s.list('sess1');
-  assert.equal(all.length, 3);
-  const from2 = await s.list('sess1', 2);
-  assert.equal(from2.length, 2);
-  assert.equal(from2[0]?.seq, 2);
-  assert.equal(await s.maxSeq('sess1'), 3);
-  assert.equal(await s.maxSeq('unknown'), null);
 });
 
 test('re-exports: JobStore and QuotaStore are same objects as W2 definitions', async () => {

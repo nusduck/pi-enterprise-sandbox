@@ -348,7 +348,7 @@ function createWorkerHarness(workerLabel, ids) {
 
 /**
  * 工作区里某个文件是否存在——直接看独立 sandbox 容器的数据根。exec 的前台
- * 命令不落执行记录（`exec_executions` 没有调用方），「命令到没到执行面」只能
+ * 命令不落执行记录，「命令到没到执行面」只能
  * 以它留下的副作用为证。
  */
 async function workspaceFileState(workspaceId, fileName) {
