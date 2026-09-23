@@ -2,7 +2,7 @@
  * Gated live integration: 租户默认 Agent 惰性创建的并发竞争（2026-09-18 K8s 演练发现）。
  *
  * 组织与用户已存在、默认 Agent 还没建时，同一组织的多个会话并发创建会在
- * `uk_agent_definitions_org_name` 上撞键。期望：全部成功且只有一个默认 Agent；
+ * `ind_agsvc_ad_a1` 上撞键。期望：全部成功且只有一个默认 Agent；
  * 任何一次冲突都应走可重试路径，而不是把通用 ConflictError（HTTP 409）抛给调用方。
  *
  * Requires TEST_MYSQL_URL=mysql://…；缺配置时整组跳过。
@@ -102,7 +102,7 @@ describeLive('default agent race (TEST_MYSQL_URL)', () => {
   it('concurrent first conversations of an existing org all succeed with one default agent', async () => {
     const { orgId, users } = await seedOrgWithUsers(CONCURRENCY);
     assert.equal(
-      (await knex('agent_definitions').where({ org_id: orgId })).length,
+      (await knex('tbl_agsvc_agent_definitions').where({ org_id: orgId })).length,
       0,
       'precondition: the org has no default agent yet',
     );
@@ -113,10 +113,10 @@ describeLive('default agent race (TEST_MYSQL_URL)', () => {
       .map((o) => `${o.reason?.name}:${o.reason?.code}:${o.reason?.message}`);
 
     assert.deepEqual(failures, [], 'no concurrent create may surface a conflict');
-    const definitions = await knex('agent_definitions').where({ org_id: orgId });
+    const definitions = await knex('tbl_agsvc_agent_definitions').where({ org_id: orgId });
     assert.equal(definitions.length, 1);
     assert.equal(
-      (await knex('agent_versions').where({ agent_id: definitions[0].agent_id })).length,
+      (await knex('tbl_agsvc_agent_versions').where({ agent_id: definitions[0].agent_id })).length,
       1,
     );
   });
@@ -126,6 +126,6 @@ describeLive('default agent race (TEST_MYSQL_URL)', () => {
     await service.create(users[0], {});
     const outcomes = await Promise.allSettled(users.map((auth) => service.create(auth, {})));
     assert.equal(outcomes.filter((o) => o.status === 'rejected').length, 0);
-    assert.equal((await knex('agent_definitions').where({ org_id: orgId })).length, 1);
+    assert.equal((await knex('tbl_agsvc_agent_definitions').where({ org_id: orgId })).length, 1);
   });
 });

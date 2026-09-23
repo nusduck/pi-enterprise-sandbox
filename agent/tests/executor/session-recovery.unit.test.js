@@ -58,7 +58,7 @@ function entry(id, text, parentId = null) {
 }
 
 function seedWorld(state, fence = 1) {
-  state.tables.conversations = [
+  state.tables.tbl_agsvc_conversations = [
     {
       conversation_id: CONV,
       org_id: ORG,
@@ -72,7 +72,7 @@ function seedWorld(state, fence = 1) {
       archived_at: null,
     },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESS,
       org_id: ORG,
@@ -91,9 +91,9 @@ function seedWorld(state, fence = 1) {
       closed_at: null,
     },
   ];
-  state.tables.agent_session_snapshots = [];
-  state.tables.messages = [];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_agent_session_snapshots = [];
+  state.tables.tbl_agsvc_messages = [];
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -117,8 +117,8 @@ function seedWorld(state, fence = 1) {
       updated_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 describe('SessionRecoveryService', () => {
@@ -175,7 +175,7 @@ describe('SessionRecoveryService', () => {
       workspacePath: '/ws',
     });
     assert.equal(c1.snapshot.snapshotVersion, 1);
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 1);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
 
     const p2 = basePayload([
       entry('e1', 'one'),
@@ -194,8 +194,8 @@ describe('SessionRecoveryService', () => {
       workspaceId: WSP,
     });
     assert.equal(c2.snapshot.snapshotVersion, 2);
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 2);
-    assert.equal(state.tables.agent_sessions[0].last_run_id, RUN);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 2);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].last_run_id, RUN);
 
     const recovered = await service.recover({
       agentSessionId: SESS,
@@ -211,7 +211,7 @@ describe('SessionRecoveryService', () => {
         recovered.payload.entries.some((e) => e.id === 'e2'),
     );
     assert.ok(
-      state.tables.run_events.some(
+      state.tables.tbl_agsvc_run_events.some(
         (e) => e.event_type === 'session.snapshot.saved',
       ),
     );
@@ -281,7 +281,7 @@ describe('SessionRecoveryService', () => {
     });
 
     // Corrupt snapshot row but leave journal
-    state.tables.agent_session_snapshots[0].checksum = '0'.repeat(64);
+    state.tables.tbl_agsvc_agent_session_snapshots[0].checksum = '0'.repeat(64);
     // Pointer still 1 — loadLatest will fail checksum
 
     const recovered = await service.recover({
@@ -316,8 +316,8 @@ describe('SessionRecoveryService', () => {
     // stored matches the mutated form (simulate divergent truth).
     const bad = basePayload([entry('e1', 'MUTATED')]);
     const badChecksum = checksumSnapshotPayload(bad);
-    state.tables.agent_session_snapshots[0].snapshot_json = bad;
-    state.tables.agent_session_snapshots[0].checksum = badChecksum;
+    state.tables.tbl_agsvc_agent_session_snapshots[0].snapshot_json = bad;
+    state.tables.tbl_agsvc_agent_session_snapshots[0].checksum = badChecksum;
 
     await assert.rejects(
       () =>
@@ -330,9 +330,9 @@ describe('SessionRecoveryService', () => {
         }),
       (err) => err instanceof SessionRecoveryRequiredError,
     );
-    assert.equal(state.tables.agent_sessions[0].status, 'SUSPENDED');
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].status, 'SUSPENDED');
     assert.equal(
-      state.tables.agent_sessions[0].recovery_reason_code,
+      state.tables.tbl_agsvc_agent_sessions[0].recovery_reason_code,
       'RECOVERY_REQUIRED',
     );
   });
@@ -385,9 +385,9 @@ describe('SessionRecoveryService', () => {
       configHash: '1'.repeat(64),
       workspaceId: WSP,
     });
-    assert.equal(state.tables.agent_sessions[0].agent_version_id, VER);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].agent_version_id, VER);
     // Simulate catalog default change (new active version) — session row unchanged
-    state.tables.agent_versions = [
+    state.tables.tbl_agsvc_agent_versions = [
       {
         agent_version_id: '01K0G2PAV8FPMVC9QHJG7JPN99',
         agent_id: '01K0G2PAV8FPMVC9QHJG7JPN5D',
@@ -400,7 +400,7 @@ describe('SessionRecoveryService', () => {
         created_at: '2026-07-18 00:00:00.000',
       },
     ];
-    assert.equal(state.tables.agent_sessions[0].agent_version_id, VER);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].agent_version_id, VER);
     // Attempt checkpoint with wrong agentVersionId fails fence binding
     await assert.rejects(
       () =>

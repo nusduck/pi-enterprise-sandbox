@@ -114,7 +114,7 @@ describe('FencedRunEventRecorder', () => {
   beforeEach(() => {
     state = createFakeState();
     knex = createFakeKnex(state);
-    state.tables.agent_sessions = [
+    state.tables.tbl_agsvc_agent_sessions = [
       {
         agent_session_id: SESS,
         org_id: ORG,
@@ -133,7 +133,7 @@ describe('FencedRunEventRecorder', () => {
         closed_at: null,
       },
     ];
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       {
         run_id: RUN,
         org_id: ORG,
@@ -157,8 +157,8 @@ describe('FencedRunEventRecorder', () => {
         updated_at: '2026-07-18 00:00:00.000',
       },
     ];
-    state.tables.run_events = [];
-    state.tables.domain_outbox = [];
+    state.tables.tbl_agsvc_run_events = [];
+    state.tables.tbl_agsvc_domain_outbox = [];
   });
 
   function makeRecorder(opts = {}) {
@@ -203,12 +203,12 @@ describe('FencedRunEventRecorder', () => {
     assert.equal(env.context.runId, RUN);
     assert.equal(env.context.traceId, TRACE);
     assert.equal(env.data.correlationId, 'prov:1');
-    assert.equal(state.tables.run_events.length, 1);
-    assert.equal(state.tables.domain_outbox.length, 1);
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 1);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox.length, 1);
     assert.equal(emitted.length, 1);
     assert.equal(emitted[0].eventId, env.eventId);
     // outbox carries full envelope
-    const ob = state.tables.domain_outbox[0];
+    const ob = state.tables.tbl_agsvc_domain_outbox[0];
     const payload =
       typeof ob.payload_json === 'string'
         ? JSON.parse(ob.payload_json)
@@ -231,7 +231,7 @@ describe('FencedRunEventRecorder', () => {
     });
     assert.ok(a);
     assert.equal(b, null);
-    assert.equal(state.tables.run_events.length, 1);
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 1);
     assert.equal(emitted.length, 1);
   });
 
@@ -243,12 +243,12 @@ describe('FencedRunEventRecorder', () => {
       () => recorder.record({ type: 'error.occurred', data: {} }),
       SessionFenceConflictError,
     );
-    assert.equal(state.tables.run_events.length, 0);
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 0);
     assert.equal(emitted.length, 0);
   });
 
   it('does not emit when transaction fails (fence mismatch)', async () => {
-    state.tables.agent_sessions[0].execution_fence_token = 99;
+    state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token = 99;
     const { recorder, emitted } = makeRecorder();
     await assert.rejects(
       () => recorder.record({ type: 'message.completed', data: {} }),
@@ -284,7 +284,7 @@ describe('FencedRunEventRecorder', () => {
     // One owner returns envelope; joiners resolve to same envelope (or null path).
     // Durable rows must be exactly one.
     assert.equal(
-      state.tables.run_events.filter(
+      state.tables.tbl_agsvc_run_events.filter(
         (e) => e.event_type === 'tool.execution.started',
       ).length,
       1,
@@ -296,7 +296,7 @@ describe('FencedRunEventRecorder', () => {
   });
 
   it('failed pending dedupe allows retry', async () => {
-    state.tables.agent_sessions[0].execution_fence_token = 99;
+    state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token = 99;
     const { recorder } = makeRecorder();
     await assert.rejects(
       () =>
@@ -308,13 +308,13 @@ describe('FencedRunEventRecorder', () => {
       /fence|Fence|conflict|token|ACTIVE/i,
     );
     // Restore fence and retry same key
-    state.tables.agent_sessions[0].execution_fence_token = 7;
+    state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token = 7;
     const env = await recorder.record({
       type: 'error.occurred',
       data: { ok: true },
       dedupeKey: 'retry-key',
     });
     assert.ok(env);
-    assert.equal(state.tables.run_events.length, 1);
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 1);
   });
 });

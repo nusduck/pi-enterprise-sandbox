@@ -27,11 +27,98 @@
     "20260901000002_dsh_session_persistence.js",
     "20260904000001_exec_artifacts_datasets.js",
     "20260904000002_workspace_quota_reservations.js",
-    "20260912000001_claim_without_skip_locked.js"
+    "20260912000001_claim_without_skip_locked.js",
+    "20260923000001_upspec_naming.js"
   ],
   "allowedExtraTables": [],
   "tables": {
-    "a2a_api_credentials": {
+    "knex_migrations": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "batch": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "id": {
+          "type": "int unsigned",
+          "nullable": false,
+          "default": null,
+          "extra": "auto_increment",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "migration_time": {
+          "type": "timestamp",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "extra": "on update current_timestamp",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "knex_migrations_lock": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "index": {
+          "type": "int unsigned",
+          "nullable": false,
+          "default": null,
+          "extra": "auto_increment",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "is_locked": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "index"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_a2a_api_credentials": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -56,7 +143,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -146,7 +233,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -155,7 +242,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -170,21 +257,28 @@
             "credential_id"
           ]
         },
-        "a2a_api_credentials_agent_id_foreign": {
+        "ind_agsvc_aac_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "key_id"
+          ]
+        },
+        "ind_agsvc_aac_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_id"
           ]
         },
-        "a2a_api_credentials_service_user_id_foreign": {
+        "ind_agsvc_aac_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "service_user_id"
           ]
         },
-        "idx_a2a_cred_org_agent": {
+        "ind_agsvc_aac_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -192,20 +286,13 @@
             "agent_id"
           ]
         },
-        "idx_a2a_cred_org_client": {
+        "ind_agsvc_aac_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "org_id",
             "client_id",
             "status"
-          ]
-        },
-        "uk_a2a_cred_key_id": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "key_id"
           ]
         }
       },
@@ -214,7 +301,7 @@
           "columns": [
             "agent_id"
           ],
-          "referencedTable": "agent_definitions",
+          "referencedTable": "tbl_agsvc_agent_definitions",
           "referencedColumns": [
             "agent_id"
           ],
@@ -225,7 +312,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -236,7 +323,7 @@
           "columns": [
             "service_user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -245,7 +332,7 @@
         }
       }
     },
-    "a2a_audit_events": {
+    "tbl_agsvc_a2a_audit_events": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -288,7 +375,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -306,7 +393,7 @@
         "event_type": {
           "type": "varchar(128)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -366,7 +453,7 @@
             "audit_id"
           ]
         },
-        "idx_a2a_audit_owner_client": {
+        "ind_agsvc_aae_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -375,7 +462,7 @@
             "created_at"
           ]
         },
-        "idx_a2a_audit_task": {
+        "ind_agsvc_aae_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -383,7 +470,7 @@
             "created_at"
           ]
         },
-        "idx_a2a_audit_trace": {
+        "ind_agsvc_aae_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -396,7 +483,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -405,7 +492,7 @@
         }
       }
     },
-    "a2a_tasks": {
+    "tbl_agsvc_a2a_tasks": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -457,7 +544,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -502,7 +589,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -526,35 +613,42 @@
             "a2a_task_id"
           ]
         },
-        "a2a_tasks_agent_id_foreign": {
+        "ind_agsvc_at_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_at_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_id"
           ]
         },
-        "a2a_tasks_conversation_id_foreign": {
+        "ind_agsvc_at_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "conversation_id"
           ]
         },
-        "a2a_tasks_credential_id_foreign": {
+        "ind_agsvc_at_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "credential_id"
           ]
         },
-        "a2a_tasks_user_id_foreign": {
+        "ind_agsvc_at_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
           ]
         },
-        "idx_a2a_tasks_org_agent": {
+        "ind_agsvc_at_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -563,7 +657,7 @@
             "created_at"
           ]
         },
-        "idx_a2a_tasks_owner_client": {
+        "ind_agsvc_at_i6": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -572,7 +666,7 @@
             "created_at"
           ]
         },
-        "idx_a2a_tasks_owner_context": {
+        "ind_agsvc_at_i7": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -581,13 +675,6 @@
             "agent_id",
             "context_id"
           ]
-        },
-        "uk_a2a_tasks_run_id": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "run_id"
-          ]
         }
       },
       "foreignKeys": {
@@ -595,7 +682,7 @@
           "columns": [
             "agent_id"
           ],
-          "referencedTable": "agent_definitions",
+          "referencedTable": "tbl_agsvc_agent_definitions",
           "referencedColumns": [
             "agent_id"
           ],
@@ -606,7 +693,7 @@
           "columns": [
             "conversation_id"
           ],
-          "referencedTable": "conversations",
+          "referencedTable": "tbl_agsvc_conversations",
           "referencedColumns": [
             "conversation_id"
           ],
@@ -617,7 +704,7 @@
           "columns": [
             "credential_id"
           ],
-          "referencedTable": "a2a_api_credentials",
+          "referencedTable": "tbl_agsvc_a2a_api_credentials",
           "referencedColumns": [
             "credential_id"
           ],
@@ -628,7 +715,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -639,7 +726,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -650,7 +737,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -659,7 +746,7 @@
         }
       }
     },
-    "agent_definitions": {
+    "tbl_agsvc_agent_definitions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -684,7 +771,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -711,7 +798,7 @@
         "name": {
           "type": "varchar(255)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -729,7 +816,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -738,7 +825,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -753,20 +840,20 @@
             "agent_id"
           ]
         },
-        "idx_agents_org": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "org_id",
-            "status"
-          ]
-        },
-        "uk_agent_definitions_org_name": {
+        "ind_agsvc_ad_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
             "org_id",
             "name"
+          ]
+        },
+        "ind_agsvc_ad_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "status"
           ]
         }
       },
@@ -775,7 +862,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -784,7 +871,7 @@
         }
       }
     },
-    "agent_session_snapshots": {
+    "tbl_agsvc_agent_session_snapshots": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -818,7 +905,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -827,7 +914,7 @@
         "pi_sdk_version": {
           "type": "varchar(64)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -836,7 +923,7 @@
         "snapshot_format": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -863,7 +950,7 @@
         "snapshot_version": {
           "type": "bigint",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -887,7 +974,7 @@
             "snapshot_id"
           ]
         },
-        "uk_session_snapshot": {
+        "ind_agsvc_assn_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
@@ -901,7 +988,7 @@
           "columns": [
             "agent_session_id"
           ],
-          "referencedTable": "agent_sessions",
+          "referencedTable": "tbl_agsvc_agent_sessions",
           "referencedColumns": [
             "agent_session_id"
           ],
@@ -910,7 +997,7 @@
         }
       }
     },
-    "agent_sessions": {
+    "tbl_agsvc_agent_sessions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -953,7 +1040,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1016,7 +1103,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1025,7 +1112,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1058,28 +1145,42 @@
             "agent_session_id"
           ]
         },
-        "agent_sessions_agent_version_id_foreign": {
+        "ind_agsvc_as_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "sandbox_session_id"
+          ]
+        },
+        "ind_agsvc_as_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        "ind_agsvc_as_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_version_id"
           ]
         },
-        "agent_sessions_conversation_id_foreign": {
+        "ind_agsvc_as_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "conversation_id"
           ]
         },
-        "agent_sessions_user_id_foreign": {
+        "ind_agsvc_as_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
           ]
         },
-        "idx_agent_sessions_owner": {
+        "ind_agsvc_as_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -1088,26 +1189,12 @@
             "conversation_id"
           ]
         },
-        "idx_agent_sessions_status_recovery": {
+        "ind_agsvc_as_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "status",
             "recovery_reason_code"
-          ]
-        },
-        "uk_agent_sessions_sandbox_session_id": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "sandbox_session_id"
-          ]
-        },
-        "uk_agent_sessions_workspace_id": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "workspace_id"
           ]
         }
       },
@@ -1116,7 +1203,7 @@
           "columns": [
             "agent_version_id"
           ],
-          "referencedTable": "agent_versions",
+          "referencedTable": "tbl_agsvc_agent_versions",
           "referencedColumns": [
             "agent_version_id"
           ],
@@ -1127,7 +1214,7 @@
           "columns": [
             "conversation_id"
           ],
-          "referencedTable": "conversations",
+          "referencedTable": "tbl_agsvc_conversations",
           "referencedColumns": [
             "conversation_id"
           ],
@@ -1138,7 +1225,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -1149,7 +1236,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -1158,7 +1245,7 @@
         }
       }
     },
-    "agent_versions": {
+    "tbl_agsvc_agent_versions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -1201,7 +1288,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1219,7 +1306,7 @@
         "pi_sdk_version": {
           "type": "varchar(64)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1228,7 +1315,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1237,7 +1324,7 @@
         "version_no": {
           "type": "int",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1252,7 +1339,7 @@
             "agent_version_id"
           ]
         },
-        "uk_agent_version": {
+        "ind_agsvc_av_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
@@ -1266,7 +1353,7 @@
           "columns": [
             "agent_id"
           ],
-          "referencedTable": "agent_definitions",
+          "referencedTable": "tbl_agsvc_agent_definitions",
           "referencedColumns": [
             "agent_id"
           ],
@@ -1275,7 +1362,7 @@
         }
       }
     },
-    "approvals": {
+    "tbl_agsvc_approvals": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -1291,7 +1378,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1372,7 +1459,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1396,14 +1483,14 @@
             "approval_id"
           ]
         },
-        "approvals_run_id_foreign": {
+        "ind_agsvc_appr_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "run_id"
           ]
         },
-        "idx_approvals_org_status": {
+        "ind_agsvc_appr_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -1417,7 +1504,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -1428,7 +1515,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -1437,7 +1524,7 @@
         }
       }
     },
-    "artifacts": {
+    "tbl_agsvc_artifacts": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -1471,7 +1558,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1480,7 +1567,7 @@
         "display_name": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1507,7 +1594,7 @@
         "relative_path": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1543,7 +1630,7 @@
         "size_bytes": {
           "type": "bigint",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1552,7 +1639,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1576,28 +1663,28 @@
             "artifact_id"
           ]
         },
-        "artifacts_user_id_foreign": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "user_id"
-          ]
-        },
-        "idx_artifacts_owner": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "org_id",
-            "user_id"
-          ]
-        },
-        "uk_artifact_file": {
+        "ind_agsvc_arti_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
             "run_id",
             "relative_path_hash",
             "sha256"
+          ]
+        },
+        "ind_agsvc_arti_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_arti_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
           ]
         }
       },
@@ -1606,7 +1693,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -1617,7 +1704,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -1628,7 +1715,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -1637,14 +1724,14 @@
         }
       }
     },
-    "auth_credentials": {
+    "tbl_agsvc_auth_credentials": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1734,7 +1821,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1758,31 +1845,31 @@
             "id"
           ]
         },
-        "idx_auth_credentials_org": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "external_org_id"
-          ]
-        },
-        "uk_auth_credentials_external_user": {
+        "ind_agsvc_ac_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
             "external_user_id"
           ]
         },
-        "uk_auth_credentials_username": {
+        "ind_agsvc_ac_a2": {
           "unique": true,
           "type": "BTREE",
           "columns": [
             "username"
           ]
+        },
+        "ind_agsvc_ac_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "external_org_id"
+          ]
         }
       },
       "foreignKeys": {}
     },
-    "conversation_external_refs": {
+    "tbl_agsvc_conversation_external_refs": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -1798,7 +1885,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1852,14 +1939,14 @@
             "external_subject"
           ]
         },
-        "conversation_external_refs_user_id_foreign": {
+        "ind_agsvc_cer_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
           ]
         },
-        "idx_conv_external_refs_conversation": {
+        "ind_agsvc_cer_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -1872,7 +1959,7 @@
           "columns": [
             "conversation_id"
           ],
-          "referencedTable": "conversations",
+          "referencedTable": "tbl_agsvc_conversations",
           "referencedColumns": [
             "conversation_id"
           ],
@@ -1883,7 +1970,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -1894,7 +1981,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -1903,7 +1990,7 @@
         }
       }
     },
-    "conversations": {
+    "tbl_agsvc_conversations": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -1937,7 +2024,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -1973,7 +2060,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -1991,7 +2078,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2015,28 +2102,28 @@
             "conversation_id"
           ]
         },
-        "conversations_agent_id_foreign": {
+        "ind_agsvc_conv_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_id"
           ]
         },
-        "conversations_user_id_foreign": {
+        "ind_agsvc_conv_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
           ]
         },
-        "fk_conversations_parent_run": {
+        "ind_agsvc_conv_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "parent_run_id"
           ]
         },
-        "idx_conversations_owner": {
+        "ind_agsvc_conv_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2045,7 +2132,7 @@
             "updated_at"
           ]
         },
-        "idx_conversations_owner_lineage": {
+        "ind_agsvc_conv_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2061,7 +2148,7 @@
           "columns": [
             "agent_id"
           ],
-          "referencedTable": "agent_definitions",
+          "referencedTable": "tbl_agsvc_agent_definitions",
           "referencedColumns": [
             "agent_id"
           ],
@@ -2072,7 +2159,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -2083,7 +2170,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -2094,7 +2181,7 @@
           "columns": [
             "parent_run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -2103,14 +2190,14 @@
         }
       }
     },
-    "cron_job_runs": {
+    "tbl_agsvc_cron_job_runs": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "claimed_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2119,7 +2206,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2173,7 +2260,7 @@
         "scheduled_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2182,7 +2269,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2191,7 +2278,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2206,14 +2293,29 @@
             "cron_job_run_id"
           ]
         },
-        "cron_job_runs_run_id_foreign": {
+        "ind_agsvc_cjr_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "idempotency_key"
+          ]
+        },
+        "ind_agsvc_cjr_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "cron_job_id",
+            "scheduled_at"
+          ]
+        },
+        "ind_agsvc_cjr_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "run_id"
           ]
         },
-        "idx_cron_job_runs_claimed": {
+        "ind_agsvc_cjr_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2221,27 +2323,12 @@
             "claimed_at"
           ]
         },
-        "idx_cron_job_runs_history": {
+        "ind_agsvc_cjr_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "cron_job_id",
             "created_at"
-          ]
-        },
-        "uk_cron_job_runs_idempotency": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "idempotency_key"
-          ]
-        },
-        "uk_cron_job_runs_scheduled": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "cron_job_id",
-            "scheduled_at"
           ]
         }
       },
@@ -2250,7 +2337,7 @@
           "columns": [
             "cron_job_id"
           ],
-          "referencedTable": "cron_jobs",
+          "referencedTable": "tbl_agsvc_cron_jobs",
           "referencedColumns": [
             "cron_job_id"
           ],
@@ -2261,7 +2348,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -2270,7 +2357,7 @@
         }
       }
     },
-    "cron_jobs": {
+    "tbl_agsvc_cron_jobs": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -2302,9 +2389,9 @@
           "generation": null
         },
         "concurrency_policy": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2313,7 +2400,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2383,9 +2470,9 @@
           "generation": null
         },
         "misfire_policy": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2394,7 +2481,7 @@
         "name": {
           "type": "varchar(255)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2437,9 +2524,9 @@
           "generation": null
         },
         "schedule_type": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2448,7 +2535,7 @@
         "timezone": {
           "type": "varchar(64)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2457,7 +2544,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2481,28 +2568,28 @@
             "cron_job_id"
           ]
         },
-        "cron_jobs_agent_id_foreign": {
+        "ind_agsvc_cj_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_id"
           ]
         },
-        "cron_jobs_user_id_foreign": {
+        "ind_agsvc_cj_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
           ]
         },
-        "idx_cron_jobs_claim_token": {
+        "ind_agsvc_cj_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "claim_token"
           ]
         },
-        "idx_cron_jobs_due": {
+        "ind_agsvc_cj_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2510,7 +2597,7 @@
             "next_run_at"
           ]
         },
-        "idx_cron_jobs_owner": {
+        "ind_agsvc_cj_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2525,7 +2612,7 @@
           "columns": [
             "agent_id"
           ],
-          "referencedTable": "agent_definitions",
+          "referencedTable": "tbl_agsvc_agent_definitions",
           "referencedColumns": [
             "agent_id"
           ],
@@ -2536,7 +2623,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -2547,7 +2634,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -2556,7 +2643,7 @@
         }
       }
     },
-    "datasets": {
+    "tbl_agsvc_datasets": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -2590,7 +2677,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2626,7 +2713,7 @@
         "original_filename": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2653,7 +2740,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2662,7 +2749,7 @@
         "stored_relative_path": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2686,28 +2773,28 @@
             "dataset_id"
           ]
         },
-        "datasets_agent_session_id_foreign": {
+        "ind_agsvc_dset_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_session_id"
           ]
         },
-        "datasets_conversation_id_foreign": {
+        "ind_agsvc_dset_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "conversation_id"
           ]
         },
-        "datasets_user_id_foreign": {
+        "ind_agsvc_dset_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
           ]
         },
-        "idx_datasets_owner": {
+        "ind_agsvc_dset_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2721,7 +2808,7 @@
           "columns": [
             "agent_session_id"
           ],
-          "referencedTable": "agent_sessions",
+          "referencedTable": "tbl_agsvc_agent_sessions",
           "referencedColumns": [
             "agent_session_id"
           ],
@@ -2732,7 +2819,7 @@
           "columns": [
             "conversation_id"
           ],
-          "referencedTable": "conversations",
+          "referencedTable": "tbl_agsvc_conversations",
           "referencedColumns": [
             "conversation_id"
           ],
@@ -2743,7 +2830,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -2754,7 +2841,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -2763,7 +2850,7 @@
         }
       }
     },
-    "domain_outbox": {
+    "tbl_agsvc_domain_outbox": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -2779,7 +2866,7 @@
         "aggregate_type": {
           "type": "varchar(64)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2815,7 +2902,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -2824,7 +2911,7 @@
         "event_type": {
           "type": "varchar(128)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2878,7 +2965,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -2893,7 +2980,7 @@
             "outbox_id"
           ]
         },
-        "idx_outbox_claim": {
+        "ind_agsvc_dob_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2902,14 +2989,14 @@
             "created_at"
           ]
         },
-        "idx_outbox_claim_token": {
+        "ind_agsvc_dob_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "claim_token"
           ]
         },
-        "idx_outbox_stale_claim": {
+        "ind_agsvc_dob_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -2920,7 +3007,7 @@
       },
       "foreignKeys": {}
     },
-    "dsh_session_events": {
+    "tbl_agsvc_dsh_session_events": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -2988,7 +3075,7 @@
             "seq"
           ]
         },
-        "idx_dsh_session_events_owner": {
+        "ind_agsvc_dse_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -3001,7 +3088,7 @@
       },
       "foreignKeys": {}
     },
-    "dsh_sessions": {
+    "tbl_agsvc_dsh_sessions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -3035,7 +3122,7 @@
         "revision": {
           "type": "varchar(128)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3077,7 +3164,7 @@
             "session_id"
           ]
         },
-        "idx_dsh_sessions_owner": {
+        "ind_agsvc_ds_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -3089,7 +3176,7 @@
       },
       "foreignKeys": {}
     },
-    "exec_artifacts": {
+    "tbl_agsvc_exec_artifacts": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -3132,7 +3219,7 @@
         "name": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3168,7 +3255,7 @@
         "size_bytes": {
           "type": "bigint unsigned",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -3177,7 +3264,7 @@
         "source_path": {
           "type": "varchar(4096)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3210,7 +3297,7 @@
             "artifact_id"
           ]
         },
-        "idx_exec_artifacts_owner": {
+        "ind_agsvc_ea_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -3218,14 +3305,14 @@
             "user_id"
           ]
         },
-        "idx_exec_artifacts_session": {
+        "ind_agsvc_ea_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "session_id"
           ]
         },
-        "idx_exec_artifacts_workspace": {
+        "ind_agsvc_ea_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -3235,7 +3322,7 @@
       },
       "foreignKeys": {}
     },
-    "exec_datasets": {
+    "tbl_agsvc_exec_datasets": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -3305,7 +3392,7 @@
         "original_filename": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3339,7 +3426,7 @@
           "generation": null
         },
         "status": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
           "default": "uploading",
           "extra": "",
@@ -3350,7 +3437,7 @@
         "stored_relative_path": {
           "type": "varchar(4096)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3383,29 +3470,7 @@
             "dataset_id"
           ]
         },
-        "idx_exec_datasets_owner": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "org_id",
-            "user_id"
-          ]
-        },
-        "idx_exec_datasets_session": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "session_id"
-          ]
-        },
-        "idx_exec_datasets_workspace": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "workspace_id"
-          ]
-        },
-        "uniq_exec_datasets_idem": {
+        "ind_agsvc_ed_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
@@ -3414,18 +3479,40 @@
             "session_id",
             "idempotency_key"
           ]
+        },
+        "ind_agsvc_ed_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        },
+        "ind_agsvc_ed_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "session_id"
+          ]
+        },
+        "ind_agsvc_ed_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
+          ]
         }
       },
       "foreignKeys": {}
     },
-    "exec_jobs": {
+    "tbl_agsvc_exec_jobs": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -3459,7 +3546,7 @@
           "generation": null
         },
         "kind": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
           "default": "bash",
           "extra": "",
@@ -3470,7 +3557,7 @@
         "label": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3560,7 +3647,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3593,14 +3680,14 @@
             "process_id"
           ]
         },
-        "idx_exec_jobs_created": {
+        "ind_agsvc_ej_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "created_at"
           ]
         },
-        "idx_exec_jobs_owner": {
+        "ind_agsvc_ej_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -3609,14 +3696,14 @@
             "workspace_id"
           ]
         },
-        "idx_exec_jobs_run": {
+        "ind_agsvc_ej_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "run_id"
           ]
         },
-        "idx_exec_jobs_status": {
+        "ind_agsvc_ej_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -3626,14 +3713,14 @@
       },
       "foreignKeys": {}
     },
-    "idempotency_records": {
+    "tbl_agsvc_idempotency_records": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -3642,7 +3729,7 @@
         "expires_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -3735,93 +3822,7 @@
       },
       "foreignKeys": {}
     },
-    "knex_migrations": {
-      "engine": "InnoDB",
-      "collation": "utf8mb4_unicode_ci",
-      "columns": {
-        "batch": {
-          "type": "int",
-          "nullable": true,
-          "default": null,
-          "extra": "",
-          "charset": null,
-          "collation": null,
-          "generation": null
-        },
-        "id": {
-          "type": "int unsigned",
-          "nullable": false,
-          "default": null,
-          "extra": "auto_increment",
-          "charset": null,
-          "collation": null,
-          "generation": null
-        },
-        "migration_time": {
-          "type": "timestamp",
-          "nullable": false,
-          "default": "CURRENT_TIMESTAMP",
-          "extra": "on update current_timestamp",
-          "charset": null,
-          "collation": null,
-          "generation": null
-        },
-        "name": {
-          "type": "varchar(255)",
-          "nullable": true,
-          "default": null,
-          "extra": "",
-          "charset": "utf8mb4",
-          "collation": "utf8mb4_unicode_ci",
-          "generation": null
-        }
-      },
-      "indexes": {
-        "PRIMARY": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "id"
-          ]
-        }
-      },
-      "foreignKeys": {}
-    },
-    "knex_migrations_lock": {
-      "engine": "InnoDB",
-      "collation": "utf8mb4_unicode_ci",
-      "columns": {
-        "index": {
-          "type": "int unsigned",
-          "nullable": false,
-          "default": null,
-          "extra": "auto_increment",
-          "charset": null,
-          "collation": null,
-          "generation": null
-        },
-        "is_locked": {
-          "type": "int",
-          "nullable": true,
-          "default": null,
-          "extra": "",
-          "charset": null,
-          "collation": null,
-          "generation": null
-        }
-      },
-      "indexes": {
-        "PRIMARY": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "index"
-          ]
-        }
-      },
-      "foreignKeys": {}
-    },
-    "messages": {
+    "tbl_agsvc_messages": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -3855,7 +3856,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -3873,7 +3874,7 @@
         "message_type": {
           "type": "varchar(64)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3900,7 +3901,7 @@
         "role": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3918,7 +3919,7 @@
         "sequence_no": {
           "type": "bigint",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -3933,24 +3934,7 @@
             "message_id"
           ]
         },
-        "idx_messages_session": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "agent_session_id",
-            "sequence_no"
-          ]
-        },
-        "idx_messages_session_pi_kind": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "agent_session_id",
-            "pi_entry_kind",
-            "sequence_no"
-          ]
-        },
-        "uk_message_sequence": {
+        "ind_agsvc_msg_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
@@ -3958,12 +3942,29 @@
             "sequence_no"
           ]
         },
-        "uk_messages_session_pi_entry": {
+        "ind_agsvc_msg_a2": {
           "unique": true,
           "type": "BTREE",
           "columns": [
             "agent_session_id",
             "pi_entry_id"
+          ]
+        },
+        "ind_agsvc_msg_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "sequence_no"
+          ]
+        },
+        "ind_agsvc_msg_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "pi_entry_kind",
+            "sequence_no"
           ]
         }
       },
@@ -3972,7 +3973,7 @@
           "columns": [
             "conversation_id"
           ],
-          "referencedTable": "conversations",
+          "referencedTable": "tbl_agsvc_conversations",
           "referencedColumns": [
             "conversation_id"
           ],
@@ -3981,14 +3982,14 @@
         }
       }
     },
-    "organization_external_refs": {
+    "tbl_agsvc_organization_external_refs": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4031,7 +4032,7 @@
             "external_subject"
           ]
         },
-        "idx_org_external_refs_org": {
+        "ind_agsvc_oer_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4044,7 +4045,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -4053,14 +4054,14 @@
         }
       }
     },
-    "organization_memberships": {
+    "tbl_agsvc_organization_memberships": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4078,7 +4079,7 @@
         "role": {
           "type": "varchar(64)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4087,7 +4088,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4112,7 +4113,7 @@
             "user_id"
           ]
         },
-        "organization_memberships_user_id_foreign": {
+        "ind_agsvc_om_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4125,7 +4126,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -4136,7 +4137,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -4145,14 +4146,14 @@
         }
       }
     },
-    "organizations": {
+    "tbl_agsvc_organizations": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4161,7 +4162,7 @@
         "name": {
           "type": "varchar(255)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4179,7 +4180,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4188,7 +4189,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4206,7 +4207,7 @@
       },
       "foreignKeys": {}
     },
-    "process_executions": {
+    "tbl_agsvc_process_executions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -4222,7 +4223,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4312,7 +4313,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4354,14 +4355,14 @@
             "process_id"
           ]
         },
-        "idx_process_executions_execution": {
+        "ind_agsvc_pe_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "execution_id"
           ]
         },
-        "idx_process_executions_owner": {
+        "ind_agsvc_pe_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4370,14 +4371,14 @@
             "created_at"
           ]
         },
-        "idx_process_executions_run": {
+        "ind_agsvc_pe_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "run_id"
           ]
         },
-        "idx_process_executions_session": {
+        "ind_agsvc_pe_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4385,7 +4386,7 @@
             "created_at"
           ]
         },
-        "process_executions_user_id_foreign": {
+        "ind_agsvc_pe_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4398,7 +4399,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -4409,7 +4410,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -4420,7 +4421,7 @@
           "columns": [
             "sandbox_session_id"
           ],
-          "referencedTable": "sandbox_sessions",
+          "referencedTable": "tbl_agsvc_sandbox_sessions",
           "referencedColumns": [
             "sandbox_session_id"
           ],
@@ -4431,7 +4432,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -4440,14 +4441,14 @@
         }
       }
     },
-    "run_events": {
+    "tbl_agsvc_run_events": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4465,7 +4466,7 @@
         "event_type": {
           "type": "varchar(128)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4474,7 +4475,7 @@
         "event_version": {
           "type": "int",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4510,7 +4511,7 @@
         "sequence_no": {
           "type": "bigint",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4543,7 +4544,15 @@
             "event_id"
           ]
         },
-        "idx_run_events_created": {
+        "ind_agsvc_re_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "sequence_no"
+          ]
+        },
+        "ind_agsvc_re_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4551,19 +4560,11 @@
             "created_at"
           ]
         },
-        "run_events_org_id_foreign": {
+        "ind_agsvc_re_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "org_id"
-          ]
-        },
-        "uk_run_event_sequence": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "run_id",
-            "sequence_no"
           ]
         }
       },
@@ -4572,7 +4573,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -4583,7 +4584,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -4592,7 +4593,7 @@
         }
       }
     },
-    "run_interactions": {
+    "tbl_agsvc_run_interactions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -4617,7 +4618,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -4635,7 +4636,7 @@
         "interaction_type": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4714,7 +4715,7 @@
           "generation": null
         },
         "resume_phase": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
           "default": "NONE",
           "extra": "",
@@ -4732,9 +4733,9 @@
           "generation": null
         },
         "status": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -4776,7 +4777,15 @@
             "interaction_id"
           ]
         },
-        "idx_run_interactions_owner_run": {
+        "ind_agsvc_ri_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "tool_call_id"
+          ]
+        },
+        "ind_agsvc_ri_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4787,7 +4796,7 @@
             "created_at"
           ]
         },
-        "idx_run_interactions_resume": {
+        "ind_agsvc_ri_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4796,7 +4805,7 @@
             "created_at"
           ]
         },
-        "idx_run_interactions_waiting": {
+        "ind_agsvc_ri_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -4805,40 +4814,32 @@
             "created_at"
           ]
         },
-        "run_interactions_agent_session_id_foreign": {
+        "ind_agsvc_ri_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_session_id"
           ]
         },
-        "run_interactions_responded_by_foreign": {
+        "ind_agsvc_ri_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "responded_by"
           ]
         },
-        "run_interactions_tool_execution_id_foreign": {
+        "ind_agsvc_ri_i6": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "tool_execution_id"
           ]
         },
-        "run_interactions_user_id_foreign": {
+        "ind_agsvc_ri_i7": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
-          ]
-        },
-        "uk_run_interactions_tool_call": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "run_id",
-            "tool_call_id"
           ]
         }
       },
@@ -4847,7 +4848,7 @@
           "columns": [
             "agent_session_id"
           ],
-          "referencedTable": "agent_sessions",
+          "referencedTable": "tbl_agsvc_agent_sessions",
           "referencedColumns": [
             "agent_session_id"
           ],
@@ -4858,7 +4859,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -4869,7 +4870,7 @@
           "columns": [
             "responded_by"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -4880,7 +4881,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -4891,7 +4892,7 @@
           "columns": [
             "tool_execution_id"
           ],
-          "referencedTable": "tool_executions",
+          "referencedTable": "tbl_agsvc_tool_executions",
           "referencedColumns": [
             "tool_execution_id"
           ],
@@ -4902,7 +4903,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -4911,7 +4912,7 @@
         }
       }
     },
-    "runs": {
+    "tbl_agsvc_runs": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -4990,7 +4991,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -5026,7 +5027,7 @@
         "queue_name": {
           "type": "varchar(128)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -5044,7 +5045,7 @@
         "source": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -5062,7 +5063,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -5143,7 +5144,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -5167,14 +5168,14 @@
             "run_id"
           ]
         },
-        "idx_runs_cancel_requested_at": {
+        "ind_agsvc_run_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "cancel_requested_at"
           ]
         },
-        "idx_runs_owner": {
+        "ind_agsvc_run_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5183,7 +5184,7 @@
             "created_at"
           ]
         },
-        "idx_runs_parent": {
+        "ind_agsvc_run_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5191,7 +5192,7 @@
             "created_at"
           ]
         },
-        "idx_runs_session": {
+        "ind_agsvc_run_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5199,7 +5200,7 @@
             "created_at"
           ]
         },
-        "idx_runs_status": {
+        "ind_agsvc_run_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5207,28 +5208,28 @@
             "created_at"
           ]
         },
-        "idx_runs_trace": {
+        "ind_agsvc_run_i6": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "trace_id"
           ]
         },
-        "runs_agent_version_id_foreign": {
+        "ind_agsvc_run_i7": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_version_id"
           ]
         },
-        "runs_conversation_id_foreign": {
+        "ind_agsvc_run_i8": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "conversation_id"
           ]
         },
-        "runs_user_id_foreign": {
+        "ind_agsvc_run_i9": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5241,7 +5242,7 @@
           "columns": [
             "parent_run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -5252,7 +5253,7 @@
           "columns": [
             "agent_session_id"
           ],
-          "referencedTable": "agent_sessions",
+          "referencedTable": "tbl_agsvc_agent_sessions",
           "referencedColumns": [
             "agent_session_id"
           ],
@@ -5263,7 +5264,7 @@
           "columns": [
             "agent_version_id"
           ],
-          "referencedTable": "agent_versions",
+          "referencedTable": "tbl_agsvc_agent_versions",
           "referencedColumns": [
             "agent_version_id"
           ],
@@ -5274,7 +5275,7 @@
           "columns": [
             "conversation_id"
           ],
-          "referencedTable": "conversations",
+          "referencedTable": "tbl_agsvc_conversations",
           "referencedColumns": [
             "conversation_id"
           ],
@@ -5285,7 +5286,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -5296,7 +5297,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -5305,7 +5306,7 @@
         }
       }
     },
-    "sandbox_audit_events": {
+    "tbl_agsvc_sandbox_audit_events": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -5321,7 +5322,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -5330,7 +5331,7 @@
         "event_type": {
           "type": "varchar(128)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -5408,14 +5409,14 @@
             "audit_id"
           ]
         },
-        "idx_sandbox_audit_execution": {
+        "ind_agsvc_sae_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "execution_id"
           ]
         },
-        "idx_sandbox_audit_owner": {
+        "ind_agsvc_sae_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5424,14 +5425,14 @@
             "created_at"
           ]
         },
-        "idx_sandbox_audit_process": {
+        "ind_agsvc_sae_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "process_id"
           ]
         },
-        "idx_sandbox_audit_session": {
+        "ind_agsvc_sae_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5439,7 +5440,7 @@
             "created_at"
           ]
         },
-        "idx_sandbox_audit_trace": {
+        "ind_agsvc_sae_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5447,7 +5448,7 @@
             "created_at"
           ]
         },
-        "sandbox_audit_events_user_id_foreign": {
+        "ind_agsvc_sae_i6": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5460,7 +5461,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -5471,7 +5472,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -5480,7 +5481,7 @@
         }
       }
     },
-    "sandbox_executions": {
+    "tbl_agsvc_sandbox_executions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -5505,7 +5506,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -5550,7 +5551,7 @@
         "kind": {
           "type": "varchar(64)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -5622,7 +5623,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -5673,14 +5674,29 @@
             "execution_id"
           ]
         },
-        "idx_sandbox_executions_agent_session": {
+        "ind_agsvc_se_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "tool_call_id"
+          ]
+        },
+        "ind_agsvc_se_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "tool_execution_id"
+          ]
+        },
+        "ind_agsvc_se_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "agent_session_id"
           ]
         },
-        "idx_sandbox_executions_owner": {
+        "ind_agsvc_se_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5689,7 +5705,7 @@
             "created_at"
           ]
         },
-        "idx_sandbox_executions_run": {
+        "ind_agsvc_se_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5697,7 +5713,7 @@
             "created_at"
           ]
         },
-        "idx_sandbox_executions_session": {
+        "ind_agsvc_se_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5705,7 +5721,7 @@
             "created_at"
           ]
         },
-        "idx_sandbox_executions_status": {
+        "ind_agsvc_se_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5713,26 +5729,11 @@
             "created_at"
           ]
         },
-        "sandbox_executions_user_id_foreign": {
+        "ind_agsvc_se_i6": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
-          ]
-        },
-        "uk_sandbox_execution_run_tool_call": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "run_id",
-            "tool_call_id"
-          ]
-        },
-        "uk_sandbox_execution_tool_execution": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "tool_execution_id"
           ]
         }
       },
@@ -5741,7 +5742,7 @@
           "columns": [
             "tool_execution_id"
           ],
-          "referencedTable": "tool_executions",
+          "referencedTable": "tbl_agsvc_tool_executions",
           "referencedColumns": [
             "tool_execution_id"
           ],
@@ -5752,7 +5753,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -5763,7 +5764,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -5774,7 +5775,7 @@
           "columns": [
             "sandbox_session_id"
           ],
-          "referencedTable": "sandbox_sessions",
+          "referencedTable": "tbl_agsvc_sandbox_sessions",
           "referencedColumns": [
             "sandbox_session_id"
           ],
@@ -5785,7 +5786,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -5794,7 +5795,7 @@
         }
       }
     },
-    "sandbox_sessions": {
+    "tbl_agsvc_sandbox_sessions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -5819,7 +5820,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -5846,7 +5847,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -5855,7 +5856,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -5888,7 +5889,21 @@
             "sandbox_session_id"
           ]
         },
-        "idx_sandbox_sessions_owner": {
+        "ind_agsvc_ss_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
+          ]
+        },
+        "ind_agsvc_ss_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        "ind_agsvc_ss_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5897,7 +5912,7 @@
             "updated_at"
           ]
         },
-        "idx_sandbox_sessions_status": {
+        "ind_agsvc_ss_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -5905,25 +5920,11 @@
             "updated_at"
           ]
         },
-        "sandbox_sessions_user_id_foreign": {
+        "ind_agsvc_ss_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
-          ]
-        },
-        "uk_sandbox_sessions_agent_session_id": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "agent_session_id"
-          ]
-        },
-        "uk_sandbox_sessions_workspace_id": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "workspace_id"
           ]
         }
       },
@@ -5932,7 +5933,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -5943,7 +5944,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -5952,7 +5953,7 @@
         }
       }
     },
-    "task_memories": {
+    "tbl_agsvc_task_memories": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -5977,7 +5978,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6037,7 +6038,7 @@
             "memory_id"
           ]
         },
-        "idx_task_memories_owner_key": {
+        "ind_agsvc_tm_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6046,7 +6047,7 @@
             "memory_key"
           ]
         },
-        "idx_task_memories_owner_recent": {
+        "ind_agsvc_tm_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6055,7 +6056,7 @@
             "created_at"
           ]
         },
-        "task_memories_user_id_foreign": {
+        "ind_agsvc_tm_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6068,7 +6069,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -6079,7 +6080,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -6088,7 +6089,7 @@
         }
       }
     },
-    "task_todos": {
+    "tbl_agsvc_task_todos": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -6104,7 +6105,7 @@
         "content": {
           "type": "varchar(1024)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6113,7 +6114,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6131,7 +6132,7 @@
         "position": {
           "type": "int",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6147,9 +6148,9 @@
           "generation": null
         },
         "status": {
-          "type": "varchar(16)",
+          "type": "char(16)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6167,7 +6168,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6191,7 +6192,15 @@
             "todo_id"
           ]
         },
-        "idx_task_todos_owner_session": {
+        "ind_agsvc_tt_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "position"
+          ]
+        },
+        "ind_agsvc_tt_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6201,19 +6210,11 @@
             "position"
           ]
         },
-        "task_todos_user_id_foreign": {
+        "ind_agsvc_tt_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "user_id"
-          ]
-        },
-        "uk_task_todos_position": {
-          "unique": true,
-          "type": "BTREE",
-          "columns": [
-            "agent_session_id",
-            "position"
           ]
         }
       },
@@ -6222,7 +6223,7 @@
           "columns": [
             "agent_session_id"
           ],
-          "referencedTable": "agent_sessions",
+          "referencedTable": "tbl_agsvc_agent_sessions",
           "referencedColumns": [
             "agent_session_id"
           ],
@@ -6233,7 +6234,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -6244,7 +6245,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -6253,7 +6254,7 @@
         }
       }
     },
-    "tool_executions": {
+    "tbl_agsvc_tool_executions": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -6287,7 +6288,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6341,7 +6342,7 @@
         "risk_level": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6368,7 +6369,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6395,7 +6396,7 @@
         "tool_name": {
           "type": "varchar(255)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6404,7 +6405,7 @@
         "tool_source": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6428,19 +6429,19 @@
             "tool_execution_id"
           ]
         },
-        "tool_executions_agent_session_id_foreign": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "agent_session_id"
-          ]
-        },
-        "uk_tool_call": {
+        "ind_agsvc_te_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
             "run_id",
             "tool_call_id"
+          ]
+        },
+        "ind_agsvc_te_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
           ]
         }
       },
@@ -6449,7 +6450,7 @@
           "columns": [
             "agent_session_id"
           ],
-          "referencedTable": "agent_sessions",
+          "referencedTable": "tbl_agsvc_agent_sessions",
           "referencedColumns": [
             "agent_session_id"
           ],
@@ -6460,7 +6461,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -6469,7 +6470,7 @@
         }
       }
     },
-    "trace_spans": {
+    "tbl_agsvc_trace_spans": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -6521,7 +6522,7 @@
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6557,7 +6558,7 @@
         "kind": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6566,7 +6567,7 @@
         "name": {
           "type": "varchar(255)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6620,7 +6621,7 @@
         "started_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6629,7 +6630,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6665,7 +6666,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6690,7 +6691,7 @@
             "span_id"
           ]
         },
-        "idx_trace_spans_owner": {
+        "ind_agsvc_ts_i1": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6700,7 +6701,7 @@
             "started_at"
           ]
         },
-        "idx_trace_spans_parent": {
+        "ind_agsvc_ts_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6708,7 +6709,7 @@
             "parent_span_id"
           ]
         },
-        "idx_trace_spans_run": {
+        "ind_agsvc_ts_i3": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6718,14 +6719,14 @@
             "started_at"
           ]
         },
-        "trace_spans_run_id_foreign": {
+        "ind_agsvc_ts_i4": {
           "unique": false,
           "type": "BTREE",
           "columns": [
             "run_id"
           ]
         },
-        "trace_spans_user_id_foreign": {
+        "ind_agsvc_ts_i5": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6738,7 +6739,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -6749,7 +6750,7 @@
           "columns": [
             "run_id"
           ],
-          "referencedTable": "runs",
+          "referencedTable": "tbl_agsvc_runs",
           "referencedColumns": [
             "run_id"
           ],
@@ -6760,7 +6761,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -6769,7 +6770,7 @@
         }
       }
     },
-    "user_skill_enablements": {
+    "tbl_agsvc_user_skill_enablements": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
@@ -6785,7 +6786,7 @@
         "enabled_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6812,7 +6813,7 @@
         "file_count": {
           "type": "int",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6830,7 +6831,7 @@
         "skill_name": {
           "type": "varchar(191)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6839,7 +6840,7 @@
         "total_bytes": {
           "type": "bigint",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6848,7 +6849,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6872,16 +6873,7 @@
             "enablement_id"
           ]
         },
-        "idx_user_skill_enablements_owner": {
-          "unique": false,
-          "type": "BTREE",
-          "columns": [
-            "org_id",
-            "user_id",
-            "enabled_at"
-          ]
-        },
-        "uk_user_skill_enablements_owner_name": {
+        "ind_agsvc_use_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
@@ -6890,7 +6882,16 @@
             "skill_name"
           ]
         },
-        "user_skill_enablements_user_id_foreign": {
+        "ind_agsvc_use_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "enabled_at"
+          ]
+        },
+        "ind_agsvc_use_i2": {
           "unique": false,
           "type": "BTREE",
           "columns": [
@@ -6903,7 +6904,7 @@
           "columns": [
             "org_id"
           ],
-          "referencedTable": "organizations",
+          "referencedTable": "tbl_agsvc_organizations",
           "referencedColumns": [
             "org_id"
           ],
@@ -6914,7 +6915,7 @@
           "columns": [
             "user_id"
           ],
-          "referencedTable": "users",
+          "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
           ],
@@ -6923,14 +6924,14 @@
         }
       }
     },
-    "users": {
+    "tbl_agsvc_users": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "created_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6966,7 +6967,7 @@
         "status": {
           "type": "varchar(32)",
           "nullable": false,
-          "default": null,
+          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -6975,7 +6976,7 @@
         "updated_at": {
           "type": "datetime(3)",
           "nullable": false,
-          "default": null,
+          "default": "1970-01-01 00:00:00.000",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -6999,7 +7000,7 @@
             "user_id"
           ]
         },
-        "uk_users_external_subject": {
+        "ind_agsvc_usr_a1": {
           "unique": true,
           "type": "BTREE",
           "columns": [
@@ -7009,14 +7010,14 @@
       },
       "foreignKeys": {}
     },
-    "workspace_quota_reservations": {
+    "tbl_agsvc_workspace_quota_reservations": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
       "columns": {
         "bytes": {
           "type": "bigint unsigned",
           "nullable": false,
-          "default": null,
+          "default": "0",
           "extra": "",
           "charset": null,
           "collation": null,
@@ -7074,25 +7075,25 @@
   },
   "triggers": {
     "trg_agent_session_snapshots_forbid_delete": {
-      "table": "agent_session_snapshots",
+      "table": "tbl_agsvc_agent_session_snapshots",
       "event": "DELETE",
       "timing": "BEFORE",
       "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'agent_session_snapshots is append-only: DELETE is forbidden'"
     },
     "trg_agent_session_snapshots_forbid_update": {
-      "table": "agent_session_snapshots",
+      "table": "tbl_agsvc_agent_session_snapshots",
       "event": "UPDATE",
       "timing": "BEFORE",
       "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'agent_session_snapshots is append-only: UPDATE is forbidden'"
     },
     "trg_messages_forbid_delete": {
-      "table": "messages",
+      "table": "tbl_agsvc_messages",
       "event": "DELETE",
       "timing": "BEFORE",
       "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'messages is append-only: DELETE is forbidden'"
     },
     "trg_messages_forbid_update": {
-      "table": "messages",
+      "table": "tbl_agsvc_messages",
       "event": "UPDATE",
       "timing": "BEFORE",
       "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'messages is append-only: UPDATE is forbidden'"

@@ -48,23 +48,23 @@ export interface ExecArtifactInsert {
 }
 
 export const EXEC_ARTIFACTS_DDL = `
-CREATE TABLE exec_artifacts (
+CREATE TABLE tbl_agsvc_exec_artifacts (
   artifact_id  VARCHAR(64)       NOT NULL,
   session_id   VARCHAR(191)      NOT NULL,
   workspace_id VARCHAR(191)      NOT NULL,
   org_id       CHAR(26)          NOT NULL,
   user_id      CHAR(26)          NOT NULL,
-  name         VARCHAR(1024)     NOT NULL,
-  source_path  VARCHAR(4096)     NOT NULL,
+  name         VARCHAR(1024)     NOT NULL DEFAULT '',
+  source_path  VARCHAR(4096)     NOT NULL DEFAULT '',
   mime_type    VARCHAR(255)      NOT NULL DEFAULT 'application/octet-stream',
   sha256       CHAR(64)          NOT NULL,
-  size_bytes   BIGINT UNSIGNED   NOT NULL,
+  size_bytes   BIGINT UNSIGNED   NOT NULL DEFAULT 0,
   identity     JSON              NULL,
   created_at   DATETIME(3)       NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (artifact_id),
-  KEY idx_exec_artifacts_session (session_id),
-  KEY idx_exec_artifacts_workspace (workspace_id),
-  KEY idx_exec_artifacts_owner (org_id, user_id)
+  KEY ind_agsvc_ea_i2 (session_id),
+  KEY ind_agsvc_ea_i3 (workspace_id),
+  KEY ind_agsvc_ea_i1 (org_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `.trim();
 
@@ -142,7 +142,7 @@ export interface ArtifactStore {
 export class MySqlArtifactStore implements ArtifactStore {
   constructor(
     private readonly pool: Pool,
-    private readonly table: string = 'exec_artifacts',
+    private readonly table: string = 'tbl_agsvc_exec_artifacts',
   ) {}
 
   async insert(rec: ExecArtifactInsert): Promise<void> {

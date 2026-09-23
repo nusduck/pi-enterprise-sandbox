@@ -305,7 +305,7 @@ export class RunRepository {
     const traceParentSpanId = assertTraceParentSpanId(input.traceParentSpanId);
 
     const now = toMysqlDateTime(input.createdAt || this.now());
-    await this.db('runs').insert({
+    await this.db('tbl_agsvc_runs').insert({
       run_id: runId,
       org_id: scope.orgId,
       user_id: scope.userId,
@@ -340,7 +340,7 @@ export class RunRepository {
   async getById(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(runId, 'runId');
-    let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs').where({ run_id: id }), s);
     if (opts.forUpdate) q = q.forUpdate();
     const row = await q.first();
     return row ? mapRunRow(row) : null;
@@ -378,7 +378,7 @@ export class RunRepository {
       SUBAGENT_CHILD_LIST_MAX,
     );
     let q = applyOwnerScope(
-      this.db('runs').where({ parent_run_id: parentId }),
+      this.db('tbl_agsvc_runs').where({ parent_run_id: parentId }),
       s,
     );
     if (Array.isArray(opts.childRunIds)) {
@@ -420,7 +420,7 @@ export class RunRepository {
 
     for (let depth = 0; depth < maxDepth && frontier.length > 0; depth += 1) {
       const rows = await applyOwnerScope(
-        this.db('runs').whereIn('parent_run_id', frontier),
+        this.db('tbl_agsvc_runs').whereIn('parent_run_id', frontier),
         s,
       )
         .orderBy('created_at', 'desc')
@@ -453,7 +453,7 @@ export class RunRepository {
   async getByIdForOrg(runId: string, orgId: string, opts: { forUpdate?: boolean } = {}) {
     const id = assertUlid(runId, 'runId');
     const oid = assertUlid(orgId, 'orgId');
-    let q = this.db('runs').where({ run_id: id, org_id: oid });
+    let q = this.db('tbl_agsvc_runs').where({ run_id: id, org_id: oid });
     if (opts.forUpdate) q = q.forUpdate();
     const row = await q.first();
     return row ? mapRunRow(row) : null;
@@ -493,7 +493,7 @@ export class RunRepository {
         ? opts.statuses.map((st) => assertRunStatus(st, 'statuses'))
         : [...NON_TERMINAL_RUN_STATUSES];
 
-    let q = this.db('runs')
+    let q = this.db('tbl_agsvc_runs')
       .whereIn('status', statuses)
       .orderBy('run_id', 'asc')
       .limit(limit);
@@ -512,7 +512,7 @@ export class RunRepository {
   async list(scope: { orgId: string, userId: string }, opts: { conversationId?: string, status?: string, limit?: number } = {}) {
     const s = requireOwnerUlids(scope);
     const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
-    let q = applyOwnerScope(this.db('runs'), s).orderBy('created_at', 'desc');
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs'), s).orderBy('created_at', 'desc');
     if (opts.conversationId) {
       q = q.andWhere({
         conversation_id: assertUlid(opts.conversationId, 'conversationId'),
@@ -534,7 +534,7 @@ export class RunRepository {
     const trace = assertTraceId(traceId);
     const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
     const rows = await applyOwnerScope(
-      this.db('runs').where({ trace_id: trace }),
+      this.db('tbl_agsvc_runs').where({ trace_id: trace }),
       s,
     )
       .orderBy('created_at', 'asc')
@@ -562,7 +562,7 @@ export class RunRepository {
         ? opts.statuses.map((st) => assertRunStatus(st, 'statuses'))
         : [...NON_TERMINAL_RUN_STATUSES];
 
-    let q = applyOwnerScope(this.db('runs'), s)
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs'), s)
       .whereIn('status', statuses)
       .orderBy('created_at', 'asc');
     if (opts.conversationId) {
@@ -628,7 +628,7 @@ export class RunRepository {
         : null;
     }
     const n = await applyOwnerScope(
-      this.db('runs').where({ run_id: id }),
+      this.db('tbl_agsvc_runs').where({ run_id: id }),
       s,
     ).update(update);
     if (!n) {
@@ -689,7 +689,7 @@ export class RunRepository {
     }
 
     const n = await applyOwnerScope(
-      this.db('runs').where({ run_id: id }).whereIn('status', expected),
+      this.db('tbl_agsvc_runs').where({ run_id: id }).whereIn('status', expected),
       s,
     ).update(update);
 
@@ -731,7 +731,7 @@ export class RunRepository {
 
     // First-writer wins: only fill null cancel_requested_at.
     const n = await applyOwnerScope(
-      this.db('runs').where({ run_id: id }).whereNull('cancel_requested_at'),
+      this.db('tbl_agsvc_runs').where({ run_id: id }).whereNull('cancel_requested_at'),
       s,
     ).update({
       cancel_requested_at: at,

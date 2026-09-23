@@ -132,7 +132,7 @@ export class AgentSessionSnapshotRepository {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     let q = applyOwnerScope(
-      db('agent_sessions').where({ agent_session_id: id }),
+      db('tbl_agsvc_agent_sessions').where({ agent_session_id: id }),
       s,
     );
     if (opts.forUpdate) q = q.forUpdate();
@@ -285,7 +285,7 @@ export class AgentSessionSnapshotRepository {
 
     // Store logical payload (header+entries); verification always re-materializes.
     try {
-      await trx('agent_session_snapshots').insert({
+      await trx('tbl_agsvc_agent_session_snapshots').insert({
         snapshot_id: snapshotId,
         agent_session_id: session.agentSessionId,
         snapshot_version: snapshotVersion,
@@ -309,7 +309,7 @@ export class AgentSessionSnapshotRepository {
 
     // CAS: owner + ACTIVE + pi_session_version + execution_fence_token
     const n = await applyOwnerScope(
-      trx('agent_sessions').where({
+      trx('tbl_agsvc_agent_sessions').where({
         agent_session_id: session.agentSessionId,
         status: SESSION_STATUS.ACTIVE,
         pi_session_version: expectedPi,
@@ -328,7 +328,7 @@ export class AgentSessionSnapshotRepository {
       );
     }
 
-    const row = await trx('agent_session_snapshots')
+    const row = await trx('tbl_agsvc_agent_session_snapshots')
       .where({ snapshot_id: snapshotId })
       .first();
     return mapAgentSessionSnapshot(row);
@@ -337,7 +337,7 @@ export class AgentSessionSnapshotRepository {
   async getById(snapshotId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(snapshotId, 'snapshotId');
-    const row = await this.db('agent_session_snapshots')
+    const row = await this.db('tbl_agsvc_agent_session_snapshots')
       .where({ snapshot_id: id })
       .first();
     if (!row) return null;
@@ -392,7 +392,7 @@ export class AgentSessionSnapshotRepository {
       return null;
     }
 
-    const row = await this.db('agent_session_snapshots')
+    const row = await this.db('tbl_agsvc_agent_session_snapshots')
       .where({ agent_session_id: sid, snapshot_version: pointer })
       .first();
 
@@ -443,7 +443,7 @@ export class AgentSessionSnapshotRepository {
       });
     }
 
-    const row = await this.db('agent_session_snapshots')
+    const row = await this.db('tbl_agsvc_agent_session_snapshots')
       .where({ agent_session_id: sid, snapshot_version: version })
       .first();
     if (!row) return null;

@@ -172,7 +172,7 @@ describe('AgentCatalogService — 一个 org 下并列多个智能体', () => {
       }),
       ValidationError,
     );
-    assert.equal(world.tables.agent_definitions.length, 1);
+    assert.equal(world.tables.tbl_agsvc_agent_definitions.length, 1);
   });
 });
 
@@ -191,7 +191,7 @@ describe('会话与 Agent 的绑定', () => {
     assert.equal(selected.agent_id, analyst.agent.agent_id);
 
     const defaulted = await conversations.create(ADMIN_AUTH, { title: '没选' });
-    const tenantDefault = world.tables.agent_definitions.find(
+    const tenantDefault = world.tables.tbl_agsvc_agent_definitions.find(
       (row) => row.name === 'default',
     );
     assert.equal(defaulted.agent_id, tenantDefault.agent_id);
@@ -239,7 +239,7 @@ describe('会话与 Agent 的绑定', () => {
       traceId: 'a'.repeat(32),
       idempotencyKey: 'pinned-follow-up',
     });
-    const oldRow = world.tables.runs.find((row) => row.run_id === oldRun.runId);
+    const oldRow = world.tables.tbl_agsvc_runs.find((row) => row.run_id === oldRun.runId);
     assert.equal(oldRow.agent_version_id, v1);
 
     // 新会话拿到 v2。
@@ -253,7 +253,7 @@ describe('会话与 Agent 的绑定', () => {
       traceId: 'b'.repeat(32),
       idempotencyKey: 'fresh-first-turn',
     });
-    const freshRow = world.tables.runs.find((row) => row.run_id === freshRun.runId);
+    const freshRow = world.tables.tbl_agsvc_runs.find((row) => row.run_id === freshRun.runId);
     assert.equal(freshRow.agent_version_id, v2.version.agent_version_id);
   });
 
@@ -298,7 +298,7 @@ describe('会话与 Agent 的绑定', () => {
   it('同名 Agent 冲突时报可读的错误，而不是裸的 ConflictError', async () => {
     const world = createFakeRunWorld();
     await provisionOwner(world);
-    // fake knex 不执行 uk_agent_definitions_org_name，所以直接让仓储抛出真实
+    // fake knex 不执行 ind_agsvc_ad_a1，所以直接让仓储抛出真实
     // MySQL 会抛的那个错，验证服务把它翻成了调用方看得懂的 400。
     const catalog = new AgentCatalogService({
       transactionManager: world.transactionManager,

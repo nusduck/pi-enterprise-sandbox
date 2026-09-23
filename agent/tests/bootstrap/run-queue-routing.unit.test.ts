@@ -20,10 +20,10 @@ import {
   planRunQueueTopology,
 } from '../../src/infrastructure/redis/run-queue-topology.js';
 
-/** 最小 knex 替身：只答 `runs` 表按主键的那一条查询。 */
+/** 最小 knex 替身：只答 `tbl_agsvc_runs` 表按主键的那一条查询。 */
 function fakeKnex(rows: Record<string, { subagent_depth: number }>): any {
   return (table: string) => {
-    assert.equal(table, 'runs');
+    assert.equal(table, 'tbl_agsvc_runs');
     let key = '';
     const builder = {
       select: () => builder,

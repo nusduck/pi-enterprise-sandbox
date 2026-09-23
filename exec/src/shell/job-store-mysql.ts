@@ -29,7 +29,7 @@ import type {
 } from './job-types.js';
 
 /** 默认表名——见文件头关于为什么不是 `process_executions` 的说明。 */
-export const DEFAULT_JOBS_TABLE = 'exec_jobs';
+export const DEFAULT_JOBS_TABLE = 'tbl_agsvc_exec_jobs';
 
 interface JobRow extends RowDataPacket {
   process_id: string;

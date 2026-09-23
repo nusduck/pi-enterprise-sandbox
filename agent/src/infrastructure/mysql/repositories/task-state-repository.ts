@@ -140,7 +140,7 @@ export class TaskStateRepository {
     }
 
     await applyOwnerScope(
-      this.db('task_todos').where({ agent_session_id: agentSessionId }),
+      this.db('tbl_agsvc_task_todos').where({ agent_session_id: agentSessionId }),
       scope,
     ).delete();
 
@@ -150,7 +150,7 @@ export class TaskStateRepository {
       const content = boundText(item?.content, MAX_TODO_CONTENT_CHARS);
       if (!content) continue;
       position += 1;
-      await this.db('task_todos').insert({
+      await this.db('tbl_agsvc_task_todos').insert({
         todo_id: this.#newId('todoId'),
         org_id: scope.orgId,
         user_id: scope.userId,
@@ -170,7 +170,7 @@ export class TaskStateRepository {
     const scope = requireOwnerScope(input);
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const rows = await applyOwnerScope(
-      this.db('task_todos').where({ agent_session_id: agentSessionId }),
+      this.db('tbl_agsvc_task_todos').where({ agent_session_id: agentSessionId }),
       scope,
     )
       .orderBy('position', 'asc')
@@ -200,7 +200,7 @@ export class TaskStateRepository {
     }
     const key = input.key == null ? null : boundText(input.key, MAX_MEMORY_KEY_CHARS);
     const memoryId = this.#newId('memoryId');
-    await this.db('task_memories').insert({
+    await this.db('tbl_agsvc_task_memories').insert({
       memory_id: memoryId,
       org_id: scope.orgId,
       user_id: scope.userId,
@@ -213,7 +213,7 @@ export class TaskStateRepository {
       created_at: toMysqlDateTime(this.now()),
     });
     const row = await applyOwnerScope(
-      this.db('task_memories').where({ memory_id: memoryId }),
+      this.db('tbl_agsvc_task_memories').where({ memory_id: memoryId }),
       scope,
     ).first();
     return row ? mapMemory(row) : null;
@@ -236,7 +236,7 @@ export class TaskStateRepository {
     const scope = requireOwnerScope(input);
     const limit = boundLimit(input.limit);
     const query = boundText(input.query, MAX_MEMORY_KEY_CHARS);
-    let q = applyOwnerScope(this.db('task_memories'), scope);
+    let q = applyOwnerScope(this.db('tbl_agsvc_task_memories'), scope);
     if (query) {
       // Escape LIKE wildcards so a literal % or _ in the query cannot widen it.
       const needle = `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;

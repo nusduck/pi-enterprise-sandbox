@@ -80,21 +80,21 @@ describeLive('schema manifest vs real migrations (TEST_MYSQL_URL)', () => {
     try {
       assert.deepEqual(await kindsOf(), ['missing_trigger trg_messages_forbid_delete']);
     } finally {
-      await knex.raw(`CREATE TRIGGER trg_messages_forbid_delete BEFORE DELETE ON messages FOR EACH ROW ${row.body}`);
+      await knex.raw(`CREATE TRIGGER trg_messages_forbid_delete BEFORE DELETE ON tbl_agsvc_messages FOR EACH ROW ${row.body}`);
     }
     assert.deepEqual(await kindsOf(), []);
   });
 
   it('a dropped later-migration column and a dropped unique key are both caught', async () => {
-    await knex.raw('ALTER TABLE cron_jobs DROP INDEX idx_cron_jobs_claim_token');
-    await knex.raw('ALTER TABLE cron_jobs DROP COLUMN claim_token');
+    await knex.raw('ALTER TABLE tbl_agsvc_cron_jobs DROP INDEX ind_agsvc_cj_i3');
+    await knex.raw('ALTER TABLE tbl_agsvc_cron_jobs DROP COLUMN claim_token');
     try {
       const kinds = await kindsOf();
-      assert.ok(kinds.includes('missing_column cron_jobs.claim_token'), kinds.join(', '));
-      assert.ok(kinds.includes('missing_index cron_jobs.idx_cron_jobs_claim_token'), kinds.join(', '));
+      assert.ok(kinds.includes('missing_column tbl_agsvc_cron_jobs.claim_token'), kinds.join(', '));
+      assert.ok(kinds.includes('missing_index tbl_agsvc_cron_jobs.ind_agsvc_cj_i3'), kinds.join(', '));
     } finally {
-      await knex.raw('ALTER TABLE cron_jobs ADD COLUMN claim_token CHAR(26) NULL');
-      await knex.raw('CREATE INDEX idx_cron_jobs_claim_token ON cron_jobs (claim_token)');
+      await knex.raw('ALTER TABLE tbl_agsvc_cron_jobs ADD COLUMN claim_token CHAR(26) NULL');
+      await knex.raw('CREATE INDEX ind_agsvc_cj_i3 ON tbl_agsvc_cron_jobs (claim_token)');
     }
   });
 

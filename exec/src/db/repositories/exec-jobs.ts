@@ -28,15 +28,15 @@ export { InMemoryJobStore } from '../../shell/job-store-memory.js';
  * 不照抄 Python 十态）。
  */
 export const EXEC_JOBS_DDL = `
-CREATE TABLE exec_jobs (
+CREATE TABLE tbl_agsvc_exec_jobs (
   process_id         VARCHAR(64)       NOT NULL,
-  kind               VARCHAR(16)       NOT NULL DEFAULT 'bash',
-  label              VARCHAR(1024)     NOT NULL,
+  kind               CHAR(16)          NOT NULL DEFAULT 'bash',
+  label              VARCHAR(1024)     NOT NULL DEFAULT '',
   org_id             CHAR(26)          NOT NULL,
   user_id            CHAR(26)          NOT NULL,
   workspace_id       VARCHAR(191)      NOT NULL,
   run_id             VARCHAR(64)       NULL,
-  status             VARCHAR(32)       NOT NULL,
+  status             VARCHAR(32)       NOT NULL DEFAULT '',
   detail             TEXT              NULL,
   output_limit_bytes BIGINT UNSIGNED   NULL,
   pid                INT               NULL,
@@ -46,18 +46,18 @@ CREATE TABLE exec_jobs (
   reported           TINYINT(1)        NOT NULL DEFAULT 0,
   started_at         DATETIME(3)       NULL,
   finished_at        DATETIME(3)       NULL,
-  created_at         DATETIME(3)       NOT NULL,
+  created_at         DATETIME(3)       NOT NULL DEFAULT '1970-01-01 00:00:00.000',
   PRIMARY KEY (process_id),
-  KEY idx_exec_jobs_owner (org_id, user_id, workspace_id),
-  KEY idx_exec_jobs_run (run_id),
-  KEY idx_exec_jobs_status (status),
-  KEY idx_exec_jobs_created (created_at)
+  KEY ind_agsvc_ej_i2 (org_id, user_id, workspace_id),
+  KEY ind_agsvc_ej_i3 (run_id),
+  KEY ind_agsvc_ej_i4 (status),
+  KEY ind_agsvc_ej_i1 (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `.trim();
 
 export const EXEC_JOBS_INDEXES: readonly string[] = [
   'PRIMARY KEY (process_id)',
-  'KEY idx_exec_jobs_owner (org_id, user_id, workspace_id) for owner-scoped reads',
-  'KEY idx_exec_jobs_run (run_id) for listByRun',
-  'KEY idx_exec_jobs_status (status) for active/recovery scans',
+  'KEY ind_agsvc_ej_i2 (org_id, user_id, workspace_id) for owner-scoped reads',
+  'KEY ind_agsvc_ej_i3 (run_id) for listByRun',
+  'KEY ind_agsvc_ej_i4 (status) for active/recovery scans',
 ];

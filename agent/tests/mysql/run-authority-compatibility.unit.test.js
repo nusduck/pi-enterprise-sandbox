@@ -63,12 +63,12 @@ const FIXED_NOW = new Date('2026-07-18T05:00:00.000Z');
 function createAuthorityFake() {
   /** @type {Record<string, Record<string, unknown>[]>} */
   const tables = {
-    runs: [],
-    organization_external_refs: [],
-    conversation_external_refs: [],
-    users: [],
-    organizations: [],
-    organization_memberships: [],
+    tbl_agsvc_runs: [],
+    tbl_agsvc_organization_external_refs: [],
+    tbl_agsvc_conversation_external_refs: [],
+    tbl_agsvc_users: [],
+    tbl_agsvc_organizations: [],
+    tbl_agsvc_organization_memberships: [],
   };
 
   /**
@@ -132,7 +132,7 @@ function createAuthorityFake() {
         return Promise.resolve().then(() => {
           const table = tables[tableName] || (tables[tableName] = []);
           // PK uniqueness heuristics
-          if (tableName === 'organization_external_refs') {
+          if (tableName === 'tbl_agsvc_organization_external_refs') {
             const dup = table.some(
               (r) =>
                 r.provider === row.provider &&
@@ -145,7 +145,7 @@ function createAuthorityFake() {
               throw err;
             }
           }
-          if (tableName === 'conversation_external_refs') {
+          if (tableName === 'tbl_agsvc_conversation_external_refs') {
             const dup = table.some(
               (r) =>
                 r.org_id === row.org_id &&
@@ -160,7 +160,7 @@ function createAuthorityFake() {
               throw err;
             }
           }
-          if (tableName === 'users') {
+          if (tableName === 'tbl_agsvc_users') {
             const dup = table.some(
               (r) =>
                 r.user_id === row.user_id ||
@@ -173,7 +173,7 @@ function createAuthorityFake() {
               throw err;
             }
           }
-          if (tableName === 'organization_memberships') {
+          if (tableName === 'tbl_agsvc_organization_memberships') {
             const dup = table.some(
               (r) => r.org_id === row.org_id && r.user_id === row.user_id,
             );
@@ -261,7 +261,7 @@ function seedRun(knex, overrides = {}) {
     updated_at: '2026-07-18 04:00:00.000',
     ...overrides,
   };
-  knex.__tables.runs.push(row);
+  knex.__tables.tbl_agsvc_runs.push(row);
   return row;
 }
 
@@ -321,7 +321,7 @@ describe('RunRepository list limits + conditional status', () => {
       status: 'STARTING',
     });
     assert.equal(updated.status, 'STARTING');
-    assert.equal(knex.__tables.runs[0].status, 'STARTING');
+    assert.equal(knex.__tables.tbl_agsvc_runs[0].status, 'STARTING');
   });
 
   it('updateStatusIf CAS: conflict when status differs', async () => {
@@ -338,7 +338,7 @@ describe('RunRepository list limits + conditional status', () => {
         return true;
       },
     );
-    assert.equal(knex.__tables.runs[0].status, 'RUNNING');
+    assert.equal(knex.__tables.tbl_agsvc_runs[0].status, 'RUNNING');
   });
 
   it('updateStatusIf CAS: not found for other tenant', async () => {
@@ -351,7 +351,7 @@ describe('RunRepository list limits + conditional status', () => {
         }),
       NotFoundError,
     );
-    assert.equal(knex.__tables.runs[0].status, 'QUEUED');
+    assert.equal(knex.__tables.tbl_agsvc_runs[0].status, 'QUEUED');
   });
 
   it('updateStatusIf applies whereIn for expected statuses (CAS SQL shape)', async () => {
@@ -573,7 +573,7 @@ describe('ExternalReferenceRepository + user external subject', () => {
       externalSubject: uuid,
       orgId: ORG,
     });
-    const row = knex.__tables.organization_external_refs[0];
+    const row = knex.__tables.tbl_agsvc_organization_external_refs[0];
     assert.equal(row.org_id, ORG);
     assert.equal(isUlid(String(row.org_id)), true);
     assert.equal(isLegacyOrUuidIdentity(String(row.org_id)), false);

@@ -60,7 +60,7 @@ async function assertParentChain(db, { traceId, spanId, parentSpanId, runId, sco
       throw new Error('trace span parent cycle detected');
     }
     seen.add(cursor);
-    const row = await db('trace_spans')
+    const row = await db('tbl_agsvc_trace_spans')
       .where({ trace_id: traceId, span_id: cursor })
       .first();
     if (!row) return;
@@ -109,7 +109,7 @@ export class TraceSpanRepository {
     // transaction, so CAS retries livelock against a newer committed row
     // (streaming watermark vs GET /trace materialize). Locking reads see the
     // latest version and serialize writers on this span.
-    let existingQuery = this.db('trace_spans').where({
+    let existingQuery = this.db('tbl_agsvc_trace_spans').where({
       trace_id: traceId,
       span_id: spanId,
     });
@@ -209,7 +209,7 @@ export class TraceSpanRepository {
         ...semanticPatch,
         updated_at: toMysqlDateTime(now),
       };
-      let update = this.db('trace_spans').where({
+      let update = this.db('tbl_agsvc_trace_spans').where({
         trace_id: traceId,
         span_id: spanId,
         org_id: scope.orgId,
@@ -245,7 +245,7 @@ export class TraceSpanRepository {
         updated_at: toMysqlDateTime(now),
       };
       try {
-        await this.db('trace_spans').insert({
+        await this.db('tbl_agsvc_trace_spans').insert({
           trace_id: traceId,
           span_id: spanId,
           ...patch,
@@ -262,7 +262,7 @@ export class TraceSpanRepository {
         return this.upsert(input, retryCount + 1);
       }
     }
-    const row = await this.db('trace_spans')
+    const row = await this.db('tbl_agsvc_trace_spans')
       .where({ trace_id: traceId, span_id: spanId })
       .first();
     return mapTraceSpan(row);
@@ -384,7 +384,7 @@ export class TraceSpanRepository {
         });
       } else if (lower === 'run.started' || status !== 'running') {
         const openQueue = await applyOwnerScope(
-          this.db('trace_spans').where({
+          this.db('tbl_agsvc_trace_spans').where({
             run_id: runId,
             trace_id: traceId,
             kind: 'queue',
@@ -510,7 +510,7 @@ export class TraceSpanRepository {
     await this.ensureRunRoot(run, owner);
 
     const rootRow = await applyOwnerScope(
-      this.db('trace_spans').where({
+      this.db('tbl_agsvc_trace_spans').where({
         trace_id: traceId,
         span_id: root,
         run_id: runId,
@@ -524,7 +524,7 @@ export class TraceSpanRepository {
     if (targetSequence == null) {
       // Compatibility for direct repository callers that pass a partial Run.
       // The production query service supplies runs.next_event_sequence.
-      const maxRow = await this.db('run_events')
+      const maxRow = await this.db('tbl_agsvc_run_events')
         .where({ run_id: runId, trace_id: traceId })
         .max('sequence_no as max_seq')
         .first();
@@ -536,7 +536,7 @@ export class TraceSpanRepository {
     // multiple submit_artifact calls retain their individual tree parents.
     const artifactParentRefs = new Map();
     while (afterSequence < targetSequence) {
-      let eventQuery = this.db('run_events')
+      let eventQuery = this.db('tbl_agsvc_run_events')
         .where({ run_id: runId, trace_id: traceId })
         .andWhere('sequence_no', '>', afterSequence)
         .orderBy('sequence_no', 'asc');
@@ -572,7 +572,7 @@ export class TraceSpanRepository {
       }
     }
 
-    const tools = await this.db('tool_executions')
+    const tools = await this.db('tbl_agsvc_tool_executions')
       .where({ run_id: runId, trace_id: traceId })
       .orderBy('created_at', 'asc');
     const toolById = new Map();
@@ -607,7 +607,7 @@ export class TraceSpanRepository {
       });
     }
 
-    const sandboxExecutions = await this.db('sandbox_executions')
+    const sandboxExecutions = await this.db('tbl_agsvc_sandbox_executions')
       .where({ run_id: runId, org_id: owner.orgId, user_id: owner.userId })
       .orderBy('created_at', 'asc');
     for (const execution of sandboxExecutions || []) {
@@ -642,13 +642,13 @@ export class TraceSpanRepository {
       });
     }
 
-    const artifacts = await this.db('artifacts')
+    const artifacts = await this.db('tbl_agsvc_artifacts')
       .where({ run_id: runId, org_id: owner.orgId, user_id: owner.userId })
       .orderBy('created_at', 'asc');
     const existingArtifactParents = new Map();
     if (artifacts?.length) {
       const existingArtifactSpans = await applyOwnerScope(
-        this.db('trace_spans').where({
+        this.db('tbl_agsvc_trace_spans').where({
           run_id: runId,
           trace_id: traceId,
           kind: 'artifact',
@@ -703,7 +703,7 @@ export class TraceSpanRepository {
       });
     }
 
-    const a2aTasks = await this.db('a2a_tasks')
+    const a2aTasks = await this.db('tbl_agsvc_a2a_tasks')
       .where({ run_id: runId, org_id: owner.orgId, user_id: owner.userId })
       .orderBy('created_at', 'asc');
     for (const task of a2aTasks || []) {
@@ -746,7 +746,7 @@ export class TraceSpanRepository {
       ? null
       : normalizeSpanId(opts.cursor);
     let query = applyOwnerScope(
-      this.db('trace_spans').where({ run_id: id, trace_id: trace }),
+      this.db('tbl_agsvc_trace_spans').where({ run_id: id, trace_id: trace }),
       owner,
     );
     if (cursor) query = query.andWhere('span_id', '>', cursor);

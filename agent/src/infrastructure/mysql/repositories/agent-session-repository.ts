@@ -128,7 +128,7 @@ export class AgentSessionRepository {
       recovery = String(input.recoveryReasonCode);
     }
 
-    await this.db('agent_sessions').insert({
+    await this.db('tbl_agsvc_agent_sessions').insert({
       agent_session_id: agentSessionId,
       org_id: scope.orgId,
       user_id: scope.userId,
@@ -154,7 +154,7 @@ export class AgentSessionRepository {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     let q = applyOwnerScope(
-      this.db('agent_sessions').where({ agent_session_id: id }),
+      this.db('tbl_agsvc_agent_sessions').where({ agent_session_id: id }),
       s,
     );
     if (opts.forUpdate) q = q.forUpdate();
@@ -186,7 +186,7 @@ export class AgentSessionRepository {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(sandboxSessionId, 'sandboxSessionId');
     let q = applyOwnerScope(
-      this.db('agent_sessions').where({ sandbox_session_id: id }),
+      this.db('tbl_agsvc_agent_sessions').where({ sandbox_session_id: id }),
       s,
     );
     if (opts.forUpdate) q = q.forUpdate();
@@ -198,7 +198,7 @@ export class AgentSessionRepository {
     const s = requireOwnerUlids(scope);
     const cid = assertUlid(conversationId, 'conversationId');
     let q = applyOwnerScope(
-      this.db('agent_sessions').where({ conversation_id: cid }),
+      this.db('tbl_agsvc_agent_sessions').where({ conversation_id: cid }),
       s,
     ).orderBy('created_at', 'desc');
     if (opts.status) q = q.andWhere({ status: assertSessionStatus(opts.status) });
@@ -210,7 +210,7 @@ export class AgentSessionRepository {
     const s = requireOwnerUlids(scope);
     const cid = assertUlid(conversationId, 'conversationId');
     let q = applyOwnerScope(
-      this.db('agent_sessions').where({ conversation_id: cid }),
+      this.db('tbl_agsvc_agent_sessions').where({ conversation_id: cid }),
       s,
     )
       .whereIn('status', [SESSION_STATUS.CREATING, SESSION_STATUS.ACTIVE])
@@ -251,7 +251,7 @@ export class AgentSessionRepository {
     const lastRunId = assertUlid(opts.lastRunId, 'lastRunId');
 
     const n = await applyOwnerScope(
-      this.db('agent_sessions').where({
+      this.db('tbl_agsvc_agent_sessions').where({
         agent_session_id: id,
         status: SESSION_STATUS.ACTIVE,
         execution_fence_token: expected,
@@ -344,7 +344,7 @@ export class AgentSessionRepository {
     }
 
     const n = await applyOwnerScope(
-      this.db('agent_sessions').where({ agent_session_id: id }).whereIn('status', expected),
+      this.db('tbl_agsvc_agent_sessions').where({ agent_session_id: id }).whereIn('status', expected),
       s,
     ).update(update);
 
@@ -414,7 +414,7 @@ export class AgentSessionRepository {
     }
 
     const n = await applyOwnerScope(
-      this.db('agent_sessions').where(where),
+      this.db('tbl_agsvc_agent_sessions').where(where),
       s,
     ).update({
       execution_fence_token: next,
@@ -542,7 +542,7 @@ export class AgentSessionRepository {
 
     // 2) Owned Run row FOR UPDATE — validate before advancing fence.
     let runQ = applyOwnerScope(
-      this.db('runs').where({ run_id: runId }),
+      this.db('tbl_agsvc_runs').where({ run_id: runId }),
       s,
     ).forUpdate();
     const runRow = await runQ.first();
@@ -685,7 +685,7 @@ export class AgentSessionRepository {
     };
 
     const n = await applyOwnerScope(
-      this.db('agent_sessions').where({
+      this.db('tbl_agsvc_agent_sessions').where({
         agent_session_id: id,
         execution_fence_token: expected,
       }),

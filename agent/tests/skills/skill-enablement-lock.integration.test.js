@@ -76,14 +76,14 @@ describeLive('skill enablement owner lock (TEST_MYSQL_URL)', () => {
       await orgs.addMembership({ orgId: ORG, userId, role: 'member', status: 'active' }).catch(() => {});
     }
     // catch 只吞重复插入；种子真缺了就地失败。
-    assert.ok(await knex('organization_memberships').where({ org_id: ORG, user_id: USER_A }).first());
-    await knex('user_skill_enablements').where({ org_id: ORG }).del();
+    assert.ok(await knex('tbl_agsvc_organization_memberships').where({ org_id: ORG, user_id: USER_A }).first());
+    await knex('tbl_agsvc_user_skill_enablements').where({ org_id: ORG }).del();
   });
 
   after(async () => {
     if (!knex) return;
     try {
-      await knex('user_skill_enablements').where({ org_id: ORG }).del();
+      await knex('tbl_agsvc_user_skill_enablements').where({ org_id: ORG }).del();
     } catch {
       // ignore cleanup errors
     }

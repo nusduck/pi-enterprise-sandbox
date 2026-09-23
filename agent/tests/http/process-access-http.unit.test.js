@@ -35,7 +35,7 @@ function row() {
 describe('ProcessExecutionRepository owner scope', () => {
   it('lists and reads only rows for the requested owner', async () => {
     const state = createFakeState();
-    state.tables.process_executions = [row()];
+    state.tables.tbl_agsvc_process_executions = [row()];
     const repository = new ProcessExecutionRepository(createFakeKnex(state));
 
     const owned = await repository.getById(PROCESS, { orgId: ORG, userId: USER });

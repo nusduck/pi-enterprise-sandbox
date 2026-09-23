@@ -101,21 +101,21 @@ export const MAX_SESSION_BYTES = 8 * 1024 * 1024;
 
 /** DDL——迁移权威在 `agent/`，此处仅常量化供单测与文档固化。 */
 export const DSH_SESSIONS_DDL = `
-CREATE TABLE dsh_sessions (
+CREATE TABLE tbl_agsvc_dsh_sessions (
   session_id   CHAR(26)       NOT NULL,
   org_id       CHAR(26)       NOT NULL,
   user_id      CHAR(26)       NOT NULL,
   header_json  JSON           NOT NULL,
-  revision     VARCHAR(128)   NOT NULL,
+  revision     VARCHAR(128)   NOT NULL DEFAULT '',
   created_at   DATETIME(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at   DATETIME(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  updated_at   DATETIME(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (session_id),
-  KEY idx_dsh_sessions_owner (org_id, user_id, session_id)
+  KEY ind_agsvc_ds_i1 (org_id, user_id, session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `.trim();
 
 export const DSH_SESSION_EVENTS_DDL = `
-CREATE TABLE dsh_session_events (
+CREATE TABLE tbl_agsvc_dsh_session_events (
   session_id   CHAR(26)       NOT NULL,
   org_id       CHAR(26)       NOT NULL,
   user_id      CHAR(26)       NOT NULL,
@@ -123,8 +123,7 @@ CREATE TABLE dsh_session_events (
   record_json  JSON           NOT NULL,
   created_at   DATETIME(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (session_id, seq),
-  KEY idx_dsh_events_seq (session_id, seq),
-  KEY idx_dsh_events_owner (org_id, user_id, session_id, seq)
+  KEY ind_agsvc_dse_i1 (org_id, user_id, session_id, seq)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `.trim();
 
@@ -421,8 +420,8 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
       this.ownedPool = true;
     }
     this.physicalRoots = opts.physicalRoots ?? (poolOrConfig as MysqlSessionStoreConfig).physicalRoots ?? [];
-    this.sessionsTable = opts.sessionsTable ?? 'dsh_sessions';
-    this.eventsTable = opts.eventsTable ?? 'dsh_session_events';
+    this.sessionsTable = opts.sessionsTable ?? 'tbl_agsvc_dsh_sessions';
+    this.eventsTable = opts.eventsTable ?? 'tbl_agsvc_dsh_session_events';
     this.ownerForSession = opts.ownerForSession;
     this.currentOwner = opts.currentOwner;
   }

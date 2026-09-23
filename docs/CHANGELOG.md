@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed（破坏性：库表命名按 UPspec 落标）
+
+- **共享 MySQL 的表、索引与字段约束按公司《数据库设计规范》落标**（[ADR 0013](adr/0013-upspec-table-naming.md)，
+  迁移 `20260923000001_upspec_naming.js`）：40 张表改名为 `tbl_agsvc_<业务名>`；139 个索引改名为
+  `ind_agsvc_<表缩写>_(a|i)<n>`（≤18 字节）；8 个 `varchar(16)` 枚举列改 `char(16)`；121 个 NOT NULL 列补默认值。
+  主键、身份/租户/引用、凭据与完整性列有意不设默认值（漏写仍由数据库拒绝）。
+  新旧代码与新旧库互不兼容：已有库须停写 → 执行增量发布包 → `schema:verify` → 部署新镜像，不能滚动发布。
+  新增仓库卫生检查 `tests/test_schema_upspec_naming.py` 按 schema 清单守住规则。
+
 ### Changed（破坏性：容器用户与前端端口）
 
 - **K8s 内的镜像统一以 `up_docker`（1000:1000）运行**（目标环境要求）：agent / agent-worker、api-server 由同 uid 的

@@ -166,7 +166,7 @@ export class RunParentProvisioner {
    * @param orgId
    */
   async #lockOrganization(orgId: string) {
-    await this.db('organizations').where({ org_id: orgId }).forUpdate().first();
+    await this.db('tbl_agsvc_organizations').where({ org_id: orgId }).forUpdate().first();
   }
 
   /**

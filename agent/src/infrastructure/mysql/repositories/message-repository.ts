@@ -46,7 +46,7 @@ export class MessageRepository {
     const scope = requireOwnerScope(input);
     const runInTxn = async (trx) => {
       const conv = await applyOwnerScope(
-        trx('conversations').where({
+        trx('tbl_agsvc_conversations').where({
           conversation_id: input.conversationId,
         }),
         scope,
@@ -63,7 +63,7 @@ export class MessageRepository {
       let sequenceNo = input.sequenceNo;
       if (sequenceNo == null) {
         // Locked parent row: max under lock is safe; preferred vs unguarded MAX+1.
-        const agg = await trx('messages')
+        const agg = await trx('tbl_agsvc_messages')
           .where({ conversation_id: input.conversationId })
           .max('sequence_no as max_seq')
           .first();
@@ -72,7 +72,7 @@ export class MessageRepository {
       }
 
       try {
-        await trx('messages').insert({
+        await trx('tbl_agsvc_messages').insert({
           message_id: input.messageId,
           conversation_id: input.conversationId,
           agent_session_id: input.agentSessionId ?? null,
@@ -104,13 +104,13 @@ export class MessageRepository {
       }
 
       await applyOwnerScope(
-        trx('conversations').where({
+        trx('tbl_agsvc_conversations').where({
           conversation_id: input.conversationId,
         }),
         scope,
       ).update({ updated_at: toMysqlDateTime(new Date()) });
 
-      const row = await trx('messages')
+      const row = await trx('tbl_agsvc_messages')
         .where({ message_id: input.messageId })
         .first();
       return mapMessage(row);
@@ -138,7 +138,7 @@ export class MessageRepository {
   async listByConversation(conversationId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number } = {}) {
     const s = requireOwnerScope(scope);
     const conv = await applyOwnerScope(
-      this.db('conversations').where({ conversation_id: conversationId }),
+      this.db('tbl_agsvc_conversations').where({ conversation_id: conversationId }),
       s,
     ).first();
     if (!conv) {
@@ -150,7 +150,7 @@ export class MessageRepository {
 
     const after = opts.afterSequence ?? 0;
     const limit = opts.limit ?? 200;
-    const rows = await this.db('messages')
+    const rows = await this.db('tbl_agsvc_messages')
       .where({ conversation_id: conversationId })
       .andWhere('sequence_no', '>', after)
       .orderBy('sequence_no', 'asc')
@@ -175,7 +175,7 @@ export class MessageRepository {
   async latestAssistantForRun(conversationId: string, runId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
     const conv = await applyOwnerScope(
-      this.db('conversations').where({ conversation_id: conversationId }),
+      this.db('tbl_agsvc_conversations').where({ conversation_id: conversationId }),
       s,
     ).first();
     if (!conv) {
@@ -184,7 +184,7 @@ export class MessageRepository {
         id: conversationId,
       });
     }
-    const row = await this.db('messages')
+    const row = await this.db('tbl_agsvc_messages')
       .where({ conversation_id: conversationId, run_id: runId, role: 'assistant' })
       .orderBy('sequence_no', 'desc')
       .first();
@@ -193,8 +193,8 @@ export class MessageRepository {
 
   async getById(messageId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
-    const row = await this.db('messages as m')
-      .join('conversations as c', 'c.conversation_id', 'm.conversation_id')
+    const row = await this.db('tbl_agsvc_messages as m')
+      .join('tbl_agsvc_conversations as c', 'c.conversation_id', 'm.conversation_id')
       .where('m.message_id', messageId)
       .andWhere('c.org_id', s.orgId)
       .andWhere('c.user_id', s.userId)

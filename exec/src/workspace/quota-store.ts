@@ -119,10 +119,10 @@ function isRowArray(value: unknown): value is Record<string, unknown>[] {
  * 这里只写出需要哪些列，交给 W3-D）：
  *
  * ```sql
- * CREATE TABLE workspace_quota_reservations (
+ * CREATE TABLE tbl_agsvc_workspace_quota_reservations (
  *   workspace_id   VARCHAR(191)      NOT NULL,
  *   reservation_id VARCHAR(191)      NOT NULL,
- *   bytes          BIGINT UNSIGNED   NOT NULL,
+ *   bytes          BIGINT UNSIGNED   NOT NULL DEFAULT 0,
  *   created_at     DATETIME(3)       NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
  *   updated_at     DATETIME(3)       NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
  *                                    ON UPDATE CURRENT_TIMESTAMP(3),
@@ -143,7 +143,7 @@ function isRowArray(value: unknown): value is Record<string, unknown>[] {
 export class MySqlQuotaStore implements QuotaStore {
   constructor(
     private readonly pool: MySqlPoolLike,
-    private readonly table: string = 'workspace_quota_reservations',
+    private readonly table: string = 'tbl_agsvc_workspace_quota_reservations',
   ) {}
 
   async sumReserved(workspaceId: string): Promise<number> {

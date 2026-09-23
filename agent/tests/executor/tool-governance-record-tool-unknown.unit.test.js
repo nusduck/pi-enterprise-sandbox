@@ -33,7 +33,7 @@ const RUN_CTX = Object.freeze({
 });
 
 function seedWorld(state) {
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -57,7 +57,7 @@ function seedWorld(state) {
       updated_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESS,
       org_id: ORG,
@@ -76,11 +76,11 @@ function seedWorld(state) {
       closed_at: null,
     },
   ];
-  state.tables.tool_executions = [];
-  state.tables.approvals = [];
-  state.tables.sandbox_audit_events = [];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_tool_executions = [];
+  state.tables.tbl_agsvc_approvals = [];
+  state.tables.tbl_agsvc_sandbox_audit_events = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 describe('FencedToolGovernanceRecorder.recordToolUnknown', () => {
@@ -163,7 +163,7 @@ describe('FencedToolGovernanceRecorder.recordToolUnknown', () => {
     assert.equal(r.envelope?.data?.unknownOutcome, true);
     assert.equal(r.envelope?.data?.isError, true);
     assert.ok(
-      state.tables.run_events.some(
+      state.tables.tbl_agsvc_run_events.some(
         (e) =>
           e.event_type === 'tool.execution.failed' &&
           String(e.payload_json).includes('unknownOutcome'),
@@ -187,7 +187,7 @@ describe('FencedToolGovernanceRecorder.recordToolUnknown', () => {
     assert.equal(second.statusChanged, false);
     assert.equal(second.toolExecution.status, TOOL_EXECUTION_STATUS.UNKNOWN);
     assert.equal(
-      state.tables.run_events.filter(
+      state.tables.tbl_agsvc_run_events.filter(
         (e) => e.event_type === 'tool.execution.failed',
       ).length,
       1,
@@ -275,7 +275,7 @@ describe('FencedToolGovernanceRecorder.recordToolUnknown', () => {
       result: { err: 'boom' },
     });
     assert.equal(
-      state.tables.tool_executions.find((t) => t.tool_call_id === 'tc-fail')
+      state.tables.tbl_agsvc_tool_executions.find((t) => t.tool_call_id === 'tc-fail')
         .status,
       TOOL_EXECUTION_STATUS.FAILED,
     );
@@ -291,7 +291,7 @@ describe('FencedToolGovernanceRecorder.recordToolUnknown', () => {
     // CANCELLED — force status. Prepared before the approval park below: a
     // sandbox tool can only be dispatched while the Run is RUNNING.
     await prepareRunning(gov, 'tc-cancel');
-    const cancelRow = state.tables.tool_executions.find(
+    const cancelRow = state.tables.tbl_agsvc_tool_executions.find(
       (t) => t.tool_call_id === 'tc-cancel',
     );
     cancelRow.status = TOOL_EXECUTION_STATUS.CANCELLED;

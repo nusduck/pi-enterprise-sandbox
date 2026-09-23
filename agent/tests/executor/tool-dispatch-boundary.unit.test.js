@@ -31,7 +31,7 @@ const WSP = '01K0G2PAV8FPMVC9QHJG7JPN5G';
 const FENCE = 7;
 
 function seedWorld(state, { sessionFence = FENCE, sandboxSessionId = SBX } = {}) {
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -55,7 +55,7 @@ function seedWorld(state, { sessionFence = FENCE, sandboxSessionId = SBX } = {})
       updated_at: '2026-09-17 00:00:00.000',
     },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESS,
       org_id: ORG,
@@ -74,11 +74,11 @@ function seedWorld(state, { sessionFence = FENCE, sandboxSessionId = SBX } = {})
       closed_at: null,
     },
   ];
-  state.tables.tool_executions = [];
-  state.tables.approvals = [];
-  state.tables.sandbox_audit_events = [];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_tool_executions = [];
+  state.tables.tbl_agsvc_approvals = [];
+  state.tables.tbl_agsvc_sandbox_audit_events = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 function makeRecorder(knex, nextId, { sandboxSessionId = SBX } = {}) {
@@ -130,7 +130,7 @@ describe('DSH dispatch boundary: recordToolStarted', () => {
     });
 
     assert.equal(started.statusChanged, true);
-    const row = state.tables.tool_executions.find((r) => r.tool_call_id === 'call-bash-1');
+    const row = state.tables.tbl_agsvc_tool_executions.find((r) => r.tool_call_id === 'call-bash-1');
     assert.equal(row.status, TOOL_EXECUTION_STATUS.RUNNING);
     assert.ok(row.started_at, 'started_at is set at the dispatch boundary');
     const expected = computeSandboxToolRequestHash({ toolName: 'bash', args });
@@ -150,7 +150,7 @@ describe('DSH dispatch boundary: recordToolStarted', () => {
     const again = await recorder.recordToolStarted({ toolCallId: 'call-bash-2', toolName: 'bash', args });
     assert.equal(again.statusChanged, false);
     assert.equal(
-      state.tables.run_events.filter((e) => e.event_type === 'tool.execution.started').length,
+      state.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'tool.execution.started').length,
       1,
     );
     await assert.rejects(() =>
@@ -169,7 +169,7 @@ describe('DSH dispatch boundary: recordToolStarted', () => {
       toolName: 'ask_user_question',
       args: { questions: [] },
     });
-    const row = state.tables.tool_executions.find((r) => r.tool_call_id === 'call-ask-1');
+    const row = state.tables.tbl_agsvc_tool_executions.find((r) => r.tool_call_id === 'call-ask-1');
     assert.equal(row.status, TOOL_EXECUTION_STATUS.RUNNING);
     assert.equal(row.request_hash, null);
     assert.equal(row.execution_fence_token, null);
@@ -186,7 +186,7 @@ describe('DSH dispatch boundary: recordToolStarted', () => {
       }),
     );
     assert.equal(
-      state.tables.tool_executions.some((r) => r.status === TOOL_EXECUTION_STATUS.RUNNING),
+      state.tables.tbl_agsvc_tool_executions.some((r) => r.status === TOOL_EXECUTION_STATUS.RUNNING),
       false,
     );
   });
@@ -199,7 +199,7 @@ describe('DSH dispatch boundary: recordToolStarted', () => {
       toolName: 'bash',
       args: { command: 'ls', description: 'list' },
     });
-    const row = state.tables.tool_executions.find((r) => r.tool_call_id === 'call-bash-nosbx');
+    const row = state.tables.tbl_agsvc_tool_executions.find((r) => r.tool_call_id === 'call-bash-nosbx');
     assert.equal(row.status, TOOL_EXECUTION_STATUS.RUNNING);
     assert.equal(row.request_hash, null);
   });

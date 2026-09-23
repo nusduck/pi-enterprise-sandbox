@@ -182,7 +182,7 @@ export class OutboxRepository {
         ? null
         : toMysqlDateTime(input.nextAttemptAt);
 
-    await executor('domain_outbox').insert({
+    await executor('tbl_agsvc_domain_outbox').insert({
       outbox_id: input.outboxId,
       aggregate_type: input.aggregateType,
       aggregate_id: input.aggregateId,
@@ -198,7 +198,7 @@ export class OutboxRepository {
       published_at: null,
     });
 
-    const row = await executor('domain_outbox')
+    const row = await executor('tbl_agsvc_domain_outbox')
       .where({ outbox_id: input.outboxId })
       .first();
     return mapDomainOutbox(row);
@@ -211,7 +211,7 @@ export class OutboxRepository {
    * Unrelated aggregates are never locked by this claim.
    *
    * 竞争行为不再是「跳过被锁的行」而是「等待锁」：并发发布者会在条件 UPDATE 上
-   * 互相等待，由短事务、idx_outbox_claim 索引和 innodb_lock_wait_timeout 约束影响。
+   * 互相等待，由短事务、ind_agsvc_dob_i1 索引和 innodb_lock_wait_timeout 约束影响。
    *
    * @param {{
    *   limit?: number,
@@ -253,7 +253,7 @@ export class OutboxRepository {
       const claimToken = this.generateClaimToken();
 
       const updateResult = await trx.raw(
-        `UPDATE domain_outbox
+        `UPDATE tbl_agsvc_domain_outbox
          SET status = ?,
              claim_token = ?,
              claimed_at = ?,
@@ -281,7 +281,7 @@ export class OutboxRepository {
         `SELECT outbox_id, aggregate_type, aggregate_id, event_type, payload_json,
                 status, attempts, claim_token, claimed_at, next_attempt_at,
                 last_error, created_at, published_at
-         FROM domain_outbox
+         FROM tbl_agsvc_domain_outbox
          WHERE claim_token = ?
            AND status = ?
          ORDER BY created_at ASC, outbox_id ASC`,
@@ -340,7 +340,7 @@ export class OutboxRepository {
     const eligibilitySql = elig.sql ? ` AND ${elig.sql}` : '';
 
     const result = await executor.raw(
-      `UPDATE domain_outbox
+      `UPDATE tbl_agsvc_domain_outbox
        SET status = ?,
            claim_token = NULL,
            claimed_at = NULL,
@@ -373,7 +373,7 @@ export class OutboxRepository {
     if (!outboxId || !claimToken) return false;
     const publishedAt = toMysqlDateTime(opts.publishedAt || this.now());
     const result = await this.db.raw(
-      `UPDATE domain_outbox
+      `UPDATE tbl_agsvc_domain_outbox
        SET status = ?,
            published_at = ?,
            claim_token = NULL,
@@ -407,7 +407,7 @@ export class OutboxRepository {
   async markPendingForRetry(outboxId: string, claimToken: string, error: unknown, opts: { attempts?: number, now?: Date } = {}) {
     if (!outboxId || !claimToken) return 'noop';
 
-    const row = await this.db('domain_outbox')
+    const row = await this.db('tbl_agsvc_domain_outbox')
       .where({ outbox_id: outboxId, claim_token: claimToken })
       .first();
     if (!row || String(row.status) !== OUTBOX_STATUS.PUBLISHING) {
@@ -430,7 +430,7 @@ export class OutboxRepository {
     const nextAttemptAt = toMysqlDateTime(new Date(at.getTime() + delayMs));
 
     const result = await this.db.raw(
-      `UPDATE domain_outbox
+      `UPDATE tbl_agsvc_domain_outbox
        SET status = ?,
            claim_token = NULL,
            claimed_at = NULL,
@@ -463,7 +463,7 @@ export class OutboxRepository {
     if (!outboxId || !claimToken) return false;
     const sanitized = sanitizeOutboxError(error, LAST_ERROR_MAX_LEN);
     const result = await this.db.raw(
-      `UPDATE domain_outbox
+      `UPDATE tbl_agsvc_domain_outbox
        SET status = ?,
            claim_token = NULL,
            claimed_at = NULL,
@@ -502,7 +502,7 @@ export class OutboxRepository {
       `SELECT outbox_id, aggregate_type, aggregate_id, event_type, payload_json,
               status, attempts, claim_token, claimed_at, next_attempt_at,
               last_error, created_at, published_at
-       FROM domain_outbox
+       FROM tbl_agsvc_domain_outbox
        WHERE status = ?
          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
          ${eligibilitySql}
@@ -551,7 +551,7 @@ export class OutboxRepository {
       `SELECT outbox_id, aggregate_type, aggregate_id, event_type, payload_json,
               status, attempts, claim_token, claimed_at, next_attempt_at,
               last_error, created_at, published_at
-       FROM domain_outbox
+       FROM tbl_agsvc_domain_outbox
        WHERE (
          (
            status = ?
@@ -578,7 +578,7 @@ export class OutboxRepository {
   }
 
   async getById(outboxId: string) {
-    const row = await this.db('domain_outbox').where({ outbox_id: outboxId }).first();
+    const row = await this.db('tbl_agsvc_domain_outbox').where({ outbox_id: outboxId }).first();
     return row ? mapDomainOutbox(row) : null;
   }
 }

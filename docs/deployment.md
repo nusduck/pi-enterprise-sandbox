@@ -467,6 +467,28 @@ Knex migrations 仍是唯一 schema 权威，但生产账号没有 DDL 权限，
 生产最小权限需要 DBA 确认。开发环境：`docker compose up -d mysql` 后执行 `scripts/dev/schema-apply.sh`；
 空库上直接 `up` 时三个服务会重启等待，建表完成后自动通过核对。备份恢复（`scripts/restore.sh`）同样只做核对，不迁移。
 
+**库表命名规范（UPspec《数据库设计规范》，[ADR 0013](adr/0013-upspec-table-naming.md)）。** 库缩写 `agsvc`；
+迁移 `20260923000001_upspec_naming.js` 起共享 MySQL 的物理对象如下，`tests/test_schema_upspec_naming.py`
+按清单守住，新迁移必须照此命名：
+
+| 对象 | 规则 | 例 |
+|---|---|---|
+| 表 | `tbl_agsvc_<业务名>`，≤128 字节 | `tbl_agsvc_runs` |
+| 索引 | `ind_agsvc_<表缩写>_(a\|i)<序号>`，≤18 字节；`a` 唯一、`i` 普通；一表一个缩写，全库不重复；单表 ≤18 个 | `ind_agsvc_run_i5` |
+| 短字符串 | 长度 ≤16 用 `char(n)` | `tbl_agsvc_cron_jobs.schedule_type char(16)` |
+| NOT NULL 列 | 带默认值：字符串 `''`、整数 `0`、时间 `'1970-01-01 00:00:00.000'`（5.7 的 `SET DEFAULT` 只收字面量） | — |
+
+有意的例外：主键列与身份/租户/引用（`*_id`、`*_subject`、`*_provider`）、操作者（`*_by`）、凭据与完整性
+（`*_hash`、`*_key`、`*_digest`、`sha256`、`checksum`、`username`）列**不设默认值**，漏写时由数据库拒绝
+（AGENTS.md §2 fail-closed）；JSON/TEXT 列 5.7 不允许默认值；有业务语义的 NULL（如 `expires_at IS NULL`
+表示永不过期）保留。Knex 记账表 `knex_migrations*`、外键约束名与触发器名不改（前者改名会让 Knex 认不出已执行的迁移，
+后两者规范未约束）。文档与代码注释里的「`runs` 表」等指业务名，物理表名一律带 `tbl_agsvc_` 前缀。
+
+> **升级注意（破坏性）**：该迁移把 40 张表整体改名，新旧版本的代码与库**互不兼容**。已有库升级时按
+> 「停写 → 导出增量发布包（`--from 20260912000001_claim_without_skip_locked.js`）→ DBA 执行 → `schema:verify`
+> → 部署新镜像」进行，不能滚动发布；表改名是一条原子 `RENAME TABLE`，其后每张表一条 `ALTER TABLE`，
+> 中途失败见 [部分迁移恢复 runbook](runbooks/mysql-partial-migration-recovery.md#upspec-naming-migration-20260923000001)。
+
 **Triggers / binary log (migration gate):** Agent migrations issue `CREATE TRIGGER`
 as the non-SUPER application user. Compose-managed `mysql` services set
 `--log-bin-trust-function-creators=1` (dev + prod overlay). Do **not** grant

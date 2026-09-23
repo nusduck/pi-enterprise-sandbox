@@ -93,7 +93,7 @@ export class RunEventRepository {
     const work = async (trx) => {
       // Ownership + existence: lock the run row for concurrent appends.
       const run = await applyOwnerScope(
-        trx('runs').where({ run_id: input.runId }),
+        trx('tbl_agsvc_runs').where({ run_id: input.runId }),
         scope,
       )
         .forUpdate()
@@ -106,7 +106,7 @@ export class RunEventRepository {
       }
 
       const updateResult = await trx.raw(
-        'UPDATE runs SET next_event_sequence = LAST_INSERT_ID(next_event_sequence + 1), updated_at = ? WHERE run_id = ? AND org_id = ? AND user_id = ?',
+        'UPDATE tbl_agsvc_runs SET next_event_sequence = LAST_INSERT_ID(next_event_sequence + 1), updated_at = ? WHERE run_id = ? AND org_id = ? AND user_id = ?',
         [
           toMysqlDateTime(new Date()),
           input.runId,
@@ -130,7 +130,7 @@ export class RunEventRepository {
       const sequenceNo = parseLastInsertId(idResult);
 
       try {
-        await trx('run_events').insert({
+        await trx('tbl_agsvc_run_events').insert({
           event_id: input.eventId,
           run_id: input.runId,
           org_id: scope.orgId,
@@ -153,7 +153,7 @@ export class RunEventRepository {
         throw err;
       }
 
-      const row = await trx('run_events').where({ event_id: input.eventId }).first();
+      const row = await trx('tbl_agsvc_run_events').where({ event_id: input.eventId }).first();
       const stored = mapRunEvent(row);
       // Trace projection is part of the same MySQL transaction as the event.
       // Failure therefore cannot leave a UI-visible span without its source
@@ -200,7 +200,7 @@ export class RunEventRepository {
   async listByRun(runId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number } = {}) {
     const s = requireOwnerScope(scope);
     const run = await applyOwnerScope(
-      this.db('runs').where({ run_id: runId }),
+      this.db('tbl_agsvc_runs').where({ run_id: runId }),
       s,
     ).first();
     if (!run) {
@@ -212,7 +212,7 @@ export class RunEventRepository {
 
     const after = opts.afterSequence ?? 0;
     const limit = opts.limit ?? 500;
-    const rows = await this.db('run_events')
+    const rows = await this.db('tbl_agsvc_run_events')
       .where({ run_id: runId, org_id: s.orgId })
       .andWhere('sequence_no', '>', after)
       .orderBy('sequence_no', 'asc')
@@ -222,8 +222,8 @@ export class RunEventRepository {
 
   async getById(eventId: string, scope: { orgId: string, userId: string }) {
     const s = requireOwnerScope(scope);
-    const row = await this.db('run_events as e')
-      .join('runs as r', 'r.run_id', 'e.run_id')
+    const row = await this.db('tbl_agsvc_run_events as e')
+      .join('tbl_agsvc_runs as r', 'r.run_id', 'e.run_id')
       .where('e.event_id', eventId)
       .andWhere('r.org_id', s.orgId)
       .andWhere('r.user_id', s.userId)

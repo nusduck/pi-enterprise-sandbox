@@ -62,7 +62,7 @@ export async function resolveRunDepth(
     throw new Error('run queue routing requires runId and orgId');
   }
   if (!knex) throw new Error('ServiceContainer MySQL not started');
-  const row = await knex('runs')
+  const row = await knex('tbl_agsvc_runs')
     .select('subagent_depth')
     .where({ run_id: runId, org_id: orgId })
     .first();

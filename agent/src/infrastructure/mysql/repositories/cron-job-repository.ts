@@ -94,7 +94,7 @@ export class CronJobRepository {
     const owner = requireOwner(input);
     const cronJobId = assertUlid(input.cronJobId, 'cronJobId');
     const now = toMysqlDateTime(input.createdAt || this.now());
-    await this.db('cron_jobs').insert({
+    await this.db('tbl_agsvc_cron_jobs').insert({
       cron_job_id: cronJobId,
       org_id: owner.orgId,
       user_id: owner.userId,
@@ -127,7 +127,7 @@ export class CronJobRepository {
   ) {
     const owner = requireOwner(scope);
     let query = applyOwnerScope(
-      this.db('cron_jobs').where({ cron_job_id: assertUlid(cronJobId, 'cronJobId') }),
+      this.db('tbl_agsvc_cron_jobs').where({ cron_job_id: assertUlid(cronJobId, 'cronJobId') }),
       owner,
     );
     if (opts.includeDeleted !== true) query = query.whereNull('deleted_at');
@@ -153,7 +153,7 @@ export class CronJobRepository {
   ) {
     const owner = requireOwner(scope);
     const limit = requireLimit(opts.limit, CRON_JOB_LIST_DEFAULT_LIMIT);
-    let query = applyOwnerScope(this.db('cron_jobs'), owner).whereNull('deleted_at');
+    let query = applyOwnerScope(this.db('tbl_agsvc_cron_jobs'), owner).whereNull('deleted_at');
     if (opts.enabled != null) query = query.where({ enabled: Boolean(opts.enabled) });
     const rows = await query.orderBy('created_at', 'desc').limit(limit);
     return rows.map(mapCronJob);
@@ -191,7 +191,7 @@ export class CronJobRepository {
             : value;
     }
     const count = await applyOwnerScope(
-      this.db('cron_jobs')
+      this.db('tbl_agsvc_cron_jobs')
         .where({ cron_job_id: assertUlid(cronJobId, 'cronJobId') })
         .whereNull('deleted_at'),
       owner,
@@ -229,7 +229,7 @@ export class CronJobRepository {
     if ('claimToken' in patch) {
       update.claim_token = patch.claimToken == null ? null : String(patch.claimToken);
     }
-    const count = await this.db('cron_jobs')
+    const count = await this.db('tbl_agsvc_cron_jobs')
       .where({ cron_job_id: assertUlid(cronJobId, 'cronJobId') })
       .whereNull('deleted_at')
       .update(update);
@@ -245,7 +245,7 @@ export class CronJobRepository {
     const owner = requireOwner(scope);
     const now = toMysqlDateTime(this.now());
     const count = await applyOwnerScope(
-      this.db('cron_jobs')
+      this.db('tbl_agsvc_cron_jobs')
         .where({ cron_job_id: assertUlid(cronJobId, 'cronJobId') })
         .whereNull('deleted_at'),
       owner,
@@ -268,7 +268,7 @@ export class CronJobRepository {
   async claimDueBatch(now, limit, claimToken) {
     const count = requireLimit(limit, 25);
     const token = assertUlid(claimToken, 'claimToken');
-    return this.db('cron_jobs')
+    return this.db('tbl_agsvc_cron_jobs')
       .where({ enabled: true })
       .whereNull('deleted_at')
       .whereNull('claim_token')
@@ -285,7 +285,7 @@ export class CronJobRepository {
   /** 回读本批次抢到的行（同事务、同连接）。 */
   async listByClaimToken(claimToken) {
     const token = assertUlid(claimToken, 'claimToken');
-    const rows = await this.db('cron_jobs')
+    const rows = await this.db('tbl_agsvc_cron_jobs')
       .where({ claim_token: token })
       .orderBy([
         { column: 'next_run_at', order: 'asc' },
@@ -297,7 +297,7 @@ export class CronJobRepository {
   /** commit 前的残留校验：本批 token 必须已被逐行清空。 */
   async countByClaimToken(claimToken) {
     const token = assertUlid(claimToken, 'claimToken');
-    const row = await this.db('cron_jobs')
+    const row = await this.db('tbl_agsvc_cron_jobs')
       .where({ claim_token: token })
       .count({ total: '*' })
       .first();
@@ -319,7 +319,7 @@ export class CronJobRepository {
       updated_at: now,
     };
     try {
-      await this.db('cron_job_runs').insert(row);
+      await this.db('tbl_agsvc_cron_job_runs').insert(row);
       return mapCronJobRun(row);
     } catch (error) {
       if (!isDuplicate(error)) throw error;
@@ -337,14 +337,14 @@ export class CronJobRepository {
     if ('runId' in patch) update.run_id = patch.runId == null ? null : assertUlid(patch.runId, 'runId');
     if ('status' in patch) update.status = patch.status;
     if ('errorMessage' in patch) update.error_message = patch.errorMessage ?? null;
-    const count = await this.db('cron_job_runs')
+    const count = await this.db('tbl_agsvc_cron_job_runs')
       .where({ cron_job_run_id: assertUlid(cronJobRunId, 'cronJobRunId') })
       .update(update);
     if (!count) throw new NotFoundError('Cron job run not found', { resource: 'cron_job_runs', id: cronJobRunId });
   }
 
   async getExecution(cronJobRunId) {
-    const row = await this.db('cron_job_runs')
+    const row = await this.db('tbl_agsvc_cron_job_runs')
       .where({ cron_job_run_id: assertUlid(cronJobRunId, 'cronJobRunId') })
       .first();
     return row ? mapCronJobRun(row) : null;
@@ -358,9 +358,9 @@ export class CronJobRepository {
     const owner = requireOwner(scope);
     const limit = requireLimit(opts.limit, CRON_JOB_RUN_LIST_DEFAULT_LIMIT);
     const id = assertUlid(cronJobId, 'cronJobId');
-    const rows = await this.db('cron_job_runs as jr')
-      .join('cron_jobs as j', 'j.cron_job_id', 'jr.cron_job_id')
-      .leftJoin('runs as r', 'r.run_id', 'jr.run_id')
+    const rows = await this.db('tbl_agsvc_cron_job_runs as jr')
+      .join('tbl_agsvc_cron_jobs as j', 'j.cron_job_id', 'jr.cron_job_id')
+      .leftJoin('tbl_agsvc_runs as r', 'r.run_id', 'jr.run_id')
       .select('jr.*', 'r.status as run_status')
       .where('jr.cron_job_id', id)
       .where('j.org_id', owner.orgId)
@@ -372,8 +372,8 @@ export class CronJobRepository {
 
   async hasOpenExecution(cronJobId) {
     const id = assertUlid(cronJobId, 'cronJobId');
-    const row = await this.db('cron_job_runs as jr')
-      .leftJoin('runs as r', 'r.run_id', 'jr.run_id')
+    const row = await this.db('tbl_agsvc_cron_job_runs as jr')
+      .leftJoin('tbl_agsvc_runs as r', 'r.run_id', 'jr.run_id')
       .where('jr.cron_job_id', id)
       .where((q) => {
         q.where('jr.status', 'CLAIMED').orWhere((nested) =>
@@ -391,8 +391,8 @@ export class CronJobRepository {
 
   async listStaleClaims(before, limit = 25) {
     const count = requireLimit(limit, 25);
-    const rows = await this.db('cron_job_runs as jr')
-      .join('cron_jobs as j', 'j.cron_job_id', 'jr.cron_job_id')
+    const rows = await this.db('tbl_agsvc_cron_job_runs as jr')
+      .join('tbl_agsvc_cron_jobs as j', 'j.cron_job_id', 'jr.cron_job_id')
       .select('jr.*')
       .where('jr.status', 'CLAIMED')
       .where('jr.claimed_at', '<=', toMysqlDateTime(before))
@@ -401,7 +401,7 @@ export class CronJobRepository {
       .limit(count);
     const claims = [];
     for (const row of rows) {
-      const jobRow = await this.db('cron_jobs')
+      const jobRow = await this.db('tbl_agsvc_cron_jobs')
         .where({ cron_job_id: String(row.cron_job_id) })
         .whereNull('deleted_at')
         .first();
@@ -414,8 +414,8 @@ export class CronJobRepository {
 
   async listNonterminalExecutions(limit = 100) {
     const count = requireLimit(limit, 100);
-    const rows = await this.db('cron_job_runs as jr')
-      .join('runs as r', 'r.run_id', 'jr.run_id')
+    const rows = await this.db('tbl_agsvc_cron_job_runs as jr')
+      .join('tbl_agsvc_runs as r', 'r.run_id', 'jr.run_id')
       .select('jr.*', 'r.status as run_status')
       .whereIn('jr.status', ['QUEUED', 'RUNNING'])
       .orderBy('jr.updated_at', 'asc')

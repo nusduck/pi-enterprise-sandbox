@@ -60,7 +60,7 @@ function seed(state, opts = {}) {
   const resumePhase = opts.resumePhase ?? INTERACTION_RESUME_PHASE.NONE;
   const toolStatus = opts.toolStatus ?? 'RUNNING';
 
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -86,7 +86,7 @@ function seed(state, opts = {}) {
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -112,7 +112,7 @@ function seed(state, opts = {}) {
       created_at: NOW,
     },
   ];
-  state.tables.run_interactions =
+  state.tables.tbl_agsvc_run_interactions =
     interactionStatus == null
       ? []
       : [
@@ -155,10 +155,10 @@ function seed(state, opts = {}) {
               interactionStatus === INTERACTION_STATUS.RESOLVED ? NOW : null,
           },
         ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
-  state.tables.trace_spans = [];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
+  state.tables.tbl_agsvc_trace_spans = [];
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESSION,
       org_id: ORG,
@@ -222,7 +222,7 @@ describe('RunRecoveryService WAITING_INPUT restart cells (offline)', () => {
     assert.equal(action.action, 'skipped');
     assert.match(String(action.reason), /still PENDING/i);
     assert.equal(enqueued.length, 0);
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.WAITING_INPUT);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.WAITING_INPUT);
   });
 
   it('terminalizes a PENDING WAITING_INPUT run that carries cancel intent', async () => {
@@ -235,23 +235,23 @@ describe('RunRecoveryService WAITING_INPUT restart cells (offline)', () => {
       resumePhase: INTERACTION_RESUME_PHASE.NONE,
       toolStatus: 'RUNNING',
     });
-    state.tables.runs[0].cancel_requested_at = NOW;
-    state.tables.runs[0].cancel_reason = 'parent run cancelled';
-    state.tables.runs[0].cancel_requested_by = USER;
+    state.tables.tbl_agsvc_runs[0].cancel_requested_at = NOW;
+    state.tables.tbl_agsvc_runs[0].cancel_reason = 'parent run cancelled';
+    state.tables.tbl_agsvc_runs[0].cancel_requested_by = USER;
 
     const action = await recovery.recoverOneRef({ runId: RUN, orgId: ORG });
 
     assert.equal(action.action, 'terminalized', JSON.stringify(action));
     assert.equal(action.status, RUN_STATUS.CANCELLED);
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
     // The ledgers are closed too, not just the run row.
     assert.equal(
-      state.tables.run_interactions[0].status,
+      state.tables.tbl_agsvc_run_interactions[0].status,
       INTERACTION_STATUS.CANCELLED,
     );
-    assert.equal(state.tables.tool_executions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'CANCELLED');
     assert.equal(enqueued.length, 0, 'a cancelled run must not be re-enqueued');
-    const events = state.tables.run_events.map((e) => e.event_type);
+    const events = state.tables.tbl_agsvc_run_events.map((e) => e.event_type);
     assert.ok(events.includes('run.cancelled'), JSON.stringify(events));
   });
 
@@ -270,7 +270,7 @@ describe('RunRecoveryService WAITING_INPUT restart cells (offline)', () => {
       enqueued[0].options?.jobId,
       `${RUN}-interaction-${INTERACTION}`,
     );
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.WAITING_INPUT);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.WAITING_INPUT);
   });
 
   it('needs reconciliation when WAITING_INPUT has no durable interaction row', async () => {
@@ -296,6 +296,6 @@ describe('RunRecoveryService WAITING_INPUT restart cells (offline)', () => {
       enqueued[0].options?.jobId,
       `${RUN}-interaction-${INTERACTION}`,
     );
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.RUNNING);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.RUNNING);
   });
 });

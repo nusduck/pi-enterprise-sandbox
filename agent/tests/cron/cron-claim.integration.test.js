@@ -78,12 +78,12 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
       updated_at: knex.fn.now(3),
       ...overrides,
     };
-    await knex('cron_jobs').insert(row);
+    await knex('tbl_agsvc_cron_jobs').insert(row);
     return cronJobId;
   }
 
   async function readJob(cronJobId) {
-    return knex('cron_jobs').where({ cron_job_id: cronJobId }).first();
+    return knex('tbl_agsvc_cron_jobs').where({ cron_job_id: cronJobId }).first();
   }
 
   before(async () => {
@@ -111,7 +111,7 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
       .addMembership({ orgId: ORG, userId: USER, role: 'member', status: 'active' })
       .catch(() => {});
     // 上面的 catch 只吞重复插入；种子真缺了就地失败，别让后面的断言变成 FK 报错。
-    const seededOrg = await knex('organizations').where({ org_id: ORG }).first();
+    const seededOrg = await knex('tbl_agsvc_organizations').where({ org_id: ORG }).first();
     assert.ok(seededOrg, 'cron 测试种子组织缺失');
 
     service = new cronMod.CronJobService({
@@ -134,21 +134,21 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
   });
 
   beforeEach(async () => {
-    await knex('cron_job_runs').whereIn(
+    await knex('tbl_agsvc_cron_job_runs').whereIn(
       'cron_job_id',
-      knex('cron_jobs').select('cron_job_id').where({ org_id: ORG }),
+      knex('tbl_agsvc_cron_jobs').select('cron_job_id').where({ org_id: ORG }),
     ).del();
-    await knex('cron_jobs').where({ org_id: ORG }).del();
+    await knex('tbl_agsvc_cron_jobs').where({ org_id: ORG }).del();
   });
 
   after(async () => {
     if (!knex) return;
     try {
-      await knex('cron_job_runs').whereIn(
+      await knex('tbl_agsvc_cron_job_runs').whereIn(
         'cron_job_id',
-        knex('cron_jobs').select('cron_job_id').where({ org_id: ORG }),
+        knex('tbl_agsvc_cron_jobs').select('cron_job_id').where({ org_id: ORG }),
       ).del();
-      await knex('cron_jobs').where({ org_id: ORG }).del();
+      await knex('tbl_agsvc_cron_jobs').where({ org_id: ORG }).del();
     } catch {
       // ignore cleanup errors
     }
@@ -170,7 +170,7 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
       'next_run_at 必须推进',
     );
 
-    const runs = await knex('cron_job_runs').where({ cron_job_id: cronJobId });
+    const runs = await knex('tbl_agsvc_cron_job_runs').where({ cron_job_id: cronJobId });
     assert.equal(runs.length, 1);
     assert.equal(runs[0].status, 'CLAIMED');
   });
@@ -226,7 +226,7 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
 
       const row = await readJob(cronJobId);
       assert.equal(row.claim_token, null);
-      const runs = await knex('cron_job_runs').where({ cron_job_id: cronJobId });
+      const runs = await knex('tbl_agsvc_cron_job_runs').where({ cron_job_id: cronJobId });
       assert.equal(runs.length, 1, '重叠竞争不得产生重复执行记录');
     } finally {
       await knexB.destroy();
@@ -263,7 +263,7 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
         1,
         '同一个到期时刻只能被抢到一次',
       );
-      const runs = await knex('cron_job_runs').where({ cron_job_id: cronJobId });
+      const runs = await knex('tbl_agsvc_cron_job_runs').where({ cron_job_id: cronJobId });
       assert.equal(runs.length, 1);
       assert.equal(
         new Set(runs.map((r) => String(r.scheduled_at))).size,
@@ -290,7 +290,7 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
     assert.equal(row.claim_token, null);
     assert.notEqual(String(row.next_run_at), '2026-09-11 00:00:00.000');
 
-    const runs = await knex('cron_job_runs').where({ cron_job_id: cronJobId });
+    const runs = await knex('tbl_agsvc_cron_job_runs').where({ cron_job_id: cronJobId });
     assert.equal(runs.length, 1);
     assert.equal(runs[0].status, 'SKIPPED');
     assert.equal(runs[0].error_message, 'MISFIRE_SKIPPED');
@@ -299,7 +299,7 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
   it('forbid 策略下已有未结执行时记为 SKIPPED 且不留残留标记', async () => {
     const cronJobId = await seedJob();
 
-    await knex('cron_job_runs').insert({
+    await knex('tbl_agsvc_cron_job_runs').insert({
       cron_job_run_id: ulidMod.ulid(),
       cron_job_id: cronJobId,
       scheduled_at: '2026-09-11 23:55:00.000',
@@ -318,7 +318,7 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
     const row = await readJob(cronJobId);
     assert.equal(row.claim_token, null);
 
-    const runs = await knex('cron_job_runs')
+    const runs = await knex('tbl_agsvc_cron_job_runs')
       .where({ cron_job_id: cronJobId })
       .orderBy('scheduled_at', 'asc');
     assert.equal(runs.length, 2);

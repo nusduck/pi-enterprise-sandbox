@@ -63,7 +63,7 @@ export class ApprovalRepository {
   async requireOwnedRun(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
-    let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs').where({ run_id: id }), s);
     if (opts.forUpdate) q = q.forUpdate();
     const row = await q.first();
     if (!row) {
@@ -82,8 +82,8 @@ export class ApprovalRepository {
    */
   #ownedApprovalQuery(scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
-    let q = this.db('approvals as a')
-      .join('runs as r', 'a.run_id', 'r.run_id')
+    let q = this.db('tbl_agsvc_approvals as a')
+      .join('tbl_agsvc_runs as r', 'a.run_id', 'r.run_id')
       .select(...APPROVAL_CHILD_SELECT)
       .select('r.conversation_id')
       .where('r.org_id', s.orgId)
@@ -100,8 +100,8 @@ export class ApprovalRepository {
    */
   #ownedToolQuery(scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
-    let q = this.db('tool_executions as te')
-      .join('runs as r', 'te.run_id', 'r.run_id')
+    let q = this.db('tbl_agsvc_tool_executions as te')
+      .join('tbl_agsvc_runs as r', 'te.run_id', 'r.run_id')
       .select(...TOOL_EXECUTION_CHILD_SELECT)
       .where('r.org_id', s.orgId)
       .andWhere('r.user_id', s.userId);
@@ -246,7 +246,7 @@ export class ApprovalRepository {
 
     const now = this.now();
     try {
-      await this.db('approvals').insert({
+      await this.db('tbl_agsvc_approvals').insert({
         approval_id: approvalId,
         org_id: scope.orgId,
         run_id: runId,
@@ -330,7 +330,7 @@ export class ApprovalRepository {
 
     const now = this.now();
     // CAS on PK after ownership verified
-    const n = await this.db('approvals')
+    const n = await this.db('tbl_agsvc_approvals')
       .where({
         approval_id: id,
         org_id: scope.orgId,

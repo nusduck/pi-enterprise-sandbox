@@ -89,7 +89,7 @@ export class InteractionRepository {
   ) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
-    let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs').where({ run_id: id }), s);
     if (opts.forUpdate) q = q.forUpdate();
     const row = await q.first();
     if (!row) {
@@ -103,8 +103,8 @@ export class InteractionRepository {
 
   #ownedQuery(scope: OwnerScope, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
-    let q = this.db('run_interactions as i')
-      .join('runs as r', 'i.run_id', 'r.run_id')
+    let q = this.db('tbl_agsvc_run_interactions as i')
+      .join('tbl_agsvc_runs as r', 'i.run_id', 'r.run_id')
       .select('i.*')
       .where('i.org_id', s.orgId)
       .andWhere('i.user_id', s.userId)
@@ -219,7 +219,7 @@ export class InteractionRepository {
       });
     }
 
-    const toolExecution = await this.db('tool_executions')
+    const toolExecution = await this.db('tbl_agsvc_tool_executions')
       .where({ tool_execution_id: toolExecutionId })
       .forUpdate()
       .first();
@@ -242,7 +242,7 @@ export class InteractionRepository {
 
     const now = toMysqlDateTime(this.now());
     try {
-      await this.db('run_interactions').insert({
+      await this.db('tbl_agsvc_run_interactions').insert({
         interaction_id: interactionId,
         org_id: scope.orgId,
         user_id: scope.userId,
@@ -339,7 +339,7 @@ export class InteractionRepository {
         id,
       });
     }
-    const n = await this.db('run_interactions')
+    const n = await this.db('tbl_agsvc_run_interactions')
       .where({
         interaction_id: id,
         org_id: scope.orgId,
@@ -397,7 +397,7 @@ export class InteractionRepository {
         id,
       });
     }
-    const changed = await this.db('run_interactions')
+    const changed = await this.db('tbl_agsvc_run_interactions')
       .where({
         interaction_id: id,
         org_id: scope.orgId,
@@ -438,7 +438,7 @@ export class InteractionRepository {
         { resource: 'interactions', id },
       );
     }
-    const changed = await this.db('run_interactions')
+    const changed = await this.db('tbl_agsvc_run_interactions')
       .where({
         interaction_id: id,
         org_id: scope.orgId,
@@ -465,7 +465,7 @@ export class InteractionRepository {
       forUpdate: true,
     });
     if (!pending) return { changed: false, interaction: null };
-    const changed = await this.db('run_interactions')
+    const changed = await this.db('tbl_agsvc_run_interactions')
       .where({
         interaction_id: pending.interactionId,
         org_id: scope.orgId,

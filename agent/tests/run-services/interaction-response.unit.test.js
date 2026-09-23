@@ -29,7 +29,7 @@ function makeIdGenerator() {
 }
 
 function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     {
       org_id: ORG,
       name: 'Acme',
@@ -38,7 +38,7 @@ function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
       updated_at: NOW,
     },
   ];
-  state.tables.users = [
+  state.tables.tbl_agsvc_users = [
     {
       user_id: USER,
       external_subject: 'bff:user-ext-1',
@@ -49,7 +49,7 @@ function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_memberships = [
+  state.tables.tbl_agsvc_organization_memberships = [
     {
       org_id: ORG,
       user_id: USER,
@@ -59,7 +59,7 @@ function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_external_refs = [
+  state.tables.tbl_agsvc_organization_external_refs = [
     {
       provider: 'bff',
       external_subject: 'org-ext-1',
@@ -67,7 +67,7 @@ function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
       created_at: NOW,
     },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -92,7 +92,7 @@ function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -114,7 +114,7 @@ function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
       created_at: NOW,
     },
   ];
-  state.tables.run_interactions = [
+  state.tables.tbl_agsvc_run_interactions = [
     {
       interaction_id: INTERACTION,
       org_id: ORG,
@@ -137,8 +137,8 @@ function seed(state, status = 'WAITING_INPUT', interactionStatus = 'PENDING') {
       resolved_at: null,
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 describe('InteractionResponseService', () => {
@@ -185,16 +185,16 @@ describe('InteractionResponseService', () => {
     assert.equal(result.queued, true);
     assert.equal(result.resume_pending, false);
     assert.deepEqual(queued, [{ runId: RUN, orgId: ORG, traceId: TRACE }]);
-    assert.equal(state.tables.run_interactions[0].status, 'RESOLVED');
-    assert.equal(state.tables.tool_executions[0].status, 'SUCCEEDED');
-    assert.equal(state.tables.run_events.length, 2);
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'RESOLVED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'SUCCEEDED');
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 2);
     assert.deepEqual(
-      state.tables.run_events.map((row) => row.event_type),
+      state.tables.tbl_agsvc_run_events.map((row) => row.event_type),
       ['tool.execution.completed', 'interaction.resolved'],
     );
-    assert.equal(state.tables.domain_outbox.length, 2);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox.length, 2);
     assert.equal(
-      JSON.parse(state.tables.domain_outbox[1].payload_json).data.respondedBy,
+      JSON.parse(state.tables.tbl_agsvc_domain_outbox[1].payload_json).data.respondedBy,
       USER,
     );
   });
@@ -206,7 +206,7 @@ describe('InteractionResponseService', () => {
       interactionId: INTERACTION,
       response: 'eu',
     });
-    const eventsAfterFirst = state.tables.run_events.length;
+    const eventsAfterFirst = state.tables.tbl_agsvc_run_events.length;
     const second = await service.respond({
       auth: AUTH,
       runId: RUN,
@@ -216,8 +216,8 @@ describe('InteractionResponseService', () => {
 
     assert.equal(first.changed, true);
     assert.equal(second.changed, false);
-    assert.equal(state.tables.run_events.length, eventsAfterFirst);
-    assert.equal(state.tables.domain_outbox.length, eventsAfterFirst);
+    assert.equal(state.tables.tbl_agsvc_run_events.length, eventsAfterFirst);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox.length, eventsAfterFirst);
     // A retry may enqueue another ref; the durable CAS remains the authority.
     assert.equal(queued.length, 2);
   });
@@ -237,12 +237,12 @@ describe('InteractionResponseService', () => {
     assert.equal(result.queued, false);
     assert.equal(result.resume_pending, true);
     assert.doesNotMatch(result.resume_error, /secret=do-not-store/i);
-    assert.equal(state.tables.run_interactions[0].status, 'RESOLVED');
-    assert.equal(state.tables.tool_executions[0].status, 'SUCCEEDED');
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'RESOLVED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'SUCCEEDED');
   });
 
   it('rejects a multibyte response that exceeds the canonical byte limit', async () => {
-    state.tables.run_interactions[0].interaction_type = 'input';
+    state.tables.tbl_agsvc_run_interactions[0].interaction_type = 'input';
 
     await assert.rejects(
       () =>
@@ -258,8 +258,8 @@ describe('InteractionResponseService', () => {
         return true;
       },
     );
-    assert.equal(state.tables.run_interactions[0].status, 'PENDING');
-    assert.equal(state.tables.tool_executions[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'PENDING');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'RUNNING');
   });
 
   it('rehydrates pending and resolved rows with different wake behavior', async () => {
@@ -278,9 +278,9 @@ describe('InteractionResponseService', () => {
       resume_error: null,
     });
 
-    state.tables.run_interactions[0].status = 'RESOLVED';
-    state.tables.run_interactions[0].response_json = JSON.stringify('eu');
-    state.tables.run_interactions[0].response_hash = 'a'.repeat(64);
+    state.tables.tbl_agsvc_run_interactions[0].status = 'RESOLVED';
+    state.tables.tbl_agsvc_run_interactions[0].response_json = JSON.stringify('eu');
+    state.tables.tbl_agsvc_run_interactions[0].response_hash = 'a'.repeat(64);
     const resolved = await service.rehydrateWaiting({ auth: AUTH, runId: RUN });
     assert.equal(resolved.items[0].resolved, true);
     assert.equal(resolved.items[0].queued, true);
@@ -288,7 +288,7 @@ describe('InteractionResponseService', () => {
   });
 
   it('rejects a pending interaction when the Run is no longer parked', async () => {
-    state.tables.runs[0].status = 'RUNNING';
+    state.tables.tbl_agsvc_runs[0].status = 'RUNNING';
     await assert.rejects(
       () =>
         service.respond({
@@ -299,7 +299,7 @@ describe('InteractionResponseService', () => {
         }),
       ConflictError,
     );
-    assert.equal(state.tables.run_interactions[0].status, 'PENDING');
-    assert.equal(state.tables.tool_executions[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'PENDING');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'RUNNING');
   });
 });

@@ -103,7 +103,7 @@ export class A2aAuditRepository {
     const optUlid = (v, field) =>
       v != null && String(v).trim() ? assertUlid(v, field) : null;
 
-    await this.db('a2a_audit_events').insert({
+    await this.db('tbl_agsvc_a2a_audit_events').insert({
       audit_id: auditId,
       org_id: orgId,
       client_id: input.clientId.trim(),
@@ -137,7 +137,7 @@ export class A2aAuditRepository {
   async listForOrgAdmin(orgId: string, opts: { agentId?: string | null, limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 20, 1), 100);
-    let query = this.db('a2a_audit_events')
+    let query = this.db('tbl_agsvc_a2a_audit_events')
       .where({ org_id: oid })
       .orderBy('created_at', 'desc');
     if (opts.agentId) {

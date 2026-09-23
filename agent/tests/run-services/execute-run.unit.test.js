@@ -180,7 +180,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-ok',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     const exec = buildExecute(world, lease, {
       runExecutorFactory: () => createStubRunExecutor(),
     });
@@ -191,9 +191,9 @@ describe('ExecuteRunService', () => {
       workerId: 'w1',
     });
     assert.equal(result.status, RUN_STATUS.SUCCEEDED);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.SUCCEEDED);
-    assert.ok(world.tables.runs[0].completed_at);
-    assert.ok(Number(world.tables.runs[0].attempt) >= 1);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.SUCCEEDED);
+    assert.ok(world.tables.tbl_agsvc_runs[0].completed_at);
+    assert.ok(Number(world.tables.tbl_agsvc_runs[0].attempt) >= 1);
     assert.equal(lease.leases.has(created.runId), false);
   });
 
@@ -204,7 +204,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-busy',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     await lease.acquire(created.runId, 'other-worker');
     const exec = buildExecute(world, lease);
     const result = await exec.execute({
@@ -214,7 +214,7 @@ describe('ExecuteRunService', () => {
       workerId: 'w1',
     });
     assert.equal(result.leaseBusy, true);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.QUEUED);
   });
 
   it('cancel-before-start: QUEUED with intent → CANCELLED', async () => {
@@ -224,10 +224,10 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-cxl-start',
     });
-    const orgId = String(world.tables.runs[0].org_id);
-    const scopeUser = String(world.tables.runs[0].user_id);
-    world.tables.runs[0].cancel_requested_at = '2026-07-18 06:00:01.000';
-    world.tables.runs[0].cancel_requested_by = scopeUser;
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
+    const scopeUser = String(world.tables.tbl_agsvc_runs[0].user_id);
+    world.tables.tbl_agsvc_runs[0].cancel_requested_at = '2026-07-18 06:00:01.000';
+    world.tables.tbl_agsvc_runs[0].cancel_requested_by = scopeUser;
 
     let executed = false;
     const exec = buildExecute(world, lease, {
@@ -247,7 +247,7 @@ describe('ExecuteRunService', () => {
     });
     assert.equal(result.status, RUN_STATUS.CANCELLED);
     assert.equal(executed, false);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
   });
 
   it('STARTING + cancel intent: STARTING→RUNNING→CANCELLING→CANCELLED', async () => {
@@ -257,12 +257,12 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-starting-cxl',
     });
-    const orgId = String(world.tables.runs[0].org_id);
-    const userId = String(world.tables.runs[0].user_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
+    const userId = String(world.tables.tbl_agsvc_runs[0].user_id);
     // Force STARTING with durable intent (runtime not yet entered)
-    world.tables.runs[0].status = RUN_STATUS.STARTING;
-    world.tables.runs[0].cancel_requested_at = '2026-07-18 06:00:01.000';
-    world.tables.runs[0].cancel_requested_by = userId;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.STARTING;
+    world.tables.tbl_agsvc_runs[0].cancel_requested_at = '2026-07-18 06:00:01.000';
+    world.tables.tbl_agsvc_runs[0].cancel_requested_by = userId;
 
     let executed = false;
     const exec = buildExecute(world, lease, {
@@ -282,9 +282,9 @@ describe('ExecuteRunService', () => {
     });
     assert.equal(result.status, RUN_STATUS.CANCELLED);
     assert.equal(executed, false);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
     // Path must have used RUNNING intermediate (events may show status.changed)
-    assert.notEqual(world.tables.runs[0].status, RUN_STATUS.STARTING);
+    assert.notEqual(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.STARTING);
   });
 
   it('cancel-during-runtime: signal aborts executor before natural return', async () => {
@@ -294,7 +294,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-cxl-run',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
 
     let abortedWhileRunning = false;
     /** @type {(() => void) | null} */
@@ -346,9 +346,9 @@ describe('ExecuteRunService', () => {
     if (releaseBlock) releaseBlock();
     assert.equal(abortedWhileRunning, true);
     assert.equal(result.status, RUN_STATUS.CANCELLED);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
     // No duplicate CANCELLING storms: at most a few status.changed to CANCELLING
-    const cancellingEvents = world.tables.run_events.filter((e) => {
+    const cancellingEvents = world.tables.tbl_agsvc_run_events.filter((e) => {
       const p =
         typeof e.payload_json === 'string'
           ? e.payload_json
@@ -366,13 +366,13 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-cxl-db',
     });
-    const orgId = String(world.tables.runs[0].org_id);
-    const userId = String(world.tables.runs[0].user_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
+    const userId = String(world.tables.tbl_agsvc_runs[0].user_id);
 
     let abortedWhileRunning = false;
     setTimeout(() => {
-      world.tables.runs[0].cancel_requested_at = '2026-07-18 06:01:00.000';
-      world.tables.runs[0].cancel_requested_by = userId;
+      world.tables.tbl_agsvc_runs[0].cancel_requested_at = '2026-07-18 06:01:00.000';
+      world.tables.tbl_agsvc_runs[0].cancel_requested_by = userId;
     }, 25);
 
     const exec = buildExecute(world, lease, {
@@ -410,7 +410,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-fail',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     const exec = buildExecute(world, lease, {
       runExecutorFactory: () =>
         createStubRunExecutor({
@@ -428,7 +428,7 @@ describe('ExecuteRunService', () => {
     });
     assert.equal(result.status, RUN_STATUS.FAILED);
     assert.match(
-      String(world.tables.runs[0].status_reason),
+      String(world.tables.tbl_agsvc_runs[0].status_reason),
       /password=(?:\*\*\*|\[REDACTED\])/,
     );
   });
@@ -440,7 +440,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-wait',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     const exec = buildExecute(world, lease, {
       runExecutorFactory: () =>
         createStubRunExecutor({
@@ -463,7 +463,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-org',
     });
-    const ownerOrg = String(world.tables.runs[0].org_id);
+    const ownerOrg = String(world.tables.tbl_agsvc_runs[0].org_id);
     const exec = buildExecute(world, lease);
     const otherOrg = world.generateId();
     const result = await exec.execute({
@@ -475,9 +475,9 @@ describe('ExecuteRunService', () => {
     assert.match(String(result.error), /not found|Run not found/i);
     assert.equal(result.needsReconciliation, true);
     assert.notEqual(result.status, RUN_STATUS.FAILED);
-    assert.equal(world.tables.runs[0].org_id, ownerOrg);
-    assert.notEqual(world.tables.runs[0].status, RUN_STATUS.SUCCEEDED);
-    assert.notEqual(world.tables.runs[0].status, RUN_STATUS.FAILED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].org_id, ownerOrg);
+    assert.notEqual(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.SUCCEEDED);
+    assert.notEqual(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.FAILED);
   });
 
   it('duplicate job after success is terminal no-op', async () => {
@@ -487,7 +487,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-dup',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     const exec = buildExecute(world, lease);
     await exec.execute({
       runId: created.runId,
@@ -511,7 +511,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-renew-false',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     lease.failRenew(created.runId);
 
     let sawAbort = false;
@@ -544,7 +544,7 @@ describe('ExecuteRunService', () => {
     });
     assert.equal(sawAbort, true);
     assert.equal(result.needsReconciliation, true);
-    assert.notEqual(world.tables.runs[0].status, RUN_STATUS.SUCCEEDED);
+    assert.notEqual(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.SUCCEEDED);
     assert.equal(lease.leases.has(created.runId), false);
   });
 
@@ -555,7 +555,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-renew-throw',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     lease.throwRenew(created.runId);
 
     const exec = buildExecute(world, lease, {
@@ -584,7 +584,7 @@ describe('ExecuteRunService', () => {
       workerId: 'w1',
     });
     assert.equal(result.needsReconciliation, true);
-    assert.notEqual(world.tables.runs[0].status, RUN_STATUS.SUCCEEDED);
+    assert.notEqual(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.SUCCEEDED);
   });
 
   it('release failure after SUCCEEDED reports cleanupError without flipping status', async () => {
@@ -594,7 +594,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-rel-fail',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     lease.failRelease();
 
     const exec = buildExecute(world, lease, {
@@ -609,7 +609,7 @@ describe('ExecuteRunService', () => {
     assert.equal(result.status, RUN_STATUS.SUCCEEDED);
     assert.ok(result.cleanupError);
     assert.match(String(result.cleanupError), /release failed/i);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.SUCCEEDED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.SUCCEEDED);
   });
 
   it('transition/DB failure does not claim durable FAILED', async () => {
@@ -619,7 +619,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-db-fail',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
 
     // Break transactions after lease acquire
     const origRun = world.transactionManager.run.bind(world.transactionManager);
@@ -653,7 +653,7 @@ describe('ExecuteRunService', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-factory',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     let createdN = 0;
     let disposedN = 0;
     const exec = buildExecute(world, lease, {
@@ -683,7 +683,7 @@ describe('ExecuteRunService', () => {
     });
     await exec.execute({
       runId: created2.runId,
-      orgId: String(world.tables.runs.find((r) => r.run_id === created2.runId).org_id),
+      orgId: String(world.tables.tbl_agsvc_runs.find((r) => r.run_id === created2.runId).org_id),
       traceId: TRACE,
       workerId: 'w1',
     });
@@ -716,7 +716,7 @@ describe('RunRecoveryService', () => {
     assert.ok(
       mine.action === 'projected_and_enqueued' || mine.action === 'enqueued',
     );
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.QUEUED);
   });
 
   it('STARTING/RUNNING returns needsReconciliation (no re-exec)', async () => {
@@ -728,7 +728,7 @@ describe('RunRecoveryService', () => {
       traceId: TRACE,
       idempotencyKey: 'rec-2',
     });
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
     const jobsBefore = world.enqueuedJobs.length;
     const recovery = new RunRecoveryService({
       transactionManager: world.transactionManager,
@@ -761,7 +761,7 @@ describe('RunRecoveryService', () => {
       traceId: TRACE,
       idempotencyKey: 'rec-3b',
     });
-    for (const r of world.tables.runs) r.status = RUN_STATUS.ACCEPTED;
+    for (const r of world.tables.tbl_agsvc_runs) r.status = RUN_STATUS.ACCEPTED;
 
     const repos = world.createRepositories(world.rootDb);
     const page = await repos.runs.listNonTerminalForSystemWorker({ limit: 1 });
@@ -782,7 +782,7 @@ describe('RunRecoveryService', () => {
       traceId: TRACE,
       idempotencyKey: 'rec-san',
     });
-    world.tables.runs[0].status = RUN_STATUS.ACCEPTED;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.ACCEPTED;
     world.runQueue.enqueue = async () => {
       throw new Error('mysql://admin:SuperSecret@db/prod failed');
     };
@@ -904,7 +904,7 @@ describe('run worker bootstrap', () => {
       traceId: TRACE,
       idempotencyKey: 'boot-job',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     const runtime = createRunWorkerRuntime({
       transactionManager: world.transactionManager,
       createRepositories: world.createRepositories,
@@ -932,7 +932,7 @@ describe('run worker bootstrap', () => {
       traceId: TRACE,
       idempotencyKey: 'boot-busy',
     });
-    const orgId = String(world.tables.runs[0].org_id);
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     await lease.acquire(created.runId, 'other-owner');
     const runtime = createRunWorkerRuntime({
       transactionManager: world.transactionManager,
@@ -953,7 +953,7 @@ describe('run worker bootstrap', () => {
       (err) => err instanceof LeaseBusyError && err.code === 'LEASE_BUSY',
     );
     // Status must remain non-terminal / unmutated by the busy attempt
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.QUEUED);
   });
 
   it('processJob throws NeedsReconciliationError for non-terminal re-entry refuse', async () => {
@@ -966,8 +966,8 @@ describe('run worker bootstrap', () => {
       traceId: TRACE,
       idempotencyKey: 'boot-recon',
     });
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
-    const orgId = String(world.tables.runs[0].org_id);
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
     const runtime = createRunWorkerRuntime({
       transactionManager: world.transactionManager,
       createRepositories: world.createRepositories,
@@ -988,7 +988,7 @@ describe('run worker bootstrap', () => {
         err instanceof NeedsReconciliationError &&
         err.code === 'NEEDS_RECONCILIATION',
     );
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.RUNNING);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.RUNNING);
   });
 });
 
@@ -1013,8 +1013,8 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-reentry-run',
     });
-    const orgId = String(world.tables.runs[0].org_id);
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
 
     let executed = 0;
     const exec = buildExecute(world, lease, {
@@ -1035,7 +1035,7 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     assert.equal(executed, 0);
     assert.equal(result.needsReconciliation, true);
     assert.match(String(result.error), /refusing re-entry/i);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.RUNNING);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.RUNNING);
   });
 
   it('recovery terminalizes lease-free CANCELLING → CANCELLED', async () => {
@@ -1045,8 +1045,8 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-rec-cxl',
     });
-    world.tables.runs[0].status = RUN_STATUS.CANCELLING;
-    world.tables.runs[0].cancel_requested_at = '2026-07-18 06:00:01.000';
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.CANCELLING;
+    world.tables.tbl_agsvc_runs[0].cancel_requested_at = '2026-07-18 06:00:01.000';
 
     const recovery = new RunRecoveryService({
       transactionManager: world.transactionManager,
@@ -1057,11 +1057,11 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     });
     const action = await recovery.recoverOneRef({
       runId: created.runId,
-      orgId: String(world.tables.runs[0].org_id),
+      orgId: String(world.tables.tbl_agsvc_runs[0].org_id),
     });
     assert.equal(action.action, 'terminalized');
     assert.equal(action.status, RUN_STATUS.CANCELLED);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
   });
 
   it('recovery requeues lease-free RUNNING when the durable tool ledger is replay-safe', async () => {
@@ -1071,7 +1071,7 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-rec-run',
     });
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
     const jobsBefore = world.enqueuedJobs.length;
 
     const recovery = new RunRecoveryService({
@@ -1083,7 +1083,7 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     });
     const action = await recovery.recoverOneRef({
       runId: created.runId,
-      orgId: String(world.tables.runs[0].org_id),
+      orgId: String(world.tables.tbl_agsvc_runs[0].org_id),
     });
     assert.equal(
       action.action,
@@ -1091,10 +1091,10 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       JSON.stringify(action),
     );
     assert.equal(action.status, RUN_STATUS.QUEUED);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.QUEUED);
     assert.equal(world.enqueuedJobs.length, jobsBefore + 1);
     assert.ok(
-      world.tables.run_events.some(
+      world.tables.tbl_agsvc_run_events.some(
         (event) => event.event_type === 'run.retrying',
       ),
     );
@@ -1107,9 +1107,9 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-rec-current-checkpoint',
     });
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
-    world.tables.agent_sessions[0].pi_session_version = 1;
-    world.tables.agent_sessions[0].last_run_id = created.runId;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 1;
+    world.tables.tbl_agsvc_agent_sessions[0].last_run_id = created.runId;
     const jobsBefore = world.enqueuedJobs.length;
 
     const recovery = new RunRecoveryService({
@@ -1121,12 +1121,12 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     });
     const action = await recovery.recoverOneRef({
       runId: created.runId,
-      orgId: String(world.tables.runs[0].org_id),
+      orgId: String(world.tables.tbl_agsvc_runs[0].org_id),
     });
 
     assert.equal(action.action, 'needsReconciliation');
     assert.match(String(action.reason), /checkpoint.*this Run.*manual/i);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.RUNNING);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.RUNNING);
     assert.equal(world.enqueuedJobs.length, jobsBefore);
   });
 
@@ -1137,13 +1137,13 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-rec-tool-unknown',
     });
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
-    world.tables.tool_executions.push({
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tbl_agsvc_tool_executions.push({
       tool_execution_id: world.generateId(),
       run_id: created.runId,
       status: 'RUNNING',
     });
-    world.tables.tool_executions.push({
+    world.tables.tbl_agsvc_tool_executions.push({
       tool_execution_id: world.generateId(),
       run_id: created.runId,
       status: 'UNKNOWN',
@@ -1159,12 +1159,12 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     });
     const action = await recovery.recoverOneRef({
       runId: created.runId,
-      orgId: String(world.tables.runs[0].org_id),
+      orgId: String(world.tables.tbl_agsvc_runs[0].org_id),
     });
 
     assert.equal(action.action, 'needsReconciliation');
     assert.match(String(action.reason), /UNKNOWN.*manual recovery/i);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.RUNNING);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.RUNNING);
     assert.equal(world.enqueuedJobs.length, jobsBefore);
   });
 
@@ -1175,7 +1175,7 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       traceId: TRACE,
       idempotencyKey: 'ex-rec-held',
     });
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
     await lease.acquire(created.runId, 'live-worker');
 
     const recovery = new RunRecoveryService({
@@ -1187,9 +1187,9 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     });
     const action = await recovery.recoverOneRef({
       runId: created.runId,
-      orgId: String(world.tables.runs[0].org_id),
+      orgId: String(world.tables.tbl_agsvc_runs[0].org_id),
     });
     assert.equal(action.action, 'skipped');
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.RUNNING);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.RUNNING);
   });
 });

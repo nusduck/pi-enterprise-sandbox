@@ -305,14 +305,14 @@ describe('DshRunExecutor', () => {
       signal: new AbortController().signal,
     });
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 1);
-    assert.ok(state.tables.run_events.some((e) => e.event_type === 'message.completed'));
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
+    assert.ok(state.tables.tbl_agsvc_run_events.some((e) => e.event_type === 'message.completed'));
     assert.ok(
-      state.tables.messages.some((m) => m.pi_entry_id != null),
+      state.tables.tbl_agsvc_messages.some((m) => m.pi_entry_id != null),
       'journal rows written',
     );
     // Ordinary UI assistant message (not journal system channel)
-    const uiAssistant = state.tables.messages.find(
+    const uiAssistant = state.tables.tbl_agsvc_messages.find(
       (m) =>
         m.role === 'assistant' &&
         String(m.pi_entry_id || '').startsWith('ui:assistant:'),
@@ -374,7 +374,7 @@ describe('DshRunExecutor', () => {
     });
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
     assert.ok(
-      state.tables.run_events.some((e) => e.event_type === 'message.completed'),
+      state.tables.tbl_agsvc_run_events.some((e) => e.event_type === 'message.completed'),
       'empty Wave-6 bundle must not disable session-subscribe projection',
     );
     await exec.dispose();
@@ -409,7 +409,7 @@ describe('DshRunExecutor', () => {
   });
 
   it('loads current-turn image ids and passes Pi prompt image content directly', async () => {
-    state.tables.messages[0].content_json = JSON.stringify({
+    state.tables.tbl_agsvc_messages[0].content_json = JSON.stringify({
       modelId: 'deepseek-v4-flash-vision-exp',
       messages: [{
         role: 'user',
@@ -689,7 +689,7 @@ describe('DshRunExecutor', () => {
   it('delivers a durable steer request through native session.steer while prompt runs', async () => {
     const steerId = '01K0G2PAV8FPMVC9QHJG7JPN5K';
     const steerMessageId = '01K0G2PAV8FPMVC9QHJG7JPN5M';
-    state.tables.messages.push({
+    state.tables.tbl_agsvc_messages.push({
       message_id: steerMessageId,
       conversation_id: CONV,
       agent_session_id: SESS,
@@ -702,7 +702,7 @@ describe('DshRunExecutor', () => {
       pi_entry_kind: null,
       created_at: '2026-07-18 00:00:01.000',
     });
-    state.tables.run_events.push({
+    state.tables.tbl_agsvc_run_events.push({
       event_id: steerId,
       run_id: RUN,
       org_id: ORG,
@@ -717,7 +717,7 @@ describe('DshRunExecutor', () => {
       span_id: null,
       created_at: '2026-07-18 00:00:01.000',
     });
-    state.tables.runs[0].next_event_sequence = 1;
+    state.tables.tbl_agsvc_runs[0].next_event_sequence = 1;
 
     const delivered = [];
     const exec = makeExecutor({
@@ -735,7 +735,7 @@ describe('DshRunExecutor', () => {
 
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
     assert.deepEqual(delivered, ['inspect the outliers first']);
-    const acknowledged = state.tables.run_events.find(
+    const acknowledged = state.tables.tbl_agsvc_run_events.find(
       (event) => event.event_type === 'run.steer.delivered',
     );
     assert.ok(acknowledged);
@@ -848,7 +848,7 @@ describe('DshRunExecutor', () => {
       signal: new AbortController().signal,
     });
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
-    const completed = state.tables.run_events.filter(
+    const completed = state.tables.tbl_agsvc_run_events.filter(
       (e) => e.event_type === 'message.completed',
     );
     assert.equal(completed.length, 2, 'both assistant messages durable');
@@ -861,7 +861,7 @@ describe('DshRunExecutor', () => {
   // 「有值才校验格式」：保住「格式不对就别往下走」这一半，不改变哪些 Run 能跑
   // （把它改成无条件会让没有 sandboxSessionId 的 Run 从此起不来，超出 H8 范围）。
   it('fails closed when sandboxSessionId is present but malformed', async () => {
-    state.tables.agent_sessions[0].sandbox_session_id = 'not-a-ulid';
+    state.tables.tbl_agsvc_agent_sessions[0].sandbox_session_id = 'not-a-ulid';
     const generateId = nextId;
     const exec = new DshRunExecutor({
       transactionManager: { run: (fn) => knex.transaction(fn) },
@@ -978,7 +978,7 @@ describe('DshRunExecutor', () => {
     // a binding proves it is honoured, and nothing used to supply one — so any
     // AgentVersion that configured tool policy at all failed every Run with
     // PI_BINDING_REQUIRED.
-    state.tables.agent_versions[0].config_json = JSON.stringify({
+    state.tables.tbl_agsvc_agent_versions[0].config_json = JSON.stringify({
       systemPrompt: 'hi',
       toolPolicy: {
         tools: { bash: 'deny' },
@@ -1048,7 +1048,7 @@ describe('DshRunExecutor', () => {
     //
     // 现在断言的是 ADR 0009 D3 真正要的那件事：租户层策略到达按 Run 的风险解析
     // 函数，并且**只能收紧**。
-    state.tables.agent_versions[0].config_json = JSON.stringify({
+    state.tables.tbl_agsvc_agent_versions[0].config_json = JSON.stringify({
       toolPolicy: { tools: { bash: 'deny' }, riskLevels: { bash: 'critical' } },
     });
     /** @type {object[]} */
@@ -1155,10 +1155,10 @@ describe('DshRunExecutor', () => {
   });
 
   it('rejects triggering message that does not bind to run', async () => {
-    state.tables.messages[0].conversation_id = '01K0G2PAV8FPMVC9QHJG7JPN99';
+    state.tables.tbl_agsvc_messages[0].conversation_id = '01K0G2PAV8FPMVC9QHJG7JPN99';
     // Keep conversation row for ownership of wrong conv absent → getById null
     // Force wrong conversation id on message while same run
-    state.tables.conversations.push({
+    state.tables.tbl_agsvc_conversations.push({
       conversation_id: '01K0G2PAV8FPMVC9QHJG7JPN99',
       org_id: ORG,
       user_id: USER,
@@ -1190,7 +1190,7 @@ describe('DshRunExecutor', () => {
 
   it('fails closed when triggering agentSessionId or runId is null or mismatched', async () => {
     // null agentSessionId
-    state.tables.messages[0].agent_session_id = null;
+    state.tables.tbl_agsvc_messages[0].agent_session_id = null;
     let exec = makeExecutor();
     let result = await exec.execute({
       run: {
@@ -1213,7 +1213,7 @@ describe('DshRunExecutor', () => {
     seedExecutorWorld(state);
     knex = createFakeKnex(state);
     redis = createFakeRedis();
-    state.tables.messages[0].run_id = null;
+    state.tables.tbl_agsvc_messages[0].run_id = null;
     exec = makeExecutor();
     result = await exec.execute({
       run: {
@@ -1236,7 +1236,7 @@ describe('DshRunExecutor', () => {
     seedExecutorWorld(state);
     knex = createFakeKnex(state);
     redis = createFakeRedis();
-    state.tables.messages[0].run_id = '01K0G2PAV8FPMVC9QHJG7JPN9A';
+    state.tables.tbl_agsvc_messages[0].run_id = '01K0G2PAV8FPMVC9QHJG7JPN9A';
     exec = makeExecutor();
     result = await exec.execute({
       run: {
@@ -1282,7 +1282,7 @@ describe('DshRunExecutor', () => {
       ],
     };
     const checksum = checksumSnapshotPayload(oldPayload);
-    state.tables.agent_session_snapshots = [
+    state.tables.tbl_agsvc_agent_session_snapshots = [
       {
         snapshot_id: '01K0G2PAV8FPMVC9QHJG7JPN9B',
         agent_session_id: SESS,
@@ -1296,9 +1296,9 @@ describe('DshRunExecutor', () => {
         created_at: '2026-07-18 00:00:00.000',
       },
     ];
-    state.tables.agent_sessions[0].pi_session_version = 1;
+    state.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 1;
     // Journal rows for old entry (recovery truth) — no ui:assistant:e-old
-    state.tables.messages.push({
+    state.tables.tbl_agsvc_messages.push({
       message_id: '01K0G2PAV8FPMVC9QHJG7JPN9C',
       conversation_id: CONV,
       agent_session_id: SESS,
@@ -1322,13 +1322,13 @@ describe('DshRunExecutor', () => {
     const { hashJournalPayload } = await import(
       '../../src/infrastructure/mysql/repositories/session-journal-repository.js'
     );
-    state.tables.messages[state.tables.messages.length - 1].content_json =
+    state.tables.tbl_agsvc_messages[state.tables.tbl_agsvc_messages.length - 1].content_json =
       JSON.stringify({
         kind: 'pi_journal_header',
         header: oldPayload.header,
         payloadHash: hashJournalPayload(oldPayload.header),
       });
-    state.tables.messages.push({
+    state.tables.tbl_agsvc_messages.push({
       message_id: '01K0G2PAV8FPMVC9QHJG7JPN9E',
       conversation_id: CONV,
       agent_session_id: SESS,
@@ -1375,7 +1375,7 @@ describe('DshRunExecutor', () => {
       signal: new AbortController().signal,
     });
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
-    const uiRows = state.tables.messages.filter(
+    const uiRows = state.tables.tbl_agsvc_messages.filter(
       (m) =>
         m.role === 'assistant' &&
         String(m.pi_entry_id || '').startsWith('ui:assistant:'),
@@ -1445,7 +1445,7 @@ describe('DshRunExecutor', () => {
       workerId: 'w1',
       signal: new AbortController().signal,
       emit: async (env) => {
-        const found = state.tables.run_events.some(
+        const found = state.tables.tbl_agsvc_run_events.some(
           (e) => e.event_id === env.payload.eventId,
         );
         emitLog.push({ type: env.type, durable: found });
@@ -1508,7 +1508,7 @@ describe('DshRunExecutor', () => {
     // Still the load-bearing half: the rolled-back batch must not survive in
     // the durable table either. Only the emit-count assertion had to relax.
     assert.ok(
-      !state.tables.run_events.some((e) => e.event_type === 'message.completed'),
+      !state.tables.tbl_agsvc_run_events.some((e) => e.event_type === 'message.completed'),
       'rolled-back message.completed must not remain',
     );
     await exec2.dispose().catch(() => {});
@@ -1569,20 +1569,20 @@ describe('DshRunExecutor', () => {
     assert.equal(result.outcome, RUN_STATUS.FAILED);
     assert.match(String(result.statusReason), /lock lost/i);
     assert.equal(
-      state.tables.messages.filter((m) =>
+      state.tables.tbl_agsvc_messages.filter((m) =>
         String(m.pi_entry_id || '').startsWith('ui:assistant:'),
       ).length,
       0,
     );
-    assert.equal(state.tables.agent_session_snapshots.length, 0);
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_session_snapshots.length, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 0);
     await exec.dispose().catch(() => {});
   });
 
   it('old session keeps agentVersionId when catalog default changes', async () => {
     // Catalog now points at a different active version
     const NEW_VER = '01K0G2PAV8FPMVC9QHJG7JPN99';
-    state.tables.agent_versions.push({
+    state.tables.tbl_agsvc_agent_versions.push({
       agent_version_id: NEW_VER,
       agent_id: DEF,
       version_no: 2,
@@ -1593,10 +1593,10 @@ describe('DshRunExecutor', () => {
       created_by: USER,
       created_at: '2026-07-18 00:00:00.000',
     });
-    state.tables.agent_definitions[0].active_version_id = NEW_VER;
+    state.tables.tbl_agsvc_agent_definitions[0].active_version_id = NEW_VER;
     // Session + run still pin VER
-    assert.equal(state.tables.agent_sessions[0].agent_version_id, VER);
-    assert.equal(state.tables.runs[0].agent_version_id, VER);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].agent_version_id, VER);
+    assert.equal(state.tables.tbl_agsvc_runs[0].agent_version_id, VER);
 
     let resolvedVersionId = null;
     const generateId = nextId;
@@ -1671,7 +1671,7 @@ describe('DshRunExecutor', () => {
     // via onPrompt
     const factory = createFakePiRuntimeFactory({
       onPrompt: async () => {
-        state.tables.agent_sessions[0].execution_fence_token = 999;
+        state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token = 999;
       },
     });
     const generateId = nextId;
@@ -1707,7 +1707,7 @@ describe('DshRunExecutor', () => {
     assert.equal(result.outcome, RUN_STATUS.FAILED);
     // No success snapshot under stolen fence
     assert.equal(
-      state.tables.agent_session_snapshots.filter(
+      state.tables.tbl_agsvc_agent_session_snapshots.filter(
         (s) => Number(s.captured_fence_token) === 1,
       ).length,
       0,
@@ -1909,8 +1909,8 @@ describe('ExecuteRunService unique run lease token', () => {
     const knex = createFakeKnex(state);
     seedExecutorWorld(state);
     // Put run in QUEUED so execute advances — use stub executor
-    state.tables.runs[0].status = 'QUEUED';
-    state.tables.runs[0].attempt = 0;
+    state.tables.tbl_agsvc_runs[0].status = 'QUEUED';
+    state.tables.tbl_agsvc_runs[0].attempt = 0;
 
     const redis = createFakeRedis();
     const leaseManager = new LeaseManager(redis, { ttlMs: 60_000 });
@@ -1948,9 +1948,9 @@ describe('ExecuteRunService unique run lease token', () => {
     assert.match(tokens[0], /^w-same:[0-9a-f]{32}$/);
 
     // Second execute with same workerId gets a different token
-    state.tables.runs[0].status = 'QUEUED';
-    state.tables.runs[0].attempt = 1;
-    state.tables.runs[0].completed_at = null;
+    state.tables.tbl_agsvc_runs[0].status = 'QUEUED';
+    state.tables.tbl_agsvc_runs[0].attempt = 1;
+    state.tables.tbl_agsvc_runs[0].completed_at = null;
     await svc.execute({
       runId: RUN,
       orgId: ORG,

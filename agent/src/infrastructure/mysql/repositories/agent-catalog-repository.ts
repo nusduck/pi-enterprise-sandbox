@@ -99,7 +99,7 @@ export class AgentCatalogRepository {
 
   async getDefinitionById(agentId: string) {
     const id = assertUlid(agentId, 'agentId');
-    const row = await this.db('agent_definitions').where({ agent_id: id }).first();
+    const row = await this.db('tbl_agsvc_agent_definitions').where({ agent_id: id }).first();
     return row ? mapAgentDefinition(row) : null;
   }
 
@@ -112,7 +112,7 @@ export class AgentCatalogRepository {
     if (typeof name !== 'string' || !name.trim()) {
       throw new Error('name must be a non-empty string');
     }
-    let q = this.db('agent_definitions').where({ org_id: oid, name: name.trim() });
+    let q = this.db('tbl_agsvc_agent_definitions').where({ org_id: oid, name: name.trim() });
     if (opts.lockForShare) q = q.forShare();
     const row = await q.first();
     return row ? mapAgentDefinition(row) : null;
@@ -121,7 +121,7 @@ export class AgentCatalogRepository {
   async listDefinitionsByOrg(orgId: string, opts: { limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
-    const rows = await this.db('agent_definitions')
+    const rows = await this.db('tbl_agsvc_agent_definitions')
       .where({ org_id: oid })
       .orderBy('created_at', 'desc')
       .limit(limit);
@@ -154,7 +154,7 @@ export class AgentCatalogRepository {
     );
     const name = input.name.trim();
     try {
-      await this.db('agent_definitions').insert({
+      await this.db('tbl_agsvc_agent_definitions').insert({
         agent_id: agentId,
         org_id: orgId,
         name,
@@ -169,10 +169,10 @@ export class AgentCatalogRepository {
       });
     } catch (err) {
       if (isDuplicateKeyError(err)) {
-        // uk_agent_definitions_org_name (org_id, name) or primary key collision.
+        // ind_agsvc_ad_a1 (org_id, name) or primary key collision.
         const msg = String((err as { message?: string })?.message || '');
         if (
-          msg.includes('uk_agent_definitions_org_name') ||
+          msg.includes('ind_agsvc_ad_a1') ||
           msg.includes("for key 'org_id'") ||
           msg.includes('org_id_name')
         ) {
@@ -198,7 +198,7 @@ export class AgentCatalogRepository {
   async listVersionsByAgent(agentId: string, opts: { limit?: number } = {}) {
     const aid = assertUlid(agentId, 'agentId');
     const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
-    const rows = await this.db('agent_versions')
+    const rows = await this.db('tbl_agsvc_agent_versions')
       .where({ agent_id: aid })
       .orderBy('version_no', 'desc')
       .limit(limit);
@@ -207,12 +207,12 @@ export class AgentCatalogRepository {
 
   /**
    * Next `version_no` for an Agent. Racy by itself — the caller relies on
-   * uk_agent_version (agent_id, version_no) to reject a lost race, which is
+   * ind_agsvc_av_a1 (agent_id, version_no) to reject a lost race, which is
    * why createVersion surfaces ConflictError instead of overwriting.
    */
   async nextVersionNo(agentId: string) {
     const aid = assertUlid(agentId, 'agentId');
-    const row = await this.db('agent_versions')
+    const row = await this.db('tbl_agsvc_agent_versions')
       .where({ agent_id: aid })
       .orderBy('version_no', 'desc')
       .first();
@@ -221,7 +221,7 @@ export class AgentCatalogRepository {
 
   async getVersionById(agentVersionId: string) {
     const id = assertUlid(agentVersionId, 'agentVersionId');
-    const row = await this.db('agent_versions')
+    const row = await this.db('tbl_agsvc_agent_versions')
       .where({ agent_version_id: id })
       .first();
     return row ? mapAgentVersion(row) : null;
@@ -253,7 +253,7 @@ export class AgentCatalogRepository {
       throw new Error('configHash must be 64 hex characters');
     }
     try {
-      await this.db('agent_versions').insert({
+      await this.db('tbl_agsvc_agent_versions').insert({
         agent_version_id: agentVersionId,
         agent_id: agentId,
         version_no: input.versionNo,
@@ -279,7 +279,7 @@ export class AgentCatalogRepository {
   async setActiveVersion(agentId: string, activeVersionId: string) {
     const aid = assertUlid(agentId, 'agentId');
     const vid = assertUlid(activeVersionId, 'activeVersionId');
-    const n = await this.db('agent_definitions')
+    const n = await this.db('tbl_agsvc_agent_definitions')
       .where({ agent_id: aid })
       .update({
         active_version_id: vid,
@@ -342,7 +342,7 @@ export class AgentCatalogRepository {
     }
 
     // No active version (or dangling pointer): create version 1.
-    const existingV1 = await this.db('agent_versions')
+    const existingV1 = await this.db('tbl_agsvc_agent_versions')
       .where({ agent_id: def.agentId, version_no: 1 })
       .first();
     let version;
@@ -363,7 +363,7 @@ export class AgentCatalogRepository {
       } catch (err) {
         if (!(err instanceof ConflictError)) throw err;
         // 同上：加锁读才能看到并发事务刚提交的版本 1。
-        const raced = await this.db('agent_versions')
+        const raced = await this.db('tbl_agsvc_agent_versions')
           .where({ agent_id: def.agentId, version_no: 1 })
           .forShare()
           .first();

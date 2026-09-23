@@ -47,7 +47,7 @@ export const JOURNAL_HEADER_KIND = 'session';
 
 /** Default page size for journal reads (not a hard truncation of full rebuild). */
 /** (agent_session_id, sequence_no) — the only index that orders this read. */
-export const JOURNAL_ORDER_INDEX = 'idx_messages_session';
+export const JOURNAL_ORDER_INDEX = 'ind_agsvc_msg_i1';
 
 export const JOURNAL_DEFAULT_PAGE_SIZE = 500;
 
@@ -257,7 +257,7 @@ export class SessionJournalRepository {
     const s = requireOwnerUlids(scope);
     const id = assertUlid(agentSessionId, 'agentSessionId');
     let q = applyOwnerScope(
-      db('agent_sessions').where({ agent_session_id: id }),
+      db('tbl_agsvc_agent_sessions').where({ agent_session_id: id }),
       s,
     );
     if (opts.forUpdate) q = q.forUpdate();
@@ -279,7 +279,7 @@ export class SessionJournalRepository {
 
   async #allocateSequence(trx: import('knex').Knex.Transaction | import('knex').Knex, conversationId: string, scope: { orgId: string, userId: string }) {
     const conv = await applyOwnerScope(
-      trx('conversations').where({ conversation_id: conversationId }),
+      trx('tbl_agsvc_conversations').where({ conversation_id: conversationId }),
       scope,
     )
       .forUpdate()
@@ -290,7 +290,7 @@ export class SessionJournalRepository {
         id: conversationId,
       });
     }
-    const agg = await trx('messages')
+    const agg = await trx('tbl_agsvc_messages')
       .where({ conversation_id: conversationId })
       .max('sequence_no as max_seq')
       .first();
@@ -448,7 +448,7 @@ export class SessionJournalRepository {
       });
 
       // Idempotency: existing row with same (session, pi_entry_id)
-      const existing = await trx('messages')
+      const existing = await trx('tbl_agsvc_messages')
         .where({
           agent_session_id: agentSessionId,
           pi_entry_id: piEntryId,
@@ -485,7 +485,7 @@ export class SessionJournalRepository {
       );
 
       try {
-        await trx('messages').insert({
+        await trx('tbl_agsvc_messages').insert({
           message_id: messageId,
           conversation_id: session.conversationId,
           agent_session_id: agentSessionId,
@@ -501,7 +501,7 @@ export class SessionJournalRepository {
       } catch (err) {
         if (isDuplicateKeyError(err)) {
           // Race: re-read and apply hash check
-          const raced = await trx('messages')
+          const raced = await trx('tbl_agsvc_messages')
             .where({
               agent_session_id: agentSessionId,
               pi_entry_id: piEntryId,
@@ -532,13 +532,13 @@ export class SessionJournalRepository {
       }
 
       await applyOwnerScope(
-        trx('conversations').where({
+        trx('tbl_agsvc_conversations').where({
           conversation_id: session.conversationId,
         }),
         scope,
       ).update({ updated_at: toMysqlDateTime(this.now()) });
 
-      const row = await trx('messages').where({ message_id: messageId }).first();
+      const row = await trx('tbl_agsvc_messages').where({ message_id: messageId }).first();
       return { row: mapMessage(row), idempotent: false };
     };
 
@@ -579,7 +579,7 @@ export class SessionJournalRepository {
     //
     // FORCE INDEX is not a micro-optimisation here, it is what keeps this query
     // runnable. Left alone the optimizer picks
-    // `idx_messages_session_pi_kind (agent_session_id, pi_entry_kind, sequence_no)`,
+    // `ind_agsvc_msg_i2 (agent_session_id, pi_entry_kind, sequence_no)`,
     // whose middle column this query never constrains — it filters on
     // `message_type` — so the index cannot supply `sequence_no` order and MySQL
     // adds a filesort over whole rows, `content_json` included. A journal entry
@@ -588,10 +588,10 @@ export class SessionJournalRepository {
     // `sort_buffer_size`, so the read fails with ER_OUT_OF_SORTMEMORY and takes
     // the Run down with it — recover() runs this on every run start, and
     // persist() re-reads right after appending the entry that just broke it.
-    // `idx_messages_session (agent_session_id, sequence_no)` yields the rows
+    // `ind_agsvc_msg_i1 (agent_session_id, sequence_no)` yields the rows
     // already ordered: no sort, no buffer, and it stops at LIMIT.
     const rows = await this.db(
-      this.db.raw('?? FORCE INDEX (??)', ['messages', JOURNAL_ORDER_INDEX]),
+      this.db.raw('?? FORCE INDEX (??)', ['tbl_agsvc_messages', JOURNAL_ORDER_INDEX]),
     )
       .where({ agent_session_id: sid })
       .whereIn('message_type', [
@@ -702,7 +702,7 @@ export class SessionJournalRepository {
     const s = requireOwnerUlids(scope);
     const sid = assertUlid(agentSessionId, 'agentSessionId');
     await this.#requireOwnedSession(this.db, sid, s);
-    const row = await this.db('messages')
+    const row = await this.db('tbl_agsvc_messages')
       .where({
         agent_session_id: sid,
         pi_entry_id: String(piEntryId),

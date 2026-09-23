@@ -160,7 +160,7 @@ export class A2aCredentialRepository {
 
   async getById(credentialId: string) {
     const id = assertUlid(credentialId, 'credentialId');
-    const row = await this.db('a2a_api_credentials')
+    const row = await this.db('tbl_agsvc_a2a_api_credentials')
       .where({ credential_id: id })
       .first();
     return row ? mapA2aCredential(row) : null;
@@ -174,7 +174,7 @@ export class A2aCredentialRepository {
     if (typeof keyId !== 'string' || !/^[0-9a-f]{16}$/i.test(keyId.trim())) {
       return null;
     }
-    const row = await this.db('a2a_api_credentials')
+    const row = await this.db('tbl_agsvc_a2a_api_credentials')
       .where({ key_id: keyId.trim().toLowerCase() })
       .first();
     return row ? mapA2aCredential(row) : null;
@@ -189,7 +189,7 @@ export class A2aCredentialRepository {
   async listByOrg(orgId: string, opts: { agentId?: string | null, limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
-    let query = this.db('a2a_api_credentials')
+    let query = this.db('tbl_agsvc_a2a_api_credentials')
       .where({ org_id: oid })
       .orderBy('created_at', 'desc');
     if (opts.agentId) {
@@ -244,7 +244,7 @@ export class A2aCredentialRepository {
         : null;
 
     try {
-      await this.db('a2a_api_credentials').insert({
+      await this.db('tbl_agsvc_a2a_api_credentials').insert({
         credential_id: credentialId,
         org_id: orgId,
         agent_id: agentId,
@@ -282,7 +282,7 @@ export class A2aCredentialRepository {
   async updateStatus(credentialId: string, nextStatus: string, opts: { expectedStatus?: string | string[] } = {}) {
     const id = assertUlid(credentialId, 'credentialId');
     const now = toMysqlDateTime(this.now());
-    let q = this.db('a2a_api_credentials')
+    let q = this.db('tbl_agsvc_a2a_api_credentials')
       .where({ credential_id: id })
       .update({ status: nextStatus, updated_at: now });
     if (opts.expectedStatus != null) {
@@ -304,7 +304,7 @@ export class A2aCredentialRepository {
   async touchLastUsed(credentialId: string) {
     const id = assertUlid(credentialId, 'credentialId');
     const now = toMysqlDateTime(this.now());
-    await this.db('a2a_api_credentials')
+    await this.db('tbl_agsvc_a2a_api_credentials')
       .where({ credential_id: id })
       .update({ last_used_at: now, updated_at: now });
   }

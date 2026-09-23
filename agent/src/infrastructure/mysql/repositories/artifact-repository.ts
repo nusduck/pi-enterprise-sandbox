@@ -42,7 +42,7 @@ export class ArtifactRepository {
     const id = assertUlid(artifactId, 'artifactId');
     const s = requireOwnerScope(scope);
     const row = await applyOwnerScope(
-      this.db('artifacts').where({ artifact_id: id }),
+      this.db('tbl_agsvc_artifacts').where({ artifact_id: id }),
       s,
     ).first();
     return row ? mapArtifact(row) : null;
@@ -60,7 +60,7 @@ export class ArtifactRepository {
     const s = requireOwnerScope(scope);
     const limit = Math.min(Math.max(Number(opts.limit) || 200, 1), 1000);
     const rows = await applyOwnerScope(
-      this.db('artifacts').where({ run_id: rid }),
+      this.db('tbl_agsvc_artifacts').where({ run_id: rid }),
       s,
     )
       .orderBy('created_at', 'asc')

@@ -99,7 +99,7 @@ export async function readUnservedQueueCounts(
 }
 
 /**
- * 权威账本里超出目标深度的非终态 Run，按深度计数。走 `idx_runs_status`，
+ * 权威账本里超出目标深度的非终态 Run，按深度计数。走 `ind_agsvc_run_i5`（status），
  * 不按租户过滤——闸门关心的是整个 Worker 拓扑，不是某个 owner。
  */
 export async function readStrandedRunCounts(
@@ -108,7 +108,7 @@ export async function readStrandedRunCounts(
 ): Promise<Record<number, number>> {
   let rows: Loose[];
   try {
-    rows = await knex('runs')
+    rows = await knex('tbl_agsvc_runs')
       .whereIn('status', [...NON_TERMINAL_RUN_STATUSES])
       .where('subagent_depth', '>', maxDepth)
       .groupBy('subagent_depth')

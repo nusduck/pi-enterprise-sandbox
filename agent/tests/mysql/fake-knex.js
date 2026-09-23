@@ -274,14 +274,14 @@ function createQuery(state, tableName, opts = {}) {
       const row = { ...ctx.insertRow };
       const bareTable = tableName.replace(/ as .*$/, '');
       // Unique key simulation for agent_session_snapshots (session + version).
-      if (bareTable === 'agent_session_snapshots') {
+      if (bareTable === 'tbl_agsvc_agent_session_snapshots') {
         const dup = table.some(
           (r) =>
             r.agent_session_id === row.agent_session_id &&
             Number(r.snapshot_version) === Number(row.snapshot_version),
         );
         if (dup) {
-          const err = new Error('Duplicate entry for uk_session_snapshot');
+          const err = new Error('Duplicate entry for ind_agsvc_assn_a1');
           // @ts-ignore
           err.code = 'ER_DUP_ENTRY';
           // @ts-ignore
@@ -290,7 +290,7 @@ function createQuery(state, tableName, opts = {}) {
         }
       }
       // PR-05 journal: UNIQUE (agent_session_id, pi_entry_id) when both non-null.
-      if (bareTable === 'messages') {
+      if (bareTable === 'tbl_agsvc_messages') {
         if (row.pi_entry_id != null && row.agent_session_id != null) {
           const dup = table.some(
             (r) =>
@@ -299,7 +299,7 @@ function createQuery(state, tableName, opts = {}) {
               r.pi_entry_id === row.pi_entry_id,
           );
           if (dup) {
-            const err = new Error('Duplicate entry for uk_messages_session_pi_entry');
+            const err = new Error('Duplicate entry for ind_agsvc_msg_a2');
             // @ts-ignore
             err.code = 'ER_DUP_ENTRY';
             // @ts-ignore
@@ -310,7 +310,7 @@ function createQuery(state, tableName, opts = {}) {
         if (row.message_id != null) {
           const dupId = table.some((r) => r.message_id === row.message_id);
           if (dupId) {
-            const err = new Error('Duplicate entry for messages.PRIMARY');
+            const err = new Error('Duplicate entry for tbl_agsvc_messages.PRIMARY');
             // @ts-ignore
             err.code = 'ER_DUP_ENTRY';
             // @ts-ignore
@@ -325,7 +325,7 @@ function createQuery(state, tableName, opts = {}) {
               Number(r.sequence_no) === Number(row.sequence_no),
           );
           if (dupSeq) {
-            const err = new Error('Duplicate entry for uk_message_sequence');
+            const err = new Error('Duplicate entry for ind_agsvc_msg_a1');
             // @ts-ignore
             err.code = 'ER_DUP_ENTRY';
             // @ts-ignore
@@ -335,13 +335,13 @@ function createQuery(state, tableName, opts = {}) {
         }
       }
       // PR-06 B2: tool_executions UNIQUE(run_id, tool_call_id)
-      if (bareTable === 'tool_executions') {
+      if (bareTable === 'tbl_agsvc_tool_executions') {
         if (row.tool_execution_id != null) {
           const dupPk = table.some(
             (r) => r.tool_execution_id === row.tool_execution_id,
           );
           if (dupPk) {
-            const err = new Error('Duplicate entry for tool_executions.PRIMARY');
+            const err = new Error('Duplicate entry for tbl_agsvc_tool_executions.PRIMARY');
             // @ts-ignore
             err.code = 'ER_DUP_ENTRY';
             // @ts-ignore
@@ -355,7 +355,7 @@ function createQuery(state, tableName, opts = {}) {
               r.run_id === row.run_id && r.tool_call_id === row.tool_call_id,
           );
           if (dup) {
-            const err = new Error('Duplicate entry for uk_tool_call');
+            const err = new Error('Duplicate entry for ind_agsvc_te_a1');
             // @ts-ignore
             err.code = 'ER_DUP_ENTRY';
             // @ts-ignore
@@ -364,10 +364,10 @@ function createQuery(state, tableName, opts = {}) {
           }
         }
       }
-      if (bareTable === 'approvals' && row.approval_id != null) {
+      if (bareTable === 'tbl_agsvc_approvals' && row.approval_id != null) {
         const dup = table.some((r) => r.approval_id === row.approval_id);
         if (dup) {
-          const err = new Error('Duplicate entry for approvals.PRIMARY');
+          const err = new Error('Duplicate entry for tbl_agsvc_approvals.PRIMARY');
           // @ts-ignore
           err.code = 'ER_DUP_ENTRY';
           // @ts-ignore
@@ -375,7 +375,7 @@ function createQuery(state, tableName, opts = {}) {
           throw err;
         }
       }
-      if (bareTable === 'run_interactions') {
+      if (bareTable === 'tbl_agsvc_run_interactions') {
         const dup = table.some(
           (r) =>
             r.interaction_id === row.interaction_id ||
@@ -390,10 +390,10 @@ function createQuery(state, tableName, opts = {}) {
           throw err;
         }
       }
-      if (bareTable === 'sandbox_audit_events' && row.audit_id != null) {
+      if (bareTable === 'tbl_agsvc_sandbox_audit_events' && row.audit_id != null) {
         const dup = table.some((r) => r.audit_id === row.audit_id);
         if (dup) {
-          const err = new Error('Duplicate entry for sandbox_audit_events.PRIMARY');
+          const err = new Error('Duplicate entry for tbl_agsvc_sandbox_audit_events.PRIMARY');
           // @ts-ignore
           err.code = 'ER_DUP_ENTRY';
           // @ts-ignore
@@ -401,12 +401,12 @@ function createQuery(state, tableName, opts = {}) {
           throw err;
         }
       }
-      if (bareTable === 'trace_spans') {
+      if (bareTable === 'tbl_agsvc_trace_spans') {
         const dup = table.some(
           (r) => r.trace_id === row.trace_id && r.span_id === row.span_id,
         );
         if (dup) {
-          const err = new Error('Duplicate entry for trace_spans.PRIMARY');
+          const err = new Error('Duplicate entry for tbl_agsvc_trace_spans.PRIMARY');
           // @ts-ignore
           err.code = 'ER_DUP_ENTRY';
           // @ts-ignore
@@ -593,11 +593,11 @@ export function createFakeKnex(state = createFakeState()) {
     state.rawCalls.push({ sql: String(sql), bindings: [...bindings] });
     const sqlNorm = String(sql).replace(/\s+/g, ' ').trim();
 
-    if (/UPDATE runs SET next_event_sequence = LAST_INSERT_ID/i.test(sqlNorm)) {
+    if (/UPDATE tbl_agsvc_runs SET next_event_sequence = LAST_INSERT_ID/i.test(sqlNorm)) {
       const runId = bindings[1];
       const orgId = bindings[2];
       const userId = bindings[3];
-      const runs = state.tables.runs || [];
+      const runs = state.tables.tbl_agsvc_runs || [];
       const run = runs.find(
         (r) =>
           r.run_id === runId && r.org_id === orgId && r.user_id === userId,

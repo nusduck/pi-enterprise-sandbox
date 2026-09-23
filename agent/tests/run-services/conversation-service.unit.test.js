@@ -154,7 +154,7 @@ describe('ConversationService MySQL authority', () => {
       traceId: 'a'.repeat(32),
       idempotencyKey: 'legacy-title',
     });
-    world.tables.conversations[0].title = 'New chat';
+    world.tables.tbl_agsvc_conversations[0].title = 'New chat';
 
     const service = createService(world);
     const listed = await service.list(FIXED_AUTH);
@@ -185,7 +185,7 @@ describe('ConversationService MySQL authority', () => {
       idempotencyKey: 'precreated-title',
     });
 
-    assert.equal(world.tables.conversations[0].title, '总结刚刚上传的文件');
+    assert.equal(world.tables.tbl_agsvc_conversations[0].title, '总结刚刚上传的文件');
   });
 
   it('creates, lists, gets, and archives an owner-scoped conversation', async () => {
@@ -198,7 +198,7 @@ describe('ConversationService MySQL authority', () => {
     assert.equal(created.messages.length, 0);
     assert.ok(created.agent_session_id);
 
-    const refs = world.tables.conversation_external_refs;
+    const refs = world.tables.tbl_agsvc_conversation_external_refs;
     assert.equal(refs.length, 1);
     assert.equal(refs[0].external_subject, created.id);
     assert.equal(refs[0].conversation_id, created.id);
@@ -229,11 +229,11 @@ describe('ConversationService MySQL authority', () => {
       service.get(created.id, FIXED_AUTH),
       OwnerScopedNotFoundError,
     );
-    assert.equal(world.tables.conversations[0].status, 'archived');
-    assert.ok(world.tables.conversations[0].archived_at);
+    assert.equal(world.tables.tbl_agsvc_conversations[0].status, 'archived');
+    assert.ok(world.tables.tbl_agsvc_conversations[0].archived_at);
     // Durable children remain; DELETE must not cascade session/run history.
     assert.ok(
-      world.tables.agent_sessions.some(
+      world.tables.tbl_agsvc_agent_sessions.some(
         (session) => session.conversation_id === created.id,
       ),
     );
@@ -272,7 +272,7 @@ describe('ConversationService MySQL authority', () => {
     const service = createService(world, null, { createSandboxClient });
 
     const created = await service.create(FIXED_AUTH, { title: 'to delete' });
-    const boundAgentSession = world.tables.agent_sessions.find(
+    const boundAgentSession = world.tables.tbl_agsvc_agent_sessions.find(
       (row) => row.conversation_id === created.id,
     );
     assert.ok(boundAgentSession, 'conversation must have a bound AgentSession');
@@ -304,7 +304,7 @@ describe('ConversationService MySQL authority', () => {
 
     await service.delete(created.id, FIXED_AUTH);
 
-    assert.equal(world.tables.conversations[0].status, 'archived');
+    assert.equal(world.tables.tbl_agsvc_conversations[0].status, 'archived');
     assert.equal(errors.length, 1);
     assert.match(errors[0], /Sandbox workspace cleanup failed/);
   });
@@ -316,7 +316,7 @@ describe('ConversationService MySQL authority', () => {
     const created = await service.create(FIXED_AUTH, { title: 'no sandbox client' });
     await service.delete(created.id, FIXED_AUTH);
 
-    assert.equal(world.tables.conversations[0].status, 'archived');
+    assert.equal(world.tables.tbl_agsvc_conversations[0].status, 'archived');
   });
 
   it('rejects titles outside the schema limit before writing', async () => {
@@ -326,7 +326,7 @@ describe('ConversationService MySQL authority', () => {
       service.create(FIXED_AUTH, { title: 'x'.repeat(501) }),
       /title exceeds max length 500/,
     );
-    assert.equal(world.tables.conversations.length, 0);
+    assert.equal(world.tables.tbl_agsvc_conversations.length, 0);
     await assert.rejects(
       service.create(FIXED_AUTH, { title: { nested: true } }),
       /title must be a string/,
@@ -402,9 +402,9 @@ describe('ConversationService MySQL authority', () => {
       traceId: 'd'.repeat(32),
       idempotencyKey: 'legacy-conversation-create',
     });
-    assert.equal(world.tables.conversations.length, 1);
+    assert.equal(world.tables.tbl_agsvc_conversations.length, 1);
     assert.equal(
-      world.tables.conversation_external_refs[0].external_subject,
+      world.tables.tbl_agsvc_conversation_external_refs[0].external_subject,
       'legacy-conversation-uuid',
     );
 
@@ -421,7 +421,7 @@ describe('ConversationService MySQL authority', () => {
     });
     assert.equal(ensured.conversation_id, createdRun.conversationId);
     assert.equal(ensured.agent_session_id, createdRun.agentSessionId);
-    assert.equal(world.tables.conversations.length, 1);
+    assert.equal(world.tables.tbl_agsvc_conversations.length, 1);
     assert.equal(calls.length, 1);
   });
 });

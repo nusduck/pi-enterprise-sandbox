@@ -69,7 +69,7 @@ describe('durable trace span projection', () => {
   it('keeps the replay watermark private and avoids semantic no-op writes', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     let now = new Date('2026-07-19T00:00:00.000Z');
     const repo = new TraceSpanRepository(knex, { now: () => now });
     const input = {
@@ -86,17 +86,17 @@ describe('durable trace span projection', () => {
     };
 
     await repo.upsert(input);
-    const firstUpdatedAt = state.tables.trace_spans[0].updated_at;
+    const firstUpdatedAt = state.tables.tbl_agsvc_trace_spans[0].updated_at;
     now = new Date('2026-07-19T00:00:10.000Z');
     await repo.upsert(input);
-    assert.equal(state.tables.trace_spans[0].updated_at, firstUpdatedAt);
+    assert.equal(state.tables.tbl_agsvc_trace_spans[0].updated_at, firstUpdatedAt);
 
     await repo.advanceRunProjectionWatermark(
       { runId: RUN, traceId: TRACE, createdAt: input.startedAt },
       { orgId: ORG, userId: USER },
       17,
     );
-    const root = state.tables.trace_spans.find(
+    const root = state.tables.tbl_agsvc_trace_spans.find(
       (row) =>
         row.kind === 'run' &&
         row.run_id === RUN &&
@@ -124,7 +124,7 @@ describe('durable trace span projection', () => {
   it('binds event projection to the append transaction and rolls back together', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       {
         run_id: RUN,
         org_id: ORG,
@@ -133,8 +133,8 @@ describe('durable trace span projection', () => {
         next_event_sequence: 0,
       },
     ];
-    state.tables.run_events = [];
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_run_events = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     let boundExecutor = null;
     const projector = {
       forExecutor(executor) {
@@ -165,14 +165,14 @@ describe('durable trace span projection', () => {
       /projection failed/,
     );
     assert.ok(boundExecutor, 'projector must receive the transaction executor');
-    assert.deepEqual(state.tables.run_events, []);
-    assert.equal(state.tables.runs[0].next_event_sequence, 0);
+    assert.deepEqual(state.tables.tbl_agsvc_run_events, []);
+    assert.equal(state.tables.tbl_agsvc_runs[0].next_event_sequence, 0);
   });
 
   it('advances the private watermark for timeline-only events in the append transaction', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       {
         run_id: RUN,
         org_id: ORG,
@@ -181,8 +181,8 @@ describe('durable trace span projection', () => {
         next_event_sequence: 0,
       },
     ];
-    state.tables.run_events = [];
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_run_events = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const traceSpans = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -198,10 +198,10 @@ describe('durable trace span projection', () => {
       traceId: TRACE,
     });
 
-    assert.equal(state.tables.trace_spans.length, 1);
-    const rawAttributes = JSON.parse(state.tables.trace_spans[0].attributes_json);
+    assert.equal(state.tables.tbl_agsvc_trace_spans.length, 1);
+    const rawAttributes = JSON.parse(state.tables.tbl_agsvc_trace_spans[0].attributes_json);
     assert.equal(rawAttributes.projectedSequence, 1);
-    const publicSpan = mapTraceSpan(state.tables.trace_spans[0]);
+    const publicSpan = mapTraceSpan(state.tables.tbl_agsvc_trace_spans[0]);
     assert.equal(publicSpan.attributes.projectedSequence, undefined);
   });
 
@@ -211,7 +211,7 @@ describe('durable trace span projection', () => {
     // executor will mark a successful agent loop FAILED.
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       {
         run_id: RUN,
         org_id: ORG,
@@ -220,8 +220,8 @@ describe('durable trace span projection', () => {
         next_event_sequence: 0,
       },
     ];
-    state.tables.run_events = [];
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_run_events = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const projector = {
       projectRunEvent: async () => {
         throw new Error('root executor must not be used');
@@ -248,14 +248,14 @@ describe('durable trace span projection', () => {
     });
 
     assert.equal(stored.eventType, 'message.completed');
-    assert.equal(state.tables.run_events.length, 1);
-    assert.equal(state.tables.runs[0].next_event_sequence, 1);
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 1);
+    assert.equal(state.tables.tbl_agsvc_runs[0].next_event_sequence, 1);
   });
 
   it('upserts a span with fake knex without requiring a real MySQL driver', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -280,7 +280,7 @@ describe('durable trace span projection', () => {
   it('returns an explicit cursor when the trace page is truncated', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -323,7 +323,7 @@ describe('durable trace span projection', () => {
   it('keeps terminal lifecycle fields monotonic across stale replays', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:10.000Z'),
     });
@@ -372,7 +372,7 @@ describe('durable trace span projection', () => {
   it('does not turn timeline-only events into trace spans', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -402,13 +402,13 @@ describe('durable trace span projection', () => {
       );
     }
 
-    assert.deepEqual(state.tables.trace_spans, []);
+    assert.deepEqual(state.tables.tbl_agsvc_trace_spans, []);
   });
 
   it('finishes session compaction spans instead of leaving them running', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -423,16 +423,16 @@ describe('durable trace span projection', () => {
       },
       { orgId: ORG, userId: USER },
     );
-    assert.equal(state.tables.trace_spans.length, 1);
-    assert.equal(state.tables.trace_spans[0].kind, 'session');
-    assert.equal(state.tables.trace_spans[0].status, 'ok');
-    assert.equal(state.tables.trace_spans[0].finished_at, '2026-07-19 00:00:01.000');
+    assert.equal(state.tables.tbl_agsvc_trace_spans.length, 1);
+    assert.equal(state.tables.tbl_agsvc_trace_spans[0].kind, 'session');
+    assert.equal(state.tables.tbl_agsvc_trace_spans[0].status, 'ok');
+    assert.equal(state.tables.tbl_agsvc_trace_spans[0].finished_at, '2026-07-19 00:00:01.000');
   });
 
   it('parents the synthetic Run span to the incoming W3C caller span', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -449,15 +449,15 @@ describe('durable trace span projection', () => {
       { orgId: ORG, userId: USER },
     );
 
-    assert.equal(state.tables.trace_spans.length, 1);
-    assert.equal(state.tables.trace_spans[0].kind, 'run');
-    assert.equal(state.tables.trace_spans[0].parent_span_id, 'f'.repeat(16));
+    assert.equal(state.tables.tbl_agsvc_trace_spans.length, 1);
+    assert.equal(state.tables.tbl_agsvc_trace_spans[0].kind, 'run');
+    assert.equal(state.tables.tbl_agsvc_trace_spans[0].parent_span_id, 'f'.repeat(16));
   });
 
   it('projects model request lifecycle and errors as real spans', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -490,9 +490,9 @@ describe('durable trace span projection', () => {
       '2026-07-19T00:00:03.000Z',
     );
 
-    assert.equal(state.tables.trace_spans.length, 2);
-    const model = state.tables.trace_spans.find((row) => row.kind === 'model');
-    const error = state.tables.trace_spans.find((row) => row.kind === 'error');
+    assert.equal(state.tables.tbl_agsvc_trace_spans.length, 2);
+    const model = state.tables.tbl_agsvc_trace_spans.find((row) => row.kind === 'model');
+    const error = state.tables.tbl_agsvc_trace_spans.find((row) => row.kind === 'error');
     assert.equal(model?.status, 'ok');
     assert.equal(model?.finished_at, '2026-07-19 00:00:02.000');
     assert.equal(error?.name, 'Error');
@@ -512,7 +512,7 @@ describe('durable trace span projection', () => {
   it('creates one Queue span per wait and closes it when the Run leaves queue', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -535,7 +535,7 @@ describe('durable trace span projection', () => {
     await project('queue-2', 'run.queued', { status: 'QUEUED' }, '2026-07-19T00:00:04.000Z');
     await project('cancel-1', 'run.cancelled', { status: 'CANCELLED' }, '2026-07-19T00:00:05.000Z');
 
-    const queues = state.tables.trace_spans
+    const queues = state.tables.tbl_agsvc_trace_spans
       .filter((row) => row.kind === 'queue')
       .sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
     assert.equal(queues.length, 2);
@@ -551,12 +551,12 @@ describe('durable trace span projection', () => {
   it('keeps one Tool span across proposal, execution, and fact materialization', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
-    state.tables.run_events = [];
-    state.tables.tool_executions = [];
-    state.tables.sandbox_executions = [];
-    state.tables.artifacts = [];
-    state.tables.a2a_tasks = [];
+    state.tables.tbl_agsvc_trace_spans = [];
+    state.tables.tbl_agsvc_run_events = [];
+    state.tables.tbl_agsvc_tool_executions = [];
+    state.tables.tbl_agsvc_sandbox_executions = [];
+    state.tables.tbl_agsvc_artifacts = [];
+    state.tables.tbl_agsvc_a2a_tasks = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -589,14 +589,14 @@ describe('durable trace span projection', () => {
       '2026-07-19T00:00:03.000Z',
     );
 
-    assert.equal(state.tables.trace_spans.length, 1);
+    assert.equal(state.tables.tbl_agsvc_trace_spans.length, 1);
     assert.equal(
-      state.tables.trace_spans[0].span_id,
+      state.tables.tbl_agsvc_trace_spans[0].span_id,
       deriveSpanId(TRACE, 'tool', 'call-1'),
     );
-    assert.equal(state.tables.trace_spans[0].status, 'ok');
+    assert.equal(state.tables.tbl_agsvc_trace_spans[0].status, 'ok');
 
-    state.tables.tool_executions.push({
+    state.tables.tbl_agsvc_tool_executions.push({
       tool_execution_id: TOOL_EXEC,
       tool_call_id: 'call-1',
       run_id: RUN,
@@ -625,12 +625,12 @@ describe('durable trace span projection', () => {
     );
 
     assert.equal(
-      state.tables.trace_spans.filter((row) => row.kind === 'tool').length,
+      state.tables.tbl_agsvc_trace_spans.filter((row) => row.kind === 'tool').length,
       1,
     );
 
-    state.tables.tool_executions[0].status = 'UNKNOWN';
-    state.tables.tool_executions[0].completed_at = null;
+    state.tables.tbl_agsvc_tool_executions[0].status = 'UNKNOWN';
+    state.tables.tbl_agsvc_tool_executions[0].completed_at = null;
     await repo.materializeRunFacts(
       {
         runId: RUN,
@@ -643,7 +643,7 @@ describe('durable trace span projection', () => {
       },
       { orgId: ORG, userId: USER },
     );
-    const unknownTool = state.tables.trace_spans.find(
+    const unknownTool = state.tables.tbl_agsvc_trace_spans.find(
       (row) => row.kind === 'tool',
     );
     assert.equal(unknownTool?.status, 'error');
@@ -653,7 +653,7 @@ describe('durable trace span projection', () => {
   it('coalesces concurrent first writes for one span', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -673,7 +673,7 @@ describe('durable trace span projection', () => {
       repo.upsert(input),
       repo.upsert(input),
     ]);
-    assert.equal(state.tables.trace_spans.length, 1);
+    assert.equal(state.tables.tbl_agsvc_trace_spans.length, 1);
     assert.equal(first.spanId, input.spanId);
     assert.equal(second.spanId, input.spanId);
   });
@@ -681,7 +681,7 @@ describe('durable trace span projection', () => {
   it('does not regress a newer watermark when an optimistic update races', async () => {
     const state = createFakeState();
     const baseKnex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const seed = new TraceSpanRepository(baseKnex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -694,12 +694,12 @@ describe('durable trace span projection', () => {
     let raced = false;
     const racingKnex = (tableName) => {
       const query = baseKnex(tableName);
-      if (tableName === 'trace_spans') {
+      if (tableName === 'tbl_agsvc_trace_spans') {
         const update = query.update.bind(query);
         query.update = async (patch) => {
           const nextSequence = JSON.parse(patch.attributes_json || '{}').projectedSequence;
           if (!raced && nextSequence === 2) {
-            const row = state.tables.trace_spans.find(
+            const row = state.tables.tbl_agsvc_trace_spans.find(
               (candidate) => candidate.run_id === RUN && candidate.kind === 'run',
             );
             const attrs = JSON.parse(row.attributes_json);
@@ -721,7 +721,7 @@ describe('durable trace span projection', () => {
       2,
     );
 
-    const root = state.tables.trace_spans.find(
+    const root = state.tables.tbl_agsvc_trace_spans.find(
       (row) => row.run_id === RUN && row.kind === 'run',
     );
     assert.equal(JSON.parse(root.attributes_json).projectedSequence, 3);
@@ -732,7 +732,7 @@ describe('durable trace span projection', () => {
   it('locks the span row when upserting inside a transaction', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     await knex.transaction(async (trx) => {
       const repo = new TraceSpanRepository(trx, {
         now: () => new Date('2026-07-19T00:00:00.000Z'),
@@ -751,7 +751,7 @@ describe('durable trace span projection', () => {
     });
     assert.ok(
       (state.lockCalls || []).some(
-        (call) => call.table === 'trace_spans' && call.mode === 'update',
+        (call) => call.table === 'tbl_agsvc_trace_spans' && call.mode === 'update',
       ),
       'transactional upsert must SELECT … FOR UPDATE so retries see the latest row',
     );
@@ -764,7 +764,7 @@ describe('durable trace span projection', () => {
     // Run 01M0YZ6C0HZAQX1GGZ8CHAA9K5 failed this way after 916 events.
     const state = createFakeState();
     const baseKnex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const seed = new TraceSpanRepository(baseKnex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -773,8 +773,8 @@ describe('durable trace span projection', () => {
       { orgId: ORG, userId: USER },
       1,
     );
-    const snapshot = { ...state.tables.trace_spans[0] };
-    const live = state.tables.trace_spans[0];
+    const snapshot = { ...state.tables.tbl_agsvc_trace_spans[0] };
+    const live = state.tables.tbl_agsvc_trace_spans[0];
     const liveAttrs = JSON.parse(live.attributes_json);
     liveAttrs.projectedSequence = 5;
     live.attributes_json = JSON.stringify(liveAttrs);
@@ -790,8 +790,8 @@ describe('durable trace span projection', () => {
       };
       const origFirst = query.first.bind(query);
       query.first = async () => {
-        if (tableName !== 'trace_spans') return origFirst();
-        const row = locked ? state.tables.trace_spans[0] : snapshot;
+        if (tableName !== 'tbl_agsvc_trace_spans') return origFirst();
+        const row = locked ? state.tables.tbl_agsvc_trace_spans[0] : snapshot;
         return row ? { ...row } : undefined;
       };
       return query;
@@ -807,7 +807,7 @@ describe('durable trace span projection', () => {
       2,
     );
     assert.equal(
-      JSON.parse(state.tables.trace_spans[0].attributes_json).projectedSequence,
+      JSON.parse(state.tables.tbl_agsvc_trace_spans[0].attributes_json).projectedSequence,
       5,
     );
   });
@@ -815,7 +815,7 @@ describe('durable trace span projection', () => {
   it('does not let stale replay reopen a terminal span', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -854,7 +854,7 @@ describe('durable trace span projection', () => {
   it('rejects a parent chain that would form a cycle', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
+    state.tables.tbl_agsvc_trace_spans = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -891,8 +891,8 @@ describe('durable trace span projection', () => {
   it('replays only events after the watermark and leaves a repeated materialization unchanged', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
-    state.tables.run_events = [
+    state.tables.tbl_agsvc_trace_spans = [];
+    state.tables.tbl_agsvc_run_events = [
       {
         event_id: 'model-started',
         run_id: RUN,
@@ -914,10 +914,10 @@ describe('durable trace span projection', () => {
         created_at: '2026-07-19 00:00:02.000',
       },
     ];
-    state.tables.tool_executions = [];
-    state.tables.sandbox_executions = [];
-    state.tables.artifacts = [];
-    state.tables.a2a_tasks = [];
+    state.tables.tbl_agsvc_tool_executions = [];
+    state.tables.tbl_agsvc_sandbox_executions = [];
+    state.tables.tbl_agsvc_artifacts = [];
+    state.tables.tbl_agsvc_a2a_tasks = [];
     let now = new Date('2026-07-19T00:00:00.000Z');
     const repo = new TraceSpanRepository(knex, { now: () => now });
     await repo.advanceRunProjectionWatermark(
@@ -944,17 +944,17 @@ describe('durable trace span projection', () => {
 
     await repo.materializeRunFacts(run, { orgId: ORG, userId: USER });
     assert.deepEqual(projected, [2]);
-    const model = state.tables.trace_spans.find((row) => row.kind === 'model');
+    const model = state.tables.tbl_agsvc_trace_spans.find((row) => row.kind === 'model');
     assert.equal(model?.status, 'ok');
-    const root = state.tables.trace_spans.find((row) => row.kind === 'run');
+    const root = state.tables.tbl_agsvc_trace_spans.find((row) => row.kind === 'run');
     assert.equal(JSON.parse(root?.attributes_json).projectedSequence, 2);
-    const updatedAt = state.tables.trace_spans.map((row) => row.updated_at);
+    const updatedAt = state.tables.tbl_agsvc_trace_spans.map((row) => row.updated_at);
 
     now = new Date('2026-07-19T00:01:00.000Z');
     await repo.materializeRunFacts(run, { orgId: ORG, userId: USER });
     assert.deepEqual(projected, [2]);
     assert.deepEqual(
-      state.tables.trace_spans.map((row) => row.updated_at),
+      state.tables.tbl_agsvc_trace_spans.map((row) => row.updated_at),
       updatedAt,
     );
   });
@@ -962,8 +962,8 @@ describe('durable trace span projection', () => {
   it('does not advance the watermark when an event projection fails', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
-    state.tables.run_events = [
+    state.tables.tbl_agsvc_trace_spans = [];
+    state.tables.tbl_agsvc_run_events = [
       {
         event_id: 'model-failed-projection',
         run_id: RUN,
@@ -975,10 +975,10 @@ describe('durable trace span projection', () => {
         created_at: '2026-07-19 00:00:02.000',
       },
     ];
-    state.tables.tool_executions = [];
-    state.tables.sandbox_executions = [];
-    state.tables.artifacts = [];
-    state.tables.a2a_tasks = [];
+    state.tables.tbl_agsvc_tool_executions = [];
+    state.tables.tbl_agsvc_sandbox_executions = [];
+    state.tables.tbl_agsvc_artifacts = [];
+    state.tables.tbl_agsvc_a2a_tasks = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -1004,15 +1004,15 @@ describe('durable trace span projection', () => {
       ),
       /projection failed/,
     );
-    const root = state.tables.trace_spans.find((row) => row.kind === 'run');
+    const root = state.tables.tbl_agsvc_trace_spans.find((row) => row.kind === 'run');
     assert.equal(JSON.parse(root?.attributes_json).projectedSequence, 1);
   });
 
   it('parents each artifact to the Tool named by its artifact.ready event', async () => {
     const state = createFakeState();
     const knex = createFakeKnex(state);
-    state.tables.trace_spans = [];
-    state.tables.run_events = [
+    state.tables.tbl_agsvc_trace_spans = [];
+    state.tables.tbl_agsvc_run_events = [
       {
         event_id: 'artifact-event-1',
         run_id: RUN,
@@ -1044,7 +1044,7 @@ describe('durable trace span projection', () => {
         created_at: '2026-07-19 00:00:02.000',
       },
     ];
-    state.tables.tool_executions = [
+    state.tables.tbl_agsvc_tool_executions = [
       {
         tool_execution_id: TOOL_EXEC,
         tool_call_id: 'submit-1',
@@ -1072,8 +1072,8 @@ describe('durable trace span projection', () => {
         created_at: '2026-07-19 00:00:01.000',
       },
     ];
-    state.tables.sandbox_executions = [];
-    state.tables.artifacts = [
+    state.tables.tbl_agsvc_sandbox_executions = [];
+    state.tables.tbl_agsvc_artifacts = [
       {
         artifact_id: ARTIFACT_1,
         org_id: ORG,
@@ -1103,7 +1103,7 @@ describe('durable trace span projection', () => {
         sha256: '2'.repeat(64),
       },
     ];
-    state.tables.a2a_tasks = [];
+    state.tables.tbl_agsvc_a2a_tasks = [];
     const repo = new TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
     });
@@ -1121,7 +1121,7 @@ describe('durable trace span projection', () => {
       { orgId: ORG, userId: USER },
     );
 
-    const artifactSpans = state.tables.trace_spans.filter(
+    const artifactSpans = state.tables.tbl_agsvc_trace_spans.filter(
       (row) => row.kind === 'artifact',
     );
     assert.equal(artifactSpans.length, 2);

@@ -47,6 +47,23 @@ Production and development both apply the exported release segment by segment
 
    `drifts: []` is required. A `SCHEMA_DRIFT` at service start lists the same objects.
 
+### UPspec naming migration (20260923000001)
+
+This segment renames every application table to `tbl_agsvc_*` in **one atomic
+`RENAME TABLE`**, then issues **one `ALTER TABLE` per table** (index renames,
+`varchar(16)` → `char(16)`, column defaults). Each statement is atomic on its own,
+so a failure leaves a clean boundary:
+
+- `SHOW TABLES LIKE 'tbl_agsvc_%'` returns nothing → the rename did not run; fix the
+  cause and re-run the whole segment.
+- Tables are renamed → find the failed table in the client error. Every `ALTER`
+  before it completed. Run the remaining `ALTER TABLE` statements from the segment,
+  starting at the failed one, then the final `knex_migrations` insert. Do **not**
+  re-run the `RENAME TABLE` statement.
+
+Old and new application versions cannot share a database across this migration.
+Stop writers before running it (`docs/deployment.md` → 库表命名规范).
+
 ## Fail-closed policy
 
 - Do **not** auto-`DROP` arbitrary existing tables in production.
@@ -86,6 +103,10 @@ and restart the services; they verify the schema at startup.
 ### Option A2 — FK-safe drop of known app tables only
 
 Use only the platform table list (core + known additive create migrations). Do not guess unrelated customer tables in a shared MySQL instance.
+
+The list below uses the names the create migrations produce. On a database that has
+already run `20260923000001_upspec_naming.js`, every name carries the `tbl_agsvc_`
+prefix (for example `tbl_agsvc_a2a_audit_events`).
 
 ```sql
 SET FOREIGN_KEY_CHECKS = 0;

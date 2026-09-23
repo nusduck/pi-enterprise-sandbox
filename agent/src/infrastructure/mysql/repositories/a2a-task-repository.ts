@@ -125,7 +125,7 @@ export class A2aTaskRepository {
     const now = toMysqlDateTime(this.now());
 
     try {
-      await this.db('a2a_tasks').insert({
+      await this.db('tbl_agsvc_a2a_tasks').insert({
         a2a_task_id: a2aTaskId,
         org_id: orgId,
         user_id: userId,
@@ -164,7 +164,7 @@ export class A2aTaskRepository {
     const id = assertUlid(a2aTaskId, 'a2aTaskId');
     const s = requireA2aClientScope(scope);
     const row = await applyA2aClientScope(
-      this.db('a2a_tasks').where({ a2a_task_id: id }),
+      this.db('tbl_agsvc_a2a_tasks').where({ a2a_task_id: id }),
       s,
     ).first();
     return row ? mapA2aTask(row) : null;
@@ -174,7 +174,7 @@ export class A2aTaskRepository {
     const id = assertUlid(runId, 'runId');
     const s = requireA2aClientScope(scope);
     const row = await applyA2aClientScope(
-      this.db('a2a_tasks').where({ run_id: id }),
+      this.db('tbl_agsvc_a2a_tasks').where({ run_id: id }),
       s,
     ).first();
     return row ? mapA2aTask(row) : null;
@@ -194,7 +194,7 @@ export class A2aTaskRepository {
   async listForClient(scope: A2aClientScope, opts: { agentId?: string, contextId?: string | null, limit?: number, afterCreatedAt?: string, } = {}) {
     const s = requireA2aClientScope(scope);
     const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 100);
-    let q = applyA2aClientScope(this.db('a2a_tasks'), s).orderBy(
+    let q = applyA2aClientScope(this.db('tbl_agsvc_a2a_tasks'), s).orderBy(
       'created_at',
       'desc',
     );
@@ -218,7 +218,7 @@ export class A2aTaskRepository {
   async listForOrgAdmin(orgId: string, opts: { agentId?: string | null, limit?: number } = {}) {
     const oid = assertUlid(orgId, 'orgId');
     const limit = Math.min(Math.max(Number(opts.limit) || 20, 1), 100);
-    let query = this.db('a2a_tasks')
+    let query = this.db('tbl_agsvc_a2a_tasks')
       .where({ org_id: oid })
       .orderBy('created_at', 'desc');
     if (opts.agentId) {
@@ -241,7 +241,7 @@ export class A2aTaskRepository {
     const id = assertUlid(a2aTaskId, 'a2aTaskId');
     const scope = requireOwnerScope(ownerScope);
     const row = await applyOwnerScope(
-      this.db('a2a_tasks').where({ a2a_task_id: id }),
+      this.db('tbl_agsvc_a2a_tasks').where({ a2a_task_id: id }),
       scope,
     ).first();
     return row ? mapA2aTask(row) : null;

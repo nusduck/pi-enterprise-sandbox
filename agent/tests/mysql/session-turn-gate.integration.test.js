@@ -78,8 +78,8 @@ describeLive('session turn gate (TEST_MYSQL_URL)', () => {
       { provider: 'bff', externalOrgId: `gate-org-${suffix}`, externalUserId: `gate-user-${suffix}` },
       {},
     );
-    const conversation = await knex('conversations').where({ conversation_id: created.id }).first();
-    const session = await knex('agent_sessions').where({ conversation_id: created.id }).first();
+    const conversation = await knex('tbl_agsvc_conversations').where({ conversation_id: created.id }).first();
+    const session = await knex('tbl_agsvc_agent_sessions').where({ conversation_id: created.id }).first();
     return {
       orgId: session.org_id,
       userId: conversation.user_id,
@@ -93,7 +93,7 @@ describeLive('session turn gate (TEST_MYSQL_URL)', () => {
   async function addRun(parents, status, extra = {}) {
     const runId = ulid();
     clock += 1000;
-    await knex('runs').insert({
+    await knex('tbl_agsvc_runs').insert({
       run_id: runId,
       org_id: parents.orgId,
       user_id: parents.userId,
@@ -129,7 +129,7 @@ describeLive('session turn gate (TEST_MYSQL_URL)', () => {
     const second = await addRun(s, 'QUEUED');
     assert.equal(await gate({ runId: first, orgId: s.orgId }), false);
     assert.equal(await gate({ runId: second, orgId: s.orgId }), true);
-    await knex('runs').where({ run_id: first }).update({ status: 'SUCCEEDED' });
+    await knex('tbl_agsvc_runs').where({ run_id: first }).update({ status: 'SUCCEEDED' });
     assert.equal(await gate({ runId: second, orgId: s.orgId }), false);
   });
 
@@ -145,7 +145,7 @@ describeLive('session turn gate (TEST_MYSQL_URL)', () => {
     lockOwners.set(other.agentSessionId, 'w2:token');
     const mine = await addRun(s, 'QUEUED');
     // followUp 仍排在前面；把它结束后，别的会话的锁与排队不影响本会话。
-    await knex('runs').where({ run_id: followUp }).update({ status: 'SUCCEEDED' });
+    await knex('tbl_agsvc_runs').where({ run_id: followUp }).update({ status: 'SUCCEEDED' });
     assert.equal(await gate({ runId: mine, orgId: s.orgId }), false);
   });
 

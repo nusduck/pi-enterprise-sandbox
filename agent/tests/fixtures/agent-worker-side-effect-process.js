@@ -69,7 +69,7 @@ const runExecutorFactory = ({ runId }) => ({
     }
 
     if (toolExecutionStatus) {
-      await sideEffectDb('tool_executions').insert({
+      await sideEffectDb('tbl_agsvc_tool_executions').insert({
         tool_execution_id: `01K0G2PAV8FPMVC9QHJ7JPN${runId.slice(-1)}`,
         run_id: runId,
         agent_session_id: ctx.run.agentSessionId,

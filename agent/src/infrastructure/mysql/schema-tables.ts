@@ -1,4 +1,16 @@
 /**
+ * Physical table-name prefix required by UPspec (`tbl_<db abbr>_<name>`), applied by
+ * migration `20260923000001_upspec_naming.js`. The lists below keep the **logical**
+ * names that the earlier migrations created (the orphan gate checks those); use
+ * `physicalTableName()` when talking to a fully migrated database.
+ */
+export const TABLE_PREFIX = 'tbl_agsvc_';
+
+export function physicalTableName(logical: string): string {
+  return `${TABLE_PREFIX}${logical}`;
+}
+
+/**
  * Ordered list of plan §8 core tables + Sandbox execution-domain tables
  * created by the initial Agent MySQL migration.
  * Used by tests and health checks.

@@ -155,7 +155,7 @@ describe('worker drain gate', () => {
     assert.equal(run.consumers(), 0);
 
     // 查询形状：权威账本 runs 表、非终态全集（含 WAITING_*）、只看超出目标深度的层。
-    const q = knex.calls.find((c) => c.table === 'runs');
+    const q = knex.calls.find((c) => c.table === 'tbl_agsvc_runs');
     assert.ok(q, 'gate must read the runs ledger');
     const whereIn = q.ops.find(([op]) => op === 'whereIn');
     assert.equal(whereIn[1], 'status');

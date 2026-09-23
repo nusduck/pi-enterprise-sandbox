@@ -479,7 +479,7 @@ export class ToolExecutionRepository {
   async requireOwnedRun(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean, forShare?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const id = assertUlid(runId, 'runId');
-    let q = applyOwnerScope(this.db('runs').where({ run_id: id }), s);
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs').where({ run_id: id }), s);
     if (opts.forUpdate) q = q.forUpdate();
     else if (opts.forShare) q = q.forShare();
     const row = await q.first();
@@ -499,8 +499,8 @@ export class ToolExecutionRepository {
    */
   #ownedToolQuery(scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
-    let q = this.db('tool_executions as te')
-      .join('runs as r', 'te.run_id', 'r.run_id')
+    let q = this.db('tbl_agsvc_tool_executions as te')
+      .join('tbl_agsvc_runs as r', 'te.run_id', 'r.run_id')
       .select(...TOOL_EXECUTION_CHILD_SELECT)
       .where('r.org_id', s.orgId)
       .andWhere('r.user_id', s.userId);
@@ -617,7 +617,7 @@ export class ToolExecutionRepository {
       }
     }
 
-    const existing = await this.db('tool_executions')
+    const existing = await this.db('tbl_agsvc_tool_executions')
       .where({ run_id: runId, tool_call_id: toolCallId })
       .forUpdate()
       .first();
@@ -641,11 +641,11 @@ export class ToolExecutionRepository {
           toolSource,
           argumentsJson: originalArgs,
         });
-        await this.db('tool_executions')
+        await this.db('tbl_agsvc_tool_executions')
           .where({ tool_execution_id: mapped.toolExecutionId })
           .update({ arguments_json: argsJson });
         mapped = mapToolExecutionPublic(
-          await this.db('tool_executions')
+          await this.db('tbl_agsvc_tool_executions')
             .where({ tool_execution_id: mapped.toolExecutionId })
             .first(),
         );
@@ -670,7 +670,7 @@ export class ToolExecutionRepository {
 
     const now = this.now();
     try {
-      await this.db('tool_executions').insert({
+      await this.db('tbl_agsvc_tool_executions').insert({
         tool_execution_id: toolExecutionId,
         run_id: runId,
         agent_session_id: agentSessionId,
@@ -693,7 +693,7 @@ export class ToolExecutionRepository {
     } catch (err) {
       const code = (err as { code?: string })?.code;
       if (code === 'ER_DUP_ENTRY') {
-        const again = await this.db('tool_executions')
+        const again = await this.db('tbl_agsvc_tool_executions')
           .where({ run_id: runId, tool_call_id: toolCallId })
           .first();
         if (!again) throw err;
@@ -714,7 +714,7 @@ export class ToolExecutionRepository {
     }
 
     let toolExecution = mapToolExecutionPublic(
-      await this.db('tool_executions')
+      await this.db('tbl_agsvc_tool_executions')
         .where({ tool_execution_id: toolExecutionId })
         .first(),
     );
@@ -803,7 +803,7 @@ export class ToolExecutionRepository {
 
     // 1) Session FOR SHARE (parent authority — allow concurrent tool binds).
     let sessionQ = applyOwnerScope(
-      this.db('agent_sessions').where({ agent_session_id: agentSessionId }),
+      this.db('tbl_agsvc_agent_sessions').where({ agent_session_id: agentSessionId }),
       scope,
     ).forShare();
     const sessionRow = await sessionQ.first();
@@ -853,7 +853,7 @@ export class ToolExecutionRepository {
       toolCallId = assertToolCallId(input.toolCallId);
     } else {
       // Peek tool row for run_id only (not authoritative; re-locked below).
-      const peek = await this.db('tool_executions')
+      const peek = await this.db('tbl_agsvc_tool_executions')
         .where({ tool_execution_id: toolExecutionId })
         .first();
       if (!peek) {
@@ -891,7 +891,7 @@ export class ToolExecutionRepository {
     //    concurrent tool calls on the same run.
     let toolRow;
     if (toolExecutionId) {
-      toolRow = await this.db('tool_executions')
+      toolRow = await this.db('tbl_agsvc_tool_executions')
         .where({ tool_execution_id: toolExecutionId })
         .forUpdate()
         .first();
@@ -918,7 +918,7 @@ export class ToolExecutionRepository {
         toolCallId = assertToolCallId(String(toolRow.tool_call_id));
       }
     } else {
-      toolRow = await this.db('tool_executions')
+      toolRow = await this.db('tbl_agsvc_tool_executions')
         .where({ run_id: runId, tool_call_id: toolCallId })
         .forUpdate()
         .first();
@@ -984,7 +984,7 @@ export class ToolExecutionRepository {
     }
 
     // CAS: only if still all NULL — no blind update of partially set rows.
-    const updated = await this.db('tool_executions')
+    const updated = await this.db('tbl_agsvc_tool_executions')
       .where({ tool_execution_id: toolExecutionId })
       .whereNull('request_hash')
       .whereNull('request_hash_version')
@@ -1091,7 +1091,7 @@ export class ToolExecutionRepository {
       patch.error_code = input.errorCode;
     }
 
-    const updated = await this.db('tool_executions')
+    const updated = await this.db('tbl_agsvc_tool_executions')
       .where({ tool_execution_id: id, status: existing.status })
       .update(patch);
     if (!updated) {

@@ -181,7 +181,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
     await mysql.migrateLatest(knex);
     client = await createClient();
 
-    await knex('domain_outbox').where({ outbox_id: OUTBOX }).del();
+    await knex('tbl_agsvc_domain_outbox').where({ outbox_id: OUTBOX }).del();
     await client.del(redisMod.runStreamKey(RUN));
   });
 
@@ -204,7 +204,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
 
     if (knex) {
       try {
-        await knex('domain_outbox').where({ outbox_id: OUTBOX }).del();
+        await knex('tbl_agsvc_domain_outbox').where({ outbox_id: OUTBOX }).del();
         await mysql.migrateRollbackAll(knex);
       } finally {
         await mysql.destroyMysqlKnex(knex);
@@ -334,7 +334,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
       orgId: ORG,
     });
 
-    await knex('agent_definitions').insert({
+    await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
       name: 'release-gate-agent',
@@ -345,7 +345,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
       created_at: knex.fn.now(3),
       updated_at: knex.fn.now(3),
     });
-    await knex('agent_versions').insert({
+    await knex('tbl_agsvc_agent_versions').insert({
       agent_version_id: VERSION,
       agent_id: AGENT,
       version_no: 1,

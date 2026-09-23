@@ -55,27 +55,27 @@ export interface ExecDatasetInsert {
 }
 
 export const EXEC_DATASETS_DDL = `
-CREATE TABLE exec_datasets (
+CREATE TABLE tbl_agsvc_exec_datasets (
   dataset_id            VARCHAR(64)     NOT NULL,
   session_id            VARCHAR(191)    NOT NULL,
   conversation_id       VARCHAR(191)    NOT NULL,
   workspace_id          VARCHAR(191)    NOT NULL,
   org_id                CHAR(26)        NOT NULL,
   user_id               CHAR(26)        NOT NULL,
-  original_filename     VARCHAR(1024)   NOT NULL,
-  stored_relative_path  VARCHAR(4096)   NOT NULL,
+  original_filename     VARCHAR(1024)   NOT NULL DEFAULT '',
+  stored_relative_path  VARCHAR(4096)   NOT NULL DEFAULT '',
   mime_type             VARCHAR(255)    NOT NULL DEFAULT 'application/octet-stream',
   sha256                CHAR(64)        NULL,
   size_bytes            BIGINT UNSIGNED NOT NULL DEFAULT 0,
-  status                VARCHAR(16)     NOT NULL DEFAULT 'uploading',
+  status                CHAR(16)        NOT NULL DEFAULT 'uploading',
   idempotency_key       VARCHAR(255)    NULL,
   created_at            DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   completed_at          DATETIME(3)     NULL,
   PRIMARY KEY (dataset_id),
-  UNIQUE KEY uniq_exec_datasets_idem (org_id, user_id, session_id, idempotency_key),
-  KEY idx_exec_datasets_session (session_id),
-  KEY idx_exec_datasets_workspace (workspace_id),
-  KEY idx_exec_datasets_owner (org_id, user_id)
+  UNIQUE KEY ind_agsvc_ed_a1 (org_id, user_id, session_id, idempotency_key),
+  KEY ind_agsvc_ed_i2 (session_id),
+  KEY ind_agsvc_ed_i3 (workspace_id),
+  KEY ind_agsvc_ed_i1 (org_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `.trim();
 
@@ -150,7 +150,7 @@ const COLUMNS =
 export class MySqlDatasetStore implements DatasetStore {
   constructor(
     private readonly pool: Pool,
-    private readonly table: string = 'exec_datasets',
+    private readonly table: string = 'tbl_agsvc_exec_datasets',
   ) {}
 
   async insert(rec: ExecDatasetInsert): Promise<void> {

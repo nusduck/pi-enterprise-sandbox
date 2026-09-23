@@ -35,7 +35,7 @@ export const fullModel = {
 };
 
 export function seedExecutorWorld(state) {
-  state.tables.conversations = [
+  state.tables.tbl_agsvc_conversations = [
     {
       conversation_id: CONV,
       org_id: ORG,
@@ -49,7 +49,7 @@ export function seedExecutorWorld(state) {
       archived_at: null,
     },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESS,
       org_id: ORG,
@@ -68,8 +68,8 @@ export function seedExecutorWorld(state) {
       closed_at: null,
     },
   ];
-  state.tables.agent_session_snapshots = [];
-  state.tables.agent_definitions = [
+  state.tables.tbl_agsvc_agent_session_snapshots = [];
+  state.tables.tbl_agsvc_agent_definitions = [
     {
       agent_id: DEF,
       org_id: ORG,
@@ -82,7 +82,7 @@ export function seedExecutorWorld(state) {
       updated_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.agent_versions = [
+  state.tables.tbl_agsvc_agent_versions = [
     {
       agent_version_id: VER,
       agent_id: DEF,
@@ -95,7 +95,7 @@ export function seedExecutorWorld(state) {
       created_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.messages = [
+  state.tables.tbl_agsvc_messages = [
     {
       message_id: TRIG,
       conversation_id: CONV,
@@ -112,7 +112,7 @@ export function seedExecutorWorld(state) {
       created_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -136,6 +136,6 @@ export function seedExecutorWorld(state) {
       updated_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }

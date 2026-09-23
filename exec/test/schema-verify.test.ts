@@ -41,16 +41,16 @@ describeLive('exec schema verify against a migrated database (TEST_MYSQL_URL)', 
       assert.deepEqual((await introspectSchema(pool)).migrations, loadSchemaManifest().migrations);
       await assertSchemaMatchesManifest(pool);
 
-      await pool.query('ALTER TABLE exec_jobs ADD COLUMN d3_probe INT NULL');
+      await pool.query('ALTER TABLE tbl_agsvc_exec_jobs ADD COLUMN d3_probe INT NULL');
       try {
         await assert.rejects(assertSchemaMatchesManifest(pool, { role: 'exec' }), (err) => {
           assert.ok(err instanceof SchemaDriftError);
-          assert.deepEqual(err.drifts.map((d) => `${d.kind} ${d.object}`), ['extra_column exec_jobs.d3_probe']);
+          assert.deepEqual(err.drifts.map((d) => `${d.kind} ${d.object}`), ['extra_column tbl_agsvc_exec_jobs.d3_probe']);
           assert.match(err.message, /^exec: /);
           return true;
         });
       } finally {
-        await pool.query('ALTER TABLE exec_jobs DROP COLUMN d3_probe');
+        await pool.query('ALTER TABLE tbl_agsvc_exec_jobs DROP COLUMN d3_probe');
       }
       await assertSchemaMatchesManifest(pool);
     } finally {

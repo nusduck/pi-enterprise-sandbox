@@ -28,7 +28,7 @@ const MSG2 = '01K0G2PAV8FPMVC9QHJG7JPN5B';
 const MSG3 = '01K0G2PAV8FPMVC9QHJG7JPN5C';
 
 function seed(state) {
-  state.tables.conversations = [
+  state.tables.tbl_agsvc_conversations = [
     {
       conversation_id: CONV,
       org_id: ORG,
@@ -42,7 +42,7 @@ function seed(state) {
       archived_at: null,
     },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESS,
       org_id: ORG,
@@ -61,7 +61,7 @@ function seed(state) {
       closed_at: null,
     },
   ];
-  state.tables.messages = [];
+  state.tables.tbl_agsvc_messages = [];
 }
 
 const header = {
@@ -201,7 +201,7 @@ describe('PiSessionJournalRepository', () => {
       entry,
     });
     assert.equal(again.idempotent, true);
-    assert.equal(state.tables.messages.filter((m) => m.pi_entry_id === 'dup-1').length, 1);
+    assert.equal(state.tables.tbl_agsvc_messages.filter((m) => m.pi_entry_id === 'dup-1').length, 1);
 
     await assert.rejects(
       () =>
@@ -272,7 +272,7 @@ describe('PiSessionJournalRepository', () => {
    * the read has to be orderable straight from an index.
    *
    * Left to itself the optimizer picks
-   * idx_messages_session_pi_kind (agent_session_id, pi_entry_kind, sequence_no)
+   * ind_agsvc_msg_i2 (agent_session_id, pi_entry_kind, sequence_no)
    * — a middle column this query never constrains, since it filters on
    * message_type — so the index cannot order by sequence_no.
    */
@@ -302,24 +302,19 @@ describe('PiSessionJournalRepository', () => {
       (t) => t && typeof t === 'object' && t.__forceIndex,
     );
     assert.ok(forced, 'journal read must name an index explicitly');
-    assert.equal(forced.__fakeTable, 'messages');
+    assert.equal(forced.__fakeTable, 'tbl_agsvc_messages');
     assert.equal(forced.__forceIndex, JOURNAL_ORDER_INDEX);
   });
 
   it('pins an index the schema actually defines', () => {
+    // 以随包 schema 清单（由真实迁移生成）为准：索引改名后 FORCE INDEX 会在运行期失败。
     const here = nodePath.dirname(fileURLToPath(import.meta.url));
-    const migration = readFileSync(
-      nodePath.join(
-        here,
-        '../../src/infrastructure/mysql/migrations/20260718000001_core_platform_schema.js',
-      ),
-      'utf8',
+    const manifest = JSON.parse(
+      readFileSync(nodePath.join(here, '../../../contract/schema/schema-manifest.json'), 'utf8'),
     );
-    assert.ok(
-      migration.includes(JOURNAL_ORDER_INDEX),
-      `${JOURNAL_ORDER_INDEX} is not created by the core migration; a rename ` +
-        'would make FORCE INDEX fail at runtime',
-    );
+    const index = manifest.tables.tbl_agsvc_messages?.indexes?.[JOURNAL_ORDER_INDEX];
+    assert.ok(index, `${JOURNAL_ORDER_INDEX} is not defined on tbl_agsvc_messages`);
+    assert.deepEqual(index.columns, ['agent_session_id', 'sequence_no']);
   });
 
   it('stores payloadHash deterministically', () => {
@@ -352,7 +347,7 @@ describe('PiSessionJournalRepository', () => {
       entry,
     });
     // Corrupt stored payloadHash while leaving entry body intact
-    const row = state.tables.messages.find((m) => m.pi_entry_id === 'hash-1');
+    const row = state.tables.tbl_agsvc_messages.find((m) => m.pi_entry_id === 'hash-1');
     const content =
       typeof row.content_json === 'string'
         ? JSON.parse(row.content_json)

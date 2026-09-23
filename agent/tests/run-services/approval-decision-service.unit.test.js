@@ -26,7 +26,7 @@ const AUTH = Object.freeze({
 const NOW = '2026-07-18 06:00:00.000';
 
 function seedWorld(state) {
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     {
       org_id: ORG,
       name: 'Acme',
@@ -35,7 +35,7 @@ function seedWorld(state) {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_external_refs = [
+  state.tables.tbl_agsvc_organization_external_refs = [
     {
       provider: 'bff',
       external_subject: 'org-ext',
@@ -43,7 +43,7 @@ function seedWorld(state) {
       created_at: NOW,
     },
   ];
-  state.tables.users = [
+  state.tables.tbl_agsvc_users = [
     {
       user_id: USER,
       external_subject: 'bff:user-ext',
@@ -54,7 +54,7 @@ function seedWorld(state) {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_memberships = [
+  state.tables.tbl_agsvc_organization_memberships = [
     {
       org_id: ORG,
       user_id: USER,
@@ -63,7 +63,7 @@ function seedWorld(state) {
       created_at: NOW,
     },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -85,7 +85,7 @@ function seedWorld(state) {
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -107,7 +107,7 @@ function seedWorld(state) {
       created_at: NOW,
     },
   ];
-  state.tables.approvals = [
+  state.tables.tbl_agsvc_approvals = [
     {
       approval_id: APPROVAL,
       org_id: ORG,
@@ -123,8 +123,8 @@ function seedWorld(state) {
       decided_at: null,
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 describe('ApprovalDecisionService', () => {
@@ -189,14 +189,14 @@ describe('ApprovalDecisionService', () => {
     assert.equal(first.changed, true);
     assert.equal(first.status, 'approved');
     assert.equal(replay.changed, false);
-    assert.equal(state.tables.approvals[0].status, 'APPROVED');
-    assert.equal(state.tables.tool_executions[0].status, 'WAITING_APPROVAL');
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, 'APPROVED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'WAITING_APPROVAL');
     assert.equal(
-      state.tables.run_events.filter((row) => row.event_type === 'approval.resolved').length,
+      state.tables.tbl_agsvc_run_events.filter((row) => row.event_type === 'approval.resolved').length,
       1,
     );
     assert.equal(
-      state.tables.domain_outbox.filter((row) => row.event_type === 'approval.resolved').length,
+      state.tables.tbl_agsvc_domain_outbox.filter((row) => row.event_type === 'approval.resolved').length,
       1,
     );
     assert.equal(queueCalls.length, 2);
@@ -221,11 +221,11 @@ describe('ApprovalDecisionService', () => {
     });
 
     assert.equal(result.status, 'rejected');
-    assert.equal(state.tables.approvals[0].status, 'REJECTED');
-    assert.equal(state.tables.tool_executions[0].status, 'FAILED');
-    assert.equal(state.tables.tool_executions[0].error_code, 'APPROVAL_REJECTED');
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, 'REJECTED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'FAILED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].error_code, 'APPROVAL_REJECTED');
     assert.equal(
-      state.tables.run_events.filter((row) => row.event_type === 'tool.execution.failed').length,
+      state.tables.tbl_agsvc_run_events.filter((row) => row.event_type === 'tool.execution.failed').length,
       1,
     );
   });
@@ -240,8 +240,8 @@ describe('ApprovalDecisionService', () => {
 
     assert.equal(result.resumePending, true);
     assert.equal(result.queued, false);
-    assert.equal(state.tables.approvals[0].status, 'APPROVED');
-    assert.equal(state.tables.run_events[0].event_type, 'approval.resolved');
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, 'APPROVED');
+    assert.equal(state.tables.tbl_agsvc_run_events[0].event_type, 'approval.resolved');
   });
 
   it('rolls back the decision and event if its outbox append fails', async () => {
@@ -256,9 +256,9 @@ describe('ApprovalDecisionService', () => {
       /injected resolved outbox failure/,
     );
 
-    assert.equal(state.tables.approvals[0].status, 'PENDING');
-    assert.equal(state.tables.run_events.length, 0);
-    assert.equal(state.tables.domain_outbox.length, 0);
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, 'PENDING');
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 0);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox.length, 0);
     assert.equal(queueCalls.length, 0);
   });
 

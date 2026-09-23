@@ -37,7 +37,7 @@ export class AuthCredentialRepository {
     role: string;
   }) {
     const now = toMysqlDateTime(this.now());
-    await this.db('auth_credentials').insert({
+    await this.db('tbl_agsvc_auth_credentials').insert({
       username: input.username,
       password_hash: input.passwordHash,
       external_user_id: input.externalUserId,
@@ -55,27 +55,27 @@ export class AuthCredentialRepository {
 
   async getByUsername(username: string) {
     return mapCredential(
-      await this.db('auth_credentials').where({ username }).first(),
+      await this.db('tbl_agsvc_auth_credentials').where({ username }).first(),
     );
   }
 
   async getByExternalUserId(externalUserId: string) {
     return mapCredential(
-      await this.db('auth_credentials')
+      await this.db('tbl_agsvc_auth_credentials')
         .where({ external_user_id: externalUserId })
         .first(),
     );
   }
 
   async setRole(externalUserId: string, role: string) {
-    await this.db('auth_credentials')
+    await this.db('tbl_agsvc_auth_credentials')
       .where({ external_user_id: externalUserId })
       .update({ role, updated_at: toMysqlDateTime(this.now()) });
   }
 
   async touchLogin(externalUserId: string) {
     const now = toMysqlDateTime(this.now());
-    await this.db('auth_credentials')
+    await this.db('tbl_agsvc_auth_credentials')
       .where({ external_user_id: externalUserId })
       .update({ last_login_at: now, updated_at: now });
   }

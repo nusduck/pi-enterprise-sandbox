@@ -47,7 +47,7 @@ export class ProcessExecutionRepository {
     const id = assertUlid(processId, 'processId');
     const owner = requireOwnerScope(scope);
     const row = await applyOwnerScope(
-      this.db('process_executions').where({ process_id: id }),
+      this.db('tbl_agsvc_process_executions').where({ process_id: id }),
       owner,
     ).first();
     return row ? mapProcessExecution(row) : null;
@@ -64,7 +64,7 @@ export class ProcessExecutionRepository {
   ) {
     const owner = requireOwnerScope(scope);
     const limit = Math.min(Math.max(Number(filters.limit) || 100, 1), 500);
-    let query = applyOwnerScope(this.db('process_executions'), owner);
+    let query = applyOwnerScope(this.db('tbl_agsvc_process_executions'), owner);
     if (filters.runId) query = query.where('run_id', assertUlid(filters.runId, 'runId'));
     if (filters.sandboxSessionId) {
       query = query.where(

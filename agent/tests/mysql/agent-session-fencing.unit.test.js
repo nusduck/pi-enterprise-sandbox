@@ -81,8 +81,8 @@ describe('AgentSessionRepository fencing/CAS', () => {
   beforeEach(() => {
     state = createFakeState();
     knex = createFakeKnex(state);
-    state.tables.agent_sessions = [sessionRow()];
-    state.tables.agent_session_snapshots = [];
+    state.tables.tbl_agsvc_agent_sessions = [sessionRow()];
+    state.tables.tbl_agsvc_agent_session_snapshots = [];
   });
 
   it('maps fence + recovery fields and scopes getById', async () => {
@@ -138,9 +138,9 @@ describe('AgentSessionRepository fencing/CAS', () => {
     });
     assert.equal(s2.recoveryReasonCode, 'SNAPSHOT_INVALID');
 
-    state.tables.agent_sessions[0].status = 'CREATING';
-    state.tables.agent_sessions[0].recovery_reason_code = null;
-    state.tables.agent_sessions[0].execution_fence_token = 3;
+    state.tables.tbl_agsvc_agent_sessions[0].status = 'CREATING';
+    state.tables.tbl_agsvc_agent_sessions[0].recovery_reason_code = null;
+    state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token = 3;
     await assert.rejects(
       () =>
         repo.markRecoveryRequired(SESS, scope, {
@@ -183,7 +183,7 @@ describe('AgentSessionRepository fencing/CAS', () => {
       () => repo.assertExecutionFence(SESS, scope, 3),
       SessionFenceConflictError,
     );
-    state.tables.agent_sessions[0].status = 'SUSPENDED';
+    state.tables.tbl_agsvc_agent_sessions[0].status = 'SUSPENDED';
     await assert.rejects(
       () => repo.acquireNextExecutionFence(SESS, scope),
       SessionFenceConflictError,
@@ -193,7 +193,7 @@ describe('AgentSessionRepository fencing/CAS', () => {
   it('acquireExecutionFenceForRun requires runId and validates owned RUNNING run', async () => {
     const RUN = '01K0G2PAV8FPMVC9QHJG7JPN5H';
     const repo = new AgentSessionRepository(knex);
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       {
         run_id: RUN,
         org_id: ORG,
@@ -216,7 +216,7 @@ describe('AgentSessionRepository fencing/CAS', () => {
         }),
       /runId is required/,
     );
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 3);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 3);
 
     // session conversation mismatch — fence unchanged
     await assert.rejects(
@@ -228,7 +228,7 @@ describe('AgentSessionRepository fencing/CAS', () => {
         }),
       /conversation binding/i,
     );
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 3);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 3);
 
     // agentVersion mismatch — fence unchanged
     await assert.rejects(
@@ -240,7 +240,7 @@ describe('AgentSessionRepository fencing/CAS', () => {
         }),
       /agentVersion binding/i,
     );
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 3);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 3);
 
     // missing run — fence unchanged
     await assert.rejects(
@@ -252,10 +252,10 @@ describe('AgentSessionRepository fencing/CAS', () => {
         }),
       NotFoundError,
     );
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 3);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 3);
 
     // cross-owner run — fence unchanged
-    state.tables.runs[0].user_id = USER2;
+    state.tables.tbl_agsvc_runs[0].user_id = USER2;
     await assert.rejects(
       () =>
         repo.acquireExecutionFenceForRun(SESS, scope, {
@@ -265,11 +265,11 @@ describe('AgentSessionRepository fencing/CAS', () => {
         }),
       NotFoundError,
     );
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 3);
-    state.tables.runs[0].user_id = USER;
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 3);
+    state.tables.tbl_agsvc_runs[0].user_id = USER;
 
     // run bound to other session — fence unchanged
-    state.tables.runs[0].agent_session_id = '01K0G2PAV8FPMVC9QHJG7JPN99';
+    state.tables.tbl_agsvc_runs[0].agent_session_id = '01K0G2PAV8FPMVC9QHJG7JPN99';
     await assert.rejects(
       () =>
         repo.acquireExecutionFenceForRun(SESS, scope, {
@@ -279,11 +279,11 @@ describe('AgentSessionRepository fencing/CAS', () => {
         }),
       /agent_session_id binding/i,
     );
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 3);
-    state.tables.runs[0].agent_session_id = SESS;
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 3);
+    state.tables.tbl_agsvc_runs[0].agent_session_id = SESS;
 
     // non-RUNNING run — fence unchanged
-    state.tables.runs[0].status = 'SUCCEEDED';
+    state.tables.tbl_agsvc_runs[0].status = 'SUCCEEDED';
     await assert.rejects(
       () =>
         repo.acquireExecutionFenceForRun(SESS, scope, {
@@ -293,8 +293,8 @@ describe('AgentSessionRepository fencing/CAS', () => {
         }),
       /RUNNING run/i,
     );
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 3);
-    state.tables.runs[0].status = 'RUNNING';
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 3);
+    state.tables.tbl_agsvc_runs[0].status = 'RUNNING';
 
     // success advances fence exactly once
     const { fenceToken } = await repo.acquireExecutionFenceForRun(SESS, scope, {
@@ -303,7 +303,7 @@ describe('AgentSessionRepository fencing/CAS', () => {
       runId: RUN,
     });
     assert.equal(fenceToken, 4);
-    assert.equal(state.tables.agent_sessions[0].execution_fence_token, 4);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token, 4);
   });
 
   it('markRecoveryRequiredIfFence is fence-CAS gated', async () => {
@@ -334,8 +334,8 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
   beforeEach(() => {
     state = createFakeState();
     knex = createFakeKnex(state);
-    state.tables.agent_sessions = [sessionRow()];
-    state.tables.agent_session_snapshots = [];
+    state.tables.tbl_agsvc_agent_sessions = [sessionRow()];
+    state.tables.tbl_agsvc_agent_session_snapshots = [];
   });
 
   it('checksum is SHA-256 of materialized JSONL (shared with adapter)', async () => {
@@ -375,7 +375,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
     assert.equal(snap.snapshotVersion, 1);
     assert.equal(snap.capturedFenceToken, 3);
     assert.equal(snap.checksum, checksumSnapshotPayload(payload));
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 1);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
   });
 
   it('CAS loser rolls back insert (no orphan snapshot)', async () => {
@@ -396,13 +396,13 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
         }),
       ConflictError,
     );
-    assert.equal(state.tables.agent_session_snapshots.length, 0);
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_session_snapshots.length, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 0);
   });
 
   it('rejects wrong status SUSPENDED / terminal for snapshot write', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
-    state.tables.agent_sessions[0].status = 'SUSPENDED';
+    state.tables.tbl_agsvc_agent_sessions[0].status = 'SUSPENDED';
     await assert.rejects(
       () =>
         repo.appendAndAdvance({
@@ -468,7 +468,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
       snapshotJson: samplePayload(),
       piSdkVersion: '0.80.3',
     });
-    state.tables.agent_session_snapshots[0].checksum = 'a'.repeat(64);
+    state.tables.tbl_agsvc_agent_session_snapshots[0].checksum = 'a'.repeat(64);
     await assert.rejects(
       () => repo.loadLatest(SESS, scope),
       (err) =>
@@ -480,7 +480,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
   it('version race on pi_session_version rolls back', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
     // Concurrent pointer advance simulation: expected 0 but actual 5.
-    state.tables.agent_sessions[0].pi_session_version = 5;
+    state.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 5;
     await assert.rejects(
       () =>
         repo.appendAndAdvance({
@@ -496,7 +496,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
         }),
       ConflictError,
     );
-    assert.equal(state.tables.agent_session_snapshots.length, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_session_snapshots.length, 0);
   });
 
   it('loadLatest uses pi_session_version pointer, ignores stray higher version', async () => {
@@ -515,7 +515,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
       piSdkVersion: '0.80.3',
     });
     // Stray higher row not reflected by pointer (must not become "latest").
-    state.tables.agent_session_snapshots.push({
+    state.tables.tbl_agsvc_agent_session_snapshots.push({
       snapshot_id: SNAP2,
       agent_session_id: SESS,
       snapshot_version: 99,
@@ -527,7 +527,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
       captured_fence_token: 3,
       created_at: '2026-07-18 00:00:01.000',
     });
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 1);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
     const loaded = await repo.loadLatest(SESS, scope);
     assert.equal(loaded.snapshotVersion, 1);
     assert.equal(loaded.snapshotId, SNAP);
@@ -535,8 +535,8 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
 
   it('loadLatest fails closed when pointed row is missing', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
-    state.tables.agent_sessions[0].pi_session_version = 2;
-    state.tables.agent_session_snapshots = [];
+    state.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 2;
+    state.tables.tbl_agsvc_agent_session_snapshots = [];
     await assert.rejects(
       () => repo.loadLatest(SESS, scope),
       (err) =>
@@ -547,7 +547,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
 
   it('loadLatest returns null only when pointer is 0', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
-    assert.equal(state.tables.agent_sessions[0].pi_session_version, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 0);
     assert.equal(await repo.loadLatest(SESS, scope), null);
   });
 

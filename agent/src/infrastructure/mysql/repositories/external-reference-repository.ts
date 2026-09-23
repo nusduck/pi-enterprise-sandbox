@@ -84,7 +84,7 @@ export class ExternalReferenceRepository {
       'externalSubject',
       EXTERNAL_SUBJECT_MAX_LEN,
     );
-    const row = await this.db('organization_external_refs')
+    const row = await this.db('tbl_agsvc_organization_external_refs')
       .where({ provider: p, external_subject: s })
       .first();
     return row ? mapOrganizationExternalRef(row) : null;
@@ -116,7 +116,7 @@ export class ExternalReferenceRepository {
     const createdAt = toMysqlDateTime(input.createdAt || this.now());
 
     try {
-      await this.db('organization_external_refs').insert({
+      await this.db('tbl_agsvc_organization_external_refs').insert({
         provider,
         external_subject: externalSubject,
         org_id: orgId,
@@ -206,7 +206,7 @@ export class ExternalReferenceRepository {
       EXTERNAL_SUBJECT_MAX_LEN,
     );
     const row = await applyOwnerScope(
-      this.db('conversation_external_refs'),
+      this.db('tbl_agsvc_conversation_external_refs'),
       scope,
     )
       .where({
@@ -250,7 +250,7 @@ export class ExternalReferenceRepository {
     const createdAt = toMysqlDateTime(input.createdAt || this.now());
 
     try {
-      await this.db('conversation_external_refs').insert({
+      await this.db('tbl_agsvc_conversation_external_refs').insert({
         org_id: scope.orgId,
         user_id: scope.userId,
         provider,

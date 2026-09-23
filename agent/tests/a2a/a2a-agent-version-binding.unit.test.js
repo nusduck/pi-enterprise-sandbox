@@ -35,7 +35,7 @@ const A2A_AUTH = {
 };
 
 function addAgentVersion(world, { agentId, versionId, versionNo, createdBy }) {
-  world.tables.agent_versions.push({
+  world.tables.tbl_agsvc_agent_versions.push({
     agent_version_id: versionId,
     agent_id: agentId,
     version_no: versionNo,
@@ -82,7 +82,7 @@ describe('A2A agent binding -> CreateRun agent version', () => {
   it('propagates the credential agent and selects its active version', async () => {
     const world = createFakeRunWorld();
     const base = await provisionDefault(world);
-    world.tables.agent_definitions.push({
+    world.tables.tbl_agsvc_agent_definitions.push({
       agent_id: AGENT,
       org_id: base.orgId,
       name: 'analysis',
@@ -113,18 +113,18 @@ describe('A2A agent binding -> CreateRun agent version', () => {
       agentProfileId: AGENT,
     });
 
-    const run = world.tables.runs.find((row) => row.run_id === result.runId);
+    const run = world.tables.tbl_agsvc_runs.find((row) => row.run_id === result.runId);
     assert.equal(run.agent_version_id, VERSION_1);
-    const conversation = world.tables.conversations.find(
+    const conversation = world.tables.tbl_agsvc_conversations.find(
       (row) => row.conversation_id === result.conversationId,
     );
     assert.equal(conversation.agent_id, AGENT);
-    const session = world.tables.agent_sessions.find(
+    const session = world.tables.tbl_agsvc_agent_sessions.find(
       (row) => row.conversation_id === result.conversationId,
     );
     assert.equal(session.agent_version_id, VERSION_1);
     assert.equal(
-      world.tables.idempotency_records[0].request_hash,
+      world.tables.tbl_agsvc_idempotency_records[0].request_hash,
       hashCreateRunRequest({
         messages,
         externalConversationId: 'binding-conv',
@@ -137,7 +137,7 @@ describe('A2A agent binding -> CreateRun agent version', () => {
   it('keeps an existing A2A session version pinned after active version changes', async () => {
     const world = createFakeRunWorld();
     const base = await provisionDefault(world);
-    world.tables.agent_definitions.push({
+    world.tables.tbl_agsvc_agent_definitions.push({
       agent_id: AGENT,
       org_id: base.orgId,
       name: 'analysis',
@@ -170,7 +170,7 @@ describe('A2A agent binding -> CreateRun agent version', () => {
       versionNo: 2,
       createdBy: base.userId,
     });
-    world.tables.agent_definitions.find(
+    world.tables.tbl_agsvc_agent_definitions.find(
       (row) => row.agent_id === AGENT,
     ).active_version_id = VERSION_2;
 
@@ -182,8 +182,8 @@ describe('A2A agent binding -> CreateRun agent version', () => {
       agentId: AGENT,
       agentProfileId: AGENT,
     });
-    const firstRun = world.tables.runs.find((row) => row.run_id === first.runId);
-    const secondRun = world.tables.runs.find((row) => row.run_id === second.runId);
+    const firstRun = world.tables.tbl_agsvc_runs.find((row) => row.run_id === first.runId);
+    const secondRun = world.tables.tbl_agsvc_runs.find((row) => row.run_id === second.runId);
     assert.equal(firstRun.agent_version_id, VERSION_1);
     assert.equal(secondRun.agent_version_id, VERSION_1);
   });
@@ -191,7 +191,7 @@ describe('A2A agent binding -> CreateRun agent version', () => {
   it('rejects a context mapped to a different Agent instead of silently running it', async () => {
     const world = createFakeRunWorld();
     const base = await provisionDefault(world);
-    world.tables.agent_definitions.push({
+    world.tables.tbl_agsvc_agent_definitions.push({
       agent_id: AGENT,
       org_id: base.orgId,
       name: 'analysis',

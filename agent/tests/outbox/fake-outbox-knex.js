@@ -186,12 +186,12 @@ export function createFakeOutboxKnex(state = createFakeState()) {
   knex.raw = async (sql, bindings = []) => {
     state.rawCalls.push({ sql: String(sql), bindings: [...bindings] });
     const n = normSql(sql);
-    const table = state.tables.domain_outbox || (state.tables.domain_outbox = []);
+    const table = state.tables.tbl_agsvc_domain_outbox || (state.tables.tbl_agsvc_domain_outbox = []);
 
     // claim UPDATE：SET status/claim_token/claimed_at, attempts = attempts + 1
     // bindings: PUBLISHING, token, now, PENDING, now, ...elig, limit
     if (
-      /^UPDATE domain_outbox/i.test(n) &&
+      /^UPDATE tbl_agsvc_domain_outbox/i.test(n) &&
       /attempts = attempts \+ 1/i.test(n)
     ) {
       state.claimSelectCalls += 1;
@@ -233,7 +233,7 @@ export function createFakeOutboxKnex(state = createFakeState()) {
     // claim 回读：WHERE claim_token = ? AND status = ?
     if (
       /^SELECT /i.test(n) &&
-      /FROM domain_outbox/i.test(n) &&
+      /FROM tbl_agsvc_domain_outbox/i.test(n) &&
       /WHERE claim_token = \?/i.test(n)
     ) {
       const claimToken = bindings[0];
@@ -250,7 +250,7 @@ export function createFakeOutboxKnex(state = createFakeState()) {
     }
 
     // listPending / listForRecovery SELECT
-    if (/^SELECT /i.test(n) && /FROM domain_outbox/i.test(n)) {
+    if (/^SELECT /i.test(n) && /FROM tbl_agsvc_domain_outbox/i.test(n)) {
       // Detect recovery shape: two status predicates
       const isRecovery =
         (n.match(/status = \?/g) || []).length >= 2 &&
@@ -307,7 +307,7 @@ export function createFakeOutboxKnex(state = createFakeState()) {
     }
 
     // UPDATE domain_outbox …
-    if (/^UPDATE domain_outbox/i.test(n)) {
+    if (/^UPDATE tbl_agsvc_domain_outbox/i.test(n)) {
       // reclaim stale PUBLISHING — bindings: PENDING, now, PUBLISHING, cutoff, ...elig
       if (
         /SET status = \?,\s*claim_token = NULL,\s*claimed_at = NULL,\s*next_attempt_at = \?/i.test(
@@ -458,9 +458,9 @@ export function createFakeOutboxKnex(state = createFakeState()) {
  * @param {Partial<Record<string, unknown>> & { outbox_id: string }} row
  */
 export function seedOutboxRow(state, row) {
-  if (!state.tables.domain_outbox) state.tables.domain_outbox = [];
+  if (!state.tables.tbl_agsvc_domain_outbox) state.tables.tbl_agsvc_domain_outbox = [];
   const outboxId = row.outbox_id;
-  state.tables.domain_outbox.push({
+  state.tables.tbl_agsvc_domain_outbox.push({
     aggregate_type: 'run',
     aggregate_id: '01K0G2PAV8FPMVC9QHJG7JPN53',
     event_type: 'run.started',

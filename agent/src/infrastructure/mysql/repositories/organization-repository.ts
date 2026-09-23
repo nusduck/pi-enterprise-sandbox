@@ -99,7 +99,7 @@ export class OrganizationRepository {
     const updated = toMysqlDateTime(
       input.updatedAt || input.createdAt || this.now(),
     );
-    await this.db('organizations').insert({
+    await this.db('tbl_agsvc_organizations').insert({
       org_id: orgId,
       name: input.name,
       status: input.status,
@@ -111,7 +111,7 @@ export class OrganizationRepository {
 
   async getOrganization(orgId: string) {
     const id = assertUlid(orgId, 'orgId');
-    const row = await this.db('organizations').where({ org_id: id }).first();
+    const row = await this.db('tbl_agsvc_organizations').where({ org_id: id }).first();
     return row ? mapOrganization(row) : null;
   }
 
@@ -141,7 +141,7 @@ export class OrganizationRepository {
     const updated = toMysqlDateTime(
       input.updatedAt || input.createdAt || this.now(),
     );
-    await this.db('users').insert({
+    await this.db('tbl_agsvc_users').insert({
       user_id: userId,
       external_subject: externalSubject,
       display_name: input.displayName ?? null,
@@ -150,13 +150,13 @@ export class OrganizationRepository {
       created_at: now,
       updated_at: updated,
     });
-    const row = await this.db('users').where({ user_id: userId }).first();
+    const row = await this.db('tbl_agsvc_users').where({ user_id: userId }).first();
     return mapUser(row);
   }
 
   async getUser(userId: string) {
     const id = assertUlid(userId, 'userId');
-    const row = await this.db('users').where({ user_id: id }).first();
+    const row = await this.db('tbl_agsvc_users').where({ user_id: id }).first();
     return row ? mapUser(row) : null;
   }
 
@@ -174,7 +174,7 @@ export class OrganizationRepository {
         `externalSubject exceeds max length ${USER_EXTERNAL_SUBJECT_MAX_LEN}`,
       );
     }
-    const row = await this.db('users')
+    const row = await this.db('tbl_agsvc_users')
       .where({ external_subject: subject })
       .first();
     return row ? mapUser(row) : null;
@@ -256,7 +256,7 @@ export class OrganizationRepository {
   async addMembership(input: { orgId: string, userId: string, role: string, status: string, createdAt?: Date | string, }) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const userId = assertUlid(input.userId, 'userId');
-    await this.db('organization_memberships').insert({
+    await this.db('tbl_agsvc_organization_memberships').insert({
       org_id: orgId,
       user_id: userId,
       role: input.role,
@@ -306,7 +306,7 @@ export class OrganizationRepository {
       userId: assertUlid(s.userId, 'userId'),
     };
     const row = await applyOwnerScope(
-      this.db('organization_memberships'),
+      this.db('tbl_agsvc_organization_memberships'),
       owner,
     ).first();
     if (!row) return null;

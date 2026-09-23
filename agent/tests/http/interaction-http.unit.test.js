@@ -34,10 +34,10 @@ function makeIdGenerator() {
 }
 
 function seed(state) {
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     { org_id: ORG, name: 'Acme', status: 'active', created_at: NOW, updated_at: NOW },
   ];
-  state.tables.users = [
+  state.tables.tbl_agsvc_users = [
     {
       user_id: USER,
       external_subject: 'bff:user-ext-1',
@@ -48,16 +48,16 @@ function seed(state) {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_memberships = [
+  state.tables.tbl_agsvc_organization_memberships = [
     { org_id: ORG, user_id: USER, role: 'member', status: 'active', created_at: NOW },
   ];
-  state.tables.organization_external_refs = [
+  state.tables.tbl_agsvc_organization_external_refs = [
     { provider: 'bff', external_subject: 'org-ext-1', org_id: ORG, created_at: NOW },
   ];
   state.tables.user_external_refs = [
     { provider: 'bff', external_subject: 'user-ext-1', user_id: USER, created_at: NOW },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -82,7 +82,7 @@ function seed(state) {
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -104,7 +104,7 @@ function seed(state) {
       created_at: NOW,
     },
   ];
-  state.tables.run_interactions = [
+  state.tables.tbl_agsvc_run_interactions = [
     {
       interaction_id: INTERACTION,
       org_id: ORG,
@@ -129,8 +129,8 @@ function seed(state) {
       resolved_at: null,
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 function listen(server) {
@@ -223,7 +223,7 @@ describe('interaction HTTP durable surface (G6)', () => {
       res.status >= 200 && res.status < 300,
       `unexpected status ${res.status}: ${res.text}`,
     );
-    assert.equal(state.tables.run_interactions[0].status, 'RESOLVED');
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'RESOLVED');
     assert.ok(queued.length >= 1, 'resolved interaction must enqueue a worker wake');
   });
 

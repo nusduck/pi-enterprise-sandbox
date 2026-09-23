@@ -85,7 +85,7 @@ describe('BrowserAuthService', () => {
     );
   });
 
-  it('provisions user and membership into organizations on register and login', async () => {
+  it('provisions user and membership into tbl_agsvc_organizations on register and login', async () => {
     const credentials = memoryCredentials();
     const createdUsers: any[] = [];
     const createdMemberships: any[] = [];

@@ -97,7 +97,7 @@ export class SandboxAuditEventRepository {
 
     const now = this.now();
     try {
-      await this.db('sandbox_audit_events').insert({
+      await this.db('tbl_agsvc_sandbox_audit_events').insert({
         audit_id: auditId,
         org_id: scope.orgId,
         user_id: scope.userId,
@@ -121,7 +121,7 @@ export class SandboxAuditEventRepository {
     }
 
     const row = await applyOwnerScope(
-      this.db('sandbox_audit_events').where({ audit_id: auditId }),
+      this.db('tbl_agsvc_sandbox_audit_events').where({ audit_id: auditId }),
       scope,
     ).first();
     if (!row) {
@@ -135,7 +135,7 @@ export class SandboxAuditEventRepository {
 
   async listByOwner(scope: { orgId: string, userId: string }, opts: { eventType?: string, limit?: number, afterCreatedAt?: string } = {}) {
     const s = requireOwnerScope(scope);
-    let q = applyOwnerScope(this.db('sandbox_audit_events'), s).orderBy(
+    let q = applyOwnerScope(this.db('tbl_agsvc_sandbox_audit_events'), s).orderBy(
       'created_at',
       'asc',
     );

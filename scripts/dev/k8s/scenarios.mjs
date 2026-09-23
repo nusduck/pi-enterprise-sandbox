@@ -154,12 +154,12 @@ const ulid = (v) => {
 };
 async function toolRows(runId) {
   const rows = await query(
-    `SELECT tool_name, status, execution_fence_token FROM tool_executions WHERE run_id = '${ulid(runId)}' ORDER BY created_at`,
+    `SELECT tool_name, status, execution_fence_token FROM tbl_agsvc_tool_executions WHERE run_id = '${ulid(runId)}' ORDER BY created_at`,
   );
   return rows.map(([name, status, fence]) => `${name}:${status}:fence${fence}`);
 }
 async function runRow(runId) {
-  const [row] = await query(`SELECT status, status_reason, attempt FROM runs WHERE run_id = '${ulid(runId)}'`);
+  const [row] = await query(`SELECT status, status_reason, attempt FROM tbl_agsvc_runs WHERE run_id = '${ulid(runId)}'`);
   return row ? { status: row[0], reason: row[1], attempt: Number(row[2]) } : null;
 }
 
@@ -776,7 +776,7 @@ sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
     const childId = `dsc-${tag}`;
     const child = Buffer.from(`[[SIM id=${childId} mode=chain n=1 s=60]] 子任务。`).toString('base64');
     const r = await drainScenario({ name: 'dsp', mode: `sub cmd=${child}`, waitTool: 'subagent' });
-    const [childRun] = await query(`SELECT run_id, status, attempt FROM runs WHERE parent_run_id = '${ulid(r.runId)}'`);
+    const [childRun] = await query(`SELECT run_id, status, attempt FROM tbl_agsvc_runs WHERE parent_run_id = '${ulid(r.runId)}'`);
     const childTurns = await llm.entries(childId);
     record(S, 'drained_within_budget_exit_0', r.exit.code === 0 && !r.exit.deadlineLogged && r.exit.elapsedS < 120, r.exit);
     record(S, 'parent_and_child_succeed_without_replay',

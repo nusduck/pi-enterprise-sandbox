@@ -38,7 +38,7 @@ export class ConversationRepository {
     const scope = requireOwnerScope(input);
     const now = toMysqlDateTime(input.createdAt || new Date());
     const updated = toMysqlDateTime(input.updatedAt || input.createdAt || new Date());
-    await this.db('conversations').insert({
+    await this.db('tbl_agsvc_conversations').insert({
       conversation_id: input.conversationId,
       org_id: scope.orgId,
       user_id: scope.userId,
@@ -65,7 +65,7 @@ export class ConversationRepository {
   async getById(conversationId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     let q = applyOwnerScope(
-      this.db('conversations').where({ conversation_id: conversationId }),
+      this.db('tbl_agsvc_conversations').where({ conversation_id: conversationId }),
       s,
     );
     if (opts.forUpdate) q = q.forUpdate();
@@ -96,7 +96,7 @@ export class ConversationRepository {
   async listForOwner(scope: { orgId: string, userId: string }, opts: { limit?: number, includeArchived?: boolean } = {}) {
     const s = requireOwnerScope(scope);
     const limit = opts.limit ?? 50;
-    let query = applyOwnerScope(this.db('conversations'), s);
+    let query = applyOwnerScope(this.db('tbl_agsvc_conversations'), s);
     if (opts.includeArchived !== true) query = query.whereNull('archived_at');
     // A sub-agent's conversation belongs to the Run that spawned it, not
     // beside it in the owner's list. It stays fully readable by id — hiding it
@@ -121,7 +121,7 @@ export class ConversationRepository {
         : null;
     }
     const n = await applyOwnerScope(
-      this.db('conversations').where({ conversation_id: conversationId }),
+      this.db('tbl_agsvc_conversations').where({ conversation_id: conversationId }),
       s,
     ).update(update);
     if (!n) {

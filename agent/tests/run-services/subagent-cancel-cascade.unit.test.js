@@ -50,7 +50,7 @@ async function parentRun(world, create, idempotencyKey = 'parent-1') {
     traceId: TRACE,
     idempotencyKey,
   });
-  const row = world.tables.runs.find((r) => r.run_id === created.runId);
+  const row = world.tables.tbl_agsvc_runs.find((r) => r.run_id === created.runId);
   return {
     runId: created.runId,
     orgId: String(row.org_id),
@@ -60,7 +60,7 @@ async function parentRun(world, create, idempotencyKey = 'parent-1') {
 
 /** @param {ReturnType<typeof createFakeRunWorld>} world */
 function runRow(world, runId) {
-  return world.tables.runs.find((r) => r.run_id === runId);
+  return world.tables.tbl_agsvc_runs.find((r) => r.run_id === runId);
 }
 
 describe('cancel cascades to sub-agent children', () => {
@@ -218,7 +218,7 @@ describe('cancel cascades to sub-agent children', () => {
       },
     );
     assert.equal(
-      world.tables.runs.filter((r) => r.parent_run_id === parent.runId).length,
+      world.tables.tbl_agsvc_runs.filter((r) => r.parent_run_id === parent.runId).length,
       0,
     );
   });
@@ -270,7 +270,7 @@ describe('sub-agent conversations stay out of the owner list', () => {
     const repos = world.createRepositories(world.rootDb);
 
     assert.equal(
-      world.tables.conversations.find(
+      world.tables.tbl_agsvc_conversations.find(
         (c) => c.conversation_id === childRow.conversation_id,
       ).parent_run_id,
       parent.runId,

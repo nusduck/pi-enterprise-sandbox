@@ -43,7 +43,7 @@ const RUN_CTX = Object.freeze({
 });
 
 function seedWorld(state) {
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -67,7 +67,7 @@ function seedWorld(state) {
       updated_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESS,
       org_id: ORG,
@@ -86,11 +86,11 @@ function seedWorld(state) {
       closed_at: null,
     },
   ];
-  state.tables.tool_executions = [];
-  state.tables.approvals = [];
-  state.tables.sandbox_audit_events = [];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_tool_executions = [];
+  state.tables.tbl_agsvc_approvals = [];
+  state.tables.tbl_agsvc_sandbox_audit_events = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 function makeGov(knex, nextId, opts = {}) {
@@ -155,7 +155,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     });
     assert.equal(r1.created, true);
     assert.ok(r1.toolExecution?.toolExecutionId);
-    assert.equal(state.tables.sandbox_audit_events.length, 1);
+    assert.equal(state.tables.tbl_agsvc_sandbox_audit_events.length, 1);
 
     // New process: fresh recorder, same DB
     const nextId2 = createUlidGenerator({ now: () => 1_721_278_800_100 });
@@ -177,7 +177,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
       r2.toolExecution.toolExecutionId,
       r1.toolExecution.toolExecutionId,
     );
-    assert.equal(state.tables.sandbox_audit_events.length, 1);
+    assert.equal(state.tables.tbl_agsvc_sandbox_audit_events.length, 1);
   });
 
   it('second recorder does not duplicate approval.requested event', async () => {
@@ -209,7 +209,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     assert.equal(p1.created, true);
     assert.ok(p1.envelope);
     assert.equal(
-      state.tables.run_events.filter((e) => e.event_type === 'approval.requested')
+      state.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'approval.requested')
         .length,
       1,
     );
@@ -234,7 +234,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     assert.equal(p2.envelope, null);
     assert.equal(p2.approval.approvalId, p1.approval.approvalId);
     assert.equal(
-      state.tables.run_events.filter((e) => e.event_type === 'approval.requested')
+      state.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'approval.requested')
         .length,
       1,
     );
@@ -267,7 +267,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
         riskLevel: 'high',
       },
     });
-    const approvalRow = state.tables.approvals.find(
+    const approvalRow = state.tables.tbl_agsvc_approvals.find(
       (row) => row.approval_id === pending.approval.approvalId,
     );
     assert.ok(approvalRow);
@@ -301,7 +301,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
       /already claimed|terminal|Conflict/i,
     );
     assert.equal(
-      state.tables.run_events.filter((row) => row.event_type === 'tool.execution.started').length,
+      state.tables.tbl_agsvc_run_events.filter((row) => row.event_type === 'tool.execution.started').length,
       1,
       'a concurrent/retried approved claim cannot emit a second started event',
     );
@@ -318,7 +318,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
       }),
       /existing waiting|Conflict/i,
     );
-    assert.equal(state.tables.tool_executions.length, 0);
+    assert.equal(state.tables.tbl_agsvc_tool_executions.length, 0);
   });
 
   it('parking one parallel tool terminalizes other RUNNING tools as UNKNOWN', async () => {
@@ -365,7 +365,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
       },
     });
 
-    const peer = state.tables.tool_executions.find(
+    const peer = state.tables.tbl_agsvc_tool_executions.find(
       (row) => row.tool_call_id === 'tc-running-peer',
     );
     assert.equal(peer.status, TOOL_EXECUTION_STATUS.UNKNOWN);
@@ -420,13 +420,13 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     assert.equal(e2.statusChanged, false);
     assert.equal(e2.envelope, null);
     assert.equal(
-      state.tables.run_events.filter(
+      state.tables.tbl_agsvc_run_events.filter(
         (e) => e.event_type === 'tool.execution.started',
       ).length,
       1,
     );
     assert.equal(
-      state.tables.run_events.filter(
+      state.tables.tbl_agsvc_run_events.filter(
         (e) => e.event_type === 'tool.execution.completed',
       ).length,
       1,
@@ -485,7 +485,7 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     // Public view must not expose raw secret
     assert.notEqual(a.toolExecution.argumentsJson.apiKey, 'sk-AAA-secret');
     // Stored row has integrity meta (envelope $integrity)
-    const raw = state.tables.tool_executions[0].arguments_json;
+    const raw = state.tables.tbl_agsvc_tool_executions[0].arguments_json;
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     const { extractIntegrity } = await import(
       '../../src/infrastructure/mysql/repositories/tool-execution-repository.js'

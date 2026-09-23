@@ -428,7 +428,7 @@ export class AgentCatalogService {
           };
         });
       } catch (err) {
-        // uk_agent_version 抢号失败：另一个 admin 拿走了同一个 version_no。
+        // ind_agsvc_av_a1（agent_id, version_no）抢号失败：另一个 admin 拿走了同一个 version_no。
         if (!(err instanceof ConflictError)) throw err;
         lastConflict = err;
       }

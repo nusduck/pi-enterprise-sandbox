@@ -136,7 +136,7 @@ export class IdempotencyRepository {
    */
   async get(key: { orgId: string, userId: string, idempotencyKey: string, operation: string }, opts: { forUpdate?: boolean } = {}) {
     const { scope, idempotencyKey, operation } = this.#validateKeyParts(key);
-    let query = applyOwnerScope(this.db('idempotency_records'), scope)
+    let query = applyOwnerScope(this.db('tbl_agsvc_idempotency_records'), scope)
       .where({
         idempotency_key: idempotencyKey,
         operation,
@@ -198,7 +198,7 @@ export class IdempotencyRepository {
       ? toMysqlDateTime(existing.createdAt)
       : null;
 
-    let q = applyOwnerScope(this.db('idempotency_records'), ctx.scope)
+    let q = applyOwnerScope(this.db('tbl_agsvc_idempotency_records'), ctx.scope)
       .where({
         idempotency_key: ctx.idempotencyKey,
         operation: ctx.operation,
@@ -308,7 +308,7 @@ export class IdempotencyRepository {
     };
 
     try {
-      await this.db('idempotency_records').insert(insertRow);
+      await this.db('tbl_agsvc_idempotency_records').insert(insertRow);
       const record = await this.get({
         orgId: scope.orgId,
         userId: scope.userId,
@@ -399,7 +399,7 @@ export class IdempotencyRepository {
     };
 
     // Only first writer wins: incomplete + not expired.
-    const n = await applyOwnerScope(this.db('idempotency_records'), scope)
+    const n = await applyOwnerScope(this.db('tbl_agsvc_idempotency_records'), scope)
       .where({
         idempotency_key: idempotencyKey,
         operation,

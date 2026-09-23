@@ -23,10 +23,10 @@ export { InMemoryQuotaStore, MySqlQuotaStore } from '../../workspace/quota-store
  * DB 天然满足"在外面"，且不需要 `fcntl.flock`。
  */
 export const WORKSPACE_QUOTA_RESERVATIONS_DDL = `
-CREATE TABLE workspace_quota_reservations (
+CREATE TABLE tbl_agsvc_workspace_quota_reservations (
   workspace_id   VARCHAR(191)      NOT NULL,
   reservation_id VARCHAR(191)      NOT NULL,
-  bytes          BIGINT UNSIGNED   NOT NULL,
+  bytes          BIGINT UNSIGNED   NOT NULL DEFAULT 0,
   created_at     DATETIME(3)       NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at     DATETIME(3)       NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
                                    ON UPDATE CURRENT_TIMESTAMP(3),

@@ -76,7 +76,7 @@ describe('mysql client value boundary', () => {
     try {
       const state = createFakeState();
       const knex = createFakeKnex(state);
-      state.tables.trace_spans = [];
+      state.tables.tbl_agsvc_trace_spans = [];
       const repo = new TraceSpanRepository(knex, {
         now: () => new Date('2026-07-18T19:37:00.000Z'),
       });
@@ -94,12 +94,12 @@ describe('mysql client value boundary', () => {
       const scope = { orgId: ORG, userId: USER };
 
       await repo.materializeRunFacts(run, scope);
-      const firstStartedAt = state.tables.trace_spans[0].started_at;
+      const firstStartedAt = state.tables.tbl_agsvc_trace_spans[0].started_at;
       await repo.materializeRunFacts(run, scope);
 
       assert.equal(firstStartedAt, '2026-07-18 19:36:59.479');
-      assert.equal(state.tables.trace_spans.length, 1);
-      assert.equal(state.tables.trace_spans[0].started_at, firstStartedAt);
+      assert.equal(state.tables.tbl_agsvc_trace_spans.length, 1);
+      assert.equal(state.tables.tbl_agsvc_trace_spans[0].started_at, firstStartedAt);
 
       await repo.upsert({
         ...scope,
@@ -109,7 +109,7 @@ describe('mysql client value boundary', () => {
         status: 'ok',
         finishedAt: '2026-07-18T19:37:00.479Z',
       });
-      assert.equal(state.tables.trace_spans[0].duration_ms, 1_000);
+      assert.equal(state.tables.tbl_agsvc_trace_spans[0].duration_ms, 1_000);
     } finally {
       if (originalTz == null) delete process.env.TZ;
       else process.env.TZ = originalTz;

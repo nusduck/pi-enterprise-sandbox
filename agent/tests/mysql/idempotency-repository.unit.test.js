@@ -238,7 +238,7 @@ function createIdempotencyFake(opts = {}) {
 
   /** @type {any} */
   const db = (table) => {
-    if (table !== 'idempotency_records') {
+    if (table !== 'tbl_agsvc_idempotency_records') {
       throw new Error(`unexpected table ${table}`);
     }
     return query();

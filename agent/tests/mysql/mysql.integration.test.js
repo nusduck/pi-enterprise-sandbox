@@ -22,6 +22,7 @@ import {
   SANDBOX_EXECUTION_DOMAIN_TABLES,
   TRACE_TABLES,
   INTERACTION_TABLES,
+  physicalTableName,
 } from '../../src/infrastructure/mysql/schema-tables.js';
 
 const TEST_URL = process.env.TEST_MYSQL_URL || '';
@@ -113,7 +114,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     await knex.raw('SET FOREIGN_KEY_CHECKS = 0');
     try {
       for (const table of TRUNCATE_ORDER) {
-        await knex.raw(`TRUNCATE TABLE \`${table}\``);
+        await knex.raw(`TRUNCATE TABLE \`${physicalTableName(table)}\``);
       }
     } finally {
       await knex.raw('SET FOREIGN_KEY_CHECKS = 1');
@@ -160,11 +161,11 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     );
     const names = new Set(rows.map((r) => r.name || r.NAME));
     for (const t of CORE_TABLES_CREATE_ORDER) {
-      assert.ok(names.has(t), `missing table ${t}`);
+      assert.ok(names.has(physicalTableName(t)), `missing table ${t}`);
     }
     assert.ok(names.has('knex_migrations'));
 
-    const runsMeta = rows.find((r) => (r.name || r.NAME) === 'runs');
+    const runsMeta = rows.find((r) => (r.name || r.NAME) === 'tbl_agsvc_runs');
     assert.ok(runsMeta);
     assert.match(String(runsMeta.engine || runsMeta.ENGINE), /InnoDB/i);
     assert.match(
@@ -174,40 +175,40 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
 
     const [cols] = await knex.raw(
       `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'runs'
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tbl_agsvc_runs'
          AND COLUMN_NAME = 'next_event_sequence'`,
     );
     assert.equal(cols.length, 1);
 
     const [outboxCols] = await knex.raw(
       `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'domain_outbox'
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tbl_agsvc_domain_outbox'
          AND COLUMN_NAME = 'published_at'`,
     );
     assert.equal(outboxCols.length, 1, 'published_at must exist exactly once');
 
     const [triggers] = await knex.raw(
       `SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS
-       WHERE TRIGGER_SCHEMA = DATABASE() AND EVENT_OBJECT_TABLE = 'messages'`,
+       WHERE TRIGGER_SCHEMA = DATABASE() AND EVENT_OBJECT_TABLE = 'tbl_agsvc_messages'`,
     );
     const triggerNames = new Set(triggers.map((r) => r.name || r.NAME));
     assert.ok(triggerNames.has(mysql.MESSAGES_FORBID_UPDATE_TRIGGER));
     assert.ok(triggerNames.has(mysql.MESSAGES_FORBID_DELETE_TRIGGER));
 
     for (const t of SANDBOX_EXECUTION_DOMAIN_TABLES) {
-      assert.ok(names.has(t), `missing sandbox domain table ${t}`);
+      assert.ok(names.has(physicalTableName(t)), `missing sandbox domain table ${t}`);
     }
     for (const t of TRACE_TABLES) {
-      assert.ok(names.has(t), `missing trace table ${t}`);
+      assert.ok(names.has(physicalTableName(t)), `missing trace table ${t}`);
     }
     for (const t of INTERACTION_TABLES) {
-      assert.ok(names.has(t), `missing interaction table ${t}`);
+      assert.ok(names.has(physicalTableName(t)), `missing interaction table ${t}`);
     }
 
     // process_executions tenant ownership columns
     const [procCols] = await knex.raw(
       `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'process_executions'
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tbl_agsvc_process_executions'
          AND COLUMN_NAME IN ('org_id', 'user_id')`,
     );
     assert.equal(procCols.length, 2, 'process_executions must have org_id and user_id');
@@ -218,17 +219,17 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
        FROM information_schema.KEY_COLUMN_USAGE
        WHERE TABLE_SCHEMA = DATABASE()
          AND (
-           (TABLE_NAME = 'agent_sessions' AND COLUMN_NAME = 'sandbox_session_id'
+           (TABLE_NAME = 'tbl_agsvc_agent_sessions' AND COLUMN_NAME = 'sandbox_session_id'
              AND REFERENCED_TABLE_NAME IS NOT NULL)
            OR
-           (TABLE_NAME = 'sandbox_sessions' AND COLUMN_NAME = 'agent_session_id'
+           (TABLE_NAME = 'tbl_agsvc_sandbox_sessions' AND COLUMN_NAME = 'agent_session_id'
              AND REFERENCED_TABLE_NAME IS NOT NULL)
          )`,
     );
     assert.equal(
       fkRows.length,
       0,
-      'agent_sessions.sandbox_session_id and sandbox_sessions.agent_session_id must not be FKs',
+      'tbl_agsvc_agent_sessions.sandbox_session_id and tbl_agsvc_sandbox_sessions.agent_session_id must not be FKs',
     );
   });
 
@@ -237,7 +238,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     const [afterDown] = await knex.raw(
       `SELECT TABLE_NAME AS name FROM information_schema.TABLES
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'
-         AND TABLE_NAME = 'runs'`,
+         AND TABLE_NAME = 'tbl_agsvc_runs'`,
     );
     assert.equal(afterDown.length, 0);
 
@@ -256,7 +257,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     const [afterUp] = await knex.raw(
       `SELECT TABLE_NAME AS name FROM information_schema.TABLES
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'
-         AND TABLE_NAME = 'runs'`,
+         AND TABLE_NAME = 'tbl_agsvc_runs'`,
     );
     assert.equal(afterUp.length, 1);
   });
@@ -264,7 +265,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
   it('enforces foreign keys', async () => {
     await assert.rejects(
       () =>
-        knex('organization_memberships').insert({
+        knex('tbl_agsvc_organization_memberships').insert({
           org_id: ORG,
           user_id: USER,
           role: 'member',
@@ -304,7 +305,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
       status: 'active',
     });
 
-    await knex('agent_definitions').insert({
+    await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
       name: 'default',
@@ -315,7 +316,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
       created_at: knex.fn.now(3),
       updated_at: knex.fn.now(3),
     });
-    await knex('agent_versions').insert({
+    await knex('tbl_agsvc_agent_versions').insert({
       agent_version_id: VER,
       agent_id: AGENT,
       version_no: 1,
@@ -419,7 +420,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
 
     await assert.rejects(
       () =>
-        knex('messages')
+        knex('tbl_agsvc_messages')
           .where({ message_id: MSG })
           .update({ role: 'system' }),
       (err) => {
@@ -432,7 +433,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     );
 
     await assert.rejects(
-      () => knex('messages').where({ message_id: MSG }).del(),
+      () => knex('tbl_agsvc_messages').where({ message_id: MSG }).del(),
       (err) => {
         assert.match(
           String(err.message),
@@ -442,7 +443,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
       },
     );
 
-    const stillThere = await knex('messages').where({ message_id: MSG }).first();
+    const stillThere = await knex('tbl_agsvc_messages').where({ message_id: MSG }).first();
     assert.ok(stillThere);
     assert.equal(stillThere.role, 'user');
   });
@@ -480,7 +481,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
       Array.from({ length: N }, (_, i) => i + 1),
     );
 
-    const run = await knex('runs').where({ run_id: RUN }).first();
+    const run = await knex('tbl_agsvc_runs').where({ run_id: RUN }).first();
     assert.equal(Number(run.next_event_sequence), N);
 
     const listed = await events.listByRun(RUN, { orgId: ORG, userId: USER });
@@ -564,17 +565,17 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
 
     const [runs, messages, acceptedEvents, acceptedOutbox, records] =
       await Promise.all([
-        knex('runs').where({ run_id: runId }),
-        knex('messages').where({ run_id: runId }),
-        knex('run_events').where({
+        knex('tbl_agsvc_runs').where({ run_id: runId }),
+        knex('tbl_agsvc_messages').where({ run_id: runId }),
+        knex('tbl_agsvc_run_events').where({
           run_id: runId,
           event_type: 'run.accepted',
         }),
-        knex('domain_outbox').where({
+        knex('tbl_agsvc_domain_outbox').where({
           aggregate_id: runId,
           event_type: 'run.accepted',
         }),
-        knex('idempotency_records').where({
+        knex('tbl_agsvc_idempotency_records').where({
           idempotency_key: request.idempotencyKey,
           operation: 'create_run',
         }),
@@ -595,20 +596,20 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     await clearAllData();
     await seedGraph();
 
-    const [indexRows] = await knex.raw('SHOW INDEX FROM `trace_spans`');
+    const [indexRows] = await knex.raw('SHOW INDEX FROM `tbl_agsvc_trace_spans`');
     const indexNames = new Set(
       indexRows.map((row) => String(row.Key_name ?? row.KEY_NAME ?? '')),
     );
     // MySQL normalizes a named primary key to PRIMARY in SHOW INDEX output.
     assert.ok(indexNames.has('PRIMARY') || indexNames.has('pk_trace_spans'));
-    assert.ok(indexNames.has('idx_trace_spans_owner'));
-    assert.ok(indexNames.has('idx_trace_spans_run'));
-    assert.ok(indexNames.has('idx_trace_spans_parent'));
+    assert.ok(indexNames.has('ind_agsvc_ts_i1'));
+    assert.ok(indexNames.has('ind_agsvc_ts_i3'));
+    assert.ok(indexNames.has('ind_agsvc_ts_i2'));
 
     const [foreignKeys] = await knex.raw(
       `SELECT COLUMN_NAME AS column_name, REFERENCED_TABLE_NAME AS referenced_table
        FROM information_schema.KEY_COLUMN_USAGE
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trace_spans'
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tbl_agsvc_trace_spans'
          AND REFERENCED_TABLE_NAME IS NOT NULL`,
     );
     const fkMap = new Map(
@@ -617,9 +618,9 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
         String(row.referenced_table ?? row.REFERENCED_TABLE_NAME),
       ]),
     );
-    assert.equal(fkMap.get('org_id'), 'organizations');
-    assert.equal(fkMap.get('user_id'), 'users');
-    assert.equal(fkMap.get('run_id'), 'runs');
+    assert.equal(fkMap.get('org_id'), 'tbl_agsvc_organizations');
+    assert.equal(fkMap.get('user_id'), 'tbl_agsvc_users');
+    assert.equal(fkMap.get('run_id'), 'tbl_agsvc_runs');
 
     const spans = new mysql.TraceSpanRepository(knex, {
       now: () => new Date('2026-07-19T00:00:00.000Z'),
@@ -671,7 +672,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     try {
       await clearAllData();
       await seedGraph();
-      await knex('runs').where({ run_id: RUN }).update({
+      await knex('tbl_agsvc_runs').where({ run_id: RUN }).update({
         created_at: '2026-07-18 19:36:59.479',
         updated_at: '2026-07-18 19:36:59.479',
       });
@@ -685,13 +686,13 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
         now: () => new Date('2026-07-18T19:37:00.000Z'),
       });
       await spans.materializeRunFacts(run, scope);
-      const first = await knex('trace_spans')
+      const first = await knex('tbl_agsvc_trace_spans')
         .where({ run_id: RUN })
         .select('span_id', 'started_at', 'finished_at', 'duration_ms')
         .orderBy('span_id', 'asc');
 
       await spans.materializeRunFacts(run, scope);
-      const second = await knex('trace_spans')
+      const second = await knex('tbl_agsvc_trace_spans')
         .where({ run_id: RUN })
         .select('span_id', 'started_at', 'finished_at', 'duration_ms')
         .orderBy('span_id', 'asc');

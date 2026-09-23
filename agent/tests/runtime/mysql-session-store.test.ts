@@ -279,7 +279,7 @@ test('MysqlSessionStore loadStored accepts already-parsed mysql2 JSON columns', 
   };
   const pool = {
     execute: async (sql: string) => {
-      if (String(sql).includes('FROM dsh_sessions')) {
+      if (String(sql).includes('FROM tbl_agsvc_dsh_sessions')) {
         return [[{
           session_id: String(id),
           org_id: 'default-org',

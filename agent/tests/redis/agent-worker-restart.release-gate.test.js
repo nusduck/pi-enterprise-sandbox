@@ -286,7 +286,7 @@ async function waitForRunStatus(
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
-    last = await knex('runs').where({ run_id: runId }).first();
+    last = await knex('tbl_agsvc_runs').where({ run_id: runId }).first();
     if (String(last?.status || '') === expected) return last;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -316,7 +316,7 @@ async function seedQueuedRun(knex, ids, opts = {}) {
       status: 'active',
     });
 
-    await knex('agent_definitions').insert({
+    await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
       name: 'release-gate-agent',
@@ -327,7 +327,7 @@ async function seedQueuedRun(knex, ids, opts = {}) {
       created_at: knex.fn.now(3),
       updated_at: knex.fn.now(3),
     });
-    await knex('agent_versions').insert({
+    await knex('tbl_agsvc_agent_versions').insert({
       agent_version_id: VER,
       agent_id: AGENT,
       version_no: 1,
@@ -404,19 +404,19 @@ async function readSideEffect(knex, toolCallId) {
 }
 
 async function assertSafeRecoveryFacts(knex, ids) {
-  const retryingEvents = await knex('run_events').where({
+  const retryingEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.retrying',
   });
   assert.equal(retryingEvents.length, 1, 'exactly one run.retrying event');
 
-  const retryingOutbox = await knex('domain_outbox').where({
+  const retryingOutbox = await knex('tbl_agsvc_domain_outbox').where({
     aggregate_id: ids.runId,
     event_type: 'run.retrying',
   });
   assert.equal(retryingOutbox.length, 1, 'exactly one run.retrying outbox row');
 
-  const failedEvents = await knex('run_events').where({
+  const failedEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.failed',
   });
@@ -430,19 +430,19 @@ async function assertSafeRecoveryFacts(knex, ids) {
 }
 
 async function assertManualRecoveryFacts(knex, ids) {
-  const retryingEvents = await knex('run_events').where({
+  const retryingEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.retrying',
   });
   assert.equal(retryingEvents.length, 0, 'unsafe recovery must not retry');
 
-  const failedEvents = await knex('run_events').where({
+  const failedEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.failed',
   });
   assert.equal(failedEvents.length, 0, 'manual boundary is not terminal FAILED');
 
-  const tools = await knex('tool_executions').where({ run_id: ids.runId });
+  const tools = await knex('tbl_agsvc_tool_executions').where({ run_id: ids.runId });
   assert.equal(tools.length, 1);
   assert.ok(['RUNNING', 'UNKNOWN'].includes(String(tools[0].status)));
 
@@ -574,7 +574,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     const killed = await workerA.terminate('SIGKILL');
     assert.equal(killed.signal, 'SIGKILL');
 
-    const afterKill = await knex('runs').where({ run_id: RUN }).first();
+    const afterKill = await knex('tbl_agsvc_runs').where({ run_id: RUN }).first();
     assert.equal(afterKill.status, 'RUNNING');
     assert.equal(await readSideEffect(knex, SAFE_IDS.toolCallId), undefined);
     assert.ok(
@@ -589,7 +589,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     workers.push(workerB);
     await workerB.waitFor((message) => message.type === 'ready');
 
-    const beforeLeaseExpiry = await knex('runs').where({ run_id: RUN }).first();
+    const beforeLeaseExpiry = await knex('tbl_agsvc_runs').where({ run_id: RUN }).first();
     assert.equal(
       beforeLeaseExpiry.status,
       'RUNNING',
@@ -658,7 +658,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     );
     assert.match(String(reconciliation.reason), /manual recovery required/i);
 
-    const recovered = await knex('runs')
+    const recovered = await knex('tbl_agsvc_runs')
       .where({ run_id: UNSAFE_IDS.runId })
       .first();
     assert.equal(recovered.status, 'RUNNING');
@@ -750,7 +750,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
 
     const succeeded = await waitForRunStatus(knex, childRun, 'SUCCEEDED', 15_000);
     assert.equal(succeeded.queue_name, QUEUE_D1);
-    const retrying = await knex('run_events').where({
+    const retrying = await knex('tbl_agsvc_run_events').where({
       run_id: childRun,
       event_type: 'run.retrying',
     });

@@ -401,7 +401,7 @@ async function waitForRow(knex, table, where, predicate, timeoutMs = 20_000) {
 
 async function seedRun(knex, ids, traceId, content, baseUrl) {
   const organizations = new OrganizationRepository(knex);
-  const existingOrg = await knex('organizations').where({ org_id: ORG }).first();
+  const existingOrg = await knex('tbl_agsvc_organizations').where({ org_id: ORG }).first();
   if (!existingOrg) {
     await organizations.createOrganization({
       orgId: ORG,
@@ -426,7 +426,7 @@ async function seedRun(knex, ids, traceId, content, baseUrl) {
       externalSubject: EXTERNAL_ORG,
       orgId: ORG,
     });
-    await knex('agent_definitions').insert({
+    await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
       name: 'real-pi-release-gate',
@@ -437,7 +437,7 @@ async function seedRun(knex, ids, traceId, content, baseUrl) {
       created_at: knex.fn.now(3),
       updated_at: knex.fn.now(3),
     });
-    await knex('agent_versions').insert({
+    await knex('tbl_agsvc_agent_versions').insert({
       agent_version_id: VER,
       agent_id: AGENT,
       version_no: 1,
@@ -653,7 +653,7 @@ describeLive(
     // 结构由脚本按发布 DDL 预先建好（ADR 0011 D6）：独立 sandbox 启动时核对清单，
     // 测试里回滚重迁移会在它运行时拆掉 exec 的表。这里只确认库是空的 gate 库。
     assert.equal(
-      Number((await agentKnex('runs').count({ n: '*' }).first())?.n ?? -1),
+      Number((await agentKnex('tbl_agsvc_runs').count({ n: '*' }).first())?.n ?? -1),
       0,
       'gate schema must be freshly applied and empty',
     );
@@ -772,7 +772,7 @@ describeLive(
     );
     await waitForRow(
       agentKnex,
-      'runs',
+      'tbl_agsvc_runs',
       { run_id: MODEL_IDS.runId },
       (row) => row?.status === 'RUNNING',
     );
@@ -797,12 +797,12 @@ describeLive(
     );
     assert.equal(completed.result.status, 'SUCCEEDED');
     assert.equal(attempts, 2, 'recovery must make exactly one new model request');
-    const retryEvents = await agentKnex('run_events').where({
+    const retryEvents = await agentKnex('tbl_agsvc_run_events').where({
       run_id: MODEL_IDS.runId,
       event_type: 'run.retrying',
     });
     assert.equal(retryEvents.length, 1);
-    const toolRows = await agentKnex('tool_executions').where({ run_id: MODEL_IDS.runId });
+    const toolRows = await agentKnex('tbl_agsvc_tool_executions').where({ run_id: MODEL_IDS.runId });
     assert.equal(toolRows.length, 0, 'model-only interruption must have no tool ledger');
     await workerB.terminate('SIGTERM');
   });
@@ -857,14 +857,14 @@ describeLive(
 
     const pending = await waitForRow(
       agentKnex,
-      'run_interactions',
+      'tbl_agsvc_run_interactions',
       { run_id: INTERACTION_IDS.runId, tool_call_id: toolCallId },
       (row) => row?.status === 'PENDING' && row?.resume_phase === 'NONE',
       30_000,
     );
     const parked = await waitForRow(
       agentKnex,
-      'runs',
+      'tbl_agsvc_runs',
       { run_id: INTERACTION_IDS.runId },
       (row) => row?.status === 'WAITING_INPUT',
       30_000,
@@ -872,7 +872,7 @@ describeLive(
     assert.equal(parked.status, 'WAITING_INPUT');
     await waitForRow(
       agentKnex,
-      'agent_sessions',
+      'tbl_agsvc_agent_sessions',
       { agent_session_id: INTERACTION_IDS.sessionId },
       (row) => Number(row?.pi_session_version || 0) > 0,
       30_000,
@@ -885,12 +885,12 @@ describeLive(
     assert.equal(parkedCompletion.result.status, 'WAITING_INPUT');
     assert.equal(providerCalls, 1, 'the first Worker must ask exactly once');
     assert.equal(
-      (await agentKnex('run_interactions').where({ run_id: INTERACTION_IDS.runId })).length,
+      (await agentKnex('tbl_agsvc_run_interactions').where({ run_id: INTERACTION_IDS.runId })).length,
       1,
       'parking must create exactly one durable interaction',
     );
     assert.equal(
-      (await agentKnex('tool_executions').where({ run_id: INTERACTION_IDS.runId })).length,
+      (await agentKnex('tbl_agsvc_tool_executions').where({ run_id: INTERACTION_IDS.runId })).length,
       1,
       'parking must create exactly one tool ledger row',
     );
@@ -951,7 +951,7 @@ describeLive(
     assert.equal(completed.result.status, 'SUCCEEDED');
     const succeeded = await waitForRow(
       agentKnex,
-      'runs',
+      'tbl_agsvc_runs',
       { run_id: INTERACTION_IDS.runId },
       (row) => row?.status === 'SUCCEEDED',
       30_000,
@@ -959,19 +959,19 @@ describeLive(
     assert.equal(succeeded.status, 'SUCCEEDED');
     const applied = await waitForRow(
       agentKnex,
-      'run_interactions',
+      'tbl_agsvc_run_interactions',
       { interaction_id: pending.interaction_id },
       (row) => row?.status === 'RESOLVED' && row?.resume_phase === 'APPLIED',
       30_000,
     );
     assert.ok(applied.resume_claimed_at);
     assert.ok(applied.resume_applied_at);
-    const session = await agentKnex('agent_sessions')
+    const session = await agentKnex('tbl_agsvc_agent_sessions')
       .where({ agent_session_id: INTERACTION_IDS.sessionId })
       .first();
     assert.equal(session.last_run_id, INTERACTION_IDS.runId);
     assert.ok(Number(session.pi_session_version) >= 2);
-    const latestSnapshot = await agentKnex('agent_session_snapshots')
+    const latestSnapshot = await agentKnex('tbl_agsvc_agent_session_snapshots')
       .where({ agent_session_id: INTERACTION_IDS.sessionId })
       .orderBy('snapshot_version', 'desc')
       .first();
@@ -985,15 +985,15 @@ describeLive(
     );
     assert.equal(providerCalls, 2, 'continuation must make one and only one follow-up model call');
     assert.equal(
-      (await agentKnex('run_interactions').where({ run_id: INTERACTION_IDS.runId })).length,
+      (await agentKnex('tbl_agsvc_run_interactions').where({ run_id: INTERACTION_IDS.runId })).length,
       1,
     );
-    const tools = await agentKnex('tool_executions').where({ run_id: INTERACTION_IDS.runId });
+    const tools = await agentKnex('tbl_agsvc_tool_executions').where({ run_id: INTERACTION_IDS.runId });
     assert.equal(tools.length, 1);
     assert.equal(tools[0].status, 'SUCCEEDED');
     assert.equal(
       (
-        await agentKnex('run_events').where({
+        await agentKnex('tbl_agsvc_run_events').where({
           run_id: INTERACTION_IDS.runId,
           event_type: 'interaction.resolved',
         })
@@ -1050,13 +1050,13 @@ describeLive(
     // 请求已经发往执行面（被代理拦住）：派发边界必须**先于**派发落库——RUNNING，
     // 并绑定请求指纹与当前 fence。2026-09-17 修复前 DSH 下这一行停在 PROPOSED、
     // 两者皆空（Pi 时序假设，见 dsh-restart-gate-rewrite 证据 §3.1）。
-    const toolBeforeKill = await agentKnex('tool_executions')
+    const toolBeforeKill = await agentKnex('tbl_agsvc_tool_executions')
       .where({ run_id: TOOL_IDS.runId, tool_call_id: toolCallId })
       .first();
     assert.ok(toolBeforeKill, `ledger row must exist before dispatch; stderr=${workerA.getStderr()}`);
     assert.equal(toolBeforeKill.status, 'RUNNING');
     assert.match(String(toolBeforeKill.request_hash), /^[0-9a-f]{64}$/);
-    const sessionBeforeKill = await agentKnex('agent_sessions')
+    const sessionBeforeKill = await agentKnex('tbl_agsvc_agent_sessions')
       .where({ agent_session_id: TOOL_IDS.sessionId })
       .first();
     assert.equal(
@@ -1085,9 +1085,9 @@ describeLive(
     );
     assert.match(String(reconciliation.reason), /manual recovery required/i);
 
-    const run = await agentKnex('runs').where({ run_id: TOOL_IDS.runId }).first();
+    const run = await agentKnex('tbl_agsvc_runs').where({ run_id: TOOL_IDS.runId }).first();
     assert.equal(run.status, 'RUNNING');
-    const toolAfterRestart = await agentKnex('tool_executions')
+    const toolAfterRestart = await agentKnex('tbl_agsvc_tool_executions')
       .where({ run_id: TOOL_IDS.runId, tool_call_id: toolCallId })
       .first();
     assert.equal(
@@ -1098,7 +1098,7 @@ describeLive(
     assert.equal(providerCalls, 1, 'Worker B must not re-prompt the model');
     assert.equal(
       (
-        await agentKnex('run_events').where({
+        await agentKnex('tbl_agsvc_run_events').where({
           run_id: TOOL_IDS.runId,
           event_type: 'run.retrying',
         })
@@ -1185,7 +1185,7 @@ describeLive(
 
       await waitForRow(
         agentKnex,
-        'tool_executions',
+        'tbl_agsvc_tool_executions',
         { run_id: SANDBOX_IDS.runId, tool_call_id: toolCallId },
         (row) => Boolean(row),
       );
@@ -1211,7 +1211,7 @@ describeLive(
 
       const terminal = await waitForRow(
         agentKnex,
-        'tool_executions',
+        'tbl_agsvc_tool_executions',
         { run_id: SANDBOX_IDS.runId, tool_call_id: toolCallId },
         (row) => ['SUCCEEDED', 'FAILED', 'UNKNOWN', 'CANCELLED', 'DENIED'].includes(String(row?.status)),
         60_000,
@@ -1226,14 +1226,14 @@ describeLive(
         'ABSENT',
         'the interrupted command must not be re-executed or complete after restart',
       );
-      const toolRows = await agentKnex('tool_executions').where({ run_id: SANDBOX_IDS.runId });
+      const toolRows = await agentKnex('tbl_agsvc_tool_executions').where({ run_id: SANDBOX_IDS.runId });
       assert.equal(toolRows.length, 1, 'no second tool execution may be created');
       assert.equal(terminal.status, 'UNKNOWN');
       assert.equal(terminal.error_code, 'TOOL_OUTCOME_UNKNOWN');
       assert.match(String(toolResultSeenByModel), /may or may not have taken effect/);
 
-      const run = await agentKnex('runs').where({ run_id: SANDBOX_IDS.runId }).first();
-      const events = await agentKnex('run_events')
+      const run = await agentKnex('tbl_agsvc_runs').where({ run_id: SANDBOX_IDS.runId }).first();
+      const events = await agentKnex('tbl_agsvc_run_events')
         .where({ run_id: SANDBOX_IDS.runId })
         .orderBy('sequence_no');
       console.error(

@@ -11,7 +11,7 @@ import {
   renderSegmentSql,
 } from '../../src/infrastructure/mysql/schema-export.js';
 
-const TRIGGER = "CREATE TRIGGER trg_x BEFORE UPDATE ON messages FOR EACH ROW SIGNAL SQLSTATE '45000'\n  SET MESSAGE_TEXT = 'append-only'";
+const TRIGGER = "CREATE TRIGGER trg_x BEFORE UPDATE ON tbl_agsvc_messages FOR EACH ROW SIGNAL SQLSTATE '45000'\n  SET MESSAGE_TEXT = 'append-only'";
 const PROC_LIKE = 'CREATE TRIGGER trg_y BEFORE DELETE ON t FOR EACH ROW BEGIN SET @a = 1; SET @b = 2; END';
 
 describe('schema release SQL', () => {
@@ -42,7 +42,7 @@ describe('schema release SQL', () => {
 
   it('refuses a migration name that could inject SQL into the bookkeeping insert', () => {
     assert.throws(
-      () => renderSegmentSql({ migration: "x'); DROP TABLE runs; --.js", statements: [] }),
+      () => renderSegmentSql({ migration: "x'); DROP TABLE tbl_agsvc_runs; --.js", statements: [] }),
       /unexpected migration name/,
     );
   });

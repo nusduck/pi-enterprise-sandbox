@@ -116,7 +116,7 @@ const main = async () => {
   const { jobId } = startBackgroundJob(workspaceId, orgId, userId);
   check('后台作业已在 exec 上起来', Boolean(jobId), `job=${jobId}`);
 
-  const before = sql(`SELECT status FROM exec_jobs WHERE process_id='${jobId}'`);
+  const before = sql(`SELECT status FROM tbl_agsvc_exec_jobs WHERE process_id='${jobId}'`);
   check('作业初始状态为 running', before === 'running', `status=${before || '(no row)'}`);
 
   // 真正的硬杀：SIGKILL，不给任何优雅退出的机会。
@@ -125,7 +125,7 @@ const main = async () => {
     .split('\n').find((l) => l.startsWith(`${SERVICE} `)) ?? '';
   check('exec 已被 SIGKILL', !/running/i.test(killedState), killedState.trim());
 
-  const stillRunning = sql(`SELECT status FROM exec_jobs WHERE process_id='${jobId}'`);
+  const stillRunning = sql(`SELECT status FROM tbl_agsvc_exec_jobs WHERE process_id='${jobId}'`);
   check('硬杀后账本仍停留在 running（回收前的样子）', stillRunning === 'running',
     `status=${stillRunning || '(no row)'}`);
 
@@ -133,7 +133,7 @@ const main = async () => {
   assert.ok(await waitReady(), 'exec must come back after the hard kill');
 
   // 回收发生在 listen 之前，所以 /ready 一通就该已经收完。
-  const after = sql(`SELECT status, detail FROM exec_jobs WHERE process_id='${jobId}'`);
+  const after = sql(`SELECT status, detail FROM tbl_agsvc_exec_jobs WHERE process_id='${jobId}'`);
   const [afterStatus, afterDetail] = after.split('\t');
   check('重启后作业被收成终态', ['killed', 'failed', 'completed'].includes(afterStatus),
     `status=${afterStatus || '(no row)'} detail=${afterDetail ?? ''}`);
@@ -142,7 +142,7 @@ const main = async () => {
 
   // 整张表不能再有僵尸：容器是新起的，任何 running/stopping 都没有活句柄。
   const zombies = sql(
-    "SELECT COUNT(*) FROM exec_jobs WHERE status IN ('running','stopping')",
+    "SELECT COUNT(*) FROM tbl_agsvc_exec_jobs WHERE status IN ('running','stopping')",
   );
   check('全表不再有 running/stopping 僵尸行', zombies === '0', `n=${zombies}`);
 

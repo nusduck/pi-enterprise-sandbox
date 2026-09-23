@@ -272,7 +272,7 @@ describeLive('outbox integration (TEST_MYSQL_URL + TEST_REDIS_URL)', () => {
     }
     if (knex) {
       try {
-        await knex('domain_outbox').del();
+        await knex('tbl_agsvc_domain_outbox').del();
       } catch {
         // ignore
       }
@@ -292,7 +292,7 @@ describeLive('outbox integration (TEST_MYSQL_URL + TEST_REDIS_URL)', () => {
     const runId = RUN;
 
     const repo = new OutboxRepository(knex, { maxAttempts: 5 });
-    await knex('domain_outbox').where({ outbox_id: obId }).del().catch(() => {});
+    await knex('tbl_agsvc_domain_outbox').where({ outbox_id: obId }).del().catch(() => {});
     await repo.insert({
       outboxId: obId,
       aggregateType: 'run',
@@ -373,7 +373,7 @@ describeLive('outbox integration (TEST_MYSQL_URL + TEST_REDIS_URL)', () => {
     const pad26 = (s2) => (s2 + 'ABCDEFGHJKMNPQRSTVWXYZ012345').slice(0, 26);
     const obId = pad26(`01CC${randomBytes(8).toString('hex')}`.toUpperCase());
 
-    await knex('domain_outbox').del();
+    await knex('tbl_agsvc_domain_outbox').del();
     const seed = new OutboxRepository(knex);
     await seed.insert({
       outboxId: obId,
@@ -428,7 +428,7 @@ describeLive('outbox integration (TEST_MYSQL_URL + TEST_REDIS_URL)', () => {
     const pad26 = (s2) => (s2 + 'ABCDEFGHJKMNPQRSTVWXYZ012345').slice(0, 26);
     const obId = pad26(`01LW${randomBytes(8).toString('hex')}`.toUpperCase());
 
-    await knex('domain_outbox').del();
+    await knex('tbl_agsvc_domain_outbox').del();
     const seed = new OutboxRepository(knex);
     await seed.insert({
       outboxId: obId,

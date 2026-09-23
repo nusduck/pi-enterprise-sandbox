@@ -27,7 +27,7 @@ export function createSessionTurnGate(deps: {
 }): SessionTurnGate {
   return async function mustWait(ref) {
     const run = await deps
-      .db('runs')
+      .db('tbl_agsvc_runs')
       .select('agent_session_id', 'created_at', 'status', 'parent_run_id')
       .where({ run_id: ref.runId, org_id: ref.orgId })
       .first();
@@ -36,7 +36,7 @@ export function createSessionTurnGate(deps: {
     }
     if ((await deps.sessionLockOwner(run.agent_session_id)) != null) return true;
     const ahead = await deps
-      .db('runs')
+      .db('tbl_agsvc_runs')
       .first('run_id')
       .where({ agent_session_id: run.agent_session_id })
       .whereNull('parent_run_id')
