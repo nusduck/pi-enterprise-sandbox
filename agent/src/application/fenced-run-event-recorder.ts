@@ -189,7 +189,7 @@ export class FencedRunEventRecorder {
   }
 
   /**
-   * Sequential enqueue (same ordering as PiRunExecutor event tail).
+   * Sequential enqueue (same ordering as DshRunExecutor event tail).
    * @param fn
    */
   enqueue(fn: () => Promise<void>) {

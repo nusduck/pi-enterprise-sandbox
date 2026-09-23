@@ -26,7 +26,7 @@
  * 含 `workspaceId` 一致性哈希），此处事务是单机原子语义，多机需加
  * `GET_LOCK` 再议。
  *
- * 无历史迁移：研发阶段，现有 Pi `0.80.3` 会话数据直接丢弃，不写转换器。
+ * 无历史迁移：研发阶段，旧引擎 `0.80.3` 会话数据直接丢弃，不写转换器。
  */
 
 import { createHash } from 'node:crypto';
@@ -42,8 +42,8 @@ import type {
   StoredPrefix,
   StoredSuffix,
 } from '@deepseek-ai/dsh-session-persistence';
-import type { Endpoint } from '@pi/contract/endpoint-failover.js';
-import { toWireError } from '@pi/contract/errors.js';
+import type { Endpoint } from '@dsh/contract/endpoint-failover.js';
+import { toWireError } from '@dsh/contract/errors.js';
 import {
   createFailoverMysqlPool,
   readUpdrdbEndpoints,
@@ -96,7 +96,7 @@ function decodeRecords(records: readonly unknown[]): SessionEvent[] {
 // 常量与 DDL
 // ---------------------------------------------------------------------------
 
-/** 在线会话 8 MiB 上限——写入前统一判定（决策 4）。与 `PI_MAX_JSONL_BYTES` 对齐。 */
+/** 在线会话 8 MiB 上限——写入前统一判定（决策 4）。与 `SESSION_MAX_JSONL_BYTES` 对齐。 */
 export const MAX_SESSION_BYTES = 8 * 1024 * 1024;
 
 /** DDL——迁移权威在 `agent/`，此处仅常量化供单测与文档固化。 */

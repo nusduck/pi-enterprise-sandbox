@@ -19,12 +19,12 @@
 //   drain-clean        两段 20s 工具，期限内排空，退出码 0，原副本完成
 //   drain-deadline     三段 70s 工具，约 150s 时到期退出（码 1），不自动重放，人工取消后 CANCELLED
 //   drain-subrun       前台子 Run（子 Run 60s 工具）期间关停父 Run 所在副本
-//   drain-redis-outage SIGTERM 后暂停专用 Redis；drain-mysql-outage SIGTERM 后只让 pi-sim 失去 MySQL
+//   drain-redis-outage SIGTERM 后暂停专用 Redis；drain-mysql-outage SIGTERM 后只让 dsh-sim 失去 MySQL
 //
 // SIM_WORKERS=<n> 指定期望的 Worker 副本数（默认 2）；SIM_RESULT_FILE=<path> 把结果写成 JSON。
 //
 // 宿主机到 ClusterIP 不通（OrbStack 下走了局域网路由），所以 HTTP 经 kubectl port-forward；
-// 账本经 docker exec 查开发栈 MySQL 的专用库 pi_k8s_sim；副作用直接看专用 exec 容器的数据根。
+// 账本经 docker exec 查开发栈 MySQL 的专用库 dsh_k8s_sim；副作用直接看专用 exec 容器的数据根。
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +33,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const sh = promisify(execFile);
-const NS = 'pi-sim';
-const SANDBOX_CONTAINER = 'pi-k8s-sim-sandbox';
+const NS = 'dsh-sim';
+const SANDBOX_CONTAINER = 'dsh-k8s-sim-sandbox';
 const BFF_PORT = 18080;
 const LLM_PORT = 18081;
 const TERMINAL = ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'];
@@ -144,7 +144,7 @@ const llm = {
 async function query(sql) {
   const { stdout } = await sh('docker', [
     'compose', '--project-directory', ROOT, 'exec', '-T', 'mysql', 'sh', '-c',
-    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -N -B pi_k8s_sim -e "$1"', '_', sql,
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -N -B dsh_k8s_sim -e "$1"', '_', sql,
   ]);
   return stdout.split('\n').filter(Boolean).map((l) => l.split('\t'));
 }
@@ -566,7 +566,7 @@ const scenarios = {
         }));
     };
     const before = await readiness();
-    await sh('docker', ['pause', 'pi-k8s-sim-redis']);
+    await sh('docker', ['pause', 'dsh-k8s-sim-redis']);
     let during;
     try {
       const deadline = Date.now() + 60_000;
@@ -575,7 +575,7 @@ const scenarios = {
         during = await readiness();
       } while (Date.now() < deadline && during.some((p) => p.ready));
     } finally {
-      await sh('docker', ['unpause', 'pi-k8s-sim-redis']);
+      await sh('docker', ['unpause', 'dsh-k8s-sim-redis']);
     }
     const workers = during.filter((p) => p.app === 'agent-worker');
     const agents = during.filter((p) => p.app === 'agent');
@@ -793,9 +793,9 @@ sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
       probes: false,
       duringDrain: async () => {
         await sleep(2_000);
-        await sh('docker', ['pause', 'pi-k8s-sim-redis']);
+        await sh('docker', ['pause', 'dsh-k8s-sim-redis']);
       },
-      afterExit: async () => sh('docker', ['unpause', 'pi-k8s-sim-redis']),
+      afterExit: async () => sh('docker', ['unpause', 'dsh-k8s-sim-redis']),
       settleMs: 90_000,
     });
     record(S, 'bounded_exit_despite_redis_outage', r.exit.gone && r.exit.elapsedS < 178, r.exit);
@@ -805,7 +805,7 @@ sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
   },
 
   async 'drain-mysql-outage'(S) {
-    // 只让 pi-sim 的 K8s 应用层失去 MySQL：EndpointSlice 指向黑洞地址，并断开 pi_k8s_sim 上除 sim 执行面
+    // 只让 dsh-sim 的 K8s 应用层失去 MySQL：EndpointSlice 指向黑洞地址，并断开 dsh_k8s_sim 上除 sim 执行面
     // 以外的全部连接（Pod 出向经 NAT，MySQL 看到的来源地址不是 Pod IP，无法只断一个副本）。开发栈库不受影响。
     const { stdout: sliceJson } = await kubectl('get', 'endpointslice', 'mysql-ext', '-o', 'json');
     const mysqlIp = JSON.parse(sliceJson).endpoints[0].addresses[0];
@@ -822,7 +822,7 @@ sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
       duringDrain: async () => {
         await sleep(2_000);
         await setMysql('10.255.255.1');
-        const rows = await query(`SELECT id, host FROM information_schema.processlist WHERE db = 'pi_k8s_sim'`);
+        const rows = await query(`SELECT id, host FROM information_schema.processlist WHERE db = 'dsh_k8s_sim'`);
         for (const [cid, host] of rows) {
           if (execHosts.includes(String(host).split(':')[0])) continue;
           await query(`KILL ${Number(cid)}`).then(() => killed.push(host), () => {});

@@ -168,7 +168,7 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
   }
 
   const telemetry = await startTelemetry(env, {
-    serviceName: 'pi-enterprise-agent-http',
+    serviceName: 'dsh-enterprise-agent-http',
   });
 
   const container = createServiceContainer(env);
@@ -481,7 +481,7 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
           }
           const description =
             (typeof def.description === 'string' && def.description.trim()) ||
-            `Enterprise agent "${def.name}" (Pi Enterprise Sandbox)`;
+            `Enterprise agent "${def.name}" (DSH Enterprise Sandbox)`;
           return {
             name: def.name,
             description,
@@ -555,7 +555,7 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
   });
 
   console.log(
-    `[agent-server] pi-enterprise-agent v4.0.0 (${config.DEPLOYMENT_ENV}/${config.NODE_ENV}) on port ${port}`,
+    `[agent-server] dsh-enterprise-agent v4.0.0 (${config.DEPLOYMENT_ENV}/${config.NODE_ENV}) on port ${port}`,
   );
   console.log(
     '[agent-server] Effective config:',

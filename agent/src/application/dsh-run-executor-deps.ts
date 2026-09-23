@@ -1,7 +1,7 @@
 /**
- * PiRunExecutor 的依赖面与三个纯判定。
+ * DshRunExecutor 的依赖面与三个纯判定。
  *
- * 这三个方法原本是 PiRunExecutor 的私有方法，但**一个都不读 `this`**——
+ * 这三个方法原本是 DshRunExecutor 的私有方法，但**一个都不读 `this`**——
  * 它们只对传进来的参数做判断。留在那个 1600 行的类里，既看不出它们可以
  * 单测，也让类的可变状态看起来比实际更多。
  */
@@ -12,11 +12,11 @@ import type { SessionRecoveryService } from './session-recovery-service.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 
 /**
- * PiRunExecutor 的依赖面。
+ * DshRunExecutor 的依赖面。
  *
- * 抽成具名类型是因为它原本被写了两遍——构造器一份、`createPiRunExecutorFactory`
+ * 抽成具名类型是因为它原本被写了两遍——构造器一份、`createDshRunExecutorFactory`
  * 一份——而工厂那份已经漂移成更弱的版本：transactionManager / sessionLockManager /
- * piRuntimeFactory / sessionAdapter 退化成 `any`，toolBudget 少了
+ * dshRuntimeFactory / sessionAdapter 退化成 `any`，toolBudget 少了
  * runDeadlineMs。工厂只是把 opts 原样转给构造器，两份声明本就该是同一份。
  */
 export interface DshRunExecutorDeps {
@@ -28,7 +28,7 @@ export interface DshRunExecutorDeps {
     release: (agentSessionId: string, ownerToken: string) => Promise<boolean>;
     renewIntervalMs?: number;
   };
-  piRuntimeFactory: { create: (input: Record<string, any>) => Promise<any> };
+  dshRuntimeFactory: { create: (input: Record<string, any>) => Promise<any> };
   sessionAdapter?: { captureSnapshotPayload: Function; dispose?: Function };
   modelResolver: (
     agentVersion: Record<string, any>,
@@ -89,13 +89,13 @@ export function looksLikeUncertainSideEffect(err: unknown) {
 }
 
 /**
- * Pi reports some terminal runtime failures in an assistant entry instead
+ * DSH reports some terminal runtime failures in an assistant entry instead
  * of rejecting `session.prompt()`. Convert those terminal markers into the
  * RunExecutor contract before ExecuteRunService commits the Run status.
  *
  * Only the **last** new assistant message for this prompt decides the
  * outcome. Intermediate `stopReason=error` entries are common when the
- * provider hits a transient "Connection error" and Pi retries within the
+ * provider hits a transient "Connection error" and DSH retries within the
  * same prompt — those must not poison a later successful turn that ends
  * with `stop` / `toolUse` / etc.
  *
@@ -139,8 +139,8 @@ export function terminalOutcomeFromNewAssistantEntries(payload: { entries?: Reco
     return {
       outcome: RUN_STATUS.FAILED,
       statusReason: runtimeDetail
-        ? `Pi runtime completed with assistant stopReason=error: ${runtimeDetail}`
-        : 'Pi runtime completed with assistant stopReason=error',
+        ? `DSH runtime completed with assistant stopReason=error: ${runtimeDetail}`
+        : 'DSH runtime completed with assistant stopReason=error',
     };
   }
   if (
@@ -151,7 +151,7 @@ export function terminalOutcomeFromNewAssistantEntries(payload: { entries?: Reco
   ) {
     return {
       outcome: RUN_STATUS.CANCELLED,
-      statusReason: `Pi runtime completed with assistant stopReason=${stopReason}`,
+      statusReason: `DSH runtime completed with assistant stopReason=${stopReason}`,
     };
   }
 

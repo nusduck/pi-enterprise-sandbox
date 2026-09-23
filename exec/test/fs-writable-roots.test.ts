@@ -49,7 +49,7 @@ describe('writableRoots', () => {
 describe('canonicalWritableRoots', () => {
   let dir = '';
   before(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'pi-exec-writable-roots-'));
+    dir = await mkdtemp(path.join(tmpdir(), 'dsh-exec-writable-roots-'));
   });
   after(async () => {
     if (dir) await rm(dir, { recursive: true, force: true });
@@ -178,7 +178,7 @@ describe('已启用 Skill 的生产装配（按清单）', () => {
   }
 
   async function withRoot(fn: (root: string) => Promise<void>): Promise<void> {
-    const root = await mkdtemp(path.join(await realpath(tmpdir()), 'pi-exec-enabled-skills-'));
+    const root = await mkdtemp(path.join(await realpath(tmpdir()), 'dsh-exec-enabled-skills-'));
     try {
       await fn(root);
     } finally {

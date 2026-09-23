@@ -1,5 +1,5 @@
 {
-  "name": "pi-enterprise-api-server",
+  "name": "dsh-enterprise-api-server",
   "version": "4.0.0",
   "private": true,
   "type": "module",

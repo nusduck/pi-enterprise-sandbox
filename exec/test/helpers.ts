@@ -36,7 +36,7 @@ export async function makeTestWorkspace(
   options: MakeTestWorkspaceOptions = {},
 ): Promise<TestWorkspace> {
   const resolvedTmpRoot = await realpath(tmpdir());
-  const base = await mkdtemp(join(resolvedTmpRoot, 'pi-isolation-'));
+  const base = await mkdtemp(join(resolvedTmpRoot, 'dsh-isolation-'));
 
   const workspaceRoot = join(base, 'workspace');
   const tempRoot = join(base, 'temp');
@@ -76,7 +76,7 @@ export async function makeTestWorkspace(
 
 /** 一个永远不会在磁盘上存在的绝对路径，用来测"必须失败"的分支。 */
 export function neverExists(label: string): string {
-  return `/pi-isolation-test-never-exists/${label}/${Date.now()}-${Math.random()}`;
+  return `/dsh-isolation-test-never-exists/${label}/${Date.now()}-${Math.random()}`;
 }
 
 /**

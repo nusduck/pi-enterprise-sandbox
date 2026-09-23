@@ -30,7 +30,7 @@ describe('durable trace span projection', () => {
         apiKey: 'sk-live-never-store',
         authorization: 'Bearer never-store',
         toolName: 'shell',
-        source: 'pi',
+        source: 'dsh',
         // Allowlisted keys must remain scalar; nested values are a payload
         // side-channel and are intentionally dropped.
         provider: { prompt: 'must-not-leak' },
@@ -40,7 +40,7 @@ describe('durable trace span projection', () => {
     assert.deepEqual(attrs, {
       eventType: 'tool.execution.started',
       toolName: 'shell',
-      source: 'pi',
+      source: 'dsh',
     });
   });
 

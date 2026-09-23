@@ -5,7 +5,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
-import type { Endpoint } from '@pi/contract/endpoint-failover.js';
+import type { Endpoint } from '@dsh/contract/endpoint-failover.js';
 import { MysqlConfigError, MysqlDependencyError } from './errors.js';
 import {
   createFailoverKnexClient,

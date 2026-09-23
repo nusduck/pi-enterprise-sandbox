@@ -35,8 +35,8 @@ test('深度 → 队列名：0 沿用历史名字，深层加后缀', () => {
   assert.equal(runQueueNameForDepth(1), 'agent-runs-d1');
   assert.equal(runQueueNameForDepth(2), 'agent-runs-d2');
   // 自定义基名（`AGENT_RUNS_QUEUE_NAME`）时深层从它派生。
-  assert.equal(runQueueNameForDepth(0, 'pi-runs'), 'pi-runs');
-  assert.equal(runQueueNameForDepth(2, 'pi-runs'), 'pi-runs-d2');
+  assert.equal(runQueueNameForDepth(0, 'dsh-runs'), 'dsh-runs');
+  assert.equal(runQueueNameForDepth(2, 'dsh-runs'), 'dsh-runs-d2');
   assert.throws(() => runQueueNameForDepth(-1), /non-negative integer/);
   assert.throws(() => runQueueNameForDepth(1.5), /non-negative integer/);
 });
@@ -121,5 +121,5 @@ test('回滚闸门：本配置不服务的层里还有存量就拒绝启动，�
 
 test('探测覆盖到配置之外的深层队列', () => {
   assert.deepEqual(queueNamesToProbe(2), ['agent-runs', 'agent-runs-d1', 'agent-runs-d2']);
-  assert.deepEqual(queueNamesToProbe(1, 'pi-runs'), ['pi-runs', 'pi-runs-d1']);
+  assert.deepEqual(queueNamesToProbe(1, 'dsh-runs'), ['dsh-runs', 'dsh-runs-d1']);
 });

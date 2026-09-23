@@ -1,19 +1,19 @@
 /**
- * PiRunExecutor (PR-05 slice B) — recoverable RunExecutor backed by Pi SDK.
+ * DshRunExecutor (PR-05 slice B) — recoverable RunExecutor backed by DSH.
  *
  * Lifecycle ownership:
- * - PiRunExecutor owns Session Lock + MySQL execution fence for the job.
+ * - DshRunExecutor owns Session Lock + MySQL execution fence for the job.
  * - ExecuteRunService owns Run Lease + Run status transitions.
  * - Session lock is held until dispose() because ExecuteRunService terminalizes
  *   the Run before disposing the per-job executor.
  *
  * Event ownership:
- * - PiRunExecutor is the sole durable projector of Pi → RunEvent+Outbox for
+ * - DshRunExecutor is the sole durable projector of DSH → RunEvent+Outbox for
  *   the run. PR-06 observability must call into this recorder rather than
  *   double-writing. The RunExecutorContext.emit seam is optional; when omitted,
  *   all persistence stays encapsulated here (no process-local Map authority).
  *
- * Production worker wires createPiRunExecutorFactory via
+ * Production worker wires createDshRunExecutorFactory via
  * ServiceContainer.ensureWorkerRunExecutorFactory (default model/workspace
  * resolvers). Custom inject still supported on the container constructor.
  *
@@ -33,7 +33,6 @@ import {
   createSerialRenewLoop,
 } from '../infrastructure/redis/session-lock-manager.js';
 import { SessionLockError } from '../infrastructure/redis/errors.js';
-import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import { bindAgentVersionConfig } from '../infrastructure/dsh/agent-version-bindings.js';
 import { buildMcpPolicyBindings } from '../infrastructure/mcp/mcp-policy-bindings.js';
 import {
@@ -112,14 +111,13 @@ import { createApprovedReplayClaim } from './approved-replay-claim.js';
 type Loose = any;
 
 export const UI_ASSISTANT_ENTRY_PREFIX = 'ui:assistant:';
-export const UI_ASSISTANT_PI_ENTRY_PREFIX = UI_ASSISTANT_ENTRY_PREFIX;
 
 export class DshRunExecutor {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   tx: Loose;
   createRepositories: Loose;
   sessionLockManager: Loose;
-  piRuntimeFactory: Loose;
+  dshRuntimeFactory: Loose;
   sessionAdapter: Loose;
   modelResolver: Loose;
   promptImageLoader: Loose;
@@ -166,7 +164,7 @@ export class DshRunExecutor {
    *     release: (agentSessionId: string, ownerToken: string) => Promise<boolean>,
    *     renewIntervalMs?: number,
    *   },
-   *   piRuntimeFactory: { create: (input: object) => Promise<any> },
+   *   dshRuntimeFactory: { create: (input: object) => Promise<any> },
    *   sessionAdapter?: { captureSnapshotPayload: Function, dispose?: Function },
    *   modelResolver: (agentVersion: object, selection?: { modelId?: string|null }) => object | Promise<object>,
    *   promptImageLoader?: (input: object) => Promise<Array<{ type: 'image', data: string, mimeType: string }>>,
@@ -194,8 +192,8 @@ export class DshRunExecutor {
     if (!deps.sessionLockManager?.acquire) {
       throw new Error('DshRunExecutor requires sessionLockManager');
     }
-    if (!deps.piRuntimeFactory?.create) {
-      throw new Error('DshRunExecutor requires piRuntimeFactory');
+    if (!deps.dshRuntimeFactory?.create) {
+      throw new Error('DshRunExecutor requires dshRuntimeFactory');
     }
     if (typeof deps.modelResolver !== 'function') {
       throw new Error('DshRunExecutor requires modelResolver(agentVersion)');
@@ -210,7 +208,7 @@ export class DshRunExecutor {
     this.tx = deps.transactionManager;
     this.createRepositories = deps.createRepositories;
     this.sessionLockManager = deps.sessionLockManager;
-    this.piRuntimeFactory = deps.piRuntimeFactory;
+    this.dshRuntimeFactory = deps.dshRuntimeFactory;
     this.sessionAdapter = deps.sessionAdapter ?? null;
     this.modelResolver = deps.modelResolver;
     this.promptImageLoader = deps.promptImageLoader ?? null;
@@ -292,7 +290,7 @@ export class DshRunExecutor {
       };
     }
 
-    // A PiRunExecutor is normally single-use, but clear this ephemeral signal
+    // A DshRunExecutor is normally single-use, but clear this ephemeral signal
     // before every attempt so a reused test/worker instance cannot carry a
     // prior Run's ask_user marker into a later execution.
     this._pendingInteractionToolCallIds.clear();
@@ -423,7 +421,7 @@ export class DshRunExecutor {
         }
       }
 
-      // 4) Exact AgentVersion + full model via resolver (exact 0.80.3)
+      // 4) Exact AgentVersion + full model via resolver
       const agentVersion = await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         const v = await repos.catalog.getVersionById(agentVersionId);
@@ -432,7 +430,6 @@ export class DshRunExecutor {
         }
         return v;
       });
-      void PINNED_PI_SDK_VERSION;
 
       // 经 bindAgentVersionConfig 读，不直接读 configJson：那是唯一定义"这份
       // config 怎么读"的地方（深冻结、凭据字段拒绝、SDK 版本钉）。2026-09-04
@@ -522,7 +519,7 @@ export class DshRunExecutor {
        * 停泊端口——收到 durable 信号才把 Run 停下并让 Worker 归还 lease。
        *
        * 2026-08-31（计划 H4.3）从 `extensionBundleFactory(...)` 的内联字面量里
-       * 提出来：现在有**两个**消费者。一个是那批 Pi Extension（H8 会删掉），
+       * 提出来：现在有**两个**消费者。一个是那批旧引擎 Extension（H8 会删掉），
        * 另一个是接 durable 审批面的 `GovernanceApprovalStore`——审批判定发生在
        * DSH 的策略挂载点上，那条路不经过 extension bundle。
        */
@@ -623,7 +620,7 @@ export class DshRunExecutor {
       });
 
       /**
-       * Proof for piRuntimeFactory that configJson.toolPolicy is actually
+       * Proof for dshRuntimeFactory that configJson.toolPolicy is actually
        * enforced this Run. Only enterprise-policy enforces it, so a Run with
        * no AgentVersion tool policy deliberately leaves this null.
        * @type {object | null}
@@ -664,8 +661,8 @@ export class DshRunExecutor {
       const runRiskResolver = buildRunRiskResolver(this.riskOverrides, agentVersion);
       const runPolicyResolver = buildRunPolicyResolver(this.riskOverrides, agentVersion);
 
-      // 8) Create Pi runtime (bindExtensions happens inside factory when extensions present)
-      const piSnapshot =
+      // 8) Create DSH runtime (bindExtensions happens inside factory when extensions present)
+      const sessionSnapshot =
         recovered.payload != null
           ? {
               snapshotJson: recovered.payload,
@@ -683,13 +680,13 @@ export class DshRunExecutor {
           })
         : null;
 
-      this._runtime = await this.piRuntimeFactory.create({
+      this._runtime = await this.dshRuntimeFactory.create({
         agentVersion,
         // 企业条款由 `assembleSystemPrompt` 追加在它之后且不可被覆盖，所以这里
         // 传的是"租户自定义的那一段"，不是最终提示词。
         systemPrompt: boundVersion.systemPrompt,
         agentSession: session,
-        piSnapshot,
+        sessionSnapshot,
         cwd,
         model,
         requestAuth,
@@ -708,7 +705,7 @@ export class DshRunExecutor {
         // 少了这一步，策略挂载点用的是进程内的 InMemoryApprovalStore：判定是
         // 对的，但不落库、不发事件、不停泊 Run、不释放 Worker——审批链条从
         // 判定之后就断了。2026-08-31 之前 recorder 只经 extensionBundleFactory
-        // 到达运行时，而那批 Pi Extension 已经删了。
+        // 到达运行时，而那批旧引擎 Extension 已经删了。
         // 本 Run 的应用层服务，经 ALS 交给注册在进程级的 provider（计划 H5）。
         // provider 是 boot 时注册一次的单例，而队列绑着这个 Run 的事务与租户
         // scope，所以只能在调用时按 Run 取——与 ctx.fs/shell/jobs 走 exec-rpc
@@ -780,7 +777,6 @@ export class DshRunExecutor {
           data: {
             agentVersionId,
             configHash: String(agentVersion.configHash || ''),
-            piSdkVersion: PINNED_PI_SDK_VERSION,
           },
           dedupeKey: `run.agent_version:${runId}`,
         });
@@ -804,7 +800,7 @@ export class DshRunExecutor {
       const useSessionSubscribe =
         projectionMode === 'session-subscribe' || projectionMode === 'both';
 
-      const persistProjected = async (piEvent) => {
+      const persistProjected = async (agentEvent) => {
         if (this._lockLost) {
           throw new SessionFenceConflictError(
             'session lock lost; refusing durable event write',
@@ -814,7 +810,7 @@ export class DshRunExecutor {
             },
           );
         }
-        const projected = projector.project(piEvent, eventContext);
+        const projected = projector.project(agentEvent, eventContext);
         if (!projected?.length) return;
         // Single-owner mode: do not dedupe message.completed (role-only keys
         // swallow later assistants). Tool/model keys are stable identities.
@@ -981,7 +977,7 @@ export class DshRunExecutor {
           runtimeSession: {
             steer: async (text) => {
               if (typeof runtimeSession.steer !== 'function') {
-                throw new Error('Pi runtime session.steer() is unavailable');
+                throw new Error('DSH runtime session.steer() is unavailable');
               }
               await runtimeSession.steer(text);
             },
@@ -1175,7 +1171,6 @@ export class DshRunExecutor {
         agentVersionId,
         configHash,
         workspaceId: session.workspaceId,
-        piSdkVersion: PINNED_PI_SDK_VERSION,
         interactionResumeId: interactionResume?.interactionId ?? null,
       });
 
@@ -1375,8 +1370,8 @@ export class DshRunExecutor {
   }
 
   /**
-   * Persist UI assistant messages for **new** Pi session entries only.
-   * Fenced + transactional; idempotent via ui:assistant:{entryId} pi_entry_id.
+   * Persist UI assistant messages for **new** DSH session entries only.
+   * Fenced + transactional; idempotent via ui:assistant:{entryId} session_entry_id.
    * Recovered history entry IDs are excluded so old assistants are never
    * re-bound to the current run.
    *
@@ -1444,12 +1439,12 @@ export class DshRunExecutor {
             messageType: 'text',
             contentJson: {
               kind: 'assistant_message',
-              piEntryId: entry.id,
+              sessionEntryId: entry.id,
               text,
               ...(thinking ? { thinking } : {}),
             },
-            piEntryId: uiEntryId,
-            piEntryKind: 'assistant_ui',
+            sessionEntryId: uiEntryId,
+            sessionEntryKind: 'assistant_ui',
           });
         } catch (err) {
           const isDup =

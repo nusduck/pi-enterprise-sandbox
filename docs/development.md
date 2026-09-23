@@ -87,8 +87,7 @@ smoke/gate 临时目录。
 ```
 
 `.runtime/` 由 Git 和 Docker build context 共同忽略。容器内路径仍为
-`/var/sandbox/*`。`/app/pi-agent-home` 与 `AGENT_PI_AGENT_DIR` 已随 Pi 运行时
-删除（阶段 G），本地也不再生成 `.runtime/agent/pi-agent-home`。
+`/var/sandbox/*`。
 
 ### 运行（推荐：OrbStack K8s）
 
@@ -115,7 +114,7 @@ scripts/dev/k8s/down.sh dev                                # 删命名空间并�
   对 agent / agent-worker / api-server / frontend / sandbox-mcp 全部 `rollout restart`，新增用本地镜像的
   Deployment 要加进脚本的 `APP_DEPLOYMENTS`（`tests/test_k8s_dev_manifests.py` 守着）。
 - 集群外依赖经 EndpointSlice 按容器 IP 接入；Compose 容器重建后 IP 会变，重新执行 `up.sh dev`。
-- 宿主到 ClusterIP 不通（路由走局域网网关），调试单个服务用 `kubectl -n pi-dev port-forward` 或 `kubectl -n pi-dev logs`。
+- 宿主到 ClusterIP 不通（路由走局域网网关），调试单个服务用 `kubectl -n dsh-dev port-forward` 或 `kubectl -n dsh-dev logs`。
 
 清单里有两处在目标环境同样要注意：镜像以 `up_docker`（1000:1000）运行且 `USER` 写数字，`runAsNonRoot`
 才能校验（写名字会被拒绝建容器）；frontend 听 8080；Pod 要关 `enableServiceLinks`，否则名为 `sandbox-mcp` / `sandbox` / `agent` 的 Service
@@ -233,7 +232,7 @@ production Bubblewrap child intentionally does not expose Debian's full
 When changing one of these Skills, rebuild `sandbox` before testing it. A
 normal execution still sees the read-only `/home/sandbox/skill` bind mount for
 instructions and source inspection, while the wrapper runs the corresponding
-build-time copy under `/usr/local/lib/pi-skill-runtime`.
+build-time copy under `/usr/local/lib/dsh-skill-runtime`.
 
 旧的 `skill_install/create/edit/uninstall` 工具已经退役。安全闸门只在启用：拒绝路径穿越、
 符号链接、特殊文件、系统 Skill 同名遮蔽、超出文件数或体积上限；已发布副本只读。
@@ -331,11 +330,11 @@ AgentVersion 侧（同一份语义，只能收紧）：
 8. 类型检查: `npm --prefix agent run typecheck`
 9. 单元测试: `npm test --prefix agent`
 
-> 历史的进程内 Run manager、Python Agent runtime、Pi Extension 包、双写 Session runtime 和自研 MCP connection manager 均已删除；Agent 的生产实现仅位于 `agent/src/`。新增 plugin 只改 `src/runtime/plugins/manifest.ts`，然后 `npm run gen:patch`。
+> 历史的进程内 Run manager、Python Agent runtime、旧引擎的 Extension 包、双写 Session runtime 和自研 MCP connection manager 均已删除；Agent 的生产实现仅位于 `agent/src/`。新增 plugin 只改 `src/runtime/plugins/manifest.ts`，然后 `npm run gen:patch`。
 
 ### 数据库操作
 
-开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。应用 DSN **不带口令**：Agent / Worker / exec 启动时向 DBPM 取口令（ADR 0011 D10），开发 Compose 默认由 `dbpm-fake` 提供；宿主机直接起服务进程时同样要给 `DBPM_URL`（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。**服务启动时不迁移**（ADR 0011 D6，开发与生产同一流程）：空库先执行 `scripts/dev/schema-apply.sh`——在 `pi_schema_shadow` 上跑迁移导出分段 SQL 发布包到 `.runtime/schema-release`，再用 mysql 客户端逐段执行（首个错误即停），最后按 `contract/schema/schema-manifest.json` 只读核对；在此之前 agent / agent-worker / sandbox 会因 `SCHEMA_DRIFT` 重启等待。改了迁移必须重新生成清单：`SCHEMA_SHADOW_DATABASE_URL=… npm run schema:manifest --prefix agent`（影子库必须为空），否则 `schema-manifest.integration` 测试会红。`schema:sql` / `schema:replay` / `schema:verify` 是开发/DBA 工具，用带口令的完整 DSN（口令可用 `SCHEMA_*_PASSWORD` 单独传入）。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
+开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。应用 DSN **不带口令**：Agent / Worker / exec 启动时向 DBPM 取口令（ADR 0011 D10），开发 Compose 默认由 `dbpm-fake` 提供；宿主机直接起服务进程时同样要给 `DBPM_URL`（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。**服务启动时不迁移**（ADR 0011 D6，开发与生产同一流程）：空库先执行 `scripts/dev/schema-apply.sh`——在 `dsh_schema_shadow` 上跑迁移导出分段 SQL 发布包到 `.runtime/schema-release`，再用 mysql 客户端逐段执行（首个错误即停），最后按 `contract/schema/schema-manifest.json` 只读核对；在此之前 agent / agent-worker / sandbox 会因 `SCHEMA_DRIFT` 重启等待。改了迁移必须重新生成清单：`SCHEMA_SHADOW_DATABASE_URL=… npm run schema:manifest --prefix agent`（影子库必须为空），否则 `schema-manifest.integration` 测试会红。`schema:sql` / `schema:replay` / `schema:verify` 是开发/DBA 工具，用带口令的完整 DSN（口令可用 `SCHEMA_*_PASSWORD` 单独传入）。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
 
 正式服务的事实状态在 Agent-owned MySQL 中。Sandbox 不再包含 SQLite
 `database`/repository 兼容层，也不拥有 Run/Conversation；调试 durable 状态
@@ -407,13 +406,13 @@ docker compose up -d mysql          # 开发栈 MySQL 需已 healthy
 scripts/dev/release-gates.sh
 ```
 
-脚本按当前工作树构建 `scripts/dev/release-gate-runner.Dockerfile`（Node 22 + docker CLI，依赖与源码在镜像内，不挂宿主目录），在开发栈网络里运行，任一项失败即非零退出；自带专用 Redis 容器 `pi-release-gate-redis-dev` 与测试库 `pi_gate_dev` / `pi_gate_dev_side`，结束后删除。依次覆盖：UPRedis 队列放行测试（直连、经路由模拟代理）、Redis 重启、BullMQ Worker 重启、Agent Worker 重启（含深度 1 子 Run 在自己那一层被 SIGKILL 后接管重放，ADR 0012）。Agent Worker gate 的副作用表放在 `_side` 兄弟库，因为被测 Worker 启动时按发布清单核对自己的库。`agent-worker-dsh-restart` 需要独立 sandbox，单独用下面的脚本跑。
+脚本按当前工作树构建 `scripts/dev/release-gate-runner.Dockerfile`（Node 22 + docker CLI，依赖与源码在镜像内，不挂宿主目录），在开发栈网络里运行，任一项失败即非零退出；自带专用 Redis 容器 `dsh-release-gate-redis-dev` 与测试库 `dsh_gate_dev` / `dsh_gate_dev_side`，结束后删除。依次覆盖：UPRedis 队列放行测试（直连、经路由模拟代理）、Redis 重启、BullMQ Worker 重启、Agent Worker 重启（含深度 1 子 Run 在自己那一层被 SIGKILL 后接管重放，ADR 0012）。Agent Worker gate 的副作用表放在 `_side` 兄弟库，因为被测 Worker 启动时按发布清单核对自己的库。`agent-worker-dsh-restart` 需要独立 sandbox，单独用下面的脚本跑。
 
 ```bash
 scripts/dev/release-gate-dsh-restart.sh   # 前提：开发栈 mysql / dbpm-fake 已 healthy，agent 与 sandbox 镜像为当前代码
 ```
 
-它重建专用库 `pi_gate_dsh` 并按发布 DDL 建表（测试本身不迁移、不回滚——独立 sandbox 启动时核对清单），用 `docker compose run` 起连该库的专用 sandbox `pi-release-gate-sandbox-dsh` 与专用 Redis，在运行器里以生产 Worker 组合 + 真实 DSH 运行时 + 假模型跑四个中断场景：模型调用中 SIGKILL、`ask_user_question` 停泊后 Worker 重启、工具派发边界 SIGKILL、命令执行中重启 sandbox（工具记 `UNKNOWN`、不自动重跑）。专用 sandbox 挂独立数据根 `.runtime/release-gate-dsh/`，不碰开发工作区；结束后删除专用容器、库与数据根。
+它重建专用库 `dsh_gate_dsh` 并按发布 DDL 建表（测试本身不迁移、不回滚——独立 sandbox 启动时核对清单），用 `docker compose run` 起连该库的专用 sandbox `dsh-release-gate-sandbox-dsh` 与专用 Redis，在运行器里以生产 Worker 组合 + 真实 DSH 运行时 + 假模型跑四个中断场景：模型调用中 SIGKILL、`ask_user_question` 停泊后 Worker 重启、工具派发边界 SIGKILL、命令执行中重启 sandbox（工具记 `UNKNOWN`、不自动重跑）。专用 sandbox 挂独立数据根 `.runtime/release-gate-dsh/`，不碰开发工作区；结束后删除专用容器、库与数据根。
 
 多副本与 K8s 编排行为另有一套演练（sim 模式，与开发栈的库、Redis、数据根互不影响）：
 
@@ -423,7 +422,7 @@ scripts/dev/k8s/up.sh sim                                  # 前提：镜像为�
 scripts/dev/k8s/down.sh sim
 ```
 
-`up.sh sim` 在命名空间 `pi-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend、sandbox-mcp 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `pi_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、共享 Skill 跨 Pod 发布（跨 owner、新版本、侧车不一致排除、停用）、同会话 follow-up 排队。另有只在点名时跑的 Worker 有界关停场景 `drain-clean`、`drain-deadline`、`drain-subrun`、`drain-redis-outage`、`drain-mysql-outage`（默认 150s 排空 / 180s 宽限，每个 1–5 分钟），核对退出码与时刻、排空期间是否仍领取新 Run、租约接管、工具副作用与最终账本。宿主没有 Node 22 时，驱动放在带 kubectl 与 docker CLI 的 `node:22-slim` 容器里跑（`--network host`、挂 `~/.kube` 与 docker socket、仓库挂到同一绝对路径）。这是本地演练，结果不代替目标环境验收；驱动经 `kubectl port-forward` 访问。
+`up.sh sim` 在命名空间 `dsh-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend、sandbox-mcp 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `dsh_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、共享 Skill 跨 Pod 发布（跨 owner、新版本、侧车不一致排除、停用）、同会话 follow-up 排队。另有只在点名时跑的 Worker 有界关停场景 `drain-clean`、`drain-deadline`、`drain-subrun`、`drain-redis-outage`、`drain-mysql-outage`（默认 150s 排空 / 180s 宽限，每个 1–5 分钟），核对退出码与时刻、排空期间是否仍领取新 Run、租约接管、工具副作用与最终账本。宿主没有 Node 22 时，驱动放在带 kubectl 与 docker CLI 的 `node:22-slim` 容器里跑（`--network host`、挂 `~/.kube` 与 docker socket、仓库挂到同一绝对路径）。这是本地演练，结果不代替目标环境验收；驱动经 `kubectl port-forward` 访问。
 
 ### 测试结构
 
@@ -530,10 +529,10 @@ git push -u origin feat/your-feature
 docker compose logs -f sandbox
 
 # 交互式 shell
-docker exec -it pi-enterprise-sandbox /bin/bash
+docker exec -it dsh-enterprise-sandbox /bin/bash
 
 # 查看 MySQL 表（compose 网络内 mysql 服务）
-docker exec -it pi-enterprise-mysql \
+docker exec -it dsh-enterprise-mysql \
   mysql -usandbox -psandbox_dev_only sandbox -e "SHOW TABLES;"
 ```
 

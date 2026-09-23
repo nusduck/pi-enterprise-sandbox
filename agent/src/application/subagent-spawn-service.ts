@@ -15,7 +15,7 @@
  *    parent finished waiting for it. Each child therefore gets a fresh
  *    conversation + AgentSession (and hence its own sandbox workspace), bound
  *    to the parent's AgentVersion so it runs the same agent configuration.
- * 2. **Exactly one child per tool call.** The Pi tool call id is the
+ * 2. **Exactly one child per tool call.** The DSH tool call id is the
  *    idempotency key, so a retried `spawn_subagent` adopts the child that was
  *    already created rather than forking a second one.
  * 3. **Fail closed on limits.** Depth and live-sibling count are re-checked

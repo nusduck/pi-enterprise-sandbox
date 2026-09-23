@@ -62,7 +62,7 @@ function seed(state, status = 'WAITING_INPUT') {
       sandbox_session_id: SANDBOX_SESSION,
       workspace_id: WORKSPACE,
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: RUN,
       execution_fence_token: 1,
       recovery_reason_code: null,

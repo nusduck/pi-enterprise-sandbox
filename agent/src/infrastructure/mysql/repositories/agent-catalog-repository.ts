@@ -17,9 +17,6 @@ type Loose = any;
 /** Default tenant agent definition name (stable per org). */
 export const DEFAULT_AGENT_DEFINITION_NAME = 'default';
 
-/** Default pi SDK version string stored on the first tenant version. */
-export const DEFAULT_PI_SDK_VERSION = '0.80.3';
-
 /**
  * @param err
  * @returns {boolean}
@@ -52,7 +49,6 @@ export function mapAgentVersion(row: Record<string, unknown>) {
     versionNo: Number(row.version_no),
     configJson: parseJsonColumn(row.config_json),
     configHash: String(row.config_hash),
-    piSdkVersion: String(row.pi_sdk_version),
     status: String(row.status),
     createdBy: String(row.created_by),
     createdAt: formatDateTime(row.created_at),
@@ -234,13 +230,12 @@ export class AgentCatalogRepository {
    *   versionNo: number,
    *   configJson?: Record<string, unknown>,
    *   configHash?: string,
-   *   piSdkVersion?: string,
    *   status?: string,
    *   createdBy: string,
    *   createdAt?: Date | string,
    * }} input
    */
-  async createVersion(input: { agentVersionId: string, agentId: string, versionNo: number, configJson?: Record<string, unknown>, configHash?: string, piSdkVersion?: string, status?: string, createdBy: string, createdAt?: Date | string, }) {
+  async createVersion(input: { agentVersionId: string, agentId: string, versionNo: number, configJson?: Record<string, unknown>, configHash?: string, status?: string, createdBy: string, createdAt?: Date | string, }) {
     const agentVersionId = assertUlid(input.agentVersionId, 'agentVersionId');
     const agentId = assertUlid(input.agentId, 'agentId');
     const createdBy = assertUlid(input.createdBy, 'createdBy');
@@ -259,7 +254,6 @@ export class AgentCatalogRepository {
         version_no: input.versionNo,
         config_json: JSON.stringify(configJson),
         config_hash: configHash.toLowerCase(),
-        pi_sdk_version: input.piSdkVersion ?? DEFAULT_PI_SDK_VERSION,
         status: input.status ?? 'active',
         created_by: createdBy,
         created_at: toMysqlDateTime(input.createdAt || this.now()),
@@ -304,10 +298,9 @@ export class AgentCatalogRepository {
    *   generateId: () => string,
    *   name?: string,
    *   configJson?: Record<string, unknown>,
-   *   piSdkVersion?: string,
    * }} input
    */
-  async ensureTenantDefaultAgent(input: { orgId: string, createdBy: string, generateId: () => string, name?: string, configJson?: Record<string, unknown>, piSdkVersion?: string, }) {
+  async ensureTenantDefaultAgent(input: { orgId: string, createdBy: string, generateId: () => string, name?: string, configJson?: Record<string, unknown>, }) {
     const orgId = assertUlid(input.orgId, 'orgId');
     const createdBy = assertUlid(input.createdBy, 'createdBy');
     if (typeof input.generateId !== 'function') {
@@ -356,7 +349,6 @@ export class AgentCatalogRepository {
           agentId: def.agentId,
           versionNo: 1,
           configJson: input.configJson ?? defaultAgentConfigJson(),
-          piSdkVersion: input.piSdkVersion ?? DEFAULT_PI_SDK_VERSION,
           status: 'active',
           createdBy,
         });

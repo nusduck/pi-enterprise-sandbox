@@ -654,7 +654,7 @@ export class RunRecoveryService {
         }
 
         // A resolved interaction has its own durable continuation fence. A
-        // CLAIMED row is a recoverable wake, while APPLIED proves that Pi
+        // CLAIMED row is a recoverable wake, while APPLIED proves that DSH
         // checkpointed the answer and only the Run terminal projection is
         // missing. Both cases must bypass ordinary RUNNING replay rules.
         if (typeof repos.interactions?.listByRunId === 'function') {

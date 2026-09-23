@@ -20,7 +20,7 @@ import {
 import { selectableReasoningEfforts } from '../infrastructure/dsh/reasoning-efforts.js';
 import { loadMcpServerRegistry } from '../infrastructure/mcp/mcp-server-registry.js';
 
-const PRODUCT_PACKAGE = 'pi-enterprise-agent';
+const PRODUCT_PACKAGE = 'dsh-enterprise-agent';
 const PRODUCT_VERSION = '4.0.0';
 const DEFAULT_PROFILE_ID = 'coding-agent';
 
@@ -278,7 +278,7 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     enabled: true,
     status: 'configured',
     category: toolCategory(name),
-    // 2026-08-31（计划 H8.5）：来源不再是那批已删除的 Pi Extension。
+    // 2026-08-31（计划 H8.5）：来源不再是那批已删除的旧引擎 Extension。
     // 这批名字来自 `runtime/policy/tool-names.ts` 的唯一事实源，
     // 与 boot 之后 `ctx.tools.schemas()` 的集合由 boot.test.ts 断言恰好相等。
     source: 'dsh-host-tools',
@@ -301,7 +301,7 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
       })),
     ),
   );
-  // Compatibility field retained for existing clients. The legacy Pi
+  // Compatibility field retained for existing clients. The legacy engine
   // Extension registry was deleted; DSH host tools are reported in `tools`.
   const extensions = [];
 

@@ -4,7 +4,7 @@
  * 裸 Error 也走 toWireError，不能只对 FsError 脱敏。
  */
 
-import { toWireError, type WireError } from '@pi/contract/errors.js';
+import { toWireError, type WireError } from '@dsh/contract/errors.js';
 
 export interface LedgerEntry {
   readonly callId: string;

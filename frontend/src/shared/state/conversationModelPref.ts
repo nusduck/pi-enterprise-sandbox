@@ -1,13 +1,13 @@
 /**
  * Per-conversation model picker preference.
  *
- * The composer previously stored a single `pi.selectedModelId` for the whole
+ * The composer previously stored a single `dsh.selectedModelId` for the whole
  * app, so switching chats kept the last picker value. Scope the choice by
  * conversation id. A blank scope is the unsaved "New conversation" draft.
  */
 
-export const LEGACY_MODEL_PREF_KEY = 'pi.selectedModelId';
-export const CONVERSATION_MODEL_PREFS_KEY = 'pi.conversationModelIds';
+export const LEGACY_MODEL_PREF_KEY = 'dsh.selectedModelId';
+export const CONVERSATION_MODEL_PREFS_KEY = 'dsh.conversationModelIds';
 export const DRAFT_CONVERSATION_SCOPE = '';
 
 export function conversationModelScope(

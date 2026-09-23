@@ -1190,3 +1190,16 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **验证：** 处理外壳回归修复前失败；判定集成 6/6；sim 修复前对照 FAILED、修复后按序成功；dev 真实模型追问排队成功；
   sim 全量 24/24；agent 1389/1389；api-server 偶发 2 cancelled（未改该包，不记通过）。详见
   [证据](evidence/follow-up-queue-and-shared-skill-2026-09-18.md)。
+
+## 2026-09-23 — pi 命名全部改为 dsh；清理旧引擎遗留代码
+
+- **Context：** 用户要求 review 项目：pi core 已迁移到 DSH，项目中所有 pi 相关内容替换为 dsh，并清理无用代码；
+  范围确认为全量（代码标识符、库字段、产品名与部署标识），直接实施。
+- **Action：** 批量改名（包名、镜像 / 容器、VM 路径与 unit、Cookie、JWT 默认值、K8s 命名空间、错误码、标识符）；
+  新增迁移 `20260923000002_dsh_naming.js`（列改名、删 `pi_sdk_version`、改写存储标记，header 哨兵因 digest 绑定保留）；
+  重新生成 schema 清单；删除 `pi_sdk_version` 校验链、`createPi*` 等兼容别名、`AGENT_PI_DEFAULT_CWD` 兜底、
+  旧引擎 thinking-level 映射、`runtime-versions.json` 的 `pi_sdk` 段与 knip 查出的无调用方导出；历史注释改为「旧引擎」；
+  deployment 增加升级对照表，CHANGELOG 同步。`evidence/`、`archive/`、`adr/`、`plan.md` 与既有 PROCESS_LOG 条目不改。
+- **STATUS IDs：** 无状态变化。
+- **验证：** 六套测试、类型检查、前端 build 全绿；开发库存量数据迁移后 105/105 会话可恢复；真实链路 17/17；
+  浏览器实测。详见[证据](evidence/dsh-naming-and-cleanup-2026-09-23.md)。

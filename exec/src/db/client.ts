@@ -13,7 +13,7 @@
  * 故障切换并在交付连接前完成 UTC 会话初始化；未配置时就是 DSN 里的单端点。
  */
 
-import type { Endpoint } from '@pi/contract/endpoint-failover.js';
+import type { Endpoint } from '@dsh/contract/endpoint-failover.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
 import {
   createFailoverPool,

@@ -1,5 +1,5 @@
 /**
- * AgentVersion config rules used by the Pi runtime factory.
+ * AgentVersion config rules used by the DSH runtime factory.
  *
  * Pure, fail-closed resolution of an immutable Agent Version config into the
  * model/config values the worker hands to the SDK:
@@ -10,8 +10,8 @@
  * No SDK import and no I/O — everything here is deterministic on its inputs.
  */
 
-import { DshRuntimeFactoryError as PiRuntimeFactoryError } from './errors.js';
-import { PINNED_PI_SDK_VERSION, resolveToolNameAlias } from './constants.js';
+import { DshRuntimeFactoryError } from './errors.js';
+import { resolveToolNameAlias } from './constants.js';
 import {
   loadMcpConfigFromAgentVersion,
   mcpToolName,
@@ -61,90 +61,91 @@ export function deepFreezeClone<T>(value: T): T {
 }
 
 /**
- * Require actual pi-ai Model fields whenever a model is supplied.
+ * Require the full Model descriptor fields whenever a model is supplied.
  * @param model
  */
 export function assertModelShape(model: unknown) {
   if (model == null) {
-    throw new PiRuntimeFactoryError('model is required when supplied to runtime create', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model is required when supplied to runtime create', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (typeof model !== 'object' || Array.isArray(model)) {
-    throw new PiRuntimeFactoryError('model must be an object', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model must be an object', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   const m = (model as Record<string, unknown>);
   for (const key of Object.keys(m)) {
     if (key === 'headers') continue;
     if (/(?:apiKey|api_key|secret|password)/i.test(key)) {
-      throw new PiRuntimeFactoryError(
+      throw new DshRuntimeFactoryError(
         'model must not embed credential fields at top level',
-        { code: 'PI_MODEL_SHAPE_INVALID' },
+        { code: 'DSH_MODEL_SHAPE_INVALID' },
       );
     }
   }
   if (typeof m.id !== 'string' || !m.id.trim()) {
-    throw new PiRuntimeFactoryError('model.id is required', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.id is required', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (typeof m.name !== 'string' || !m.name.trim()) {
-    throw new PiRuntimeFactoryError('model.name is required', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.name is required', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (typeof m.api !== 'string' || !m.api.trim()) {
-    throw new PiRuntimeFactoryError('model.api is required', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.api is required', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (typeof m.provider !== 'string' || !m.provider.trim()) {
-    throw new PiRuntimeFactoryError('model.provider is required', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.provider is required', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (typeof m.baseUrl !== 'string') {
-    throw new PiRuntimeFactoryError('model.baseUrl must be a string', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.baseUrl must be a string', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (typeof m.reasoning !== 'boolean') {
-    throw new PiRuntimeFactoryError('model.reasoning must be a boolean', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.reasoning must be a boolean', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (!Array.isArray(m.input)) {
-    throw new PiRuntimeFactoryError('model.input must be an array', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.input must be an array', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (!m.cost || typeof m.cost !== 'object') {
-    throw new PiRuntimeFactoryError('model.cost is required', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.cost is required', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (!Number.isFinite(Number(m.contextWindow))) {
-    throw new PiRuntimeFactoryError('model.contextWindow must be a number', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.contextWindow must be a number', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if (!Number.isFinite(Number(m.maxTokens))) {
-    throw new PiRuntimeFactoryError('model.maxTokens must be a number', {
-      code: 'PI_MODEL_SHAPE_INVALID',
+    throw new DshRuntimeFactoryError('model.maxTokens must be a number', {
+      code: 'DSH_MODEL_SHAPE_INVALID',
     });
   }
   if ('output' in m) {
-    throw new PiRuntimeFactoryError(
-      'model.output is not a pi-ai chat Model field (remove non-Model output)',
-      { code: 'PI_MODEL_SHAPE_INVALID' },
+    throw new DshRuntimeFactoryError(
+      'model.output is not a chat Model descriptor field (remove non-Model output)',
+      { code: 'DSH_MODEL_SHAPE_INVALID' },
     );
   }
 }
 
 /**
- * pi-ai ModelThinkingLevel values accepted in AgentVersion config.
+ * Thinking levels accepted in AgentVersion config (projected onto the routed
+ * adapter's reasoning efforts by `reasoning-efforts.ts`).
  * @type {readonly string[]}
  */
 export const AGENT_VERSION_THINKING_LEVELS = Object.freeze([
@@ -169,10 +170,10 @@ export function normalizeThinkingLevel(value: unknown) {
   if (value == null || value === '') return null;
   const level = String(value).trim().toLowerCase();
   if (!AGENT_VERSION_THINKING_LEVELS.includes(level)) {
-    throw new PiRuntimeFactoryError(
-      `AgentVersion thinkingLevel "${String(value)}" is not a pi thinking level ` +
+    throw new DshRuntimeFactoryError(
+      `AgentVersion thinkingLevel "${String(value)}" is not a dsh thinking level ` +
         `(${AGENT_VERSION_THINKING_LEVELS.join(', ')})`,
-      { code: 'PI_THINKING_LEVEL_INVALID' },
+      { code: 'DSH_THINKING_LEVEL_INVALID' },
     );
   }
   return level;
@@ -205,9 +206,9 @@ function normalizeAgentDecision(value: unknown, field: string): AgentToolDecisio
       : value;
   const decision = String(candidate ?? '').trim().toLowerCase();
   if (!AGENT_DECISIONS.includes(decision)) {
-    throw new PiRuntimeFactoryError(
+    throw new DshRuntimeFactoryError(
       `${field} must be allow|require_approval|deny`,
-      { code: 'PI_TOOL_POLICY_INVALID' },
+      { code: 'DSH_TOOL_POLICY_INVALID' },
     );
   }
   return decision as AgentToolDecision;
@@ -244,9 +245,9 @@ function projectAuthorizationToolNames(table: Record<string, unknown>) {
   for (const [rawKey, rawValue] of Object.entries(table)) {
     const key = String(rawKey).trim();
     if (key.includes('::') || key.endsWith('*')) {
-      throw new PiRuntimeFactoryError(
+      throw new DshRuntimeFactoryError(
         `toolPolicy.tools.${rawKey} must be an exact tool name; wildcard and server::tool entries belong in riskLevels`,
-        { code: 'PI_TOOL_POLICY_INVALID' },
+        { code: 'DSH_TOOL_POLICY_INVALID' },
       );
     }
     const projected = key.startsWith('mcp__') ? key : resolveToolNameAlias(key);
@@ -267,15 +268,15 @@ function buildAgentVersionAuthorization(
   if (rawPolicy != null && !isPlainObject(rawPolicy)) {
     // bindAgentVersionConfig performs the same shape check for its model path;
     // keep this local check so direct authorization callers fail closed too.
-    throw new PiRuntimeFactoryError('AgentVersion.toolPolicy must be an object', {
-      code: 'PI_TOOL_POLICY_INVALID',
+    throw new DshRuntimeFactoryError('AgentVersion.toolPolicy must be an object', {
+      code: 'DSH_TOOL_POLICY_INVALID',
     });
   }
   const policy = (rawPolicy as Record<string, unknown> | undefined) ?? {};
   const decisions: Record<string, AgentToolDecision> = {};
   if (policy.tools != null && !isPlainObject(policy.tools)) {
-    throw new PiRuntimeFactoryError('AgentVersion.toolPolicy.tools must be an object', {
-      code: 'PI_TOOL_POLICY_INVALID',
+    throw new DshRuntimeFactoryError('AgentVersion.toolPolicy.tools must be an object', {
+      code: 'DSH_TOOL_POLICY_INVALID',
     });
   }
   if (isPlainObject(policy.tools)) {
@@ -304,17 +305,17 @@ function buildAgentVersionAuthorization(
     const nestedDecisions: Record<string, AgentToolDecision> = {};
     const nestedTools = nested.tools;
     if (nestedTools != null && !isPlainObject(nestedTools)) {
-      throw new PiRuntimeFactoryError(
+      throw new DshRuntimeFactoryError(
         `mcpServers.${server.serverId}.toolPolicy.tools must be an object`,
-        { code: 'PI_TOOL_POLICY_INVALID' },
+        { code: 'DSH_TOOL_POLICY_INVALID' },
       );
     }
     if (isPlainObject(nestedTools)) {
       for (const [tool, value] of Object.entries(nestedTools)) {
         if (!/^[A-Za-z0-9._-]+$/.test(tool)) {
-          throw new PiRuntimeFactoryError(
+          throw new DshRuntimeFactoryError(
             `mcpServers.${server.serverId}.toolPolicy.tools.${tool} must be a bare tool name`,
-            { code: 'PI_TOOL_POLICY_INVALID' },
+            { code: 'DSH_TOOL_POLICY_INVALID' },
           );
         }
         nestedDecisions[tool] = normalizeAgentDecision(
@@ -380,15 +381,15 @@ export function modelIdentityEqual(a: Record<string, any>, b: Record<string, any
  */
 export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
   if (!agentVersion || typeof agentVersion !== 'object') {
-    throw new PiRuntimeFactoryError('agentVersion is required', {
-      code: 'PI_AGENT_VERSION_REQUIRED',
+    throw new DshRuntimeFactoryError('agentVersion is required', {
+      code: 'DSH_AGENT_VERSION_REQUIRED',
     });
   }
   const v = (agentVersion as Record<string, unknown>);
   const agentVersionId = String(v.agentVersionId ?? v.agent_version_id ?? '');
   if (!agentVersionId) {
-    throw new PiRuntimeFactoryError('agentVersion.agentVersionId is required', {
-      code: 'PI_AGENT_VERSION_REQUIRED',
+    throw new DshRuntimeFactoryError('agentVersion.agentVersionId is required', {
+      code: 'DSH_AGENT_VERSION_REQUIRED',
     });
   }
   const rawConfig =
@@ -401,16 +402,6 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
   const configJson = /** @type {Record<string, unknown>} */ (
     deepFreezeClone(JSON.parse(JSON.stringify(rawConfig)))
   );
-
-  const piSdkVersion = String(
-    v.piSdkVersion ?? v.pi_sdk_version ?? PINNED_PI_SDK_VERSION,
-  );
-  if (piSdkVersion !== PINNED_PI_SDK_VERSION) {
-    throw new PiRuntimeFactoryError(
-      `Agent Version piSdkVersion ${piSdkVersion} must equal exact pin ${PINNED_PI_SDK_VERSION}`,
-      { code: 'PI_SDK_VERSION_INCOMPATIBLE' },
-    );
-  }
 
   const modelPolicy =
     configJson.modelPolicy && typeof configJson.modelPolicy === 'object'
@@ -429,9 +420,9 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
   // projection in tool-risk-bindings then read as empty — so the Run failed
   // with "no binding provided" instead of naming the malformed config.
   if (configJson.toolPolicy != null && !isPlainObject(configJson.toolPolicy)) {
-    throw new PiRuntimeFactoryError(
+    throw new DshRuntimeFactoryError(
       'AgentVersion.toolPolicy must be an object (e.g. { "tools": { "bash": "deny" } })',
-      { code: 'PI_TOOL_POLICY_INVALID' },
+      { code: 'DSH_TOOL_POLICY_INVALID' },
     );
   }
   const toolPolicy =
@@ -442,9 +433,9 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
       : {};
   // Model parameter overrides. maxOutputTokens is applied onto the resolved
   // Model.maxTokens (the SDK caps each provider response with it). temperature
-  // is validated and carried for future SDK plumbing — pi-ai StreamOptions
-  // supports it, but the coding-agent loop does not surface it per-session
-  // yet, so we fail closed on bad values and document the wire gap.
+  // is validated and carried for future plumbing — the DSH runtime factory
+  // does not send it per-Run yet, so we fail closed on bad values and
+  // document the wire gap.
   const maxOutputTokens = optionalPositiveInt(
     modelPolicy.maxOutputTokens ?? configJson.maxOutputTokens,
     'modelPolicy.maxOutputTokens',
@@ -456,7 +447,6 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
 
   return Object.freeze({
     agentVersionId,
-    piSdkVersion,
     configJson,
     configHash:
       typeof v.configHash === 'string'
@@ -509,9 +499,9 @@ export function resolveConcreteModel(bound: ReturnType<typeof bindAgentVersionCo
     if (inputModel != null) {
       assertModelShape(inputModel);
       if (!modelIdentityEqual(bound.model, inputModel)) {
-        throw new PiRuntimeFactoryError(
+        throw new DshRuntimeFactoryError(
           'input.model cannot override AgentVersion embedded model (immutable pin)',
-          { code: 'PI_MODEL_OVERRIDE_FORBIDDEN' },
+          { code: 'DSH_MODEL_OVERRIDE_FORBIDDEN' },
         );
       }
     }
@@ -550,31 +540,31 @@ export function resolveConcreteModel(bound: ReturnType<typeof bindAgentVersionCo
   );
 
   if (inputModel == null) {
-    throw new PiRuntimeFactoryError(
+    throw new DshRuntimeFactoryError(
       hasConstraints
         ? 'modelResolver must supply a concrete model matching AgentVersion modelPolicy constraints'
-        : 'A concrete full pi-ai Model is required (pass input.model or AgentVersion modelPolicy.model). Do not rely on SDK default model selection.',
-      { code: 'PI_MODEL_REQUIRED' },
+        : 'A concrete full Model descriptor is required (pass input.model or AgentVersion modelPolicy.model). Do not rely on SDK default model selection.',
+      { code: 'DSH_MODEL_REQUIRED' },
     );
   }
   assertModelShape(inputModel);
   const m = (inputModel as Record<string, unknown>);
   if (constraintProvider && String(m.provider) !== constraintProvider) {
-    throw new PiRuntimeFactoryError(
+    throw new DshRuntimeFactoryError(
       `resolved model.provider ${String(m.provider)} does not match AgentVersion constraint ${constraintProvider}`,
-      { code: 'PI_MODEL_POLICY_MISMATCH' },
+      { code: 'DSH_MODEL_POLICY_MISMATCH' },
     );
   }
   if (constraintId && String(m.id) !== constraintId) {
-    throw new PiRuntimeFactoryError(
+    throw new DshRuntimeFactoryError(
       `resolved model.id ${String(m.id)} does not match AgentVersion constraint ${constraintId}`,
-      { code: 'PI_MODEL_POLICY_MISMATCH' },
+      { code: 'DSH_MODEL_POLICY_MISMATCH' },
     );
   }
   if (constraintApi && String(m.api) !== constraintApi) {
-    throw new PiRuntimeFactoryError(
+    throw new DshRuntimeFactoryError(
       `resolved model.api ${String(m.api)} does not match AgentVersion constraint ${constraintApi}`,
-      { code: 'PI_MODEL_POLICY_MISMATCH' },
+      { code: 'DSH_MODEL_POLICY_MISMATCH' },
     );
   }
   // Apply the AgentVersion-declared max output tokens onto the resolved Model.
@@ -597,8 +587,8 @@ function optionalPositiveInt(value: unknown, field: string) {
   if (value == null || value === '') return undefined;
   const n = Number(value);
   if (!Number.isSafeInteger(n) || n < 1) {
-    throw new PiRuntimeFactoryError(`${field} must be a positive integer`, {
-      code: 'PI_MODEL_PARAM_INVALID',
+    throw new DshRuntimeFactoryError(`${field} must be a positive integer`, {
+      code: 'DSH_MODEL_PARAM_INVALID',
     });
   }
   return n;
@@ -615,9 +605,9 @@ function optionalFiniteNumber(value: unknown, field: string) {
   if (value == null || value === '') return undefined;
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0 || n > 2) {
-    throw new PiRuntimeFactoryError(
+    throw new DshRuntimeFactoryError(
       `${field} must be a finite number in [0, 2]`,
-      { code: 'PI_MODEL_PARAM_INVALID' },
+      { code: 'DSH_MODEL_PARAM_INVALID' },
     );
   }
   return n;

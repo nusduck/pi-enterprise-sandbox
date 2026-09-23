@@ -19,7 +19,7 @@ const TEST_REDIS_URL = (process.env.TEST_REDIS_URL || '').trim();
 const TEST_REDIS_CONTAINER = (process.env.TEST_REDIS_CONTAINER || '').trim();
 const explicitlyEnabled = process.env.RUN_REDIS_RESTART_GATE === '1';
 
-const safeContainer = /^pi-release-gate-redis-[a-z0-9-]+$/.test(
+const safeContainer = /^dsh-release-gate-redis-[a-z0-9-]+$/.test(
   TEST_REDIS_CONTAINER,
 );
 
@@ -28,7 +28,7 @@ function isDedicatedMysqlUrl(value) {
     const parsed = new URL(value);
     return (
       (parsed.protocol === 'mysql:' || parsed.protocol === 'mysql2:') &&
-      parsed.pathname.slice(1).startsWith('pi_gate_')
+      parsed.pathname.slice(1).startsWith('dsh_gate_')
     );
   } catch {
     return false;
@@ -120,11 +120,11 @@ describe('redis restart release gate safety', () => {
     }
     assertStrict.ok(
       safeContainer,
-      'TEST_REDIS_CONTAINER must match pi-release-gate-redis-*',
+      'TEST_REDIS_CONTAINER must match dsh-release-gate-redis-*',
     );
     assertStrict.ok(
       safeMysql,
-      'TEST_MYSQL_URL database must start with pi_gate_',
+      'TEST_MYSQL_URL database must start with dsh_gate_',
     );
     assertStrict.ok(TEST_REDIS_URL, 'TEST_REDIS_URL is required');
   });
@@ -351,7 +351,6 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
       version_no: 1,
       config_json: JSON.stringify({ modelPolicy: {} }),
       config_hash: 'a'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: USER,
       created_at: knex.fn.now(3),

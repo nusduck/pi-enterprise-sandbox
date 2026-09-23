@@ -2,9 +2,9 @@
  * Durable steer admission for an active Run.
  *
  * The HTTP process and Worker are separate processes, so this service never
- * reaches for an in-memory Pi session. It appends the instruction Message,
+ * reaches for an in-memory DSH session. It appends the instruction Message,
  * run.steer.requested event, Outbox row, and idempotency response in one MySQL
- * transaction. PiRunExecutor consumes the durable request while prompt() runs.
+ * transaction. DshRunExecutor consumes the durable request while prompt() runs.
  */
 
 import { RUN_STATUS } from '../domain/run/index.js';

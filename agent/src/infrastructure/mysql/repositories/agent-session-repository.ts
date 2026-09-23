@@ -103,7 +103,7 @@ export class AgentSessionRepository {
    *   sandboxSessionId: string,
    *   workspaceId: string,
    *   status: string,
-   *   piSessionVersion?: number,
+   *   sessionVersion?: number,
    *   lastRunId?: string | null,
    *   executionFenceToken?: number,
    *   recoveryReasonCode?: string | null,
@@ -112,7 +112,7 @@ export class AgentSessionRepository {
    *   closedAt?: Date | string | null,
    * }} input
    */
-  async create(input: { agentSessionId: string, orgId: string, userId: string, conversationId: string, agentVersionId: string, sandboxSessionId: string, workspaceId: string, status: string, piSessionVersion?: number, lastRunId?: string | null, executionFenceToken?: number, recoveryReasonCode?: string | null, createdAt?: Date | string, updatedAt?: Date | string, closedAt?: Date | string | null, }) {
+  async create(input: { agentSessionId: string, orgId: string, userId: string, conversationId: string, agentVersionId: string, sandboxSessionId: string, workspaceId: string, status: string, sessionVersion?: number, lastRunId?: string | null, executionFenceToken?: number, recoveryReasonCode?: string | null, createdAt?: Date | string, updatedAt?: Date | string, closedAt?: Date | string | null, }) {
     const scope = requireOwnerUlids(input);
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const status = assertSessionStatus(input.status);
@@ -137,7 +137,7 @@ export class AgentSessionRepository {
       sandbox_session_id: assertUlid(input.sandboxSessionId, 'sandboxSessionId'),
       workspace_id: assertUlid(input.workspaceId, 'workspaceId'),
       status,
-      pi_session_version: input.piSessionVersion ?? 0,
+      session_version: input.sessionVersion ?? 0,
       last_run_id: input.lastRunId
         ? assertUlid(input.lastRunId, 'lastRunId')
         : null,
@@ -227,7 +227,7 @@ export class AgentSessionRepository {
    */
   async update() {
     throw new Error(
-      'AgentSessionRepository.update is disabled: cannot arbitrarily write status/pi_session_version/recovery. Use transitionIf, markRecoveryRequiredIfFence, updateLastRunIdIfFence, or appendAndAdvance',
+      'AgentSessionRepository.update is disabled: cannot arbitrarily write status/session_version/recovery. Use transitionIf, markRecoveryRequiredIfFence, updateLastRunIdIfFence, or appendAndAdvance',
     );
   }
 
@@ -709,13 +709,13 @@ export class AgentSessionRepository {
   }
 
   /**
-   * Removed public path (PR-05): pi_session_version advances only via
+   * Removed public path (PR-05): session_version advances only via
    * AgentSessionSnapshotRepository.appendAndAdvance (atomic insert+CAS).
    * Calling this throws to prevent bypass.
    */
-  async advancePiSessionVersionIf() {
+  async advanceSessionVersionIf() {
     throw new Error(
-      'advancePiSessionVersionIf is disabled: use AgentSessionSnapshotRepository.appendAndAdvance only',
+      'advanceSessionVersionIf is disabled: use AgentSessionSnapshotRepository.appendAndAdvance only',
     );
   }
 }

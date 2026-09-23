@@ -16,7 +16,7 @@
  * Idempotent replay: same key+body returns stored response and may safely
  * re-enqueue (jobId=runId) for recoverable statuses; never creates a second Run.
  *
- * No inline Pi/runtime execution. No process-local Map status authority.
+ * No inline DSH/runtime execution. No process-local Map status authority.
  */
 
 import { ConflictError } from '../infrastructure/mysql/errors.js';
@@ -137,7 +137,7 @@ function requireMessages(messages: unknown) {
 
 /**
  * Persist the current user turn separately from the full prompt context.
- * The latter is needed by Pi, but it must never be used as the browser's
+ * The latter is needed by DSH, but it must never be used as the browser's
  * transcript body: its first item belongs to an older turn after turn one.
  *
  * @param messages

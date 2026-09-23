@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # 在 OrbStack 单节点 K8s 里跑应用服务。不是生产部署脚本：目标环境的清单归平台团队。
 #
-#   scripts/dev/k8s/up.sh dev   日常本地运行（默认）。命名空间 pi-dev，各 1 副本，真实模型；
+#   scripts/dev/k8s/up.sh dev   日常本地运行（默认）。命名空间 dsh-dev，各 1 副本，真实模型；
 #                               MySQL / Redis / dbpm-fake / exec（代替 VM）用 Compose 开发栈，库为 sandbox，
 #                               Compose 里的 agent / agent-worker / api-server / frontend / sandbox-mcp 会被停掉
 #                               （同一队列不能有两组消费者）。浏览器仍是 http://127.0.0.1:3000。
-#   scripts/dev/k8s/up.sh sim   多副本演练。命名空间 pi-sim，各 2 副本，可控假模型 fake-llm；
-#                               专用库 pi_k8s_sim、专用 Redis、专用 exec 容器、数据根 .runtime/k8s-sim/，
+#   scripts/dev/k8s/up.sh sim   多副本演练。命名空间 dsh-sim，各 2 副本，可控假模型 fake-llm；
+#                               专用库 dsh_k8s_sim、专用 Redis、专用 exec 容器、数据根 .runtime/k8s-sim/，
 #                               缩短租约 / 锁 / 恢复间隔。场景驱动：scenarios.mjs。与开发栈互不影响。
 #
 # 两种模式的服务环境变量都取自 `docker compose config`（即 Compose 渲染值），只按模式改少数几项。
@@ -72,7 +72,7 @@ NETWORK="$(docker inspect "$(dc ps -q mysql)" --format '{{range $k, $v := .Netwo
 APP_USER="$(dc exec -T mysql printenv MYSQL_USER)"
 
 if [ "$MODE" = dev ]; then
-    NS="pi-dev"
+    NS="dsh-dev"
     REPLICAS=1
     echo "[1/4] Handing the application tier over to K8s (stopping its Compose services)..."
     dc stop agent agent-worker api-server frontend sandbox-mcp >/dev/null 2>&1 || true
@@ -90,12 +90,12 @@ if [ "$MODE" = dev ]; then
     render_env agent > "$ENV_DIR/agent.env"
     render_env agent-worker > "$ENV_DIR/agent-worker.env"
 else
-    NS="pi-sim"
+    NS="dsh-sim"
     REPLICAS=2
-    SIM_DB="pi_k8s_sim"
+    SIM_DB="dsh_k8s_sim"
     DATA_ROOT="$ROOT/.runtime/k8s-sim"
-    REDIS_CONTAINER="pi-k8s-sim-redis"
-    SANDBOX_CONTAINER="pi-k8s-sim-sandbox"
+    REDIS_CONTAINER="dsh-k8s-sim-redis"
+    SANDBOX_CONTAINER="dsh-k8s-sim-sandbox"
     REDIS_PASSWORD="$(dc exec -T redis printenv REDIS_PASSWORD)"
     "$ROOT/$HERE/down.sh" sim >/dev/null 2>&1 || true
 

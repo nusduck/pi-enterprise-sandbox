@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fetchDbpmCredentials, readDbpmSettings } from '@pi/contract/dbpm-config.js';
+import { fetchDbpmCredentials, readDbpmSettings } from '@dsh/contract/dbpm-config.js';
 import { parseFakeDbpmEntries, startFakeDbpm } from '../../../scripts/dev/fake-dbpm.mjs';
 import { startDbpmForUrls, stripUrlPassword } from './fake-dbpm-env.js';
 

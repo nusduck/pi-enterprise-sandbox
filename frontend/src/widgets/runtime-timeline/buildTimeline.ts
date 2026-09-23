@@ -187,7 +187,7 @@ export function formatPayload(value: unknown, maxLen = 4000): string {
   // Prefer human tool result unwrapping (bash stdout nested in content[].text).
   try {
     // Lazy import avoided to keep this module free of circular deps — inline
-    // a light unwrap for the common Pi toolResult envelope.
+    // a light unwrap for the common DSH toolResult envelope.
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
       const obj = value as Record<string, unknown>;
       const content = obj.content;

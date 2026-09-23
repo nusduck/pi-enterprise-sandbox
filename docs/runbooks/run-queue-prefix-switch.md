@@ -1,6 +1,6 @@
 # Runbook：切换 BullMQ 队列 prefix / 服务 Redis 目标
 
-适用：改 `AGENT_RUN_QUEUE_PREFIX`（如首次切到 `{bull}`、改成环境独立的 `{pi-test-bull}`），
+适用：改 `AGENT_RUN_QUEUE_PREFIX`（如首次切到 `{bull}`、改成环境独立的 `{dsh-test-bull}`），
 或把服务 Redis 从本地容器换到 UPRedis（含 7.2 → 5.0.14 换新卷）。依据：
 [统一 design](../design/updrdb-dbpm-deployment.md) §8、ADR 0011 D9。
 

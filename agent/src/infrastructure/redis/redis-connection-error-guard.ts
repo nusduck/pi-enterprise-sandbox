@@ -24,7 +24,7 @@ const attachedClients: WeakSet<Record<string, any>> = new WeakSet();
 
 /** @type {symbol} */
 export const REDIS_ERROR_GUARD_CLEANUP = Symbol.for(
-  'pi.enterprise.redis.connectionErrorGuardCleanup',
+  'dsh.enterprise.redis.connectionErrorGuardCleanup',
 );
 
 /**

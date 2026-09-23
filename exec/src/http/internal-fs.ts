@@ -14,9 +14,9 @@
 
 import type { Context } from 'hono';
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs';
-import { ContractError, toWireError } from '@pi/contract/errors.js';
-import { parseEnvelope } from '@pi/contract/envelope.js';
-import { parseEnabledSkills, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
+import { ContractError, toWireError } from '@dsh/contract/errors.js';
+import { parseEnvelope } from '@dsh/contract/envelope.js';
+import { parseEnabledSkills, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
 import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';

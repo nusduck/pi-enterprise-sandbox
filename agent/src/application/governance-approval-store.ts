@@ -9,7 +9,7 @@
  * 信号给 executor 的 `runSuspensionPort`——executor 收到它才会停泊并释放 Worker。
  *
  * 而 2026-08-31 之前，这个 recorder **只经 `extensionBundleFactory` 到达运行时**，
- * 也就是那批已经删掉的 Pi Extension。DSH 重建之后没有人再调它，于是：
+ * 也就是那批已经删掉的 DSH Extension。DSH 重建之后没有人再调它，于是：
  * runtime 侧的策略挂载点用的是进程内的 `InMemoryApprovalStore`，
  * 审批「判定」是对的，但**不落库、不发事件、不停泊 Run、不释放 Worker**。
  * 换句话说审批链条从判定之后就断了。

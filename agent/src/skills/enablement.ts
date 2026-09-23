@@ -21,7 +21,7 @@
  *
  * ## 按摘要分版本（design §3.3 S1）
  *
- * 发布布局见 `@pi/contract/skill-manifest.js`：`<name>/.v/<digest>/<name>/` 加侧车
+ * 发布布局见 `@dsh/contract/skill-manifest.js`：`<name>/.v/<digest>/<name>/` 加侧车
  * `<name>/.v/<digest>.json`。启用不再原地替换：新摘要写进新目录，旧版本留给仍在
  * 运行、清单里点着它的 Run，过了宽限期、且账本不再引用时才回收。
  *
@@ -38,7 +38,7 @@ import {
   SKILL_VERSIONS_DIRNAME,
   type SkillVersionPaths,
   type SkillVersionSidecar,
-} from '@pi/contract/skill-manifest.js';
+} from '@dsh/contract/skill-manifest.js';
 import { validateSkillPackage } from './validator.js';
 import { ensureTraversableUserSkillRoot } from './install.js';
 

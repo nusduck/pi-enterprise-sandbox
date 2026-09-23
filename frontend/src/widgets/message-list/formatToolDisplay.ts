@@ -56,7 +56,7 @@ function formatExecutionEnvelope(obj: Record<string, unknown>): string | null {
 }
 
 /**
- * Unwrap Pi / platform tool result bags into display text.
+ * Unwrap DSH / platform tool result bags into display text.
  */
 export function formatToolResultDisplay(result: unknown): string {
   if (result == null) return '';
@@ -83,7 +83,7 @@ export function formatToolResultDisplay(result: unknown): string {
   const fromEnvelope = formatExecutionEnvelope(result);
   if (fromEnvelope != null) return fromEnvelope;
 
-  // Pi ToolResult: { content: [{ type: 'text', text: '...' }] }
+  // DSH ToolResult: { content: [{ type: 'text', text: '...' }] }
   const contentText = extractContentText(result);
   if (contentText) {
     const nested = tryParseJson(contentText);

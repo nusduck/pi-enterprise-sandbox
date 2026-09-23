@@ -182,7 +182,7 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps) {
           buildAgentCard({
             rpcPath: '/a2a',
             baseUrl: base,
-            name: 'Pi Enterprise Agent',
+            name: 'DSH Enterprise Agent',
             description:
               'Discover agent-specific cards at /a2a/agents/{agent_id}/.well-known/agent-card.json',
             skillRoot: deps.skillRoot ?? null,

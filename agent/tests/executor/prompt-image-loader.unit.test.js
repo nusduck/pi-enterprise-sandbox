@@ -12,7 +12,7 @@ function imageResponse(bytes, mime = 'image/png', sha256 = null) {
 }
 
 describe('prompt image loader', () => {
-  it('resolves an owner-scoped attachment id into Pi image content', async () => {
+  it('resolves an owner-scoped attachment id into DSH image content', async () => {
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const calls = [];

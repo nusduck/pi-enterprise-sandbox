@@ -25,7 +25,7 @@ import {
   diffSchemaManifest,
   loadSchemaManifest,
   type SchemaManifest,
-} from '@pi/contract/schema-manifest.js';
+} from '@dsh/contract/schema-manifest.js';
 
 import { createMysqlKnex, destroyMysqlKnex, migrationsDirectory } from './client.js';
 import { migrateLatest } from './migrate.js';

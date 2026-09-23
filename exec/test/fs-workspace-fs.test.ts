@@ -30,7 +30,7 @@ async function makeFixture(): Promise<Fixture> {
   // 一律走 realpath 比较（这正是 ADR 0008 验证要求 #3 targetKey 稳定性想要
   // 的行为），所以这里先把根目录本身 realpath 一次，让测试期望值天然就是
   // 规范形式，不用在每条断言里都重新 realpath 一遍。
-  const rawRoot = await mkdtemp(path.join(tmpdir(), 'pi-exec-workspace-fs-'));
+  const rawRoot = await mkdtemp(path.join(tmpdir(), 'dsh-exec-workspace-fs-'));
   const root = await realpath(rawRoot);
   const workspaceRoot = path.join(root, 'workspace');
   const tempRoot = path.join(root, 'temp');

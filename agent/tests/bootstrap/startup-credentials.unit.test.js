@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DbpmConfigError } from '@pi/contract/dbpm-config.js';
+import { DbpmConfigError } from '@dsh/contract/dbpm-config.js';
 import { resolveAgentCredentials } from '../../src/bootstrap/startup-credentials.js';
 
 const ENV = {

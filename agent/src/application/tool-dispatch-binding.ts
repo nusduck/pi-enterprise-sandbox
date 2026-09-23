@@ -8,7 +8,7 @@
  *
  * 复用 `ToolExecutionRepository.bindSandboxRequest`（ACTIVE session、fence、会话 /
  * 沙箱会话一致、仅 RUNNING、NULL→set CAS 或完全相同幂等）。它此前没有调用方：
- * Pi 时代由沙箱桥在派发前调用，换 DSH 后这条接线断了。
+ * 旧引擎时代由沙箱桥在派发前调用，换 DSH 后这条接线断了。
  */
 
 import { computeSandboxToolRequestHash } from './sandbox-request-binder.js';

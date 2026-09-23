@@ -98,7 +98,7 @@ export function defaultAgentSkills() {
  * Read name / description from a SKILL.md for the Agent Card.
  *
  * Shares the service-wide reader so a skill is described on the card the same
- * way the lifecycle validator and Pi's own loader read it. Fail-soft: an
+ * way the lifecycle validator and DSH's own loader read it. Fail-soft: an
  * unreadable or truncated package yields empty fields and the caller falls back
  * to the directory name, rather than failing the whole card.
  *
@@ -193,7 +193,7 @@ export const A2A_SUPPORTED_OUTPUT_MODES = Object.freeze([
 
 /** Stable extension URI for enterprise tenant fields on task metadata. */
 export const A2A_ENTERPRISE_EXTENSION_URI =
-  'https://pi-enterprise.local/a2a/extensions/enterprise/v1';
+  'https://dsh-enterprise.local/a2a/extensions/enterprise/v1';
 
 /**
  * @param {{
@@ -226,7 +226,7 @@ export function buildAgentCard(input: { agentId?: string, rpcPath?: string, name
   const url = `${base}${rpcPath}`;
   const description =
     (typeof input.description === 'string' && input.description.trim()) ||
-    'Enterprise data analysis agent (Pi Enterprise Sandbox)';
+    'Enterprise data analysis agent (DSH Enterprise Sandbox)';
   const skills = resolveAgentCardSkills({
     configured: input.skills,
     skillRoot: input.skillRoot,

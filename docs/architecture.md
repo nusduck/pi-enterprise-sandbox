@@ -2,7 +2,7 @@
 
 ## Overview
 
-Pi Enterprise Sandbox 采用**六个进程、五份镜像**：前端、BFF、Agent HTTP 面、
+DSH Enterprise Sandbox 采用**六个进程、五份镜像**：前端、BFF、Agent HTTP 面、
 Agent Worker、执行面（compose 服务名仍叫 `sandbox`）以及 MCP facade（`sandbox-mcp`）。
 
 Agent 镜像跑两个进程——同镜像、不同入口、**各自独立的容器与生命周期**，
@@ -11,7 +11,7 @@ facade 是 slim 镜像，不带模型工具链、Bubblewrap、执行面代码与
 
 | 镜像 | 进程 | 入口 |
 |------|------|------|
-| `pi-enterprise-agent` | `agent` / `agent-worker` | `dist/server.js` / `dist/worker.js` |
+| `dsh-enterprise-agent` | `agent` / `agent-worker` | `dist/server.js` / `dist/worker.js` |
 | `enterprise-sandbox`（`exec/Dockerfile` 默认 target） | `sandbox` | `dist/main.js` |
 | `enterprise-sandbox-mcp`（`exec/Dockerfile --target facade`） | `sandbox-mcp` | `dist/mcp-main.js` |
 
@@ -57,16 +57,16 @@ facade 是 slim 镜像，不带模型工具链、Bubblewrap、执行面代码与
 
 | 组件 | 容器名 | 技术栈 | 职责 |
 |------|--------|--------|------|
-| **Frontend** | `pi-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
-| **API Server (BFF)** | `pi-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
-| **Agent** | `pi-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/src/runtime/` 组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
-| **Agent Worker** | `pi-enterprise-agent-worker` | 同 Agent 镜像，入口 `dist/worker.js` | 消费**按子任务深度分层**的 BullMQ Run 队列（`agent-runs` / `agent-runs-d1` / …，每层一个消费者，ADR 0012）并真正执行 Run；Worker Lease 续约、会话恢复、Outbox publisher。**无 HTTP 面、不暴露端口**；可独立于 Agent HTTP 面横向扩缩容 |
-| **Sandbox（执行面）** | `pi-enterprise-sandbox` | Node.js 22 + TypeScript + Bubblewrap | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；命令执行、文件、搜索、数据集、产物。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
-| **Sandbox MCP** | `pi-enterprise-sandbox-mcp` | 同一镜像，入口 `dist/mcp-main.js` | 对外的 Streamable HTTP MCP 面。**只能走 `/internal/mcp/v1/*` 窄桥**，够不到内部面——这是它单独成进程的全部理由 |
+| **Frontend** | `dsh-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
+| **API Server (BFF)** | `dsh-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
+| **Agent** | `dsh-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/src/runtime/` 组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
+| **Agent Worker** | `dsh-enterprise-agent-worker` | 同 Agent 镜像，入口 `dist/worker.js` | 消费**按子任务深度分层**的 BullMQ Run 队列（`agent-runs` / `agent-runs-d1` / …，每层一个消费者，ADR 0012）并真正执行 Run；Worker Lease 续约、会话恢复、Outbox publisher。**无 HTTP 面、不暴露端口**；可独立于 Agent HTTP 面横向扩缩容 |
+| **Sandbox（执行面）** | `dsh-enterprise-sandbox` | Node.js 22 + TypeScript + Bubblewrap | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；命令执行、文件、搜索、数据集、产物。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
+| **Sandbox MCP** | `dsh-enterprise-sandbox-mcp` | 同一镜像，入口 `dist/mcp-main.js` | 对外的 Streamable HTTP MCP 面。**只能走 `/internal/mcp/v1/*` 窄桥**，够不到内部面——这是它单独成进程的全部理由 |
 
 > **Python 还在，但换了角色。** 服务代码全是 TypeScript；Python 3.11 只作为
 > 沙箱镜像里给**模型执行代码**用的解释器与运行库（`exec/requirements.txt`），
-> 挂载在 `/opt/pi-python/venv`，由 `AGENT_PYTHON_VENV` 单一事实源同时决定
+> 挂载在 `/opt/dsh-python/venv`，由 `AGENT_PYTHON_VENV` 单一事实源同时决定
 > Bubblewrap 的只读挂载与子进程 `PATH`。
 
 ## 通信协议
@@ -179,7 +179,7 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 **2026-08-31（ADR 0009）重写。** 模型侧的工具面现在是 **DSH 出厂工具挂在 host 上**
 （overlay/bundle），不是自建 Extension，也不是 per-Run preset。
 
-Pi 的 first-party Extension 包（`agent/src/extensions/`）已随 ADR 0007 删除；
+旧引擎的 first-party Extension 包（`agent/src/extensions/`）已随 ADR 0007 删除；
 把它们接到运行时的 `extensionBundleFactory` 也已随 ADR 0009 删除
 （它终止在一个被 `runtime-factory.create()` 忽略的参数上，而喂给它的三样依赖
 各自断链——详见 `design/dsh-host-tools.md` H8）。

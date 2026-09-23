@@ -40,7 +40,7 @@ export const SANDBOX_TOOL_NAMES = Object.freeze([
   // dsh-tool-subagent（one-shot，见 cordis.patch.yml）
   'subagent',
   // 自建：把工作区文件提交成可下载产物（ADR 0009 D4）。
-  // 2026-08-31 实测发现它此前根本没有插件注册——旧 Pi Extension 删除后没补，
+  // 2026-08-31 实测发现它此前根本没有插件注册——旧引擎 Extension 删除后没补，
   // 能力静默缺失。补回来而不是按退役处理。
   'submit_artifact',
 ]);
@@ -54,7 +54,7 @@ export const ENTERPRISE_DEFAULT_TOOLS = Object.freeze([
 ]);
 
 /**
- * 旧 Pi 工具名 → 新出厂工具名的**只读别名映射**（ADR 0009 D4「存量数据」）。
+ * 旧引擎工具名 → 新出厂工具名的**只读别名映射**（ADR 0009 D4「存量数据」）。
  *
  * AgentVersion 的 `configJson` 是 Run 创建时冻结的不可变快照，里面的 `toolPolicy`
  * 存的是旧名。不迁移、不回写——**只在读取 `toolPolicy` 时投影一次**。

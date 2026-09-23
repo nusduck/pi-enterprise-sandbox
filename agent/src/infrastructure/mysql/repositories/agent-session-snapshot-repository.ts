@@ -2,8 +2,8 @@
  * Agent Session Snapshot repository (plan §8.9 + PR-05).
  *
  * Append-only snapshot versions. Snapshots are acceleration artifacts.
- * Checksum = SHA-256 of deterministic materialized Pi JSONL v3 UTF-8 bytes
- * (shared codec with PiSessionAdapter).
+ * Checksum = SHA-256 of deterministic materialized session JSONL v3 UTF-8 bytes
+ * (shared codec with DshSessionAdapter).
  *
  * Public commit path {@link appendAndAdvance} is transactional: insert + CAS
  * on agent_sessions in one trx so a CAS loser never leaves an orphan row.
@@ -18,13 +18,12 @@ import { ConflictError, NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { SessionSnapshotError } from '../../../domain/session/errors.js';
 import { SESSION_STATUS } from '../../../domain/session/session-status.js';
-import { DEFAULT_PI_SDK_VERSION } from './agent-catalog-repository.js';
 import {
   checksumSnapshotPayload,
   materializeJsonl,
   validateSnapshotPayload,
   verifySnapshotChecksum,
-  PI_SESSION_JSONL_VERSION,
+  SESSION_JSONL_VERSION,
   DEFAULT_MAX_JSONL_BYTES,
 } from '../../../application/session-json-codec.js';
 
@@ -33,7 +32,7 @@ type Loose = any;
 
 /** Supported snapshot payload format identifiers. */
 export const SNAPSHOT_FORMAT = Object.freeze({
-  PI_JSONL_V3: 'pi_jsonl_v3',
+  SESSION_JSONL_V3: 'session_jsonl_v3',
 });
 
 export const SUPPORTED_SNAPSHOT_FORMATS = Object.freeze(
@@ -62,30 +61,6 @@ export function assertSnapshotFormat(format: string, field: string = 'snapshotFo
 }
 
 /**
- * Exact equality only for this revision. Future compatibility requires an
- * explicit migrator — never same-major/minor soft matching.
- *
- * @param stored
- * @param runtime
- */
-export function assertPiSdkVersionCompatible(stored: string, runtime: string) {
-  const a = String(stored || '').trim();
-  const b = String(runtime || '').trim();
-  if (!a || !b) {
-    throw new SessionSnapshotError('pi_sdk_version is required for snapshot compatibility', {
-      code: 'SNAPSHOT_SDK_VERSION_INCOMPATIBLE',
-    });
-  }
-  if (a !== b) {
-    throw new SessionSnapshotError(
-      `pi_sdk_version incompatible: snapshot=${a} runtime=${b} (exact match required)`,
-      { code: 'SNAPSHOT_SDK_VERSION_INCOMPATIBLE' },
-    );
-  }
-  return true;
-}
-
-/**
  * @param err
  * @returns {boolean}
  */
@@ -100,31 +75,28 @@ export {
   materializeJsonl as serializeSnapshotPayload,
   checksumSnapshotPayload,
   verifySnapshotChecksum,
-  PI_SESSION_JSONL_VERSION,
+  SESSION_JSONL_VERSION,
 };
 
 export class AgentSessionSnapshotRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   db: Loose;
   now: Loose;
-  runtimePiSdkVersion: Loose;
   maxSnapshotBytes: Loose;
 
   /**
    * @param db
    * @param {{
    *   now?: () => Date,
-   *   runtimePiSdkVersion?: string,
    *   maxSnapshotBytes?: number,
    * }} [opts]
    */
-  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date, runtimePiSdkVersion?: string, maxSnapshotBytes?: number, } = {}) {
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date, maxSnapshotBytes?: number, } = {}) {
     if (!db) {
       throw new Error('AgentSessionSnapshotRepository requires a knex executor');
     }
     this.db = db;
     this.now = opts.now ?? (() => new Date());
-    this.runtimePiSdkVersion = opts.runtimePiSdkVersion ?? DEFAULT_PI_SDK_VERSION;
     this.maxSnapshotBytes = opts.maxSnapshotBytes ?? DEFAULT_MAX_SNAPSHOT_BYTES;
   }
 
@@ -147,17 +119,17 @@ export class AgentSessionSnapshotRepository {
       agentSessionId: id,
       orgId: s.orgId,
       userId: s.userId,
-      piSessionVersion: Number(row.pi_session_version ?? 0),
+      sessionVersion: Number(row.session_version ?? 0),
       executionFenceToken: Number(row.execution_fence_token ?? 0),
       status: String(row.status),
     };
   }
 
   /**
-   * Safe public path: insert snapshot + advance pi_session_version atomically.
+   * Safe public path: insert snapshot + advance session_version atomically.
    * Requires:
    * - expectedExecutionFenceToken (stored as captured_fence_token)
-   * - expectedPiSessionVersion; snapshotVersion === expected + 1
+   * - expectedSessionVersion; snapshotVersion === expected + 1
    * - session status ACTIVE (owner-scoped CAS)
    *
    * When `db` is not already a transaction, opens a short transaction so CAS
@@ -169,17 +141,16 @@ export class AgentSessionSnapshotRepository {
    *   orgId: string,
    *   userId: string,
    *   snapshotVersion: number,
-   *   expectedPiSessionVersion: number,
+   *   expectedSessionVersion: number,
    *   expectedExecutionFenceToken: number,
    *   snapshotFormat?: string,
    *   snapshotJson: object,
    *   workspacePath?: string | null,
-   *   piSdkVersion?: string,
    *   checksum?: string,
    *   createdAt?: Date | string,
    * }} input
    */
-  async appendAndAdvance(input: { snapshotId: string, agentSessionId: string, orgId: string, userId: string, snapshotVersion: number, expectedPiSessionVersion: number, expectedExecutionFenceToken: number, snapshotFormat?: string, snapshotJson: Record<string, any>, workspacePath?: string | null, piSdkVersion?: string, checksum?: string, createdAt?: Date | string, }) {
+  async appendAndAdvance(input: { snapshotId: string, agentSessionId: string, orgId: string, userId: string, snapshotVersion: number, expectedSessionVersion: number, expectedExecutionFenceToken: number, snapshotFormat?: string, snapshotJson: Record<string, any>, workspacePath?: string | null, checksum?: string, createdAt?: Date | string, }) {
     const run = async (trx) => this.#appendAndAdvanceOn(trx, input);
 
     if (this.db.isTransaction === true) {
@@ -232,13 +203,13 @@ export class AgentSessionSnapshotRepository {
       });
     }
 
-    const expectedPi = Number(input.expectedPiSessionVersion);
-    if (!Number.isInteger(expectedPi) || expectedPi < 0) {
-      throw new Error('expectedPiSessionVersion must be a non-negative integer');
+    const expectedVersion = Number(input.expectedSessionVersion);
+    if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+      throw new Error('expectedSessionVersion must be a non-negative integer');
     }
-    if (snapshotVersion !== expectedPi + 1) {
+    if (snapshotVersion !== expectedVersion + 1) {
       throw new SessionSnapshotError(
-        `snapshotVersion must equal expectedPiSessionVersion+1 (${expectedPi + 1}), got ${snapshotVersion}`,
+        `snapshotVersion must equal expectedSessionVersion+1 (${expectedVersion + 1}), got ${snapshotVersion}`,
         {
           code: 'SNAPSHOT_VERSION_INVALID',
           agentSessionId: session.agentSessionId,
@@ -246,18 +217,16 @@ export class AgentSessionSnapshotRepository {
         },
       );
     }
-    if (session.piSessionVersion !== expectedPi) {
+    if (session.sessionVersion !== expectedVersion) {
       throw new ConflictError(
-        `pi_session_version race: expected ${expectedPi}, got ${session.piSessionVersion}`,
+        `session_version race: expected ${expectedVersion}, got ${session.sessionVersion}`,
         { resource: 'agent_sessions', id: session.agentSessionId },
       );
     }
 
     const format = assertSnapshotFormat(
-      input.snapshotFormat ?? SNAPSHOT_FORMAT.PI_JSONL_V3,
+      input.snapshotFormat ?? SNAPSHOT_FORMAT.SESSION_JSONL_V3,
     );
-    const piSdkVersion = String(input.piSdkVersion ?? this.runtimePiSdkVersion);
-    assertPiSdkVersionCompatible(piSdkVersion, this.runtimePiSdkVersion);
 
     // Validate + materialize for checksum (shared codec).
     const normalized = validateSnapshotPayload(input.snapshotJson);
@@ -293,7 +262,6 @@ export class AgentSessionSnapshotRepository {
         snapshot_json: normalized,
         workspace_path: input.workspacePath ?? null,
         checksum,
-        pi_sdk_version: piSdkVersion,
         captured_fence_token: expectedFence,
         created_at: toMysqlDateTime(input.createdAt || this.now()),
       });
@@ -307,17 +275,17 @@ export class AgentSessionSnapshotRepository {
       throw err;
     }
 
-    // CAS: owner + ACTIVE + pi_session_version + execution_fence_token
+    // CAS: owner + ACTIVE + session_version + execution_fence_token
     const n = await applyOwnerScope(
       trx('tbl_agsvc_agent_sessions').where({
         agent_session_id: session.agentSessionId,
         status: SESSION_STATUS.ACTIVE,
-        pi_session_version: expectedPi,
+        session_version: expectedVersion,
         execution_fence_token: expectedFence,
       }),
       scope,
     ).update({
-      pi_session_version: snapshotVersion,
+      session_version: snapshotVersion,
       updated_at: toMysqlDateTime(this.now()),
     });
     if (!n) {
@@ -364,7 +332,7 @@ export class AgentSessionSnapshotRepository {
   /**
    * Load the **current** committed snapshot for a session.
    *
-   * Uses `agent_sessions.pi_session_version` as the sole pointer — never MAX(version).
+   * Uses `agent_sessions.session_version` as the sole pointer — never MAX(version).
    * - pointer === 0 → null (no committed snapshot)
    * - pointer > 0 and row missing / checksum / format / SDK invalid → typed recovery error
    * - never silently picks another version (stray higher rows are ignored)
@@ -377,11 +345,11 @@ export class AgentSessionSnapshotRepository {
     const s = requireOwnerUlids(scope);
     const sid = assertUlid(agentSessionId, 'agentSessionId');
     const session = await this.#requireOwnedSessionOn(this.db, sid, s);
-    const pointer = Number(session.piSessionVersion);
+    const pointer = Number(session.sessionVersion);
 
     if (!Number.isInteger(pointer) || pointer < 0) {
       throw new SessionSnapshotError(
-        `Invalid pi_session_version pointer: ${String(session.piSessionVersion)}`,
+        `Invalid session_version pointer: ${String(session.sessionVersion)}`,
         {
           code: 'SNAPSHOT_POINTER_INVALID',
           agentSessionId: sid,
@@ -467,7 +435,6 @@ export class AgentSessionSnapshotRepository {
     if (opts.requireCompatible !== false) {
       try {
         assertSnapshotFormat(mapped.snapshotFormat);
-        assertPiSdkVersionCompatible(mapped.piSdkVersion, this.runtimePiSdkVersion);
       } catch (err) {
         if (err instanceof SessionSnapshotError) {
           throw new SessionSnapshotError(err.message, {

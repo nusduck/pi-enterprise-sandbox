@@ -86,7 +86,7 @@ export class DurableSteerController {
       throw new Error('DurableSteerController requires createRepositories');
     }
     if (typeof deps.runtimeSession?.steer !== 'function') {
-      throw new Error('Pi runtime session.steer() is required');
+      throw new Error('DSH runtime session.steer() is required');
     }
     if (typeof deps.eventRecorder?.record !== 'function') {
       throw new Error('DurableSteerController requires eventRecorder.record');

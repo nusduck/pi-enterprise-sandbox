@@ -1,7 +1,7 @@
 /**
  * SkillManager.reload() must fail closed when the post-reload rebuild fails.
  *
- * Under Pi this guarded `session.reload()` rebuilding the extension runtime in
+ * Under DSH this guarded `session.reload()` rebuilding the extension runtime in
  * place: the resource loader recorded factory errors without throwing, so the
  * manager had to inspect `getExtensions().errors` itself. DSH composes plugins
  * once at boot and has no per-reload extension rescan, so that specific hole is

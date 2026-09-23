@@ -67,7 +67,7 @@ function str(v: unknown, fallback = ''): string {
 
 /**
  * Roles that belong in the chat transcript EntityStore.
- * Pi emits `toolResult` / `tool` as message.completed after sandbox tools;
+ * DSH emits `toolResult` / `tool` as message.completed after sandbox tools;
  * those must never become assistant bubbles (raw exitCode/stdout JSON).
  */
 function normalizeChatMessageRole(
@@ -486,7 +486,7 @@ export function reduceRuntimeEvent(
       const completedRole = normalizeChatMessageRole(
         payload.role == null || payload.role === '' ? 'assistant' : payload.role,
       );
-      // Pi toolResult / tool messages: handled via tool.* events only.
+      // DSH toolResult / tool messages: handled via tool.* events only.
       if (!completedRole) break;
 
       let messageId = str(payload.message_id || payload.id);

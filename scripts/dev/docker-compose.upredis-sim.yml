@@ -13,7 +13,7 @@
 services:
   upredis-proxy:
     image: ${DBPM_FAKE_IMAGE:-node:22-slim}
-    container_name: pi-enterprise-upredis-proxy
+    container_name: dsh-enterprise-upredis-proxy
     user: node
     command: ["node", "/opt/dev/upredis-sim-proxy.mjs"]
     environment:

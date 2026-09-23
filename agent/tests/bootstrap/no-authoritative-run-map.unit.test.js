@@ -459,7 +459,7 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // JavaScript-era entries are intentionally not kept as evidence.
     // 2026-09-04: 28 → 26。少的两条分别是
     // `infrastructure/sandbox/internal-hmac.ts`（HMAC 实现收口到
-    // `@pi/contract/hmac.js`，整文件删除）与 `runtime/providers/memory.ts`
+    // `@dsh/contract/hmac.js`，整文件删除）与 `runtime/providers/memory.ts`
     // （memory 工具按 ADR 0009 D10 退役，实现是死代码，一并删除）。
     // 2026-09-06: 26 → 28。新增的两条都在 `application/agent-config-validator.ts`，
     // 是同一次 validate()/构造调用内的函数局部索引，不跨请求、不跨进程存活。

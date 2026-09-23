@@ -7,8 +7,8 @@
  */
 
 import { Hono } from 'hono';
-import { ContractError, toWireError } from '@pi/contract/errors.js';
-import type { InternalHmacKeyringInput } from '@pi/contract/hmac.js';
+import { ContractError, toWireError } from '@dsh/contract/errors.js';
+import type { InternalHmacKeyringInput } from '@dsh/contract/hmac.js';
 import { isIpAllowed, readInternalAllowCidr } from '../security/cidr.js';
 import { signedQueryBytes, verifyInternalRequest } from '../security/hmac.js';
 import { PEER_IP_HEADER } from './node-listener.js';

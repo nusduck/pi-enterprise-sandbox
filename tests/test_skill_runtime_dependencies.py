@@ -50,7 +50,7 @@ def test_image_installs_python_for_agent_executed_code() -> None:
     assert "requirements.txt" in dockerfile, "agent workload libs must be installed"
     # The venv's bin has to be on PATH or `python3` resolves to a bare
     # interpreter with none of the workload libraries importable.
-    assert "/opt/pi-python/venv/bin:$PATH" in dockerfile
+    assert "/opt/dsh-python/venv/bin:$PATH" in dockerfile
 
 
 def test_image_installs_isolation_primitives() -> None:
@@ -119,7 +119,7 @@ def test_baoyu_wrappers_are_network_free_and_use_build_time_runtime() -> None:
         text = wrapper.read_text(encoding="utf-8")
         assert text.startswith("#!/bin/sh")
         assert "/usr/local/bin/bun" in text
-        assert "/usr/local/lib/pi-skill-runtime/" in text
+        assert "/usr/local/lib/dsh-skill-runtime/" in text
         assert "npx" not in text
         assert "npm" not in text
 
@@ -128,8 +128,8 @@ def test_image_provides_the_paths_the_wrappers_hardcode() -> None:
     """The shims hardcode two paths; the image must actually create them."""
     dockerfile = _dockerfile()
     assert "/usr/local/bin/bun" in dockerfile
-    assert "/usr/local/lib/pi-skill-runtime/baoyu-format-markdown/" in dockerfile
-    assert "/usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html/" in dockerfile
+    assert "/usr/local/lib/dsh-skill-runtime/baoyu-format-markdown/" in dockerfile
+    assert "/usr/local/lib/dsh-skill-runtime/baoyu-markdown-to-html/" in dockerfile
     # baoyu-chromium execs /usr/lib/chromium/chromium directly, bypassing the
     # Debian launcher (which reads /etc/chromium.d/*, outside the bwrap /etc
     # allowlist) — so the chromium package itself must be installed.

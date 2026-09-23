@@ -228,7 +228,7 @@ export async function spillRequestToTempFile(
   req: IncomingMessage,
   maxBytes: number = 60 * 1024 * 1024,
 ): Promise<{ dir: string; filePath: string; size: number }> {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-upload-'));
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-upload-'));
   const filePath = join(dir, 'body.bin');
   let size = 0;
   const out = createWriteStream(filePath);

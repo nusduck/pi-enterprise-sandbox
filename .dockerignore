@@ -23,7 +23,6 @@ workspaces/
 tmp-workspaces/
 artifacts/
 control/
-pi-agent-home/
 .env
 *.db
 *.log

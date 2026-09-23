@@ -18,7 +18,7 @@ export function generateRunLeaseOwnerToken(workerId: string, opts: { randomBytes
 }
 
 /**
- * Derive Pi prompt content from the durable triggering user message only.
+ * Derive DSH prompt content from the durable triggering user message only.
  * Never re-sends full accumulated history into prompt.
  *
  * @param message — mapped Message row
@@ -132,7 +132,7 @@ export function appendCurrentTurnAttachmentContext(prompt, attachments) {
 /**
  * Extract current-turn image attachment references without trusting a browser
  * path as bytes. The worker later resolves each id through the owner-scoped
- * attachment store and converts the exact bytes to Pi ImageContent.
+ * attachment store and converts the exact bytes to DSH ImageContent.
  */
 export function imageAttachmentsFromTriggeringMessage(message) {
   return attachmentsFromTriggeringMessage(message).flatMap((item) => {
@@ -152,7 +152,7 @@ export function imageAttachmentsFromTriggeringMessage(message) {
  * A text-only model with an image attached used to fail the whole turn. The
  * user has already uploaded and sent — losing the question along with the
  * picture helps nobody, and the model can still act on the filenames and the
- * text. Mirrors the note Pi's own read tool emits for a non-vision model.
+ * text. Mirrors the note DSH's own read tool emits for a non-vision model.
  *
  * @param prompt
  * @param images
@@ -174,7 +174,7 @@ export function appendNonVisionImageNotice(prompt: string | Array<{ type: string
 
 /**
  * Adapt durable text/image parts to AgentSession.prompt(text, { images }).
- * Pi 0.80.3 always requires the first argument to be a string.
+ * The runtime session's prompt() always requires the first argument to be a string.
  *
  * @param prompt
  * @returns {{ text: string, options?: { images: object[] } }}
@@ -199,7 +199,7 @@ export function toDshPromptInvocation(prompt: string | Array<{ type: string, tex
  * The ToolExecution ledger deliberately stores a *redacted* view of the
  * arguments (`$payload`), while `$integrity` commits to the original. Replaying
  * an approved tool from the ledger therefore both fails the integrity check and
- * would execute the tool with truncated arguments. The Pi session still holds
+ * would execute the tool with truncated arguments. The DSH session still holds
  * the assistant message that produced the call, so that — not the ledger — is
  * the authority on what to re-execute.
  *
@@ -253,7 +253,7 @@ export function findToolCallArgumentsInSession(session, toolCallId) {
 /**
  * Replace a parked approval/interaction placeholder in live state and the
  * durable branch. `appendIfMissing` is reserved for interaction recovery from
- * an older snapshot that was checkpointed before Pi emitted a toolResult slot.
+ * an older snapshot that was checkpointed before DSH emitted a toolResult slot.
  */
 export function replaceSuspendedToolResultInSession(session, replacement) {
   if (!session || !replacement?.toolCallId) return false;

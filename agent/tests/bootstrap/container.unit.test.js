@@ -76,8 +76,8 @@ describe('ServiceContainer', () => {
       AGENT_REDIS_URL: 'redis://localhost:6379/0',
     });
     assert.equal(typeof c.createSessionLockManager, 'function');
-    assert.equal(typeof c.createPiRuntimeFactory, 'function');
-    assert.equal(typeof c.createPiSessionAdapter, 'function');
+    assert.equal(typeof c.createDshRuntimeFactory, 'function');
+    assert.equal(typeof c.createDshSessionAdapter, 'function');
     assert.equal(typeof c.createPlatformEventProjector, 'function');
     assert.equal(typeof c.createDshRunExecutorFactory, 'function');
     assert.equal(typeof c.createSessionRecoveryService, 'function');
@@ -333,16 +333,16 @@ describe('ServiceContainer', () => {
     );
   });
 
-  it('createWorkerServices wires Pi factory when none pre-injected (assembly gate)', async () => {
+  it('createWorkerServices wires DSH factory when none pre-injected (assembly gate)', async () => {
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
     const redis = { status: 'ready' };
-    const agentDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-ws-'));
+    const agentDir = mkdtempSync(path.join(tmpdir(), 'dsh-agent-ws-'));
     const c = createServiceContainer(
       {
         AGENT_DATABASE_URL: 'mysql://u:p@h/db',
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
         AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
-        AGENT_PI_AGENT_DIR: agentDir,
+        AGENT_DSH_AGENT_DIR: agentDir,
         SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
         DEPLOYMENT_ENV: 'production',
         LLMIO_BASE_URL: 'http://llm.example',
@@ -361,18 +361,18 @@ describe('ServiceContainer', () => {
     );
     await c.start();
 
-    let piFactoryCalls = 0;
+    let dshFactoryCalls = 0;
     /** @type {unknown} */
     let capturedOpts = null;
     c.createDshRunExecutorFactory = async (opts) => {
-      piFactoryCalls += 1;
+      dshFactoryCalls += 1;
       capturedOpts = opts;
       assert.equal(typeof opts.modelResolver, 'function');
       assert.equal(typeof opts.workspaceResolver, 'function');
-      // Real Pi factory marker — not createStubRunExecutor
-      return function productionPiRunExecutorFactory() {
+      // Real DSH factory marker — not createStubRunExecutor
+      return function productionDshRunExecutorFactory() {
         return {
-          kind: 'pi-run-executor-factory',
+          kind: 'dsh-run-executor-factory',
           execute: async () => ({ outcome: 'SUCCEEDED' }),
         };
       };
@@ -391,11 +391,11 @@ describe('ServiceContainer', () => {
     });
 
     const services = await c.createWorkerServices();
-    assert.equal(piFactoryCalls, 1, 'must call createDshRunExecutorFactory once');
+    assert.equal(dshFactoryCalls, 1, 'must call createDshRunExecutorFactory once');
     assert.equal(typeof services.runExecutorFactory, 'function');
     assert.equal(
       services.runExecutorFactory().kind,
-      'pi-run-executor-factory',
+      'dsh-run-executor-factory',
     );
     // Default resolvers present
     const opts = /** @type {{ modelResolver: Function, workspaceResolver: Function, agentDir?: string }} */ (
@@ -410,12 +410,12 @@ describe('ServiceContainer', () => {
     // The signed internal plane is the only route to Sandbox. Booting without
     // it would produce a runtime whose every sandbox tool dies at call time.
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
-    const agentDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-nokey-'));
+    const agentDir = mkdtempSync(path.join(tmpdir(), 'dsh-agent-nokey-'));
     const c = createServiceContainer(
       {
         AGENT_DATABASE_URL: 'mysql://u:p@h/db',
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
-        AGENT_PI_AGENT_DIR: agentDir,
+        AGENT_DSH_AGENT_DIR: agentDir,
         SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
         DEPLOYMENT_ENV: 'development',
       },
@@ -437,7 +437,7 @@ describe('ServiceContainer', () => {
           modelResolver: () => ({ id: 'm', name: 'm', api: 'openai-completions', provider: 'x', baseUrl: 'http://x', reasoning: false, input: ['text'], cost: {}, contextWindow: 1, maxTokens: 1 }),
           workspaceResolver: () => '/home/sandbox/workspace',
           sessionLockManager: { acquire: async () => true, renew: async () => true, release: async () => true },
-          piRuntimeFactory: { agentDir, create: async () => ({ session: {} }) },
+          dshRuntimeFactory: { agentDir, create: async () => ({ session: {} }) },
         }),
       /SANDBOX_INTERNAL_HMAC_KEYRING/,
     );
@@ -465,10 +465,10 @@ describe('ServiceContainer', () => {
       },
     );
     await c.start();
-    let piFactoryCalls = 0;
+    let dshFactoryCalls = 0;
     c.createDshRunExecutorFactory = async () => {
-      piFactoryCalls += 1;
-      throw new Error('must not build Pi factory when stub allowed');
+      dshFactoryCalls += 1;
+      throw new Error('must not build DSH factory when stub allowed');
     };
     c.createCancelSignal = async () => ({
       request: async () => {},
@@ -481,11 +481,11 @@ describe('ServiceContainer', () => {
       getOwner: async () => null,
     });
     const services = await c.createWorkerServices();
-    assert.equal(piFactoryCalls, 0);
+    assert.equal(dshFactoryCalls, 0);
     assert.equal(typeof services.runExecutorFactory, 'function');
   });
 
-  it('production refuses stub allowlist (still wires Pi factory path)', async () => {
+  it('production refuses stub allowlist (still wires DSH factory path)', async () => {
     assert.equal(
       resolveWorkerExecutorFactory(
         {
@@ -528,13 +528,13 @@ describe('ServiceContainer', () => {
     const factory = await c.createDshRunExecutorFactory({
       modelResolver: () => ({ id: 'm' }),
       workspaceResolver: () => '/tmp/ws',
-      // Inject fakes so no Redis lock / Pi / recovery connections are needed.
+      // Inject fakes so no Redis lock / DSH / recovery connections are needed.
       sessionLockManager: {
         acquire: async () => true,
         renew: async () => true,
         release: async () => true,
       },
-      piRuntimeFactory: { create: async () => ({ session: {} }) },
+      dshRuntimeFactory: { create: async () => ({ session: {} }) },
       sessionAdapter: {},
       projector: { project: () => [] },
       recoveryService: {

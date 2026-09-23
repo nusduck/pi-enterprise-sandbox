@@ -1,5 +1,5 @@
 # Node major pin: runtime-versions.json → node.docker_image
-# Compose context is the repo root so `@pi/contract` (file:../contract) is
+# Compose context is the repo root so `@dsh/contract` (file:../contract) is
 # installable. The HTTP process and worker both import it.
 FROM node:22-slim
 WORKDIR /app
@@ -27,14 +27,9 @@ RUN npm run build
 
 # Logical workspace cwd. The directory is intentionally empty in this image:
 # all workspace bytes stay owned by exec and are reached over the signed RPC.
-#
-# `/app/pi-agent-home` (AGENT_PI_AGENT_DIR / PI_CODING_AGENT_DIR) is gone with
-# the Pi runtime: agentDir was threaded from the container to
-# runtime-factory.create(), which never read it, and @pi/runtime never
-# mentioned it at all.
-RUN mkdir -p /home/sandbox/workspace /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime \
+RUN mkdir -p /home/sandbox/workspace /home/sandbox/skill-user /tmp/dsh-enterprise-mcp-runtime \
     && chmod 755 /home/sandbox/workspace \
-    && chmod 700 /tmp/pi-enterprise-mcp-runtime
+    && chmod 700 /tmp/dsh-enterprise-mcp-runtime
 
 # Drop root. Unlike the exec service — which needs Bubblewrap — the Agent
 # process never performs a privileged operation: it talks to MySQL, Redis, the
@@ -50,7 +45,7 @@ RUN mkdir -p /home/sandbox/workspace /home/sandbox/skill-user /tmp/pi-enterprise
 # runAsNonRoot 才能校验（写名字会被拒绝建容器）。
 RUN groupmod -n up_docker node \
     && usermod -l up_docker -d /home/up_docker -m node \
-    && chown -R 1000:1000 /app /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime
+    && chown -R 1000:1000 /app /home/sandbox/skill-user /tmp/dsh-enterprise-mcp-runtime
 USER 1000:1000
 
 EXPOSE 4100

@@ -47,7 +47,7 @@ if (
   !workerLabel ||
   !expectedRunId ||
   !/^release_gate_[a-z0-9_]+$/.test(sideEffectTable) ||
-  !/^pi_gate_[a-z0-9_]+$/.test(sideEffectSchema)
+  !/^dsh_gate_[a-z0-9_]+$/.test(sideEffectSchema)
 ) {
   emit({ type: 'fatal', message: 'invalid Agent Worker fixture configuration' });
   process.exit(2);

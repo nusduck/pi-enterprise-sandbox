@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 
-const SESSION_COOKIE = 'pi_enterprise_session';
+const SESSION_COOKIE = 'dsh_enterprise_session';
 
 export function readCookie(req: IncomingMessage | { headers?: { cookie?: string } } | null | undefined, name: string = SESSION_COOKIE): string {
   const header = String(req?.headers?.cookie || '');

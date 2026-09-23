@@ -70,7 +70,7 @@ export async function handleHealthRoute(input: HealthRouteInput): Promise<boolea
   if (req.method === 'GET' && path === '/health') {
     json(res, 200, {
       status: 'ok',
-      service: 'pi-enterprise-agent',
+      service: 'dsh-enterprise-agent',
       version: '4.0.0',
       active_runs: input.activeRunHint ? input.activeRunHint() : 0,
       authority: 'mysql',

@@ -14,7 +14,7 @@ import { ShellExecutor } from '@deepseek-ai/dsh-shell';
 import { randomUUID } from 'node:crypto';
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell';
 import type { Context } from '@deepseek-ai/cordis';
-import { ContractError } from '@pi/contract/errors.js';
+import { ContractError } from '@dsh/contract/errors.js';
 import { currentExecJobId, ExecRpcClient, resolveExecRpcConfig } from './exec-rpc.js';
 import type { ExecRpcConfig } from './exec-rpc.js';
 

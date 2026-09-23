@@ -46,7 +46,7 @@ const TEST_REDIS_CONTAINER = String(
 ).trim();
 const explicitlyEnabled =
   process.env.RUN_AGENT_WORKER_RESTART_GATE === '1';
-const safeContainer = /^pi-release-gate-redis-[a-z0-9-]+$/.test(
+const safeContainer = /^dsh-release-gate-redis-[a-z0-9-]+$/.test(
   TEST_REDIS_CONTAINER,
 );
 
@@ -59,7 +59,7 @@ function databaseNameFromUrl(value) {
 }
 
 const databaseName = databaseNameFromUrl(TEST_MYSQL_URL);
-const safeDatabase = /^pi_gate_[a-z0-9_]+$/.test(databaseName);
+const safeDatabase = /^dsh_gate_[a-z0-9_]+$/.test(databaseName);
 // The Worker verifies its database against the release manifest before it
 // consumes jobs (ADR 0011 D6), so the fixture's side-effect table lives in a
 // sibling schema instead of adding an unknown table to the verified one.
@@ -333,7 +333,6 @@ async function seedQueuedRun(knex, ids, opts = {}) {
       version_no: 1,
       config_json: JSON.stringify({ modelPolicy: {} }),
       config_hash: 'a'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: USER,
       created_at: knex.fn.now(3),
@@ -461,11 +460,11 @@ describe('Agent Worker restart release-gate safety', () => {
     }
     assert.ok(
       safeContainer,
-      'TEST_REDIS_CONTAINER must match pi-release-gate-redis-*',
+      'TEST_REDIS_CONTAINER must match dsh-release-gate-redis-*',
     );
     assert.ok(
       safeDatabase,
-      'TEST_MYSQL_URL database must match pi_gate_*',
+      'TEST_MYSQL_URL database must match dsh_gate_*',
     );
     assert.ok(TEST_REDIS_URL, 'TEST_REDIS_URL is required');
   });

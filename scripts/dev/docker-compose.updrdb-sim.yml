@@ -40,11 +40,11 @@ x-updrdb-proxy: &updrdb-proxy
 services:
   updrdb-proxy-a:
     <<: *updrdb-proxy
-    container_name: pi-enterprise-updrdb-proxy-a
+    container_name: dsh-enterprise-updrdb-proxy-a
 
   updrdb-proxy-b:
     <<: *updrdb-proxy
-    container_name: pi-enterprise-updrdb-proxy-b
+    container_name: dsh-enterprise-updrdb-proxy-b
 
   agent:
     environment:

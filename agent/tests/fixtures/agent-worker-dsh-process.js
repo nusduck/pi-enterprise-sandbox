@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Independent Agent Worker process for the destructive real-Pi restart gate.
+ * Independent Agent Worker process for the destructive real-DSH-runtime restart gate.
  *
- * No RunExecutor is injected here. startWorkerMain builds the production Pi
+ * No RunExecutor is injected here. startWorkerMain builds the production DSH
  * runtime, enterprise extensions, model HTTP client, and Sandbox transports.
  */
 
@@ -24,11 +24,11 @@ function emit(message) {
 }
 
 if (
-  process.env.TEST_EXPECT_REAL_PI !== '1' ||
+  process.env.TEST_EXPECT_REAL_DSH !== '1' ||
   !workerLabel ||
   expectedRunIds.size === 0
 ) {
-  emit({ type: 'fatal', message: 'invalid real-Pi Worker fixture configuration' });
+  emit({ type: 'fatal', message: 'invalid real-DSH Worker fixture configuration' });
   process.exit(2);
 }
 
@@ -77,7 +77,7 @@ try {
   emit({
     type: 'ready',
     queueName: started.workerHandle.queueName,
-    executor: 'production-pi',
+    executor: 'production-dsh',
   });
 
   if (process.env.TEST_EMIT_RECOVERY_SCANS === 'true') {

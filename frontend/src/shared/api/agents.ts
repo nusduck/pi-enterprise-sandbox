@@ -34,7 +34,6 @@ const AgentVersionSchema = z
     version_no: z.number(),
     config: z.record(z.string(), z.unknown()).optional(),
     config_hash: z.string().optional(),
-    pi_sdk_version: z.string().optional(),
     status: z.string().optional(),
     created_at: z.string().nullable().optional(),
   })

@@ -1,9 +1,9 @@
 /**
- * DSH 运行时工厂——取代 PiRuntimeFactory。
+ * DSH 运行时工厂——取代 DshRuntimeFactory。
  *
- * create() 的对外形状与旧 Pi 工厂兼容（session.prompt / subscribe / abort /
- * getAllTools / dispose），好让 Dsh/Pi RunExecutor 的锁-围栏-账本路径不变。
- * 内部走 @pi/runtime：凭据 fail-closed、远程 provider 按 Run 装配，
+ * create() 的对外形状与旧引擎工厂兼容（session.prompt / subscribe / abort /
+ * getAllTools / dispose），好让 DSH RunExecutor 的锁-围栏-账本路径不变。
+ * 内部走 @dsh/runtime：凭据 fail-closed、远程 provider 按 Run 装配，
  * prompt() 驱动 DSH agent.followup + whenIdle。
  * 不加载 @earendil-works/*。
  */
@@ -51,7 +51,7 @@ function localSkillContext(agentCtx: Loose): Loose {
   };
 }
 
-export { PINNED_DSH_VERSION, PINNED_PI_SDK_VERSION } from './constants.js';
+export { PINNED_DSH_VERSION } from './constants.js';
 export { DshRuntimeFactoryError };
 
 export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.ProcessEnv = process.env) {
@@ -117,7 +117,7 @@ function resolveReasoningEffort(providerRoute: string, level: string | null) {
     throw new DshRuntimeFactoryError(
       `AgentVersion thinkingLevel "${level}" is not a reasoning effort accepted by ` +
         `provider route "${providerRoute}" (${accepted.join(', ') || 'none'})`,
-      { code: 'PI_THINKING_LEVEL_UNSUPPORTED' },
+      { code: 'DSH_THINKING_LEVEL_UNSUPPORTED' },
     );
   }
   return level;
@@ -140,7 +140,7 @@ async function toUserMessage(
   text: unknown,
   options?: { images?: unknown[] },
 ) {
-  // DSH 的图片块保存的是 ctx.attachments 产生的不可变引用，而不是旧 Pi
+  // DSH 的图片块保存的是 ctx.attachments 产生的不可变引用，而不是旧引擎
   // API 的 { data, mimeType } 临时块。图片 loader 在进入 DSH 前仍可用旧形状
   // 搬运并校验字节；这里是唯一的边界适配，避免 base64 落进会话日志。
   const content: Array<{ type: string; [key: string]: unknown }> = [
@@ -185,14 +185,14 @@ async function toUserMessage(
 }
 
 /**
- * DSH session/event → 现有 projector 认得的 Pi 形状。
+ * DSH session/event → 现有 projector 认得的旧引擎事件形状。
  *
  * DSH 的词汇是 `assistant/chunk`、`assistant/message`、`turn/end`。把 `turn/end`
  * 映射成 `message_end` 会给每一轮多造一条空助手气泡；把整份 session log
  * 再 dump 一遍会把上一轮文本拼进本轮。两者叠在一起就是「气泡重复上轮文本
  * 且被 512 字摘要截断」。
  */
-export function mapDshEventToPi(event: Record<string, any> | null | undefined) {
+export function mapDshEventToAgentEvent(event: Record<string, any> | null | undefined) {
   if (!event || typeof event !== 'object') return null;
   const type = String(event.type ?? '');
   const data = event.data && typeof event.data === 'object' ? event.data : event;
@@ -227,7 +227,7 @@ export function mapDshEventToPi(event: Record<string, any> | null | undefined) {
     };
   }
 
-  // 旧 Pi 形状的透传（单测夹具仍发 message_update）。
+  // 旧引擎形状的透传（单测夹具仍发 message_update）。
   if (type === 'message_update' || type.startsWith('message_')) {
     return event;
   }
@@ -328,7 +328,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       );
       const sessionOwner = { orgId: rpc.orgId, userId: rpc.userId };
       const releaseSessionOwner = sessionStore.bindOwner(sessionId, sessionOwner);
-      const recoveredPayload = input.piSnapshot?.snapshotJson;
+      const recoveredPayload = input.sessionSnapshot?.snapshotJson;
       const recoveredHeader = recoveredPayload?.header;
       const recoveredEntries = Array.isArray(recoveredPayload?.entries)
         ? recoveredPayload.entries
@@ -338,7 +338,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         ((agentCtx, options) => {
           if (typeof agentCtx?.agents?.create !== 'function') {
             throw new DshRuntimeFactoryError(
-              'DSH ctx.agents.create is not mounted; boot @pi/runtime before create()',
+              'DSH ctx.agents.create is not mounted; boot @dsh/runtime before create()',
             );
           }
           return agentCtx.agents.create(options);
@@ -348,7 +348,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         ((agentCtx, options) => {
           if (typeof agentCtx?.agents?.resume !== 'function') {
             throw new DshRuntimeFactoryError(
-              'DSH ctx.agents.resume is not mounted; boot @pi/runtime before resume()',
+              'DSH ctx.agents.resume is not mounted; boot @dsh/runtime before resume()',
             );
           }
           return agentCtx.agents.resume(options);
@@ -529,7 +529,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       const subs: Array<(ev: Record<string, any>) => void> = [];
       const entries = [];
       const seenEntryIds = new Set<string>();
-      const seenPi: Record<string, any>[] = [];
+      const seenEvents: Record<string, any>[] = [];
       const recordAssistantEntry = (event: Record<string, any>, mapped: Record<string, any>) => {
         if (mapped?.type !== 'message_end') return;
         const data = event.data && typeof event.data === 'object' ? event.data : event;
@@ -550,11 +550,11 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         });
       };
       const emit = (ev) => {
-        seenPi.push(ev);
+        seenEvents.push(ev);
         for (const fn of subs) fn(ev);
       };
       const emitMapped = (event: Record<string, any>) => {
-        const mapped = mapDshEventToPi(event);
+        const mapped = mapDshEventToAgentEvent(event);
         if (!mapped) return false;
         recordAssistantEntry(event, mapped);
         emit(mapped);
@@ -573,7 +573,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         agent.ctx.on('agent/error', onAgentError);
       } else if (typeof agent.subscribe === 'function') {
         agent.subscribe((ev) => {
-          const mapped = mapDshEventToPi(ev) ?? ev;
+          const mapped = mapDshEventToAgentEvent(ev) ?? ev;
           emit(mapped);
         });
       }
@@ -594,7 +594,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
           return sessionStore.runAsOwner(sessionOwner, () => run(rpc, async () => withServices(input.runServices ?? {}, async () => runWithInteractionRequester(input.interactionRequester, async () => {
             const log = agent.session?.events;
             const priorLen = Array.isArray(log) ? log.length : 0;
-            const seenBefore = seenPi.length;
+            const seenBefore = seenEvents.length;
             agent.followup(await toUserMessage(ctx, text, options));
             if (typeof agent.whenIdle === 'function') await agent.whenIdle();
             const liveLog = agent.session?.events;
@@ -602,13 +602,13 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
             // 含历史轮次，会让本轮气泡重复上轮文本。只在本轮还没有
             // message_end 时补：完全没直播就 dump 本轮新增；只有 delta
             // 没有完成帧时只补 message_end。
-            const gotLiveAssistant = seenPi
+            const gotLiveAssistant = seenEvents
               .slice(seenBefore)
               .some((e) => e?.type === 'message_end');
             if (!gotLiveAssistant && Array.isArray(liveLog)) {
-              const hadLive = seenPi.length > seenBefore;
+              const hadLive = seenEvents.length > seenBefore;
               for (const event of liveLog.slice(priorLen)) {
-                if (hadLive && mapDshEventToPi(event)?.type !== 'message_end') continue;
+                if (hadLive && mapDshEventToAgentEvent(event)?.type !== 'message_end') continue;
                 emitMapped(event);
               }
             }
@@ -616,9 +616,9 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
               const msg = turnError instanceof Error ? turnError.message : String(turnError);
               throw new DshRuntimeFactoryError(`DSH agent/error: ${msg}`);
             }
-            const gotAssistant = seenPi.slice(seenBefore).some((e) => e?.type === 'message_end')
+            const gotAssistant = seenEvents.slice(seenBefore).some((e) => e?.type === 'message_end')
               || (Array.isArray(liveLog)
-                && liveLog.slice(priorLen).some((e) => mapDshEventToPi(e)?.type === 'message_end'));
+                && liveLog.slice(priorLen).some((e) => mapDshEventToAgentEvent(e)?.type === 'message_end'));
             if (!gotAssistant) {
               throw new DshRuntimeFactoryError(
                 `DSH turn produced no assistant output; events=${summarizeSessionLog(liveLog)}`,

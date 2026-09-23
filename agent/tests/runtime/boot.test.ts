@@ -217,7 +217,7 @@ test('真实的 bundle/cordis.patch.yml 全部可解析', async () => {
   const { loadOverlayPatches } = await import('@deepseek-ai/dsh-app-boot');
   const here = dirname(fileURLToPath(import.meta.url));
   const overlayFile = join(here, '../../src/runtime/bundle/cordis.patch.yml');
-  const entries = loadOverlayPatches('pi-runtime', overlayFile);
+  const entries = loadOverlayPatches('dsh-runtime', overlayFile);
   // 这条守的是"自建插件真的装得上"。它红过一次：credentials 与
   // subagent-spawn-in-process 曾指向 ../src/*.js（源码是 .ts），于是
   // ctx.credentials 静默退回出厂的 LocalCredentialProvider。

@@ -1,4 +1,4 @@
-# Pi Enterprise Sandbox
+# DSH Enterprise Sandbox
 
 > 企业沙箱 + AI 智能体 · v4.0
 
@@ -42,7 +42,7 @@ open http://localhost:3000
 ## 目录结构
 
 ```
-pi-sandbox/
+dsh-enterprise-sandbox/
 ├── frontend/             ← SPA 前端（Vite + React；纯 UI，零 Agent SDK）
 │   ├── src/main.tsx      ← 前端入口
 │   ├── Dockerfile        ← Nginx 静态服务
@@ -60,7 +60,7 @@ pi-sandbox/
 │   ├── src/runtime/      ← DSH 组合层（provider / policy / projection）
 │   │                        agent 私有，不是独立服务
 │   └── Dockerfile
-├── contract/             ← @pi/contract：exec ↔ agent runtime 的 RPC 信封、HMAC、错误码
+├── contract/             ← @dsh/contract：exec ↔ agent runtime 的 RPC 信封、HMAC、错误码
 ├── exec/                 ← 执行面 + MCP facade（TypeScript，取代原 Python sandbox/）
 │   ├── src/main.ts       ← 执行面入口（compose: sandbox）
 │   ├── src/mcp-main.ts   ← MCP facade 入口（compose: sandbox-mcp，同 Dockerfile 的 slim `facade` 镜像）

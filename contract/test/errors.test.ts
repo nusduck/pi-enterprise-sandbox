@@ -11,7 +11,7 @@ import { FsError } from '@deepseek-ai/dsh-fs';
 
 import { ContractError, redactPhysicalPaths, toWireError } from '../src/errors.js';
 
-const PHYSICAL_ROOT = '/var/lib/pi-exec/workspaces/01K0G2PAV8FPMVC9QHJG7JPN4Z';
+const PHYSICAL_ROOT = '/var/lib/dsh-exec/workspaces/01K0G2PAV8FPMVC9QHJG7JPN4Z';
 
 // `physicalRoots` is REQUIRED (no default value) on both `redactPhysicalPaths`
 // and `ToWireErrorOptions` — this is deliberate fail-closed design, not an
@@ -38,8 +38,8 @@ describe('redactPhysicalPaths', () => {
   });
 
   it('redacts the longest matching root first so nested roots do not half-substitute', () => {
-    const outer = '/var/lib/pi-exec';
-    const inner = '/var/lib/pi-exec/workspaces/ws-1';
+    const outer = '/var/lib/dsh-exec';
+    const inner = '/var/lib/dsh-exec/workspaces/ws-1';
     const message = `${inner}/file.txt and ${outer}/shared.log`;
     const redacted = redactPhysicalPaths(message, [outer, inner]);
     assert.equal(redacted, '<workspace>/file.txt and <workspace>/shared.log');

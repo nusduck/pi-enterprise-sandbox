@@ -31,7 +31,7 @@ services:
     # amd64 宿主机上这行是空操作。
     image: mysql:5.7
     platform: ${MYSQL_PLATFORM:-linux/amd64}
-    container_name: ${MYSQL_CONTAINER:-pi-enterprise-mysql}
+    container_name: ${MYSQL_CONTAINER:-dsh-enterprise-mysql}
     # Dev-only host publish: loopback only (not 0.0.0.0). Prod overlay uses
     # ports: !reset [] so these do not survive compose merge.
     ports:
@@ -99,7 +99,7 @@ services:
   redis:
     # 与 UPRedis 同版本基线（ADR 0011 D9）：BullMQ 在 6.0.6 以下自动改用无 LPOS 的脚本。
     image: redis:5.0.14
-    container_name: ${REDIS_CONTAINER:-pi-enterprise-redis}
+    container_name: ${REDIS_CONTAINER:-dsh-enterprise-redis}
     ports:
       - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     environment:
@@ -145,7 +145,7 @@ services:
   # 并要求真实 DBPM_URL；脚本自身在 DEPLOYMENT_ENV=production 时拒绝运行。
   dbpm-fake:
     image: ${DBPM_FAKE_IMAGE:-node:22-slim}
-    container_name: ${DBPM_FAKE_CONTAINER:-pi-enterprise-dbpm-fake}
+    container_name: ${DBPM_FAKE_CONTAINER:-dsh-enterprise-dbpm-fake}
     user: node
     command: ["node", "/opt/fake-dbpm/fake-dbpm.mjs"]
     environment:
@@ -176,8 +176,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: ${FRONTEND_IMAGE:-pi-enterprise-frontend:latest}
-    container_name: ${FRONTEND_CONTAINER:-pi-enterprise-frontend}
+    image: ${FRONTEND_IMAGE:-dsh-enterprise-frontend:latest}
+    container_name: ${FRONTEND_CONTAINER:-dsh-enterprise-frontend}
     environment:
       # frontend nginx 的 /api/ 上游（design §2.2）；启动时校验，只接受 http://host[:port]。
       API_UPSTREAM: ${API_UPSTREAM:-http://api-server:4000}
@@ -196,8 +196,8 @@ services:
     build:
       context: ./api-server
       dockerfile: Dockerfile
-    image: ${API_IMAGE:-pi-enterprise-api:latest}
-    container_name: ${API_CONTAINER:-pi-enterprise-api}
+    image: ${API_IMAGE:-dsh-enterprise-api:latest}
+    container_name: ${API_CONTAINER:-dsh-enterprise-api}
     ports:
       - "127.0.0.1:${API_PORT:-4000}:4000"
     env_file:
@@ -280,8 +280,8 @@ services:
     build:
       context: .
       dockerfile: agent/Dockerfile
-    image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
-    container_name: ${AGENT_CONTAINER:-pi-enterprise-agent}
+    image: ${AGENT_IMAGE:-dsh-enterprise-agent:latest}
+    container_name: ${AGENT_CONTAINER:-dsh-enterprise-agent}
     ports:
       - "127.0.0.1:${AGENT_PORT:-4100}:4100"
     env_file:
@@ -303,8 +303,8 @@ services:
       # retained for deployment compatibility with the former Python service.
       SANDBOX_JWT_SECRET: ${SANDBOX_JWT_SECRET:-}
       SANDBOX_JWT_TTL_SECONDS: ${SANDBOX_JWT_TTL_SECONDS:-86400}
-      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-pi-enterprise-sandbox}
-      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-pi-enterprise-sandbox}
+      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-dsh-enterprise-sandbox}
+      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-dsh-enterprise-sandbox}
       SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: ${SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER:-true}
       SANDBOX_AUTH_ADMIN_USERNAMES: ${SANDBOX_AUTH_ADMIN_USERNAMES:-}
       A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:-http://127.0.0.1:${AGENT_PORT:-4100}}
@@ -410,11 +410,11 @@ services:
 
   # ── Agent Worker — Run queue consumer + recovery + outbox (no public port) ─
   agent-worker:
-    image: ${AGENT_IMAGE:-pi-enterprise-agent:latest}
+    image: ${AGENT_IMAGE:-dsh-enterprise-agent:latest}
     build:
       context: .
       dockerfile: agent/Dockerfile
-    container_name: ${AGENT_WORKER_CONTAINER:-pi-enterprise-agent-worker}
+    container_name: ${AGENT_WORKER_CONTAINER:-dsh-enterprise-agent-worker}
     env_file:
       - ${API_ENV_FILE:-.env}
     environment:
@@ -471,7 +471,7 @@ services:
       SANDBOX_POLICY_PROFILE: ${SANDBOX_POLICY_PROFILE:-balanced}
       SANDBOX_ISOLATION_BACKEND: ${SANDBOX_ISOLATION_BACKEND:-bubblewrap}
       SANDBOX_ISOLATION_REQUIRED: ${SANDBOX_ISOLATION_REQUIRED:-true}
-      # Pi executor (same logical cwd / agentDir / model knobs as HTTP agent)
+      # DSH executor (same logical cwd / agentDir / model knobs as HTTP agent)
       AGENT_SESSION_WORKSPACE_CWD: ${AGENT_SESSION_WORKSPACE_CWD:-/home/sandbox/workspace}
       LLMIO_BASE_URL: ${LLMIO_BASE_URL:-}
       LLMIO_API_KEY: ${LLMIO_API_KEY:-}
@@ -535,7 +535,7 @@ services:
       context: .
       dockerfile: exec/Dockerfile
     image: ${SANDBOX_IMAGE:-enterprise-sandbox:latest}
-    container_name: ${SANDBOX_CONTAINER:-pi-enterprise-sandbox}
+    container_name: ${SANDBOX_CONTAINER:-dsh-enterprise-sandbox}
     # Load project .env so SANDBOX_SHARED_ENV_KEYS / SANDBOX_EXEC_ENV_* values
     # are present on the service process for child-exec injection (safe_env).
     # Child processes still never inherit the full env — only allowlisted keys.
@@ -723,7 +723,7 @@ services:
       # slim facade 阶段：不带模型工具链、bwrap、Python、执行面代码与数据库驱动。
       target: facade
     image: ${SANDBOX_MCP_IMAGE:-enterprise-sandbox-mcp:latest}
-    container_name: ${SANDBOX_MCP_CONTAINER:-pi-enterprise-sandbox-mcp}
+    container_name: ${SANDBOX_MCP_CONTAINER:-dsh-enterprise-sandbox-mcp}
     # MCP facade only — same Dockerfile as the executor but its own slim image,
     # entrypoint and credentials. No Bubblewrap, no workspace mounts: it never
     # executes anything itself, it calls the narrow bridge.
@@ -797,12 +797,12 @@ services:
 
 networks:
   backend_internal:
-    name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-backend-internal
+    name: ${COMPOSE_PROJECT_NAME:-dsh-enterprise}-backend-internal
     internal: true
   service_egress:
-    name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-service-egress
+    name: ${COMPOSE_PROJECT_NAME:-dsh-enterprise}-service-egress
   dev_ingress:
-    name: ${COMPOSE_PROJECT_NAME:-pi-enterprise}-dev-ingress
+    name: ${COMPOSE_PROJECT_NAME:-dsh-enterprise}-dev-ingress
 
 volumes:
   agent_user_skills:

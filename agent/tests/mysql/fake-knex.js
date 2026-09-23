@@ -289,14 +289,14 @@ function createQuery(state, tableName, opts = {}) {
           throw err;
         }
       }
-      // PR-05 journal: UNIQUE (agent_session_id, pi_entry_id) when both non-null.
+      // PR-05 journal: UNIQUE (agent_session_id, session_entry_id) when both non-null.
       if (bareTable === 'tbl_agsvc_messages') {
-        if (row.pi_entry_id != null && row.agent_session_id != null) {
+        if (row.session_entry_id != null && row.agent_session_id != null) {
           const dup = table.some(
             (r) =>
               r.agent_session_id === row.agent_session_id &&
-              r.pi_entry_id != null &&
-              r.pi_entry_id === row.pi_entry_id,
+              r.session_entry_id != null &&
+              r.session_entry_id === row.session_entry_id,
           );
           if (dup) {
             const err = new Error('Duplicate entry for ind_agsvc_msg_a2');

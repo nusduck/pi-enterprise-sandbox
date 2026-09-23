@@ -81,7 +81,7 @@ describe('search: service', () => {
 
   before(async () => {
     const resolved = await realpath(tmpdir());
-    base = await mkdtemp(path.join(resolved, 'pi-search-'));
+    base = await mkdtemp(path.join(resolved, 'dsh-search-'));
     root = path.join(base, 'ws');
     outside = path.join(base, 'outside');
     await mkdir(root, { recursive: true });

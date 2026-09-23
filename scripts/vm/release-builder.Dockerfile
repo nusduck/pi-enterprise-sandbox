@@ -29,7 +29,7 @@ COPY --from=build /src/contract/package.json /src/contract/package-lock.json ./c
 COPY --from=build /src/contract/dist ./contract/dist
 COPY --from=build /src/contract/schema ./contract/schema
 RUN cd contract && npm ci --omit=dev --ignore-scripts
-# exec：dist + 生产依赖（@pi/contract 以 ../contract 链接）
+# exec：dist + 生产依赖（@dsh/contract 以 ../contract 链接）
 COPY --from=build /src/exec/package.json /src/exec/package-lock.json ./exec/
 COPY --from=build /src/exec/dist ./exec/dist
 RUN cd exec && npm ci --omit=dev --ignore-scripts
@@ -39,8 +39,8 @@ COPY runtime-versions.json ./vm/runtime-versions.json
 # 工具链安装脚本读取的仓库侧资产（与 exec/Dockerfile 同源）：Python 依赖、三个 wrapper、BaoYu 脚本与锁文件
 COPY exec/requirements.txt ./toolchain/requirements.txt
 COPY exec/skill-runtime/ ./toolchain/skill-runtime/
-COPY skills/baoyu-format-markdown/scripts/ ./toolchain/pi-skill-runtime/baoyu-format-markdown/
-COPY skills/baoyu-markdown-to-html/scripts/ ./toolchain/pi-skill-runtime/baoyu-markdown-to-html/
+COPY skills/baoyu-format-markdown/scripts/ ./toolchain/dsh-skill-runtime/baoyu-format-markdown/
+COPY skills/baoyu-markdown-to-html/scripts/ ./toolchain/dsh-skill-runtime/baoyu-markdown-to-html/
 COPY scripts/vm/write-release-manifest.mjs /tmp/write-release-manifest.mjs
 RUN chmod 0755 vm/exec-preflight.sh vm/install-release.sh && \
     node /tmp/write-release-manifest.mjs \

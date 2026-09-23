@@ -5,7 +5,7 @@
  *
  * 为什么要单独一层，而不是直接把 `Error.message` 透传出去：
  * - `exec/` 的错误消息里天然会带物理路径（`dsh-fs-local` 的报错原文常见
- *   `ENOENT: /var/lib/pi-exec/workspaces/<uuid>/...`），设计文档的硬要求
+ *   `ENOENT: /var/lib/dsh-exec/workspaces/<uuid>/...`），设计文档的硬要求
  *   是"错误文本里物理根一律显示成 `<workspace>`"——这是防止内部目录结构
  *   通过错误提示泄漏给模型 / 前端 / 攻击者的最后一道闸门。
  * - `FsError`（dsh-fs 抛出）与我们自己的 `ContractError`（信封/认证失败）
@@ -87,7 +87,7 @@ const DEFAULT_PHYSICAL_PREFIXES: readonly string[] = Object.freeze([
  * 直接编译不过，而不是运行时悄悄放行。
  *
  * 处理顺序（对齐 `sandbox/paths.py:219-271` 的 `sanitize_path_error`，
- * `LEGACY_AGENT_WORKSPACE_PATH` 那条 Pi 时代兼容逻辑本次不迁移）：
+ * `LEGACY_AGENT_WORKSPACE_PATH` 那条 旧引擎时代兼容逻辑本次不迁移）：
  * 1. 把调用方传入的 roots 与 {@link DEFAULT_PHYSICAL_PREFIXES} 合并；
  * 2. 每个 root 去掉尾部 `/` 再去重——否则带尾斜杠的 root 匹配不上
  *    文本里不带尾斜杠的路径；

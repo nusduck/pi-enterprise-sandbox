@@ -1,4 +1,4 @@
-# ── Nginx Reverse Proxy for Pi Enterprise Sandbox ─────────────────
+# ── Nginx Reverse Proxy for DSH Enterprise Sandbox ─────────────────
 # Production-grade: TLS termination, rate limiting, SSE support
 
 FROM nginx:1.27-alpine
@@ -13,7 +13,7 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 # nginx.conf 会 include conf.d/*.conf，模板留在那里会被同时加载（80 冲突）。
 # entrypoint 按 TLS_ENABLED 把选中的一套渲染进 conf.d/sandbox.conf。
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
-COPY nginx/templates/ /etc/nginx/pi-templates/
+COPY nginx/templates/ /etc/nginx/dsh-templates/
 
 # Entrypoint — generates self-signed cert if none exists, then starts nginx
 COPY nginx/entrypoint.sh /entrypoint.sh

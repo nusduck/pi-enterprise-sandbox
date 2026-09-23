@@ -2,31 +2,25 @@
  * One SKILL.md frontmatter reader for the whole service.
  *
  * There were two hand-rolled parsers — the lifecycle validator's and the A2A
- * Agent Card's — each accepting a slightly different subset of YAML, and
- * neither matching the SDK's `loadSkillsFromDir`, which is what actually
- * decides whether the model ever sees a skill. That gap is installable-but-
- * invisible skills: a package passes lifecycle validation, then the runtime
- * loader reads its frontmatter differently and drops it.
+ * Agent Card's — each accepting a slightly different subset of YAML. The one
+ * that actually decides whether the model ever sees a skill is the runtime's
+ * loader (`@deepseek-ai/dsh-skill-filesystem`); a gap between the two means
+ * installable-but-invisible skills.
  *
- * So the parse is real YAML via the same `yaml` library, with the same
- * delimiter rule, that Pi's `parseFrontmatter` uses; this module only adds what
- * Pi has no opinion about: the enterprise field bounds and the error messages
- * an operator installing a package needs to read.
+ * So the parse is real YAML via the same `yaml` library the DSH loader uses;
+ * this module only adds what DSH has no opinion about: the enterprise field
+ * bounds and the error messages an operator installing a package needs to read.
  *
- * Why `yaml` directly and not `parseFrontmatter` from the SDK: this module is
- * reached from the A2A Agent Card handler, and a static SDK import there costs
- * ~300ms of process start and pulls the whole coding agent into an HTTP process
- * that never runs one — before `assertSdkVersionPinned` has had a chance to
- * check the version. `tests/skills-frontmatter.test.js` asserts agreement with
- * `loadSkillsFromDir` on real packages, which is the property that actually
- * matters and the one a shared import only implies.
+ * Why `yaml` directly and not the loader itself: this module is reached from
+ * the A2A Agent Card handler, an HTTP process that never boots the runtime.
  */
 
 import { parse as parseYaml } from 'yaml';
 
 /**
- * Frontmatter extraction, matching Pi's `parseFrontmatter` exactly: a leading
- * `---`, the next `\n---`, and everything between them as YAML.
+ * Frontmatter extraction: a leading `---`, the next `\n---`, and everything
+ * between them as YAML. Looser than the DSH loader, which requires both
+ * delimiter lines to be exactly `---`.
  *
  * @param normalized  content with CRLF already normalised
  * @returns {{ yamlString: string | null, body: string }}
@@ -87,7 +81,7 @@ function scalarString(value: unknown) {
  * Turn a YAML parse failure into something an operator can act on.
  *
  * This parser is stricter than the regex it replaced, which is the point —
- * agreeing with Pi's loader is what stops a package installing and then failing
+ * agreeing with the DSH loader is what stops a package installing and then failing
  * to load. But it means SKILL.md files that used to install can now be
  * rejected, and the two common cases are both easy to fix once you can see the
  * line: an unquoted colon (`description: Use this when: ...`) and a leading

@@ -201,4 +201,4 @@ export const AGENT_TEMP_PATH = '/tmp';
  * 而挂载是 `required: false`，缺失被静默宽恕，于是沙箱里的 `python3` 退化成
  * 一个什么库都没有的裸解释器，不报错。
  */
-export const AGENT_PYTHON_VENV = '/opt/pi-python/venv';
+export const AGENT_PYTHON_VENV = '/opt/dsh-python/venv';

@@ -37,7 +37,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     npm ci --omit=dev --ignore-scripts --prefix /build/baoyu-format-markdown
 
 # ── TypeScript 编译（仅构建期）─────────────────────────────────────
-# compose 的 context 是仓库根，这样 `@pi/contract`（file:../contract）与
+# compose 的 context 是仓库根，这样 `@dsh/contract`（file:../contract）与
 # tsconfig.base.json 可见；单从 ./exec 出发 `tsc -b` 看不到它们。
 FROM node:22-slim AS ts-build
 WORKDIR /app
@@ -140,10 +140,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # `shell/python-materialize.ts` 产出的 argv 是 `python3 ...`，所以 venv 的
 # bin 目录要进 PATH。
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-COPY exec/requirements.txt /opt/pi-python/requirements.txt
+COPY exec/requirements.txt /opt/dsh-python/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv venv /opt/pi-python/venv && \
-    VIRTUAL_ENV=/opt/pi-python/venv uv pip install -r /opt/pi-python/requirements.txt
+    uv venv /opt/dsh-python/venv && \
+    VIRTUAL_ENV=/opt/dsh-python/venv uv pip install -r /opt/dsh-python/requirements.txt
 
 # bun（独立二进制）+ docx/pptxgenjs，来自上面的 js-deps 阶段。
 COPY --from=js-deps /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
@@ -151,15 +151,15 @@ COPY --from=js-deps /usr/local/bin/bun /usr/local/bin/bun
 
 # BaoYu 的 TS Skill 在运行时是只读 bind。镜像里留一份锁好依赖的副本，
 # 生产的 Bubblewrap 子进程因此永远不需要 npx/npm 联网。
-COPY skills/baoyu-format-markdown/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/
-COPY --from=js-deps /build/baoyu-format-markdown/node_modules/ /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/node_modules/
-COPY skills/baoyu-markdown-to-html/scripts/ /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html/
+COPY skills/baoyu-format-markdown/scripts/ /usr/local/lib/dsh-skill-runtime/baoyu-format-markdown/
+COPY --from=js-deps /build/baoyu-format-markdown/node_modules/ /usr/local/lib/dsh-skill-runtime/baoyu-format-markdown/node_modules/
+COPY skills/baoyu-markdown-to-html/scripts/ /usr/local/lib/dsh-skill-runtime/baoyu-markdown-to-html/
 RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
-    cd /usr/local/lib/pi-skill-runtime/baoyu-markdown-to-html && \
+    cd /usr/local/lib/dsh-skill-runtime/baoyu-markdown-to-html && \
     bun install --frozen-lockfile --production --no-progress
 
 # 三个 shell 启动垫片（ADR 0008 D10）。它们写死了 /usr/local/bin/bun 与
-# /usr/local/lib/pi-skill-runtime/，所以必须在上面两步之后才有意义。
+# /usr/local/lib/dsh-skill-runtime/，所以必须在上面两步之后才有意义。
 COPY exec/skill-runtime/ /usr/local/bin/
 RUN chmod 0555 \
         /usr/local/bin/baoyu-format-markdown \
@@ -187,7 +187,7 @@ COPY --from=ts-build --chown=10001:10001 /app/exec /app/exec
 WORKDIR /app/exec
 USER 10001:10001
 
-ENV PATH="/opt/pi-python/venv/bin:$PATH" \
+ENV PATH="/opt/dsh-python/venv/bin:$PATH" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     EXEC_PORT=8081 \

@@ -10,7 +10,6 @@ export { AuthCredentialRepository } from './auth-credential-repository.js';
 export { MessageRepository } from './message-repository.js';
 export {
   SessionJournalRepository,
-  PiSessionJournalRepository,
   hashJournalPayload,
   assertJournalEntryShape,
   assertJournalHeaderShape,
@@ -34,11 +33,10 @@ export {
   checksumSnapshotPayload,
   verifySnapshotChecksum,
   assertSnapshotFormat,
-  assertPiSdkVersionCompatible,
   SNAPSHOT_FORMAT,
   SUPPORTED_SNAPSHOT_FORMATS,
   DEFAULT_MAX_SNAPSHOT_BYTES,
-  PI_SESSION_JSONL_VERSION,
+  SESSION_JSONL_VERSION,
 } from './agent-session-snapshot-repository.js';
 export {
   AgentCatalogRepository,
@@ -47,7 +45,6 @@ export {
   hashAgentConfig,
   defaultAgentConfigJson,
   DEFAULT_AGENT_DEFINITION_NAME,
-  DEFAULT_PI_SDK_VERSION,
 } from './agent-catalog-repository.js';
 export {
   RunRepository,

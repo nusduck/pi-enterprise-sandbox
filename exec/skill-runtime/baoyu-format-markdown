@@ -10,4 +10,4 @@ case "${1:-}" in
 esac
 
 exec /usr/local/bin/bun \
-  /usr/local/lib/pi-skill-runtime/baoyu-format-markdown/main.ts "$@"
+  /usr/local/lib/dsh-skill-runtime/baoyu-format-markdown/main.ts "$@"

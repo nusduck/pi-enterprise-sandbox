@@ -4,9 +4,9 @@
  * ## 为什么这个文件是新加的
  *
  * 2026-08-31 之前 `prepareApprovalResume` 的「已批准」分支
- * **一个测试都没有**。而那条分支在 Pi→DSH 之后一直是坏的：它调
+ * **一个测试都没有**。而那条分支在 换引擎 之后一直是坏的：它调
  * `runtimeSession.getToolDefinition(...)`，而 DSH 的 session 根本没有这个方法，
- * 所以每次都抛 "Pi runtime cannot replay approved tool"——
+ * 所以每次都抛 "DSH runtime cannot replay approved tool"——
  * 「审批能停泊，但批准之后续不回去」。没有用例，就没有人发现。
  */
 import assert from 'node:assert/strict';

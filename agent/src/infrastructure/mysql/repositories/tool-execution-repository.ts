@@ -263,7 +263,7 @@ export function extractPolicyFingerprint(stored: unknown) {
 }
 
 /**
- * Identify the explicit, side-effect-free placeholder written when Pi emits
+ * Identify the explicit, side-effect-free placeholder written when DSH emits
  * tool_execution_start before the policy hook.
  * @param stored
  * @returns {boolean}
@@ -404,7 +404,7 @@ function mapToolExecutionPublic(row: Record<string, unknown>) {
     _resultIntegrity: extractIntegrity(rawResult),
     /** @internal hidden policy decision fingerprint (not public) */
     _policyFingerprint: extractPolicyFingerprint(rawArgs),
-    /** @internal explicit Pi pre-policy start placeholder */
+    /** @internal explicit DSH pre-policy start placeholder */
     _policyPending: extractPolicyPending(rawArgs),
   };
 }
@@ -624,7 +624,7 @@ export class ToolExecutionRepository {
 
     if (existing) {
       let mapped = mapToolExecutionPublic(existing);
-      // Pi emits tool_execution_start before the beforeToolCall policy hook.
+      // DSH emits tool_execution_start before the beforeToolCall policy hook.
       // The start observer may therefore create a PROPOSED placeholder without
       // a fingerprint. The policy hook may adopt that untouched row exactly
       // once while it is still side-effect free.

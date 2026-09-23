@@ -7,8 +7,8 @@
 
 import { internalClaimsByRequest } from './internal-claims.js';
 import type { Hono } from 'hono';
-import { ContractError, toWireError } from '@pi/contract/errors.js';
-import { parseEnvelope } from '@pi/contract/envelope.js';
+import { ContractError, toWireError } from '@dsh/contract/errors.js';
+import { parseEnvelope } from '@dsh/contract/envelope.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 
 function workspaceIdFromBody(body: unknown): string {

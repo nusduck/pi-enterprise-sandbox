@@ -154,8 +154,8 @@ export class BrowserAuthService {
     this.externalRefs = input.externalRefs;
     this.generateId = input.generateId;
     this.secret = String(input.secret || '').trim();
-    this.issuer = String(input.issuer || 'pi-enterprise-sandbox');
-    this.audience = String(input.audience || 'pi-enterprise-sandbox');
+    this.issuer = String(input.issuer || 'dsh-enterprise-sandbox');
+    this.audience = String(input.audience || 'dsh-enterprise-sandbox');
     this.ttlSeconds = Math.min(604_800, Math.max(60, Number(input.ttlSeconds) || 86_400));
     this.allowPublicRegister = input.allowPublicRegister !== false;
     this.adminUsernames = new Set(

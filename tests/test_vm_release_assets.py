@@ -20,7 +20,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 VM = ROOT / "deploy" / "vm"
-UNIT = VM / "pi-exec.service"
+UNIT = VM / "dsh-exec.service"
 ENV_EXAMPLE = VM / "exec.env.example"
 PREFLIGHT = VM / "exec-preflight.sh"
 INSTALL = VM / "install-release.sh"
@@ -107,15 +107,15 @@ def test_preflight_requires_what_the_template_marks_required() -> None:
 
 def test_unit_runs_non_root_with_preflight_and_cgroup_cleanup() -> None:
     d = _unit_directives()
-    assert d["User"] == ["pi-exec"]
-    assert d["EnvironmentFile"] == ["/etc/pi-exec/exec.env"]
-    assert d["ExecStartPre"] == ["/opt/pi-exec/current/vm/exec-preflight.sh"]
+    assert d["User"] == ["dsh-exec"]
+    assert d["EnvironmentFile"] == ["/etc/dsh-exec/exec.env"]
+    assert d["ExecStartPre"] == ["/opt/dsh-exec/current/vm/exec-preflight.sh"]
     assert d["ExecStart"] == ["/usr/local/bin/node dist/main.js"]
-    assert d["WorkingDirectory"] == ["/opt/pi-exec/current/exec"]
+    assert d["WorkingDirectory"] == ["/opt/dsh-exec/current/exec"]
     assert d["KillMode"] == ["mixed"]
     assert d["NoNewPrivileges"] == ["yes"]
     assert d["ProtectSystem"] == ["strict"]
-    assert "/var/lib/pi-exec" in d["ReadWritePaths"][0]
+    assert "/var/lib/dsh-exec" in d["ReadWritePaths"][0]
 
 
 @pytest.mark.parametrize(
@@ -146,7 +146,7 @@ def test_unit_keeps_hardening_measured_compatible_with_bubblewrap() -> None:
 def test_node_binary_lives_where_bubblewrap_can_see_it() -> None:
     exec_start = _unit_directives()["ExecStart"][0]
     assert exec_start.startswith("/usr/"), exec_start
-    assert 'NODE_BIN="${PI_EXEC_NODE:-/usr/local/bin/node}"' in PREFLIGHT.read_text(encoding="utf-8")
+    assert 'NODE_BIN="${DSH_EXEC_NODE:-/usr/local/bin/node}"' in PREFLIGHT.read_text(encoding="utf-8")
 
 
 def test_builder_ships_runtime_files_and_builds_on_target_platform() -> None:

@@ -47,7 +47,7 @@ function sessionRow(overrides = {}) {
     sandbox_session_id: SBX,
     workspace_id: WSP,
     status: 'ACTIVE',
-    pi_session_version: 0,
+    session_version: 0,
     last_run_id: null,
     execution_fence_token: 3,
     recovery_reason_code: null,
@@ -154,7 +154,7 @@ describe('AgentSessionRepository fencing/CAS', () => {
     const repo = new AgentSessionRepository(knex);
     await assert.rejects(() => repo.update(), /disabled|updateLastRunIdIfFence/);
     await assert.rejects(
-      () => repo.advancePiSessionVersionIf(),
+      () => repo.advanceSessionVersionIf(),
       /disabled|appendAndAdvance/,
     );
     const s = await repo.updateLastRunIdIfFence(SESS, scope, {
@@ -357,7 +357,6 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
 
   it('appendAndAdvance commits snapshot + pointer under fence', async () => {
     const repo = new AgentSessionSnapshotRepository(knex, {
-      runtimePiSdkVersion: '0.80.3',
     });
     const payload = samplePayload();
     const snap = await repo.appendAndAdvance({
@@ -366,16 +365,15 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
       orgId: ORG,
       userId: USER,
       snapshotVersion: 1,
-      expectedPiSessionVersion: 0,
+      expectedSessionVersion: 0,
       expectedExecutionFenceToken: 3,
-      snapshotFormat: SNAPSHOT_FORMAT.PI_JSONL_V3,
+      snapshotFormat: SNAPSHOT_FORMAT.SESSION_JSONL_V3,
       snapshotJson: payload,
-      piSdkVersion: '0.80.3',
     });
     assert.equal(snap.snapshotVersion, 1);
     assert.equal(snap.capturedFenceToken, 3);
     assert.equal(snap.checksum, checksumSnapshotPayload(payload));
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 1);
   });
 
   it('CAS loser rolls back insert (no orphan snapshot)', async () => {
@@ -389,15 +387,14 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
           orgId: ORG,
           userId: USER,
           snapshotVersion: 1,
-          expectedPiSessionVersion: 0,
+          expectedSessionVersion: 0,
           expectedExecutionFenceToken: 99, // stale fence
           snapshotJson: samplePayload(),
-          piSdkVersion: '0.80.3',
         }),
       ConflictError,
     );
     assert.equal(state.tables.tbl_agsvc_agent_session_snapshots.length, 0);
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 0);
   });
 
   it('rejects wrong status SUSPENDED / terminal for snapshot write', async () => {
@@ -411,7 +408,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
           orgId: ORG,
           userId: USER,
           snapshotVersion: 1,
-          expectedPiSessionVersion: 0,
+          expectedSessionVersion: 0,
           expectedExecutionFenceToken: 3,
           snapshotJson: samplePayload(),
         }),
@@ -429,7 +426,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
           orgId: ORG,
           userId: USER2,
           snapshotVersion: 1,
-          expectedPiSessionVersion: 0,
+          expectedSessionVersion: 0,
           expectedExecutionFenceToken: 3,
           snapshotJson: samplePayload(),
         }),
@@ -437,7 +434,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
     );
   });
 
-  it('requires snapshotVersion === expectedPiSessionVersion+1', async () => {
+  it('requires snapshotVersion === expectedSessionVersion+1', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
     await assert.rejects(
       () =>
@@ -447,7 +444,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
           orgId: ORG,
           userId: USER,
           snapshotVersion: 2,
-          expectedPiSessionVersion: 0,
+          expectedSessionVersion: 0,
           expectedExecutionFenceToken: 3,
           snapshotJson: samplePayload(),
         }),
@@ -463,10 +460,9 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
       orgId: ORG,
       userId: USER,
       snapshotVersion: 1,
-      expectedPiSessionVersion: 0,
+      expectedSessionVersion: 0,
       expectedExecutionFenceToken: 3,
       snapshotJson: samplePayload(),
-      piSdkVersion: '0.80.3',
     });
     state.tables.tbl_agsvc_agent_session_snapshots[0].checksum = 'a'.repeat(64);
     await assert.rejects(
@@ -477,10 +473,10 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
     );
   });
 
-  it('version race on pi_session_version rolls back', async () => {
+  it('version race on session_version rolls back', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
     // Concurrent pointer advance simulation: expected 0 but actual 5.
-    state.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 5;
+    state.tables.tbl_agsvc_agent_sessions[0].session_version = 5;
     await assert.rejects(
       () =>
         repo.appendAndAdvance({
@@ -489,19 +485,17 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
           orgId: ORG,
           userId: USER,
           snapshotVersion: 1,
-          expectedPiSessionVersion: 0,
+          expectedSessionVersion: 0,
           expectedExecutionFenceToken: 3,
           snapshotJson: samplePayload(),
-          piSdkVersion: '0.80.3',
         }),
       ConflictError,
     );
     assert.equal(state.tables.tbl_agsvc_agent_session_snapshots.length, 0);
   });
 
-  it('loadLatest uses pi_session_version pointer, ignores stray higher version', async () => {
+  it('loadLatest uses session_version pointer, ignores stray higher version', async () => {
     const repo = new AgentSessionSnapshotRepository(knex, {
-      runtimePiSdkVersion: '0.80.3',
     });
     await repo.appendAndAdvance({
       snapshotId: SNAP,
@@ -509,25 +503,23 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
       orgId: ORG,
       userId: USER,
       snapshotVersion: 1,
-      expectedPiSessionVersion: 0,
+      expectedSessionVersion: 0,
       expectedExecutionFenceToken: 3,
       snapshotJson: samplePayload(),
-      piSdkVersion: '0.80.3',
     });
     // Stray higher row not reflected by pointer (must not become "latest").
     state.tables.tbl_agsvc_agent_session_snapshots.push({
       snapshot_id: SNAP2,
       agent_session_id: SESS,
       snapshot_version: 99,
-      snapshot_format: 'pi_jsonl_v3',
+      snapshot_format: 'session_jsonl_v3',
       snapshot_json: samplePayload(),
       workspace_path: null,
       checksum: checksumSnapshotPayload(samplePayload()),
-      pi_sdk_version: '0.80.3',
       captured_fence_token: 3,
       created_at: '2026-07-18 00:00:01.000',
     });
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 1);
     const loaded = await repo.loadLatest(SESS, scope);
     assert.equal(loaded.snapshotVersion, 1);
     assert.equal(loaded.snapshotId, SNAP);
@@ -535,7 +527,7 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
 
   it('loadLatest fails closed when pointed row is missing', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
-    state.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 2;
+    state.tables.tbl_agsvc_agent_sessions[0].session_version = 2;
     state.tables.tbl_agsvc_agent_session_snapshots = [];
     await assert.rejects(
       () => repo.loadLatest(SESS, scope),
@@ -547,28 +539,8 @@ describe('AgentSessionSnapshotRepository atomic appendAndAdvance', () => {
 
   it('loadLatest returns null only when pointer is 0', async () => {
     const repo = new AgentSessionSnapshotRepository(knex);
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 0);
     assert.equal(await repo.loadLatest(SESS, scope), null);
-  });
-
-  it('assertPiSdkVersionCompatible requires exact equality', async () => {
-    const {
-      assertPiSdkVersionCompatible,
-    } = await import(
-      '../../src/infrastructure/mysql/repositories/agent-session-snapshot-repository.js'
-    );
-    assert.equal(assertPiSdkVersionCompatible('0.80.3', '0.80.3'), true);
-    assert.throws(
-      () => assertPiSdkVersionCompatible('0.80.3', '0.80.4'),
-      (err) =>
-        err instanceof SessionSnapshotError &&
-        err.code === 'SNAPSHOT_SDK_VERSION_INCOMPATIBLE',
-    );
-    // No same-major/minor soft match
-    assert.throws(
-      () => assertPiSdkVersionCompatible('0.80.0', '0.80.3'),
-      SessionSnapshotError,
-    );
   });
 
   it('does not expose appendWithoutPointerAdvance', () => {

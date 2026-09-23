@@ -8,7 +8,7 @@ export const INTERACTION_STATUS = Object.freeze({
 
 /**
  * Continuation phase is separate from the request lifecycle. RESOLVED is the
- * immutable user-answer fact; this phase fences the Worker/Pi hand-off across
+ * immutable user-answer fact; this phase fences the Worker/DSH hand-off across
  * a process crash.
  */
 export const INTERACTION_RESUME_PHASE = Object.freeze({

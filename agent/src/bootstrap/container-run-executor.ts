@@ -1,9 +1,9 @@
 /**
- * Assembly of the per-Run Pi executor factory.
+ * Assembly of the per-Run DSH executor factory.
  *
  * The container's single largest wiring step: repositories, session lock,
- * recovery, sandbox provisioning, the Pi runtime factory and the extension
- * bundle are all resolved here and handed to createPiRunExecutorFactory. Kept
+ * recovery, sandbox provisioning, the DSH runtime factory and the extension
+ * bundle are all resolved here and handed to createDshRunExecutorFactory. Kept
  * out of container.js so the container stays a directory of services rather
  * than one long assembly script.
  */
@@ -63,7 +63,7 @@ function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses:
 }
 
 /**
- * Explicit PiRunExecutor factory (PR-05 slice B).
+ * Explicit DshRunExecutor factory (PR-05 slice B).
  *
  * @param {import('./container.js').ServiceContainer} container
  *
@@ -74,7 +74,7 @@ function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses:
  */
 
 /**
- * `buildPiRunExecutorFactory` 的选项。由 JSDoc 转成真接口。
+ * `buildDshRunExecutorFactory` 的选项。由 JSDoc 转成真接口。
  *
  * 大部分字段仍是 `Loose`：它们承载的对象（容器、仓储、应用服务）都还是 JS，
  * 给它们编造精确类型会谎报现状。等 application/ 与 infrastructure/ 转完，
@@ -86,7 +86,7 @@ export interface DshRunExecutorFactoryOptions {
   readonly extensionFactories?: unknown[];
   readonly eventProjectionMode?: 'session-subscribe' | 'observability' | 'both';
   readonly sessionLockManager?: Loose;
-  readonly piRuntimeFactory?: Loose;
+  readonly dshRuntimeFactory?: Loose;
   readonly sessionAdapter?: Loose;
   readonly projector?: Loose;
   readonly recoveryService?: Loose;
@@ -143,10 +143,10 @@ export async function buildDshRunExecutorFactory(
   const sessionLockManager =
     opts.sessionLockManager ?? (await container.createSessionLockManager());
   const sessionAdapter =
-    opts.sessionAdapter ?? (await container.createPiSessionAdapter());
-  const piRuntimeFactory =
-    opts.piRuntimeFactory ??
-    (await container.createPiRuntimeFactory({
+    opts.sessionAdapter ?? (await container.createDshSessionAdapter());
+  const dshRuntimeFactory =
+    opts.dshRuntimeFactory ??
+    (await container.createDshRuntimeFactory({
       sessionAdapter,
       extensionFactories: opts.extensionFactories,
     }));
@@ -158,7 +158,7 @@ export async function buildDshRunExecutorFactory(
     opts.sandboxSessionProvisioner ??
     (await container.createSandboxSessionProvisioner());
 
-  // 通往 exec 的唯一路径是 `@pi/runtime` 的 remote-fs/shell/jobs（HMAC RPC），
+  // 通往 exec 的唯一路径是 `@dsh/runtime` 的 remote-fs/shell/jobs（HMAC RPC），
   // 由 `infrastructure/dsh/runtime-factory.js` 按 Run 装配。
   //
   // 这里曾经**并行**构造第二套：5 个 `internal-*-http` 传输 →
@@ -217,13 +217,13 @@ export async function buildDshRunExecutorFactory(
     });
 
   // 建成变量而不是内联字面量：内联时多余属性检查会对不在
-  // PiRunExecutorFactoryOptions 里的字段报错，而这里刻意多带了几个
+  // DshRunExecutorFactoryOptions 里的字段报错，而这里刻意多带了几个
   // 装配期用得到、执行器本身不读的项。
   const factoryOpts = {
     transactionManager: container.getTransactionManager(),
     createRepositories: (db) => container.createRepositories(db),
     sessionLockManager,
-    piRuntimeFactory,
+    dshRuntimeFactory,
     sessionAdapter,
     modelResolver: opts.modelResolver,
     promptImageLoader,

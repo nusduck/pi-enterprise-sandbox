@@ -7,10 +7,10 @@
 #
 # 步骤：
 #   1. 按当前工作树构建运行器镜像（与 release-gates.sh 同一个 Dockerfile）；
-#   2. 重建专用库 pi_gate_dsh，按发布 DDL 建表（schema-apply.sh，与生产同一流程）——
+#   2. 重建专用库 dsh_gate_dsh，按发布 DDL 建表（schema-apply.sh，与生产同一流程）——
 #      sandbox 启动时核对清单，测试里不能再迁移或回滚；
 #   3. 起专用 Redis 5.0.14 与专用 sandbox（`docker compose run` 沿用 sandbox 服务的
-#      隔离配置、HMAC 与 DBPM，只把库换成 pi_gate_dsh、数据根换成 .runtime/release-gate-dsh）；
+#      隔离配置、HMAC 与 DBPM，只把库换成 dsh_gate_dsh、数据根换成 .runtime/release-gate-dsh）；
 #   4. 在运行器里跑 gate；
 #   5. 不论成败，删除专用容器、专用库与专用数据根；gate 失败则脚本非零退出。
 #
@@ -21,10 +21,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-GATE_DB="pi_gate_dsh"
-REDIS_CONTAINER="pi-release-gate-redis-dsh"
-SANDBOX_CONTAINER="pi-release-gate-sandbox-dsh"
-RUNNER_IMAGE="pi-release-gate-runner:local"
+GATE_DB="dsh_gate_dsh"
+REDIS_CONTAINER="dsh-release-gate-redis-dsh"
+SANDBOX_CONTAINER="dsh-release-gate-sandbox-dsh"
+RUNNER_IMAGE="dsh-release-gate-runner:local"
 GATE_REDIS_PASSWORD="gate_dev_only"
 # 专用 sandbox 的数据根。不能复用开发栈的 .runtime/sandbox/*：gate 用固定的工作区 ID，
 # 上一次运行（例如变异验证里真的被重放的命令）留下的文件会让「副作用不存在」的断言误判。
@@ -98,7 +98,7 @@ docker run --rm -i --network "$NETWORK" \
     -e TEST_SANDBOX_URL="http://${SANDBOX_CONTAINER}:8081" \
     -e TEST_SANDBOX_INTERNAL_HMAC_KEYRING -e TEST_SANDBOX_INTERNAL_HMAC_ACTIVE_KID \
     -e TEST_SANDBOX_API_TOKEN \
-    -e RUN_AGENT_PI_RESTART_GATE=1 \
+    -e RUN_AGENT_DSH_RESTART_GATE=1 \
     "$RUNNER_IMAGE" bash -s <<'INNER'
 set -euo pipefail
 cd /repo/agent

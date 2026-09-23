@@ -17,7 +17,7 @@ import {
   SchemaDriftError,
   type SchemaManifest,
   type SchemaMetadataRows,
-} from '@pi/contract/schema-manifest.js';
+} from '@dsh/contract/schema-manifest.js';
 
 type KnexLike = { raw: (sql: string) => Promise<unknown> };
 

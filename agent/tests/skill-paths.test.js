@@ -21,7 +21,7 @@ import {
 const CANONICAL_SKILL_ROOT = '/home/sandbox/skill';
 const CANONICAL_USER_SKILL_ROOT = '/home/sandbox/skill-user';
 const CANONICAL_ROOTS = [CANONICAL_SKILL_ROOT, CANONICAL_USER_SKILL_ROOT];
-const REMOVED_COMPATIBILITY_ROOTS = ['/sandbox/skills', '/app/.pi/skills'];
+const REMOVED_COMPATIBILITY_ROOTS = ['/sandbox/skills'];
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const USER = '01K0G2PAV8FPMVC9QHJG7JPN50';
 

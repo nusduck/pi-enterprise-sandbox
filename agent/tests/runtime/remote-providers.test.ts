@@ -19,8 +19,8 @@ import { RemoteJobs } from '../../src/runtime/providers/remote-jobs.js';
 import { guardIterable, fromWireError, runWithExecRpc } from '../../src/runtime/providers/exec-rpc.js';
 import type { ExecRpcConfig } from '../../src/runtime/providers/exec-rpc.js';
 import { FsError } from '@deepseek-ai/dsh-fs';
-import { toWireError } from '@pi/contract/errors.js';
-import { verifyInternalToken, internalBindingForHtu } from '@pi/contract/hmac.js';
+import { toWireError } from '@dsh/contract/errors.js';
+import { verifyInternalToken, internalBindingForHtu } from '@dsh/contract/hmac.js';
 
 function fakeFetchForFs(calls: string[] = []): typeof fetch {
   return (async (url: string | URL | Request, init?: RequestInit) => {

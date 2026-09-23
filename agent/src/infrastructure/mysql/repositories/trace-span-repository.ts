@@ -446,7 +446,7 @@ export class TraceSpanRepository {
       if (toolIdentity) parentSpanId = deriveSpanId(traceId, 'tool', toolIdentity);
     } else if (lower.startsWith('session.')) {
       kind = 'session';
-      name = lower.includes('snapshot') ? 'Pi session checkpoint' : 'Pi session';
+      name = lower.includes('snapshot') ? 'DSH session checkpoint' : 'DSH session';
       identity = data.snapshotId ?? event.eventId ?? identity;
     } else if (lower.startsWith('a2a.')) {
       kind = 'a2a';

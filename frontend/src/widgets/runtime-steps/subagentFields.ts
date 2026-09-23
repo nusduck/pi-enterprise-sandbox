@@ -1,7 +1,7 @@
 /**
  * Parse `spawn_subagent` / `check_subagent` tool payloads into display fields.
  *
- * Both tools return a Pi tool-result envelope whose text part is a JSON
+ * Both tools return a DSH tool-result envelope whose text part is a JSON
  * document (`toolOk(toolResultJson(...))` on the Agent side), so the raw card
  * would otherwise show the model's wire format to the user. A fan-out is the
  * one thing in a run where "what are my children doing" is the whole question,
@@ -43,7 +43,7 @@ function trimmedString(value: unknown): string | null {
 }
 
 /**
- * Pull the JSON document out of a Pi tool-result envelope.
+ * Pull the JSON document out of a DSH tool-result envelope.
  * Accepts the envelope, a bare JSON string, or an already-parsed object.
  */
 export function parseToolResultJson(result: unknown): Record<string, unknown> | null {

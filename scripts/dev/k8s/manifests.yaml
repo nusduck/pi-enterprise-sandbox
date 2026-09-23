@@ -100,7 +100,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: agent
-          image: pi-enterprise-agent:latest
+          image: dsh-enterprise-agent:latest
           imagePullPolicy: Never
           command: ["node", "dist/server.js"]
           envFrom: [{ secretRef: { name: agent-env } }]
@@ -146,7 +146,7 @@ spec:
       terminationGracePeriodSeconds: 180
       containers:
         - name: agent-worker
-          image: pi-enterprise-agent:latest
+          image: dsh-enterprise-agent:latest
           imagePullPolicy: Never
           command: ["node", "dist/worker.js"]
           envFrom: [{ secretRef: { name: agent-worker-env } }]
@@ -181,7 +181,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: api-server
-          image: pi-enterprise-api:latest
+          image: dsh-enterprise-api:latest
           imagePullPolicy: Never
           envFrom: [{ secretRef: { name: api-server-env } }]
           ports: [{ containerPort: 4000 }]
@@ -210,7 +210,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: frontend
-          image: pi-enterprise-frontend:latest
+          image: dsh-enterprise-frontend:latest
           imagePullPolicy: Never
           env: [{ name: API_UPSTREAM, value: "http://api-server:4000" }]
           ports: [{ containerPort: 8080 }]

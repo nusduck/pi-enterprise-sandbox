@@ -1,7 +1,7 @@
 /**
  * Environment and wiring helpers for the service container.
  *
- * Pure resolution of what the process was configured with — Pi agent dir,
+ * Pure resolution of what the process was configured with — DSH agent dir,
  * MySQL/Redis URLs, per-run skill roots, the repository bundle, the worker
  * executor factory — plus the production token assertion that fails closed.
  * No service construction and no I/O beyond ensuring the agent dir exists.
@@ -34,7 +34,6 @@ import { SkillEnablementRepository } from '../infrastructure/mysql/repositories/
 import { AuthCredentialRepository } from '../infrastructure/mysql/repositories/auth-credential-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
-import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import * as skillPathsModule from '../skills/paths.js';
 
 /** 身份来自不可信来源，两个字段都可能缺；解析失败时降级到系统层。 */
@@ -148,35 +147,6 @@ export async function resolveRunSkillPaths(
 }
 
 /**
- * Skill roots for the capability projection, plus the caller's own writable
- * directory so the projection can label each package's tier.
- *
- * Deliberately the same resolver a Run uses: the Skills tab must list what that
- * caller's next Run would actually load, not a process-wide inventory.
- *
- * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} env
- * @param {{ orgId?: unknown, userId?: unknown } | null} identity
- * @returns {{ skillRoots: string[], userSkillRoot: string | null }}
- */
-export function resolveSkillScopeForIdentity(env, identity) {
-  const skillRoots = resolveSkillRootsForRun(env, identity);
-  const { USER_SKILL_ROOT, userSkillRootFor } = skillPathsModule;
-  const userRootBase = String(
-    env?.SKILLS_USER_ROOT || env?.AGENT_SKILLS_USER_ROOT || USER_SKILL_ROOT,
-  ).trim();
-  let userSkillRoot: string | null = null;
-  try {
-    // 身份形状由 userSkillRootFor 自己校验并在非法时抛——这里不重复判断，
-    // 只负责把"抛了就降级到系统层"这条策略写清楚。
-    userSkillRoot = userSkillRootFor(identity as never, userRootBase);
-  } catch {
-    // Malformed identity: system tier only, same degradation as the Run path.
-    userSkillRoot = null;
-  }
-  return { skillRoots, userSkillRoot };
-}
-
-/**
  * @param {NodeJS.ProcessEnv | Record<string, string|undefined>} [env]
  */
 export function resolveMysqlUrlFromEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env) {
@@ -200,13 +170,11 @@ export function resolveRedisUrlFromEnv(env: NodeJS.ProcessEnv | Record<string, s
 }
 
 /**
- * 仓储 opts。原来的 JSDoc 只声明了 `now`，而三个仓储实际还收
- * `runtimePiSdkVersion` / `generateId`——那正是这里曾经三处
- * `@ts-expect-error` 的全部原因：声明少了字段，不是类型系统的问题。
+ * 仓储 opts。原来的 JSDoc 只声明了 `now`，而仓储实际还收 `generateId`——
+ * 那正是这里曾经几处 `@ts-expect-error` 的全部原因：声明少了字段，不是类型系统的问题。
  */
 export interface RepositoryBundleOptions {
   readonly now?: () => Date;
-  readonly runtimePiSdkVersion?: string;
   readonly generateId?: () => string;
 }
 
@@ -223,12 +191,9 @@ export function createRepositoryBundle(
     conversations: new ConversationRepository(db),
     sessions: new AgentSessionRepository(db, { now }),
     /** PR-05 acceleration snapshots (not sole truth). */
-    sessionSnapshots: new AgentSessionSnapshotRepository(db, {
-      now,
-      runtimePiSdkVersion: opts.runtimePiSdkVersion ?? PINNED_PI_SDK_VERSION,
-    }),
+    sessionSnapshots: new AgentSessionSnapshotRepository(db, { now }),
     messages: new MessageRepository(db),
-    /** PR-05 long-term Pi JSONL journal (messages-backed). */
+    /** PR-05 long-term session JSONL journal (messages-backed). */
     journal: new SessionJournalRepository(db, {
       now,
       generateId: opts.generateId,

@@ -7,7 +7,7 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import { issueInternalToken } from '@pi/contract/hmac.js';
+import { issueInternalToken } from '@dsh/contract/hmac.js';
 import { createExecApp, createExecAppFromEnv } from '../src/http/app.js';
 import { WorkspaceManager } from '../src/workspace/manager.js';
 import { MySqlJobRegistry } from '../src/shell/job-registry.js';

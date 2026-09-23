@@ -12,8 +12,6 @@ import {
   buildCachedRegistry,
   buildRegistry,
   resolveDefaultModelId,
-  toThinkingLevelMap,
-  supportedThinkingLevels,
 } from '../../src/infrastructure/model-registry.js';
 import { installDshRunToolBudget } from '../../src/application/dsh-run-tool-budget.js';
 
@@ -42,40 +40,6 @@ describe('model registry: default-model fallback path', () => {
     ];
     const seedOnly = buildRegistry({ seed, filePath: null });
     assert.equal(resolveDefaultModelId(seedOnly), 'seed-model');
-  });
-});
-
-describe('model registry: thinking levels stay self-consistent', () => {
-  it('a wire value cannot advertise a level the entry never declared', () => {
-    // thinking_wire_map says *how* to send a level, not *whether* it exists.
-    // Applying it to an undeclared level made pi-ai report a level that
-    // supportedThinkingLevels() filtered out.
-    const entry = {
-      model_id: 'm',
-      provider: 'p',
-      supports_reasoning: true,
-      thinking_levels: ['low', 'medium'],
-      thinking_wire_map: { high: 'high' },
-    };
-    const map = toThinkingLevelMap(entry);
-    const supported = supportedThinkingLevels(entry);
-    assert.equal(map.high, null, 'undeclared level must stay unsupported');
-    assert.equal(supported.includes('high'), false);
-    for (const level of supported) {
-      assert.notEqual(map[level], null, `${level} is supported but mapped null`);
-    }
-  });
-
-  it('still honours a wire value for a declared level', () => {
-    const entry = {
-      model_id: 'm',
-      provider: 'p',
-      supports_reasoning: true,
-      thinking_levels: ['low', 'xhigh'],
-      thinking_wire_map: { xhigh: 'max' },
-    };
-    assert.equal(toThinkingLevelMap(entry).xhigh, 'max');
-    assert.ok(supportedThinkingLevels(entry).includes('xhigh'));
   });
 });
 

@@ -15,7 +15,7 @@ import {
   readDbpmSettings,
   type DbpmCredentialRole,
   type FetchDbpmCredentialsOptions,
-} from '@pi/contract/dbpm-config.js';
+} from '@dsh/contract/dbpm-config.js';
 import { resolveMysqlUrlFromEnv, resolveRedisUrlFromEnv } from './container-env.js';
 
 export interface AgentCredentials {

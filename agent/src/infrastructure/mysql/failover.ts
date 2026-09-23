@@ -3,7 +3,7 @@
  * §4.2 / §4.3，ADR 0011 D5 / D7）。
  *
  * 为什么在这里而不在 contract/：粘主/拉黑/预算是纯策略，已放进
- * `@pi/contract/endpoint-failover`；「怎样建一条 mysql2 连接、哪些驱动错误算网络
+ * `@dsh/contract/endpoint-failover`；「怎样建一条 mysql2 连接、哪些驱动错误算网络
  * 故障、会话怎样初始化」依赖驱动行为，按 design 留在各包基础设施层。Agent 的
  * Knex 与 DSH 会话存储的裸池共用本文件；exec 另有一份同构实现（不同包）。
  *
@@ -31,7 +31,7 @@ import {
   parseEndpointList,
   type ConnectFailureKind,
   type Endpoint,
-} from '@pi/contract/endpoint-failover.js';
+} from '@dsh/contract/endpoint-failover.js';
 
 const require = createRequire(import.meta.url);
 

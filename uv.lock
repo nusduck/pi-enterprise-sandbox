@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.11.*"
 resolution-markers = [
     "python_version < '0'",
@@ -64,6 +64,30 @@ wheels = [
 ]
 
 [[package]]
+name = "dsh-enterprise-sandbox"
+version = "0.1.0"
+source = { editable = "." }
+
+[package.optional-dependencies]
+test = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-httpx" },
+    { name = "requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
+    { name = "pytest-httpx", marker = "extra == 'test'", specifier = ">=0.30.0" },
+    { name = "requests", marker = "extra == 'test'", specifier = ">=2.31.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -126,30 +150,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/d7/f1/e7a6dd94a8d4a5626
 wheels = [
     { url = "https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e", size = 100195, upload-time = "2026-04-24T20:15:22.081Z" },
 ]
-
-[[package]]
-name = "pi-enterprise-sandbox"
-version = "0.1.0"
-source = { editable = "." }
-
-[package.optional-dependencies]
-test = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-httpx" },
-    { name = "requests" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
-    { name = "pytest-httpx", marker = "extra == 'test'", specifier = ">=0.30.0" },
-    { name = "requests", marker = "extra == 'test'", specifier = ">=2.31.0" },
-]
-provides-extras = ["test"]
 
 [[package]]
 name = "pluggy"

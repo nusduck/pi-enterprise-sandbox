@@ -15,7 +15,7 @@ import {
   SchemaDriftError,
   type SchemaManifest,
   type SchemaMetadataRows,
-} from '@pi/contract/schema-manifest.js';
+} from '@dsh/contract/schema-manifest.js';
 
 import type { ExecDbPool } from './failover-pool.js';
 

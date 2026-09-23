@@ -263,13 +263,13 @@ test('env: rejects embedded NUL bytes in values', () => {
 });
 
 test('host secrets never leak in merely by being in process.env: render() never reads process.env', () => {
-  const previous = process.env['PI_ISOLATION_TEST_SECRET'];
-  process.env['PI_ISOLATION_TEST_SECRET'] = 'host-secret-that-must-not-cross';
+  const previous = process.env['DSH_ISOLATION_TEST_SECRET'];
+  process.env['DSH_ISOLATION_TEST_SECRET'] = 'host-secret-that-must-not-cross';
   try {
     const argv = render(baseProfile());
     assert.ok(!argv.join(' ').includes('host-secret-that-must-not-cross'));
   } finally {
-    if (previous === undefined) delete process.env['PI_ISOLATION_TEST_SECRET'];
-    else process.env['PI_ISOLATION_TEST_SECRET'] = previous;
+    if (previous === undefined) delete process.env['DSH_ISOLATION_TEST_SECRET'];
+    else process.env['DSH_ISOLATION_TEST_SECRET'] = previous;
   }
 });

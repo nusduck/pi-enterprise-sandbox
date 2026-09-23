@@ -1,10 +1,10 @@
 /**
- * Shared Pi JSONL v3 codec (PR-05).
+ * Shared session JSONL v3 codec (PR-05).
  *
  * Single source of truth for materialization + checksum used by:
  * - AgentSessionSnapshotRepository
- * - PiSessionAdapter
- * - Pi session journal / recovery
+ * - DshSessionAdapter
+ * - DSH session journal / recovery
  *
  * Checksum = SHA-256 of the exact deterministic materialized JSONL UTF-8 bytes.
  * Each JSONL line is recursive-canonical JSON (sorted object keys); array /
@@ -17,16 +17,15 @@
 
 import { createHash } from 'node:crypto';
 import { DshSessionAdapterError } from '../infrastructure/dsh/errors.js';
-const PiSessionAdapterError = DshSessionAdapterError;
 
-/** Matches CURRENT_SESSION_VERSION from @earendil-works/pi-coding-agent@0.80.3. */
-export const PI_SESSION_JSONL_VERSION = 3;
+/** Session JSONL format version (header `version`). Inherited from the legacy engine; frozen for stored sessions. */
+export const SESSION_JSONL_VERSION = 3;
 
 /**
  * Exact SessionEntry type union for v3 (plus header type "session").
  * @see SessionManager session-manager.d.ts SessionEntry
  */
-export const PI_JSONL_ENTRY_TYPES = Object.freeze([
+export const SESSION_JSONL_ENTRY_TYPES = Object.freeze([
   'message',
   'thinking_level_change',
   'model_change',
@@ -38,7 +37,7 @@ export const PI_JSONL_ENTRY_TYPES = Object.freeze([
   'session_info',
 ]);
 
-export const PI_JSONL_ENTRY_TYPE_SET = new Set(PI_JSONL_ENTRY_TYPES);
+export const SESSION_JSONL_ENTRY_TYPE_SET = new Set(SESSION_JSONL_ENTRY_TYPES);
 
 /** Default max JSONL UTF-8 bytes. */
 export const DEFAULT_MAX_JSONL_BYTES = 8 * 1024 * 1024;
@@ -67,8 +66,8 @@ export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<strin
   if (t === 'string' || t === 'boolean') return value;
   if (t === 'number') {
     if (!Number.isFinite(value)) {
-      throw new PiSessionAdapterError('non-finite numbers are not supported in JSONL', {
-        code: 'PI_JSONL_CANONICALIZE_ERROR',
+      throw new DshSessionAdapterError('non-finite numbers are not supported in JSONL', {
+        code: 'SESSION_JSONL_CANONICALIZE_ERROR',
       });
     }
     if (Object.is(value, -0)) return 0;
@@ -84,14 +83,14 @@ export function canonicalizeForJsonl(value: unknown, stack: WeakSet<Record<strin
     return value;
   }
   if (t !== 'object') {
-    throw new PiSessionAdapterError(`unsupported JSONL value type: ${t}`, {
-      code: 'PI_JSONL_CANONICALIZE_ERROR',
+    throw new DshSessionAdapterError(`unsupported JSONL value type: ${t}`, {
+      code: 'SESSION_JSONL_CANONICALIZE_ERROR',
     });
   }
   const obj = (value as Record<string, any>);
   if (stack.has(obj)) {
-    throw new PiSessionAdapterError('circular reference is not supported in JSONL', {
-      code: 'PI_JSONL_CANONICALIZE_ERROR',
+    throw new DshSessionAdapterError('circular reference is not supported in JSONL', {
+      code: 'SESSION_JSONL_CANONICALIZE_ERROR',
     });
   }
   stack.add(obj);
@@ -137,15 +136,15 @@ export function serializeJsonlLine(value: unknown) {
  */
 export function validateSnapshotPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new PiSessionAdapterError('snapshot payload must be an object', {
-      code: 'PI_SNAPSHOT_PAYLOAD_INVALID',
+    throw new DshSessionAdapterError('snapshot payload must be an object', {
+      code: 'SESSION_SNAPSHOT_PAYLOAD_INVALID',
     });
   }
   const p = (payload as Record<string, unknown>);
   const header = validateHeader(p.header);
   if (!Array.isArray(p.entries)) {
-    throw new PiSessionAdapterError('snapshot payload.entries must be an array', {
-      code: 'PI_SNAPSHOT_PAYLOAD_INVALID',
+    throw new DshSessionAdapterError('snapshot payload.entries must be an array', {
+      code: 'SESSION_SNAPSHOT_PAYLOAD_INVALID',
     });
   }
   const entries = validateEntries((p.entries as unknown[]));
@@ -158,36 +157,36 @@ export function validateSnapshotPayload(payload: unknown) {
  */
 export function validateHeader(header: unknown) {
   if (!header || typeof header !== 'object' || Array.isArray(header)) {
-    throw new PiSessionAdapterError('snapshot header is required', {
-      code: 'PI_JSONL_HEADER_INVALID',
+    throw new DshSessionAdapterError('snapshot header is required', {
+      code: 'SESSION_JSONL_HEADER_INVALID',
     });
   }
   const h = (header as Record<string, unknown>);
   if (h.type !== 'session') {
-    throw new PiSessionAdapterError('header.type must be "session"', {
-      code: 'PI_JSONL_HEADER_INVALID',
+    throw new DshSessionAdapterError('header.type must be "session"', {
+      code: 'SESSION_JSONL_HEADER_INVALID',
     });
   }
   const version = Number(h.version);
-  if (version !== PI_SESSION_JSONL_VERSION) {
-    throw new PiSessionAdapterError(
-      `header.version must be ${PI_SESSION_JSONL_VERSION}, got ${String(h.version)}`,
-      { code: 'PI_SNAPSHOT_VERSION_INCOMPATIBLE' },
+  if (version !== SESSION_JSONL_VERSION) {
+    throw new DshSessionAdapterError(
+      `header.version must be ${SESSION_JSONL_VERSION}, got ${String(h.version)}`,
+      { code: 'SESSION_SNAPSHOT_VERSION_INCOMPATIBLE' },
     );
   }
   if (typeof h.id !== 'string' || !h.id.trim()) {
-    throw new PiSessionAdapterError('header.id must be a non-empty string', {
-      code: 'PI_JSONL_HEADER_INVALID',
+    throw new DshSessionAdapterError('header.id must be a non-empty string', {
+      code: 'SESSION_JSONL_HEADER_INVALID',
     });
   }
   if (typeof h.timestamp !== 'string' || !h.timestamp.trim()) {
-    throw new PiSessionAdapterError('header.timestamp must be a non-empty string', {
-      code: 'PI_JSONL_HEADER_INVALID',
+    throw new DshSessionAdapterError('header.timestamp must be a non-empty string', {
+      code: 'SESSION_JSONL_HEADER_INVALID',
     });
   }
   if (typeof h.cwd !== 'string') {
-    throw new PiSessionAdapterError('header.cwd must be a string', {
-      code: 'PI_JSONL_HEADER_INVALID',
+    throw new DshSessionAdapterError('header.cwd must be a string', {
+      code: 'SESSION_JSONL_HEADER_INVALID',
     });
   }
   return h;
@@ -258,95 +257,95 @@ export function validateEntries(entries: unknown[]) {
   for (let i = 0; i < entries.length; i += 1) {
     const raw = entries[i];
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      throw new PiSessionAdapterError(`entries[${i}] must be an object`, {
-        code: 'PI_SNAPSHOT_ENTRY_INVALID',
+      throw new DshSessionAdapterError(`entries[${i}] must be an object`, {
+        code: 'SESSION_SNAPSHOT_ENTRY_INVALID',
       });
     }
     const e = (raw as Record<string, unknown>);
     const type = e.type;
-    if (typeof type !== 'string' || !PI_JSONL_ENTRY_TYPE_SET.has(type)) {
-      throw new PiSessionAdapterError(
+    if (typeof type !== 'string' || !SESSION_JSONL_ENTRY_TYPE_SET.has(type)) {
+      throw new DshSessionAdapterError(
         `entries[${i}].type unknown or missing: ${String(type)}`,
-        { code: 'PI_SNAPSHOT_ENTRY_UNKNOWN_TYPE' },
+        { code: 'SESSION_SNAPSHOT_ENTRY_UNKNOWN_TYPE' },
       );
     }
     if (typeof e.id !== 'string' || !e.id.trim()) {
-      throw new PiSessionAdapterError(`entries[${i}].id must be a non-empty string`, {
-        code: 'PI_SNAPSHOT_ENTRY_INVALID',
+      throw new DshSessionAdapterError(`entries[${i}].id must be a non-empty string`, {
+        code: 'SESSION_SNAPSHOT_ENTRY_INVALID',
       });
     }
     const id = e.id;
     if (seenIds.has(id)) {
-      throw new PiSessionAdapterError(`duplicate entry id: ${id}`, {
-        code: 'PI_SNAPSHOT_ENTRY_DUPLICATE_ID',
+      throw new DshSessionAdapterError(`duplicate entry id: ${id}`, {
+        code: 'SESSION_SNAPSHOT_ENTRY_DUPLICATE_ID',
       });
     }
 
     // parentId must be an explicit own-property (null root or prior id).
     if (!Object.prototype.hasOwnProperty.call(e, 'parentId')) {
-      throw new PiSessionAdapterError(
+      throw new DshSessionAdapterError(
         `entries[${i}].parentId is required (own property; use null for the single root)`,
-        { code: 'PI_SNAPSHOT_ENTRY_PARENT_REQUIRED' },
+        { code: 'SESSION_SNAPSHOT_ENTRY_PARENT_REQUIRED' },
       );
     }
 
     if (e.parentId === null) {
       if (i !== 0 || nullRootSeen) {
-        throw new PiSessionAdapterError(
+        throw new DshSessionAdapterError(
           `entries[${i}].parentId null root only allowed as the first entry (at most one root)`,
-          { code: 'PI_SNAPSHOT_ENTRY_MULTI_ROOT' },
+          { code: 'SESSION_SNAPSHOT_ENTRY_MULTI_ROOT' },
         );
       }
       nullRootSeen = true;
     } else if (typeof e.parentId === 'string' && e.parentId.trim()) {
       if (!seenIds.has(e.parentId)) {
-        throw new PiSessionAdapterError(
+        throw new DshSessionAdapterError(
           `entries[${i}].parentId ${e.parentId} does not reference a prior entry`,
-          { code: 'PI_SNAPSHOT_ENTRY_ORPHAN' },
+          { code: 'SESSION_SNAPSHOT_ENTRY_ORPHAN' },
         );
       }
     } else {
-      throw new PiSessionAdapterError(
+      throw new DshSessionAdapterError(
         `entries[${i}].parentId must be null or a non-empty string`,
-        { code: 'PI_SNAPSHOT_ENTRY_ORPHAN' },
+        { code: 'SESSION_SNAPSHOT_ENTRY_ORPHAN' },
       );
     }
 
     if (typeof e.timestamp !== 'string' || !e.timestamp.trim()) {
-      throw new PiSessionAdapterError(
+      throw new DshSessionAdapterError(
         `entries[${i}].timestamp must be a non-empty string`,
-        { code: 'PI_SNAPSHOT_ENTRY_INVALID' },
+        { code: 'SESSION_SNAPSHOT_ENTRY_INVALID' },
       );
     }
 
     if (type === 'message') {
       if (!e.message || typeof e.message !== 'object') {
-        throw new PiSessionAdapterError(`entries[${i}].message is required`, {
-          code: 'PI_SNAPSHOT_ENTRY_INVALID',
+        throw new DshSessionAdapterError(`entries[${i}].message is required`, {
+          code: 'SESSION_SNAPSHOT_ENTRY_INVALID',
         });
       }
     }
 
     if (type === 'compaction') {
       if (typeof e.summary !== 'string' || typeof e.firstKeptEntryId !== 'string') {
-        throw new PiSessionAdapterError(
+        throw new DshSessionAdapterError(
           `entries[${i}] compaction requires summary and firstKeptEntryId`,
-          { code: 'PI_SNAPSHOT_ENTRY_INVALID' },
+          { code: 'SESSION_SNAPSHOT_ENTRY_INVALID' },
         );
       }
       if (!seenIds.has(e.firstKeptEntryId)) {
-        throw new PiSessionAdapterError(
+        throw new DshSessionAdapterError(
           `entries[${i}].firstKeptEntryId ${e.firstKeptEntryId} does not reference a prior entry`,
-          { code: 'PI_SNAPSHOT_ENTRY_COMPACTION_INVALID' },
+          { code: 'SESSION_SNAPSHOT_ENTRY_COMPACTION_INVALID' },
         );
       }
       // firstKeptEntryId must be on the ancestry of this entry's parent (or be parent).
       const parentId = (e.parentId as string | null);
       if (parentId != null) {
         if (!isAncestorOrSelf(parentId, e.firstKeptEntryId, parentOf)) {
-          throw new PiSessionAdapterError(
+          throw new DshSessionAdapterError(
             `entries[${i}].firstKeptEntryId ${e.firstKeptEntryId} is not on the parent ancestry chain`,
-            { code: 'PI_SNAPSHOT_ENTRY_COMPACTION_INVALID' },
+            { code: 'SESSION_SNAPSHOT_ENTRY_COMPACTION_INVALID' },
           );
         }
       }
@@ -354,24 +353,24 @@ export function validateEntries(entries: unknown[]) {
 
     if (type === 'branch_summary') {
       if (typeof e.fromId !== 'string' || typeof e.summary !== 'string') {
-        throw new PiSessionAdapterError(
+        throw new DshSessionAdapterError(
           `entries[${i}] branch_summary requires fromId and summary`,
-          { code: 'PI_SNAPSHOT_ENTRY_INVALID' },
+          { code: 'SESSION_SNAPSHOT_ENTRY_INVALID' },
         );
       }
       if (!seenIds.has(e.fromId)) {
-        throw new PiSessionAdapterError(
+        throw new DshSessionAdapterError(
           `entries[${i}].fromId ${e.fromId} does not reference a prior entry`,
-          { code: 'PI_SNAPSHOT_ENTRY_BRANCH_INVALID' },
+          { code: 'SESSION_SNAPSHOT_ENTRY_BRANCH_INVALID' },
         );
       }
     }
 
     // Non-empty sessions must start with a null root.
     if (i === 0 && e.parentId !== null) {
-      throw new PiSessionAdapterError(
+      throw new DshSessionAdapterError(
         'entries[0].parentId must be null (single root)',
-        { code: 'PI_SNAPSHOT_ENTRY_MULTI_ROOT' },
+        { code: 'SESSION_SNAPSHOT_ENTRY_MULTI_ROOT' },
       );
     }
 
@@ -383,7 +382,7 @@ export function validateEntries(entries: unknown[]) {
 }
 
 /**
- * Materialize complete version-3 Pi JSONL text (header first, then entries).
+ * Materialize complete version-3 session JSONL text (header first, then entries).
  * Each line uses deterministic canonical serialization.
  *
  * @param payload
@@ -400,9 +399,9 @@ export function materializeJsonl(payload: unknown, opts: { maxBytes?: number } =
   const max = opts.maxBytes ?? DEFAULT_MAX_JSONL_BYTES;
   const bytes = Buffer.byteLength(text, 'utf8');
   if (bytes > max) {
-    throw new PiSessionAdapterError(
+    throw new DshSessionAdapterError(
       `JSONL exceeds max size ${max} bytes`,
-      { code: 'PI_JSONL_TOO_LARGE' },
+      { code: 'SESSION_JSONL_TOO_LARGE' },
     );
   }
   return text;
@@ -415,8 +414,8 @@ export function materializeJsonl(payload: unknown, opts: { maxBytes?: number } =
  */
 export function checksumJsonl(jsonlText: string) {
   if (typeof jsonlText !== 'string') {
-    throw new PiSessionAdapterError('checksumJsonl requires a string', {
-      code: 'PI_JSONL_CHECKSUM_INVALID',
+    throw new DshSessionAdapterError('checksumJsonl requires a string', {
+      code: 'SESSION_JSONL_CHECKSUM_INVALID',
     });
   }
   return createHash('sha256').update(jsonlText, 'utf8').digest('hex');
@@ -448,7 +447,7 @@ export function verifySnapshotChecksum(snapshot: { snapshotJson?: unknown, check
 export function buildSessionHeader(opts: { id: string, cwd: string, timestamp?: string }) {
   return {
     type: 'session',
-    version: PI_SESSION_JSONL_VERSION,
+    version: SESSION_JSONL_VERSION,
     id: String(opts.id),
     timestamp: opts.timestamp || new Date().toISOString(),
     cwd: String(opts.cwd ?? ''),
@@ -456,7 +455,7 @@ export function buildSessionHeader(opts: { id: string, cwd: string, timestamp?: 
 }
 
 /**
- * Capture a Pi JSONL snapshot from SessionManager, awaiting a thenable adapter.
+ * Capture a session JSONL snapshot from SessionManager, awaiting a thenable adapter.
  * A null/Promise adapter (Wave 6 stub) must fall through to getHeader, not throw
  * "snapshot header is required" on the Promise object.
  *
@@ -485,7 +484,7 @@ export async function captureSessionSnapshotPayload(input: { sessionAdapter?: { 
       header: {
         ...payload.header,
         cwd: cwd ?? payload.header.cwd,
-        version: PI_SESSION_JSONL_VERSION,
+        version: SESSION_JSONL_VERSION,
         type: 'session',
       },
       entries: Array.isArray(payload.entries) ? [...payload.entries] : [],

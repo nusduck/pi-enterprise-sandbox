@@ -133,7 +133,7 @@ function statementBlock(statement: string): string {
 
 export function renderBookkeepingSql(statements: readonly string[]): string {
   return [
-    '-- pi-enterprise-sandbox schema release: Knex bookkeeping tables (first install only)',
+    '-- dsh-enterprise-sandbox schema release: Knex bookkeeping tables (first install only)',
     '-- 执行：mysql <db> < 本文件；首个错误即停，禁止 --force。',
     ...statements.map(statementBlock),
   ].join('\n');
@@ -144,7 +144,7 @@ export function renderSegmentSql(segment: ExportedSegment): string {
     throw new Error(`refusing to render unexpected migration name: ${segment.migration}`);
   }
   return [
-    `-- pi-enterprise-sandbox schema release segment: ${segment.migration}`,
+    `-- dsh-enterprise-sandbox schema release segment: ${segment.migration}`,
     `-- statements: ${segment.statements.length}`,
     '-- 执行：mysql <db> < 本文件；首个错误即停，禁止 --force。失败时不要补记版本，按',
     '-- docs/runbooks/mysql-partial-migration-recovery.md 判断继续或清理范围。',

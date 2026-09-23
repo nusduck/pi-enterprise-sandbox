@@ -12,8 +12,8 @@ export function createDshRunExecutorFactory(opts: DshRunExecutorFactoryOptions) 
   if (!opts.transactionManager || !opts.createRepositories) {
     throw new Error('createDshRunExecutorFactory requires transactionManager and createRepositories');
   }
-  if (!opts.sessionLockManager || !opts.piRuntimeFactory) {
-    throw new Error('createDshRunExecutorFactory requires sessionLockManager and piRuntimeFactory');
+  if (!opts.sessionLockManager || !opts.dshRuntimeFactory) {
+    throw new Error('createDshRunExecutorFactory requires sessionLockManager and dshRuntimeFactory');
   }
   if (typeof opts.generateId !== 'function') {
     throw new Error('createDshRunExecutorFactory requires generateId');
@@ -24,7 +24,7 @@ export function createDshRunExecutorFactory(opts: DshRunExecutorFactoryOptions) 
       transactionManager: opts.transactionManager,
       createRepositories: opts.createRepositories,
       sessionLockManager: opts.sessionLockManager,
-      piRuntimeFactory: opts.piRuntimeFactory,
+      dshRuntimeFactory: opts.dshRuntimeFactory,
       modelResolver: opts.modelResolver,
       promptImageLoader: opts.promptImageLoader,
       requestAuthResolver: opts.requestAuthResolver,

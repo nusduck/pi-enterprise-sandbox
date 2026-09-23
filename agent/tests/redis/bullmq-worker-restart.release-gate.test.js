@@ -28,7 +28,7 @@ const TEST_REDIS_CONTAINER = String(
 ).trim();
 const explicitlyEnabled =
   process.env.RUN_BULLMQ_WORKER_RESTART_GATE === '1';
-const safeContainer = /^pi-release-gate-redis-[a-z0-9-]+$/.test(
+const safeContainer = /^dsh-release-gate-redis-[a-z0-9-]+$/.test(
   TEST_REDIS_CONTAINER,
 );
 const runLive = explicitlyEnabled && safeContainer && Boolean(TEST_REDIS_URL);
@@ -185,7 +185,7 @@ describe('BullMQ Worker restart gate safety', () => {
     }
     assert.ok(
       safeContainer,
-      'TEST_REDIS_CONTAINER must match pi-release-gate-redis-*',
+      'TEST_REDIS_CONTAINER must match dsh-release-gate-redis-*',
     );
     assert.ok(TEST_REDIS_URL, 'TEST_REDIS_URL is required');
   });

@@ -161,7 +161,7 @@ describe('startWorkerMain', () => {
             AGENT_BULLMQ_LOCK_DURATION_MS: '3000',
             AGENT_BULLMQ_STALLED_INTERVAL_MS: '500',
             AGENT_BULLMQ_MAX_STALLED_COUNT: '2',
-            AGENT_RUN_QUEUE_PREFIX: '{pi-test-bull}',
+            AGENT_RUN_QUEUE_PREFIX: '{dsh-test-bull}',
           },
           {
             createContainer: () => fakeContainer,
@@ -177,7 +177,7 @@ describe('startWorkerMain', () => {
     assert.equal(options.lockDuration, 3000);
     assert.equal(options.stalledInterval, 500);
     assert.equal(options.maxStalledCount, 2);
-    assert.equal(options.prefix, '{pi-test-bull}');
+    assert.equal(options.prefix, '{dsh-test-bull}');
     // 生产接线：每个消费者都带同会话依次执行的判定（plan §12 follow-up）。
     assert.equal(typeof options.shouldWait, 'function');
 

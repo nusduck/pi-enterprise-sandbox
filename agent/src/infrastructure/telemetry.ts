@@ -17,7 +17,7 @@ import {
 import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 
-const INSTRUMENTATION_NAME = 'pi-enterprise-agent';
+const INSTRUMENTATION_NAME = 'dsh-enterprise-agent';
 let telemetry = null;
 
 function positiveInteger(value, fallback) {
@@ -69,7 +69,7 @@ export async function startTelemetry(
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: String(
-        env.OTEL_SERVICE_NAME || options.serviceName || 'pi-enterprise-agent',
+        env.OTEL_SERVICE_NAME || options.serviceName || 'dsh-enterprise-agent',
       ),
       [ATTR_SERVICE_VERSION]: '4.0.0',
       'deployment.environment.name': String(

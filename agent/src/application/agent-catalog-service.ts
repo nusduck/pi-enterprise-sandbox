@@ -33,7 +33,6 @@ import {
 } from './parent/external-identity-resolver.js';
 import { bindAgentVersionConfig } from '../infrastructure/dsh/agent-version-bindings.js';
 import {
-  DEFAULT_PI_SDK_VERSION,
   defaultAgentConfigJson,
   hashAgentConfig,
 } from '../infrastructure/mysql/repositories/agent-catalog-repository.js';
@@ -104,7 +103,6 @@ export function presentAgentVersion(version: Record<string, any>) {
     version_no: Number(version.versionNo),
     config: version.configJson ?? {},
     config_hash: version.configHash,
-    pi_sdk_version: version.piSdkVersion,
     status: version.status,
     created_at: version.createdAt ?? null,
   };
@@ -218,7 +216,6 @@ export class AgentCatalogService {
       bindAgentVersionConfig({
         agentVersionId: 'validation-probe',
         configJson,
-        piSdkVersion: DEFAULT_PI_SDK_VERSION,
       });
     } catch (err) {
       throw new ValidationError(
@@ -361,7 +358,6 @@ export class AgentCatalogService {
         versionNo: 1,
         configJson,
         configHash: hashAgentConfig(configJson),
-        piSdkVersion: DEFAULT_PI_SDK_VERSION,
         status: 'active',
         createdBy: owner.userId,
       });
@@ -412,7 +408,6 @@ export class AgentCatalogService {
             versionNo,
             configJson,
             configHash: hashAgentConfig(configJson),
-            piSdkVersion: DEFAULT_PI_SDK_VERSION,
             status: 'active',
             createdBy: owner.userId,
           });

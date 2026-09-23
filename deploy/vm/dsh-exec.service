@@ -1,6 +1,6 @@
-# Pi Enterprise Sandbox exec（执行面）的 systemd unit（design §9.1 / §9.2）。
+# DSH Enterprise Sandbox exec（执行面）的 systemd unit（design §9.1 / §9.2）。
 #
-# 由 install-release.sh activate 安装到 /etc/systemd/system/pi-exec.service。
+# 由 install-release.sh activate 安装到 /etc/systemd/system/dsh-exec.service。
 # 单 VM 单实例：不要复制成多个实例（exec 也会以 EXEC_CONCURRENCY 拒绝多实例）。
 #
 # 加固项与 Bubblewrap 的兼容性以 exec 启动期隔离预检为准：不兼容时 exec 拒绝启动，不会带病运行。
@@ -16,7 +16,7 @@
 #     MemoryDenyWriteExecute —— Node 的 JIT 需要可写可执行内存
 
 [Unit]
-Description=Pi Enterprise Sandbox exec (execution plane)
+Description=DSH Enterprise Sandbox exec (execution plane)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -24,12 +24,12 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=pi-exec
-Group=pi-exec
-EnvironmentFile=/etc/pi-exec/exec.env
-WorkingDirectory=/opt/pi-exec/current/exec
+User=dsh-exec
+Group=dsh-exec
+EnvironmentFile=/etc/dsh-exec/exec.env
+WorkingDirectory=/opt/dsh-exec/current/exec
 # 部署检查：非 root、Node 版本与位置、release 完整且只读、必需配置、数据目录属主与权限。
-ExecStartPre=/opt/pi-exec/current/vm/exec-preflight.sh
+ExecStartPre=/opt/dsh-exec/current/vm/exec-preflight.sh
 # 应用自身再按 取密 → schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen 启动。
 ExecStart=/usr/local/bin/node dist/main.js
 Restart=on-failure
@@ -50,7 +50,7 @@ AmbientCapabilities=
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/pi-exec -/mnt/pi-skill/draft
+ReadWritePaths=/var/lib/dsh-exec -/mnt/dsh-skill/draft
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes

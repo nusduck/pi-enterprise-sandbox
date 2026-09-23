@@ -108,8 +108,8 @@ export function mapMessage(row: Record<string, unknown>) {
     contentJson: parseJsonColumn(row.content_json),
     sequenceNo: Number(row.sequence_no),
     // PR-05 slice B journal markers (nullable; absent on pre-journal rows).
-    piEntryId: row.pi_entry_id == null ? null : String(row.pi_entry_id),
-    piEntryKind: row.pi_entry_kind == null ? null : String(row.pi_entry_kind),
+    sessionEntryId: row.session_entry_id == null ? null : String(row.session_entry_id),
+    sessionEntryKind: row.session_entry_kind == null ? null : String(row.session_entry_kind),
     createdAt: formatDateTime(row.created_at),
   };
 }
@@ -124,7 +124,7 @@ export function mapAgentSession(row: Record<string, unknown>) {
     sandboxSessionId: String(row.sandbox_session_id),
     workspaceId: String(row.workspace_id),
     status: String(row.status),
-    piSessionVersion: Number(row.pi_session_version ?? 0),
+    sessionVersion: Number(row.session_version ?? 0),
     lastRunId: row.last_run_id == null ? null : String(row.last_run_id),
     // PR-05 fencing / recovery (migration 20260718000005); default when absent.
     executionFenceToken: Number(row.execution_fence_token ?? 0),
@@ -154,7 +154,6 @@ export function mapAgentSessionSnapshot(row: Record<string, unknown>) {
     workspacePath:
       row.workspace_path == null ? null : String(row.workspace_path),
     checksum: String(row.checksum),
-    piSdkVersion: String(row.pi_sdk_version),
     capturedFenceToken: Number(row.captured_fence_token ?? 0),
     createdAt: formatDateTime(row.created_at),
   };

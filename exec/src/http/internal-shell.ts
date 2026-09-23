@@ -11,7 +11,7 @@
  *
  * 1. **参数被静默丢弃**（R4）：以前只挑 `command`/`timeoutMs`，Agent 发的
  *    `workdir`/`stdin`/`env`/`stdoutMaxBytes` 一律丢掉，HTTP 仍然 200。现在
- *    整个请求体走 `@pi/contract/shell-payload.js` 的共用解析器，非法字段在
+ *    整个请求体走 `@dsh/contract/shell-payload.js` 的共用解析器，非法字段在
  *    执行前拒绝（400），合法字段原样传到执行器。
  * 2. **资源限额从未生效**（R1）：`SANDBOX_MAX_PROCESS_COUNT` 等变量在
  *    `exec/src` 里一个消费者都没有。现在装配层把 `ShellResourceLimits`
@@ -26,9 +26,9 @@
  */
 
 import type { Hono } from 'hono';
-import { ContractError, toWireError } from '@pi/contract/errors.js';
-import { parseEnvelope } from '@pi/contract/envelope.js';
-import { parseEnabledSkills, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
+import { ContractError, toWireError } from '@dsh/contract/errors.js';
+import { parseEnvelope } from '@dsh/contract/envelope.js';
+import { parseEnabledSkills, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
 import {
   parseShellRunPayload,
   parseShellStartPayload,
@@ -36,7 +36,7 @@ import {
   SANDBOX_WORKSPACE_PATH,
   type ShellPayload,
   type ShellPayloadLimits,
-} from '@pi/contract/shell-payload.js';
+} from '@dsh/contract/shell-payload.js';
 import { deniedProcessHandle, deniedRunResult } from '../shell/executor.js';
 import type { MySqlJobRegistry } from '../shell/job-registry.js';
 import type { ShellResourceLimits } from '../shell/resource-limits.js';

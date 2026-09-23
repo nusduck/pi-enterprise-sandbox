@@ -2,7 +2,7 @@
  * exec 侧 UPDRDB 双 Proxy 建连：每端点一个 mysql2 池 + 按端点故障切换的 acquire
  * （design `updrdb-dbpm-deployment.md` §4.2 / §4.3，ADR 0011 D5 / D7）。
  *
- * 粘主/拉黑/预算的纯策略在 `@pi/contract/endpoint-failover`；驱动接线按 design 留在
+ * 粘主/拉黑/预算的纯策略在 `@dsh/contract/endpoint-failover`；驱动接线按 design 留在
  * 各包，所以 Agent 的 `infrastructure/mysql/failover.ts` 有一份同构实现。两边规则
  * 必须一致：只在 acquire 阶段换端点，业务 SQL 发出后不重发；会话初始化在交付
  * 连接前完成，失败即丢弃连接并按致命错误抛出。
@@ -18,7 +18,7 @@ import {
   parseEndpointList,
   type ConnectFailureKind,
   type Endpoint,
-} from '@pi/contract/endpoint-failover.js';
+} from '@dsh/contract/endpoint-failover.js';
 
 const require = createRequire(import.meta.url);
 

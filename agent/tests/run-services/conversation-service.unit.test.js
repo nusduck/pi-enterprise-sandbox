@@ -89,7 +89,7 @@ describe('ConversationService MySQL authority', () => {
           role: 'system',
           messageType: 'message',
           contentJson: {
-            kind: 'pi_journal_entry',
+            kind: 'session_journal_entry',
             entry: {
               id: 'dsh:assistant:2:1',
               type: 'message',
@@ -109,7 +109,7 @@ describe('ConversationService MySQL authority', () => {
           role: 'assistant',
           messageType: 'text',
           sequenceNo: 3,
-          contentJson: { kind: 'assistant_message', piEntryId: 'dsh:assistant:2:1', text: 'You have 13 skills.' },
+          contentJson: { kind: 'assistant_message', sessionEntryId: 'dsh:assistant:2:1', text: 'You have 13 skills.' },
         },
       ],
     );

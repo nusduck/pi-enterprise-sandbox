@@ -4,8 +4,8 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { DbpmConfigError } from '@pi/contract/dbpm-config.js';
-import type { DbpmEntry } from '@pi/contract/dbpm.js';
+import { DbpmConfigError } from '@dsh/contract/dbpm-config.js';
+import type { DbpmEntry } from '@dsh/contract/dbpm.js';
 
 import { createExecAppFromEnv, readExecDbConfigFromSandboxEnv } from '../src/http/app.js';
 import { resolveExecDbPassword } from '../src/startup-credentials.js';

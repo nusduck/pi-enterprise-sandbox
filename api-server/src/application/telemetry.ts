@@ -24,7 +24,7 @@ import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic
 import type { IncomingMessage } from 'node:http';
 import type { RequestTraceContext } from './trace-context.js';
 
-const INSTRUMENTATION_NAME = 'pi-enterprise-bff';
+const INSTRUMENTATION_NAME = 'dsh-enterprise-bff';
 const DEFAULT_EXPORT_TIMEOUT_MS = 10_000;
 const DEFAULT_SCHEDULE_DELAY_MS = 5_000;
 const DEFAULT_MAX_QUEUE_SIZE = 2_048;
@@ -98,7 +98,7 @@ export async function startTelemetry(
     : new NoopSpanProcessor();
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: String(env.OTEL_SERVICE_NAME || 'pi-enterprise-bff'),
+      [ATTR_SERVICE_NAME]: String(env.OTEL_SERVICE_NAME || 'dsh-enterprise-bff'),
       [ATTR_SERVICE_VERSION]: '4.0.0',
       'deployment.environment.name': String(
         env.DEPLOYMENT_ENV || env.NODE_ENV || 'development',

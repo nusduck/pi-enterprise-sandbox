@@ -1120,7 +1120,7 @@ export class ExecuteRunService {
   }
 
   /**
-   * Crash recovery after the durable claim committed but before Pi checkpointed
+   * Crash recovery after the durable claim committed but before DSH checkpointed
    * the answered tool-result. The CLAIMED phase is the explicit replay fence;
    * ordinary RUNNING jobs still fail closed above.
    */
@@ -1327,7 +1327,7 @@ export class ExecuteRunService {
     }
 
     // requestApproval may already have atomically persisted the waiting state
-    // before PiRunExecutor returns the same outcome.
+    // before DshRunExecutor returns the same outcome.
     if (currentFrom === outcome) {
       return {
         status: currentFrom,

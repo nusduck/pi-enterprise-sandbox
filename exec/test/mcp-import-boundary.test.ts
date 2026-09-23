@@ -57,7 +57,7 @@ const ALLOWED_EXTERNAL = [
   /^hono$/,
   /^ioredis$/,
   /^zod$/,
-  /^@pi\/contract\/dbpm-config\.js$/,
+  /^@dsh\/contract\/dbpm-config\.js$/,
 ];
 
 function dockerStage(name: string): string {
@@ -117,7 +117,7 @@ describe('Dockerfile facade stage matches the import graph', () => {
   });
 
   test('不带执行面工具链，以 up_docker（1000:1000）运行 facade 入口', () => {
-    for (const forbidden of ['apt-get', 'bubblewrap', 'pi-python', 'bun', 'skill-runtime', 'chromium']) {
+    for (const forbidden of ['apt-get', 'bubblewrap', 'dsh-python', 'bun', 'skill-runtime', 'chromium']) {
       assert.ok(!stage.includes(forbidden), `facade stage mentions ${forbidden}`);
     }
     assert.match(stage, /^USER 1000:1000$/m);

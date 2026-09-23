@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { FailoverError } from '@pi/contract/endpoint-failover.js';
+import { FailoverError } from '@dsh/contract/endpoint-failover.js';
 import type { PoolConnection } from 'mysql2/promise';
 
 import { createExecDbPool, closeExecDbPool, SESSION_UTC_SQL } from '../src/db/client.js';

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 CANONICAL_SKILL_TARGET = "/home/sandbox/skill"
-REMOVED_SKILL_TARGETS = frozenset({"/sandbox/skills", "/app/.pi/skills"})
+REMOVED_SKILL_TARGETS = frozenset({"/sandbox/skills"})
 MYSQL_SCHEMES = frozenset({"mysql", "mysql+pymysql", "mysql2"})
 # Application services that fetch credentials from DBPM, and the connection
 # URLs that must therefore carry no password (ADR 0011 D10).

@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { EndpointConfigError, FailoverError } from '@pi/contract/endpoint-failover.js';
+import { EndpointConfigError, FailoverError } from '@dsh/contract/endpoint-failover.js';
 import { createMysqlKnex, destroyMysqlKnex, loadKnexModule } from '../../src/infrastructure/mysql/client.js';
 import {
   MysqlSessionInitError,

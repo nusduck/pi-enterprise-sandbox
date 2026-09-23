@@ -1,5 +1,5 @@
 /**
- * 组合根——取代 `agent/src/infrastructure/pi/pi-runtime-factory.js`。
+ * 组合根——取代 `agent/src/infrastructure/dsh/dsh-runtime-factory.js`。
  *
  * 这是什么：叠在 `@deepseek-ai/dsh-base` 之上的第 1 层组合（`src/runtime/bundle/cordis.patch.yml`），
  * 把自建 provider/策略挂载点挂到 DSH 的原生能力上。能用原生的（`dsh-tool-fs`/`dsh-compaction` 等）
@@ -382,18 +382,18 @@ export async function bootEnterpriseRuntime(
   const overlayFile = join(here, 'bundle/cordis.patch.yml');
   const emptyConfig = join(here, 'bundle/cordis.yml');
   const { existsSync } = await import('node:fs');
-  const overlayPatches = loadOverlayPatches('pi-runtime', overlayFile);
+  const overlayPatches = loadOverlayPatches('dsh-runtime', overlayFile);
   // fail-closed：本包 patch 里引用不到的文件会让插件静默退回出厂实现。
   assertOverlayPatchResolvable(overlayFile, overlayPatches, existsSync);
   // MCP 按进程环境叠，不进提交的 YAML（镜像构建时 MCP_SERVERS_JSON 是空的）。
   const mcpPatches = buildMcpRuntimePatches();
   const patches = [
-    ...loadOverlayPatches('pi-runtime', basePatchFile),
+    ...loadOverlayPatches('dsh-runtime', basePatchFile),
     ...overlayPatches,
     // PatchEntry.insert 是 readonly；boot 要的 PatchOptions.insert 是可变数组。
     ...(mcpPatches as unknown as ReturnType<typeof loadOverlayPatches>),
   ];
   const bareModuleBaseUrl = pathToFileURL(join(here, '../')).href;
   void rpc;
-  return boot('pi-runtime', emptyConfig, patches, undefined, bareModuleBaseUrl);
+  return boot('dsh-runtime', emptyConfig, patches, undefined, bareModuleBaseUrl);
 }

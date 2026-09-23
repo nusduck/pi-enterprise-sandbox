@@ -1,5 +1,5 @@
 {
-  "name": "@pi/contract",
+  "name": "@dsh/contract",
   "version": "0.0.0",
   "private": true,
   "description": "Agent 与执行面之间的共享类型与 RPC 信封。类型系统即契约。",

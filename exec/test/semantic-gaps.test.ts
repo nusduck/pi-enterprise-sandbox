@@ -44,7 +44,7 @@ describe('semantic gaps: search / artifact / dataset (expected red until impleme
 
   before(async () => {
     const resolved = await realpath(tmpdir());
-    base = await mkdtemp(path.join(resolved, 'pi-semantic-'));
+    base = await mkdtemp(path.join(resolved, 'dsh-semantic-'));
     workspaceManager = new WorkspaceManager({
       workspacesBaseRoot: path.join(base, 'workspaces'),
       tempBaseRoot: path.join(base, 'tmp'),

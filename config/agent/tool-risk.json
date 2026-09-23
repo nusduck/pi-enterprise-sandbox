@@ -6,7 +6,7 @@
     "TOOL_RISK_POLICY_PATH elsewhere) to change which tools need approval.",
     "",
     "2026-08-31 (ADR 0009 D4): keys are the DSH factory tool names, not the old",
-    "Pi ones. The single source for the names is",
+    "legacy-engine ones. The single source for the names is",
     "agent/src/runtime/policy/tool-names.ts (SANDBOX_TOOL_NAMES); startup asserts",
     "every non-mcp key here exists there and throws otherwise, because the",
     "classifier is fail-closed and a stale key's only symptom would be that its",

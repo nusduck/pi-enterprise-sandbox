@@ -73,7 +73,7 @@ function seedWorld(state) {
       sandbox_session_id: SBX,
       workspace_id: WSP,
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: RUN,
       execution_fence_token: 3,
       recovery_reason_code: null,

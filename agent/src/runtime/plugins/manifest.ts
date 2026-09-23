@@ -169,7 +169,7 @@ const ADDITIONS: readonly PatchEntry[] = [
   {
     comment:
       'submit_artifact：ADR 0009 D4 说「我们自建的，保留」，但 2026-08-31 起栈实测' + '\n' +
-      '发现**根本没有插件注册它**——旧 Pi Extension 删除后没补，能力静默缺失了。' + '\n' +
+      '发现**根本没有插件注册它**——旧引擎 Extension 删除后没补，能力静默缺失了。' + '\n' +
       '补回来而不是按退役处理：exec 侧 /internal/v1/artifacts/submit 一直都在。',
     insert: [{ id: 'submit-artifact', name: ownModule('submit-artifact'), config: {} }],
   },

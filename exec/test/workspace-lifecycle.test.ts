@@ -47,7 +47,7 @@ describe('ids: validateOpaqueId / tempIdForWorkspaceId / joinContained', () => {
 describe('temp-tree: physicalTempPath / initTempTree', () => {
   let root: string;
   before(async () => {
-    root = await realpath(await mkdtemp(path.join(tmpdir(), 'pi-workspace-temp-')));
+    root = await realpath(await mkdtemp(path.join(tmpdir(), 'dsh-workspace-temp-')));
   });
   after(async () => {
     await rm(root, { recursive: true, force: true });
@@ -73,7 +73,7 @@ describe('WorkspaceManager: init / remove', () => {
   let root: string;
   let manager: WorkspaceManager;
   before(async () => {
-    root = await realpath(await mkdtemp(path.join(tmpdir(), 'pi-workspace-lifecycle-')));
+    root = await realpath(await mkdtemp(path.join(tmpdir(), 'dsh-workspace-lifecycle-')));
     manager = new WorkspaceManager({
       workspacesBaseRoot: path.join(root, 'workspaces'),
       tempBaseRoot: path.join(root, 'tmp'),

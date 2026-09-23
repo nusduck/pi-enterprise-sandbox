@@ -2,7 +2,7 @@
  * BullMQ prefix 的 hash tag 约束（ADR 0011 D9）。
  *
  * 负对照：旧的无 tag 前缀 `bull` 在建 Queue/Worker 之前就被拒；正对照：默认 `{bull}`
- * 与环境独立的 `{pi-test-bull}` 通过。校验先于 bullmq 加载，所以不需要 Redis。
+ * 与环境独立的 `{dsh-test-bull}` 通过。校验先于 bullmq 加载，所以不需要 Redis。
  */
 
 import { describe, it } from 'node:test';
@@ -26,7 +26,7 @@ describe('run queue prefix hash tag', () => {
   });
 
   it('accepts environment-specific tagged prefixes', () => {
-    assert.equal(resolveRunQueuePrefix('{pi-test-bull}'), '{pi-test-bull}');
+    assert.equal(resolveRunQueuePrefix('{dsh-test-bull}'), '{dsh-test-bull}');
     assert.equal(resolveRunQueuePrefix(' {bull} '), '{bull}');
     assert.equal(resolveRunQueuePrefix('env:{bull}'), 'env:{bull}');
   });

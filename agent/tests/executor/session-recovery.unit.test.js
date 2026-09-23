@@ -36,7 +36,7 @@ function basePayload(entries = []) {
     header: {
       type: 'session',
       version: 3,
-      id: 'pi-1',
+      id: 'dsh-1',
       timestamp: '2026-07-18T00:00:00.000Z',
       cwd: '/ws',
     },
@@ -82,7 +82,7 @@ function seedWorld(state, fence = 1) {
       sandbox_session_id: SBX,
       workspace_id: WSP,
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: null,
       execution_fence_token: fence,
       recovery_reason_code: null,
@@ -144,7 +144,6 @@ describe('SessionRecoveryService', () => {
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
       generateId,
       now: () => new Date(),
-      runtimePiSdkVersion: '0.80.3',
     });
   });
 
@@ -175,7 +174,7 @@ describe('SessionRecoveryService', () => {
       workspacePath: '/ws',
     });
     assert.equal(c1.snapshot.snapshotVersion, 1);
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 1);
 
     const p2 = basePayload([
       entry('e1', 'one'),
@@ -194,7 +193,7 @@ describe('SessionRecoveryService', () => {
       workspaceId: WSP,
     });
     assert.equal(c2.snapshot.snapshotVersion, 2);
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 2);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 2);
     assert.equal(state.tables.tbl_agsvc_agent_sessions[0].last_run_id, RUN);
 
     const recovered = await service.recover({
@@ -394,7 +393,6 @@ describe('SessionRecoveryService', () => {
         version_no: 2,
         config_json: '{}',
         config_hash: 'f'.repeat(64),
-        pi_sdk_version: '0.80.3',
         status: 'active',
         created_by: USER,
         created_at: '2026-07-18 00:00:00.000',

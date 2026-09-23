@@ -1,11 +1,11 @@
 /**
- * PlatformEventProjector — pure, stateless Pi → platform event mapping.
+ * PlatformEventProjector — pure, stateless DSH → platform event mapping.
  *
- * NOT the production event path. `PiRunExecutor` only calls `project()` when
+ * NOT the production event path. `DshRunExecutor` only calls `project()` when
  * `eventProjectionMode` is "session-subscribe", and that mode is replaced by
  * "observability" as soon as an extension bundle is present — which it always
  * is in production. The live projection lives in the observability extension,
- * which maps the same Pi events straight onto the durable recorder.
+ * which maps the same DSH events straight onto the durable recorder.
  *
  * What is kept here, and why: a Run assembled without the enterprise bundle has
  * no observability extension and would otherwise emit nothing at all. Tests use
@@ -313,6 +313,6 @@ export class PlatformEventProjector {
   }
 }
 
-export function projectPiEvent(event: Record<string, any>, ctx: Record<string, any> = {}) {
+export function projectAgentEvent(event: Record<string, any>, ctx: Record<string, any> = {}) {
   return new PlatformEventProjector().project(event, ctx);
 }

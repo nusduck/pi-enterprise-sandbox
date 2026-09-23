@@ -561,7 +561,7 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
         const installed = describeInstalledSkills(skillRoots, {
           writableRoot: userRoot,
         }).map((skill) => skill.name);
-        // Fail closed. Pi rebuilt the extension runtime inside session.reload()
+        // Fail closed. DSH rebuilt the extension runtime inside session.reload()
         // and this manager asserted the loader reported no errors; DSH composes
         // plugins once at boot, so `onAfterReload` is the only post-reload
         // rebuild left. Swallowing its failure would report a successful reload

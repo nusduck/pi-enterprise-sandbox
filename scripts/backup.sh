@@ -7,7 +7,7 @@ umask 077
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 TIMESTAMP="${BACKUP_TIMESTAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BACKUP_NAME="sandbox-backup-${TIMESTAMP}"
-STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pi-sandbox-backup.XXXXXX")"
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dsh-sandbox-backup.XXXXXX")"
 
 cleanup() {
     rm -rf "$STAGING_DIR"
@@ -25,7 +25,7 @@ MYSQL_ARCHIVE="${BACKUP_DIR}/${BACKUP_NAME}.mysql.sql.gz"
 RUNTIME_ARCHIVE="${BACKUP_DIR}/${BACKUP_NAME}-runtime-files.tar.gz"
 MANIFEST="${BACKUP_DIR}/${BACKUP_NAME}.manifest"
 
-echo "=== Pi Enterprise Sandbox Backup ==="
+echo "=== DSH Enterprise Sandbox Backup ==="
 echo "Backup directory: $BACKUP_DIR"
 
 echo "[1/3] Backing up the MySQL control plane..."
@@ -71,7 +71,7 @@ echo "[3/3] Writing a non-secret manifest..."
 DATABASE_NAME="$(docker compose exec -T mysql sh -c 'printf %s "$MYSQL_DATABASE"')"
 GIT_REVISION="$(git rev-parse --verify HEAD 2>/dev/null || printf unknown)"
 {
-    printf 'format=pi-enterprise-backup-v1\n'
+    printf 'format=dsh-enterprise-backup-v1\n'
     printf 'created_at=%s\n' "$TIMESTAMP"
     printf 'database=%s\n' "$DATABASE_NAME"
     printf 'git_revision=%s\n' "$GIT_REVISION"

@@ -1,5 +1,5 @@
 /**
- * Shared world for PiRunExecutor tests: the durable rows an executed Run
+ * Shared world for DshRunExecutor tests: the durable rows an executed Run
  * expects to already exist (organization, membership, conversation, agent
  * session, sandbox session, agent version, run and triggering message), plus
  * the ids and model that identify them.
@@ -8,7 +8,6 @@
  * knex without duplicating the seed.
  */
 
-import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/dsh/runtime-factory.js';
 
 export const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 export const USER = '01K0G2PAV8FPMVC9QHJG7JPN50';
@@ -59,7 +58,7 @@ export function seedExecutorWorld(state) {
       sandbox_session_id: SBX,
       workspace_id: WSP,
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: null,
       execution_fence_token: 0,
       recovery_reason_code: null,
@@ -89,7 +88,6 @@ export function seedExecutorWorld(state) {
       version_no: 1,
       config_json: JSON.stringify({ systemPrompt: 'hi' }),
       config_hash: 'a'.repeat(64),
-      pi_sdk_version: PINNED_PI_SDK_VERSION,
       status: 'active',
       created_by: USER,
       created_at: '2026-07-18 00:00:00.000',
@@ -107,8 +105,8 @@ export function seedExecutorWorld(state) {
         messages: [{ role: 'user', content: 'hello world' }],
       }),
       sequence_no: 1,
-      pi_entry_id: null,
-      pi_entry_kind: null,
+      session_entry_id: null,
+      session_entry_kind: null,
       created_at: '2026-07-18 00:00:00.000',
     },
   ];

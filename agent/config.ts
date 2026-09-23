@@ -415,7 +415,7 @@ export const config = {
   SANDBOX_BASE_URL: process.env.SANDBOX_BASE_URL || 'http://sandbox:8081',
   SANDBOX_API_TOKEN: process.env.SANDBOX_API_TOKEN || '',
   /**
-   * Stable logical cwd recorded by Pi SDK sessions after Sandbox creates or
+   * Stable logical cwd recorded by DSH sessions after Sandbox creates or
    * reuses the session workspace. This is intentionally not a physical host
    * path; sandbox tools normalize it to the same REST path identity.
    */
@@ -468,7 +468,7 @@ export const config = {
   DEFAULT_SKILL_ROOTS,
   /**
    * Env-controlled product/role layer (AGENT_SYSTEM_PROMPT / _FILE).
-   * Applied by pi-runtime-factory when AgentVersion.systemPrompt is empty.
+   * Applied by dsh-runtime-factory when AgentVersion.systemPrompt is empty.
    * Non-empty AgentVersion.systemPrompt wins; enterprise path/tool contract
    * is always appended via resolveEnterpriseSystemPrompt.
    */

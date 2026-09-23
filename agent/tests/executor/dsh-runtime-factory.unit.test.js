@@ -10,7 +10,7 @@ import path from 'node:path';
 import {
   buildExecRpcConfig,
   createDshRuntimeFactory,
-  mapDshEventToPi,
+  mapDshEventToAgentEvent,
 } from '../../src/infrastructure/dsh/runtime-factory.js';
 import { validateSnapshotPayload } from '../../src/application/session-json-codec.js';
 
@@ -65,7 +65,7 @@ function factoryEmitting(events, { recovered } = {}) {
       };
     },
   });
-  return factory.create(baseInput(recovered ? { piSnapshot: { snapshotJson: recovered } } : {}));
+  return factory.create(baseInput(recovered ? { sessionSnapshot: { snapshotJson: recovered } } : {}));
 }
 
 function baseInput(overrides = {}) {
@@ -91,9 +91,9 @@ function baseInput(overrides = {}) {
   };
 }
 
-describe('mapDshEventToPi', () => {
+describe('mapDshEventToAgentEvent', () => {
   it('maps assistant/chunk text-delta to message_update', () => {
-    const mapped = mapDshEventToPi({
+    const mapped = mapDshEventToAgentEvent({
       type: 'assistant/chunk',
       data: { turn: 1, step: 0, chunk: { type: 'text-delta', text: 'hello' } },
     });
@@ -104,7 +104,7 @@ describe('mapDshEventToPi', () => {
   });
 
   it('maps assistant/message to message_end and ignores turn/end', () => {
-    const mapped = mapDshEventToPi({
+    const mapped = mapDshEventToAgentEvent({
       type: 'assistant/message',
       data: {
         turn: 1,
@@ -114,7 +114,7 @@ describe('mapDshEventToPi', () => {
     });
     assert.equal(mapped.type, 'message_end');
     assert.equal(mapped.message.content[0].text, 'done');
-    assert.equal(mapDshEventToPi({ type: 'turn/end', data: { turn: 1, reason: 'completed' } }), null);
+    assert.equal(mapDshEventToAgentEvent({ type: 'turn/end', data: { turn: 1, reason: 'completed' } }), null);
   });
 });
 
@@ -399,7 +399,7 @@ describe('createDshRuntimeFactory.create', () => {
     });
 
     const runtime = await factory.create(baseInput({
-      piSnapshot: { snapshotJson: recovered },
+      sessionSnapshot: { snapshotJson: recovered },
     }));
     assert.deepEqual(runtime.sessionManager.getHeader(), recovered.header);
     assert.deepEqual(runtime.sessionManager.getEntries(), recovered.entries);

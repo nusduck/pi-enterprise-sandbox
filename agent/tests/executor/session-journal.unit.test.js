@@ -1,5 +1,5 @@
 /**
- * Pi session journal repository (PR-05 slice B) — fake knex offline.
+ * Session journal repository (PR-05 slice B) — fake knex offline.
  */
 
 import { describe, it, beforeEach } from 'node:test';
@@ -7,7 +7,6 @@ import assert from 'node:assert/strict';
 import { createFakeKnex, createFakeState } from '../mysql/fake-knex.js';
 import {
   SessionJournalRepository,
-  PiSessionJournalRepository,
   hashJournalPayload,
   JOURNAL_HEADER_ENTRY_ID,
   JOURNAL_MESSAGE_TYPE,
@@ -52,7 +51,7 @@ function seed(state) {
       sandbox_session_id: '01K0G2PAV8FPMVC9QHJG7JPN5F',
       workspace_id: '01K0G2PAV8FPMVC9QHJG7JPN5G',
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: null,
       execution_fence_token: 1,
       recovery_reason_code: null,
@@ -67,7 +66,7 @@ function seed(state) {
 const header = {
   type: 'session',
   version: 3,
-  id: 'pi-sess-1',
+  id: 'dsh-sess-1',
   timestamp: '2026-07-18T00:00:00.000Z',
   cwd: '/tmp/ws',
 };
@@ -132,7 +131,7 @@ function branchEntry(id, parentId, fromId) {
   };
 }
 
-describe('PiSessionJournalRepository', () => {
+describe('SessionJournalRepository', () => {
   /** @type {ReturnType<typeof createFakeState>} */
   let state;
   /** @type {ReturnType<typeof createFakeKnex>} */
@@ -147,7 +146,7 @@ describe('PiSessionJournalRepository', () => {
   });
 
   it('appends header + full toolCall/toolResult/compaction/branch entries', async () => {
-    const repo = new PiSessionJournalRepository(knex, {
+    const repo = new SessionJournalRepository(knex, {
       generateId: nextId,
     });
     const e1 = msgEntry('e1', 'hello');
@@ -176,7 +175,7 @@ describe('PiSessionJournalRepository', () => {
     }
 
     const loaded = await repo.loadPayload(SESS, scope);
-    assert.equal(loaded.header.id, 'pi-sess-1');
+    assert.equal(loaded.header.id, 'dsh-sess-1');
     assert.equal(loaded.entries.length, 4);
     assert.equal(loaded.entries[0].message.content[1].type, 'toolCall');
     assert.equal(loaded.entries[1].message.role, 'toolResult');
@@ -185,8 +184,8 @@ describe('PiSessionJournalRepository', () => {
     assert.ok(loaded.digest);
   });
 
-  it('duplicate pi_entry_id is idempotent; hash conflict throws', async () => {
-    const repo = new PiSessionJournalRepository(knex);
+  it('duplicate session_entry_id is idempotent; hash conflict throws', async () => {
+    const repo = new SessionJournalRepository(knex);
     const entry = msgEntry('dup-1', 'v1');
     await repo.appendEntry({
       messageId: MSG1,
@@ -201,7 +200,7 @@ describe('PiSessionJournalRepository', () => {
       entry,
     });
     assert.equal(again.idempotent, true);
-    assert.equal(state.tables.tbl_agsvc_messages.filter((m) => m.pi_entry_id === 'dup-1').length, 1);
+    assert.equal(state.tables.tbl_agsvc_messages.filter((m) => m.session_entry_id === 'dup-1').length, 1);
 
     await assert.rejects(
       () =>
@@ -216,7 +215,7 @@ describe('PiSessionJournalRepository', () => {
   });
 
   it('paginates beyond 200 without truncating full rebuild', async () => {
-    const repo = new PiSessionJournalRepository(knex);
+    const repo = new SessionJournalRepository(knex);
     await repo.appendHeader({
       messageId: nextId(),
       agentSessionId: SESS,
@@ -245,7 +244,7 @@ describe('PiSessionJournalRepository', () => {
   });
 
   it('owner-scopes journal reads', async () => {
-    const repo = new PiSessionJournalRepository(knex);
+    const repo = new SessionJournalRepository(knex);
     await repo.appendHeader({
       messageId: MSG1,
       agentSessionId: SESS,
@@ -272,7 +271,7 @@ describe('PiSessionJournalRepository', () => {
    * the read has to be orderable straight from an index.
    *
    * Left to itself the optimizer picks
-   * ind_agsvc_msg_i2 (agent_session_id, pi_entry_kind, sequence_no)
+   * ind_agsvc_msg_i2 (agent_session_id, session_entry_kind, sequence_no)
    * — a middle column this query never constrains, since it filters on
    * message_type — so the index cannot order by sequence_no.
    */
@@ -287,7 +286,7 @@ describe('PiSessionJournalRepository', () => {
       },
       base,
     );
-    const repo = new PiSessionJournalRepository(spy);
+    const repo = new SessionJournalRepository(spy);
     await repo.appendHeader({
       messageId: MSG1,
       agentSessionId: SESS,
@@ -325,7 +324,7 @@ describe('PiSessionJournalRepository', () => {
   });
 
   it('header uses stable JOURNAL_HEADER_ENTRY_ID', async () => {
-    const repo = new PiSessionJournalRepository(knex);
+    const repo = new SessionJournalRepository(knex);
     await repo.appendHeader({
       messageId: MSG1,
       agentSessionId: SESS,
@@ -334,11 +333,11 @@ describe('PiSessionJournalRepository', () => {
     });
     const row = await repo.getByEntryId(SESS, JOURNAL_HEADER_ENTRY_ID, scope);
     assert.equal(row.messageType, JOURNAL_MESSAGE_TYPE.HEADER);
-    assert.equal(row.piEntryKind, 'session');
+    assert.equal(row.sessionEntryKind, 'session');
   });
 
   it('never trusts stored payloadHash — mismatch fails closed', async () => {
-    const repo = new PiSessionJournalRepository(knex);
+    const repo = new SessionJournalRepository(knex);
     const entry = msgEntry('hash-1', 'v1');
     await repo.appendEntry({
       messageId: MSG1,
@@ -347,7 +346,7 @@ describe('PiSessionJournalRepository', () => {
       entry,
     });
     // Corrupt stored payloadHash while leaving entry body intact
-    const row = state.tables.tbl_agsvc_messages.find((m) => m.pi_entry_id === 'hash-1');
+    const row = state.tables.tbl_agsvc_messages.find((m) => m.session_entry_id === 'hash-1');
     const content =
       typeof row.content_json === 'string'
         ? JSON.parse(row.content_json)

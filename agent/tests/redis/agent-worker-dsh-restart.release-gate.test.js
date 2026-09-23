@@ -71,12 +71,12 @@ const TEST_HMAC_ACTIVE_KID = String(
     process.env.SANDBOX_INTERNAL_HMAC_ACTIVE_KID ||
     '',
 ).trim();
-const explicitlyEnabled = process.env.RUN_AGENT_PI_RESTART_GATE === '1';
-const safeContainer = /^pi-(?:release-gate|refactor-gate)-redis-[a-z0-9-]+$/.test(
+const explicitlyEnabled = process.env.RUN_AGENT_DSH_RESTART_GATE === '1';
+const safeContainer = /^dsh-(?:release-gate|refactor-gate)-redis-[a-z0-9-]+$/.test(
   TEST_REDIS_CONTAINER,
 );
 const safeSandboxContainer =
-  /^pi-(?:release-gate|refactor-gate)-sandbox-[a-z0-9-]+$/.test(
+  /^dsh-(?:release-gate|refactor-gate)-sandbox-[a-z0-9-]+$/.test(
     TEST_SANDBOX_CONTAINER,
   );
 
@@ -88,10 +88,10 @@ function databaseNameFromUrl(value) {
   }
 }
 
-const safeDatabase = /^pi_gate_[a-z0-9_]+$/.test(
+const safeDatabase = /^dsh_gate_[a-z0-9_]+$/.test(
   databaseNameFromUrl(TEST_MYSQL_URL),
 );
-const safeSandboxDatabase = /^pi_gate_[a-z0-9_]+$/.test(
+const safeSandboxDatabase = /^dsh_gate_[a-z0-9_]+$/.test(
   databaseNameFromUrl(TEST_SANDBOX_MYSQL_URL),
 );
 const sharedGateDatabase =
@@ -117,13 +117,13 @@ const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const USER = '01K0G2PAV8FPMVC9QHJG7JPN50';
 const AGENT = '01K0G2PAV8FPMVC9QHJG7JPN5B';
 const VER = '01K0G2PAV8FPMVC9QHJG7JPN5C';
-const QUEUE = 'release-gate-agent-pi-restart';
+const QUEUE = 'release-gate-agent-dsh-restart';
 const TRACE_MODEL = '11111111111111111111111111111111';
 const TRACE_TOOL = '22222222222222222222222222222222';
 const TRACE_SANDBOX = '33333333333333333333333333333333';
 const TRACE_INTERACTION = '44444444444444444444444444444444';
-const EXTERNAL_ORG = 'real-pi-restart-gate-org';
-const EXTERNAL_USER = 'real-pi-restart-gate-user';
+const EXTERNAL_ORG = 'real-dsh-restart-gate-org';
+const EXTERNAL_USER = 'real-dsh-restart-gate-user';
 
 const MODEL_IDS = Object.freeze({
   conversationId: '01K0G2PAV8FPMVC9QHJG7JPN71',
@@ -222,7 +222,7 @@ function createWorkerHarness(workerLabel, ids) {
       ...process.env,
       NODE_ENV: 'test',
       DEPLOYMENT_ENV: 'test',
-      TEST_EXPECT_REAL_PI: '1',
+      TEST_EXPECT_REAL_DSH: '1',
       TEST_RUN_IDS: ids.runId,
       TEST_WORKER_LABEL: workerLabel,
       TEST_EMIT_RECOVERY_SCANS: 'true',
@@ -429,7 +429,7 @@ async function seedRun(knex, ids, traceId, content, baseUrl) {
     await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
-      name: 'real-pi-release-gate',
+      name: 'real-dsh-release-gate',
       description: null,
       status: 'active',
       active_version_id: VER,
@@ -443,7 +443,6 @@ async function seedRun(knex, ids, traceId, content, baseUrl) {
       version_no: 1,
       config_json: JSON.stringify(modelConfig(baseUrl)),
       config_hash: 'c'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: USER,
       created_at: knex.fn.now(3),
@@ -602,13 +601,13 @@ const workers = [];
 describe('real DSH Agent/Sandbox restart release gate', () => {
   it('requires explicit opt-in and isolated resources', () => {
     if (!explicitlyEnabled) {
-      assert.ok(true, 'skipped: RUN_AGENT_PI_RESTART_GATE is not 1');
+      assert.ok(true, 'skipped: RUN_AGENT_DSH_RESTART_GATE is not 1');
       return;
     }
     assert.ok(safeContainer, 'TEST_REDIS_CONTAINER is not an isolated gate container');
     assert.ok(safeSandboxContainer, 'TEST_SANDBOX_CONTAINER is not an isolated gate container');
-    assert.ok(safeDatabase, 'TEST_MYSQL_URL must use a pi_gate_* schema');
-    assert.ok(safeSandboxDatabase, 'TEST_SANDBOX_MYSQL_URL must use a pi_gate_* schema');
+    assert.ok(safeDatabase, 'TEST_MYSQL_URL must use a dsh_gate_* schema');
+    assert.ok(safeSandboxDatabase, 'TEST_SANDBOX_MYSQL_URL must use a dsh_gate_* schema');
     assert.ok(
       sharedGateDatabase,
       'Agent and Sandbox must use the same gate schema; Sandbox validates Agent-owned parent rows',
@@ -640,7 +639,7 @@ describeLive(
     await waitForHttp(`${TEST_SANDBOX_URL}/health`);
     await waitForHttp(`${TEST_SANDBOX_URL}/ready`);
 
-    tempRoot = mkdtempSync(path.join(os.tmpdir(), 'pi-real-restart-gate-'));
+    tempRoot = mkdtempSync(path.join(os.tmpdir(), 'dsh-real-restart-gate-'));
     await fs.mkdir(tempRoot, { recursive: true });
     fakeProvider = await startFakeOpenAIProvider({ reply: 'unused' });
     dbpm = await startDbpmForUrls({ mysqlUrl: TEST_MYSQL_URL, redisUrl: TEST_REDIS_URL });
@@ -808,7 +807,7 @@ describeLive(
   });
 
   it('continues one durable interaction after Worker restart and checkpoints the answer', async () => {
-    const toolCallId = 'call-real-pi-interaction-restart-gate';
+    const toolCallId = 'call-real-dsh-interaction-restart-gate';
     let providerCalls = 0;
     fakeProvider.setResponder(async ({ body }) => {
       const text = agentTurnText(body);
@@ -874,7 +873,7 @@ describeLive(
       agentKnex,
       'tbl_agsvc_agent_sessions',
       { agent_session_id: INTERACTION_IDS.sessionId },
-      (row) => Number(row?.pi_session_version || 0) > 0,
+      (row) => Number(row?.session_version || 0) > 0,
       30_000,
     );
     const parkedCompletion = await workerA.waitFor(
@@ -970,7 +969,7 @@ describeLive(
       .where({ agent_session_id: INTERACTION_IDS.sessionId })
       .first();
     assert.equal(session.last_run_id, INTERACTION_IDS.runId);
-    assert.ok(Number(session.pi_session_version) >= 2);
+    assert.ok(Number(session.session_version) >= 2);
     const latestSnapshot = await agentKnex('tbl_agsvc_agent_session_snapshots')
       .where({ agent_session_id: INTERACTION_IDS.sessionId })
       .orderBy('snapshot_version', 'desc')
@@ -981,7 +980,7 @@ describeLive(
         ? latestSnapshot.snapshot_json
         : JSON.stringify(latestSnapshot.snapshot_json),
       /INTERACTION_RESTART_CONTINUED_EU|User response: eu/,
-      'the APPLIED continuation must be present in the durable Pi checkpoint',
+      'the APPLIED continuation must be present in the durable DSH checkpoint',
     );
     assert.equal(providerCalls, 2, 'continuation must make one and only one follow-up model call');
     assert.equal(
@@ -1004,7 +1003,7 @@ describeLive(
   });
 
   it('does not replay a real DSH tool after its dispatch boundary', async () => {
-    const toolCallId = 'call-real-pi-tool-restart-gate';
+    const toolCallId = 'call-real-dsh-tool-restart-gate';
     let providerCalls = 0;
     fakeProvider.setResponder(async ({ body }) => {
       const text = agentTurnText(body);
@@ -1049,7 +1048,7 @@ describeLive(
     assert.match(heldRequest.path, /\/internal\/v1\/shell\/run$/);
     // 请求已经发往执行面（被代理拦住）：派发边界必须**先于**派发落库——RUNNING，
     // 并绑定请求指纹与当前 fence。2026-09-17 修复前 DSH 下这一行停在 PROPOSED、
-    // 两者皆空（Pi 时序假设，见 dsh-restart-gate-rewrite 证据 §3.1）。
+    // 两者皆空（DSH 时序假设，见 dsh-restart-gate-rewrite 证据 §3.1）。
     const toolBeforeKill = await agentKnex('tbl_agsvc_tool_executions')
       .where({ run_id: TOOL_IDS.runId, tool_call_id: toolCallId })
       .first();

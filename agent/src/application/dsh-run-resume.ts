@@ -1,13 +1,13 @@
 /**
  * Resume preparation for a Run that was parked mid-turn.
  *
- * Two durable park points, verified against MySQL before Pi is touched again:
+ * Two durable park points, verified against MySQL before DSH is touched again:
  * an approval decision (approved tools are claimed and executed once with
  * their original toolCallId and arguments; rejected ones only add a
  * continuation result) and an ask_user answer recovered into its parked
  * tool-result slot.
  *
- * Split out of pi-run-executor.js — both take the executor explicitly rather
+ * Split out of dsh-run-executor.js — both take the executor explicitly rather
  * than reading it off `this`.
  */
 
@@ -31,7 +31,7 @@ import {
  * args-integrity check ("tool_call_id replay conflicts with existing args
  * integrity") and would run the approved tool on truncated input.
  *
- * The Pi session still holds the assistant message that emitted the call, so
+ * The DSH session still holds the assistant message that emitted the call, so
  * it is the authority. The ledger view is used only when it provably equals the
  * original — its fingerprint matches the stored `$integrity` — which is the
  * common short-argument case.
@@ -169,8 +169,8 @@ export async function prepareApprovalResume(executor, {
   //
   // **那条路在 DSH 下已经跑不通了**：DSH 的 session（`runtime-factory.ts` 里
   // 构造的那个）根本没有 `getToolDefinition`，所以这一支只会抛
-  // "Pi runtime cannot replay approved tool"——即「审批能停泊，但批准之后
-  // 续不回去」。不是本次重构把它弄坏的，是 Pi→DSH 之后它就一直是坏的。
+  // "DSH runtime cannot replay approved tool"——即「审批能停泊，但批准之后
+  // 续不回去」。不是本次重构把它弄坏的，是 换引擎 之后它就一直是坏的。
   //
   // 新形状：**application 只负责停下来和重新跑起来，执行者是循环**。
   // 这里只回一段续跑提示；模型重新发起同一个调用，`tools/pre-execute` 按
@@ -207,7 +207,7 @@ export async function prepareApprovalResume(executor, {
 
 /**
  * Recover a durable ask_user answer into the parked tool-result slot, then
- * continue the existing Pi session with a short continuation prompt.
+ * continue the existing DSH session with a short continuation prompt.
  */
 /** 续跑提示词里内联回答的长度上限；超过就截断，完整值仍在 tool result 里。 */
 const INTERACTION_ANSWER_PROMPT_MAX = 2000;

@@ -95,9 +95,9 @@ def test_install_script_targets_paths_visible_inside_bubblewrap() -> None:
         "/usr/local/bin/pandoc",
         "/usr/local/bin/uv",
         "/usr/local/bin/soffice",
-        "/usr/local/lib/pi-chromium/chrome/chrome",
-        "/usr/local/lib/pi-skill-runtime",
-        "/opt/pi-python/venv",
+        "/usr/local/lib/dsh-chromium/chrome/chrome",
+        "/usr/local/lib/dsh-skill-runtime",
+        "/opt/dsh-python/venv",
     ):
         assert target in text, target
     assert "tar -xJf \"$file\" -C /usr/local" in text
@@ -134,8 +134,8 @@ def test_release_builder_ships_toolchain_assets() -> None:
     for line in (
         "COPY exec/requirements.txt ./toolchain/requirements.txt",
         "COPY exec/skill-runtime/ ./toolchain/skill-runtime/",
-        "COPY skills/baoyu-format-markdown/scripts/ ./toolchain/pi-skill-runtime/baoyu-format-markdown/",
-        "COPY skills/baoyu-markdown-to-html/scripts/ ./toolchain/pi-skill-runtime/baoyu-markdown-to-html/",
+        "COPY skills/baoyu-format-markdown/scripts/ ./toolchain/dsh-skill-runtime/baoyu-format-markdown/",
+        "COPY skills/baoyu-markdown-to-html/scripts/ ./toolchain/dsh-skill-runtime/baoyu-markdown-to-html/",
     ):
         assert line in builder, line
 
@@ -144,4 +144,4 @@ def test_chromium_wrapper_template_still_matches_the_rewrite() -> None:
     # install-toolchain.sh 用 sed 把 Debian 路径换成 VM 路径；模板改了路径，替换会静默失效。
     wrapper = (ROOT / "exec" / "skill-runtime" / "baoyu-chromium").read_text(encoding="utf-8")
     assert "/usr/lib/chromium/chromium" in wrapper
-    assert "s#/usr/lib/chromium/chromium#/usr/local/lib/pi-chromium/chrome/chrome#" in INSTALL.read_text(encoding="utf-8")
+    assert "s#/usr/lib/chromium/chromium#/usr/local/lib/dsh-chromium/chrome/chrome#" in INSTALL.read_text(encoding="utf-8")

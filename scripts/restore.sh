@@ -26,7 +26,8 @@ for required in "$MYSQL_ARCHIVE" "$RUNTIME_ARCHIVE" "$MANIFEST"; do
     fi
 done
 
-if ! grep -qx 'format=pi-enterprise-backup-v1' "$MANIFEST"; then
+# 改名前的备份写的是旧格式标记，内容布局相同，照常接受。
+if ! grep -qxE 'format=(dsh|pi)-enterprise-backup-v1' "$MANIFEST"; then
     echo "Unsupported or invalid backup manifest" >&2
     exit 65
 fi
@@ -45,7 +46,7 @@ done
 
 docker compose ps mysql >/dev/null
 
-echo "=== Pi Enterprise Sandbox Restore ==="
+echo "=== DSH Enterprise Sandbox Restore ==="
 echo "Restore prefix: $BACKUP_PATH"
 echo "Stopping data-plane writers..."
 docker compose stop api-server agent agent-worker sandbox

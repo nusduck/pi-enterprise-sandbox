@@ -18,7 +18,6 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
         "tmp-workspaces",
         "artifacts",
         "control",
-        "pi-agent-home",
         # Per-developer local tooling state (gitignored, never part of the repo).
         ".claude",
     }
@@ -40,7 +39,7 @@ HOTSPOT_LINE_BUDGETS = {
     # assertCompatiblePolicyReplay，不碰仓储/事务/围栏的纯判定），
     # 1_654 -> 1_558，预算收紧。
     "agent/src/application/fenced-tool-governance-recorder.ts": 1_557,
-    # 转 TS 时拆出 pi-run-executor-deps.ts（依赖面类型 + 三个不读 this 的
+    # 转 TS 时拆出 dsh-run-executor-deps.ts（依赖面类型 + 三个不读 this 的
     # 纯判定），1_597 -> 1_526，预算收紧。改名 dsh-run-executor.ts。
     # 2026-09-06 又拆出 approved-replay-claim.ts（已批准调用的续跑查找与
     # 一次性消费 CAS），1_526 -> 1_505，预算继续收紧。
@@ -91,7 +90,7 @@ def _production_sources() -> list[Path]:
         # DSH 重建的新 TS 包（ADR 0007 / 0008）。刻意**不给任何 hotspot
         # 预算**：新代码从第一天就守 1000 行上限，不把既有债务复制过去。
         # `sandbox/**.py`（Python 执行面）与 `agent/runtime/src/**.ts`（阶段 F 之前
-        # 的独立 `@pi/runtime` 包）两条 glob 已随目录一起删除，留着只会让人以为
+        # 的独立 `@dsh/runtime` 包）两条 glob 已随目录一起删除，留着只会让人以为
         # 还有东西在扫——组合层现在在 `agent/src/runtime/`，由上面 agent/src 那条覆盖。
         *ROOT.joinpath("contract", "src").rglob("*.ts"),
         *ROOT.joinpath("exec", "src").rglob("*.ts"),

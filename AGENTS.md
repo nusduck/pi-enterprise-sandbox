@@ -33,7 +33,7 @@
 > **`agent/src/runtime/`** 是 agent 私有的 DSH 组合层（provider / policy / projection），
 > 不是独立服务或对外公共 SDK：只有 `agent/` 消费它，与 Agent 源码一起编译。
 > `contract/` 是 exec 与 agent 共用的 RPC 契约包。模型侧 MCP 由出厂
-> `@deepseek-ai/dsh-mcp-client` 承担（ADR 0009 H7 退役了自建的 `pi-mcp-adapter`），
+> `@deepseek-ai/dsh-mcp-client` 承担（ADR 0009 H7 退役了自建的 MCP adapter），
 > server 清单**只来自进程环境变量 `MCP_SERVERS_JSON`**，不进提交的 YAML。
 
 推论（都踩过坑）：
@@ -153,7 +153,7 @@ docker compose up -d
 
 **已知环境陷阱**（撞上先别怀疑自己的改动）：
 
-- 不要修改宿主机 `~/.pi/agent/mcp.json` 来修本仓库 MCP；当前清单入口见 §1。
+- 不要靠修改宿主机上的个人 MCP 配置来修本仓库 MCP；当前清单入口见 §1。
 - `scripts/smoke-cross-service.mjs` 在**宿主机**起进程，不走 Docker。macOS 内核没有
   bwrap 要的 user namespace，这条脚本在 Mac 上失败是预期的，应在 Linux/CI 跑。
 - Mac 的 Docker 执行面运行在 Linux VM，可使用 bwrap。遇到 namespace 错误，先检查
@@ -164,7 +164,7 @@ docker compose up -d
   行数，只能减不能增。加行就会失败——优先按职责拆分，确需提高预算必须在 commit message
   说明理由。
 - 同一测试还要求项目文档只能放在 `docs/`（只有 `README.md`、本文件和 `CLAUDE.md` 例外）。
-- `git ls-files agent/pi-agent-home frontend/dist .runtime pi_enterprise_sandbox.egg-info .claude`
+- `git ls-files frontend/dist .runtime dsh_enterprise_sandbox.egg-info .claude`
   必须是空输出。
 
 ## 5. 设计约束与当前事实（发生冲突时）

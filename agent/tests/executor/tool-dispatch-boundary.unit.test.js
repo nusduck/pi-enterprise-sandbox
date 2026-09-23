@@ -2,7 +2,7 @@
  * DSH 工具派发边界（2026-09-17，STATUS G2）。
  *
  * DSH 的顺序是 `tools/pre-execute`（策略判定）→ `tools/execute`（`recordToolStarted`
- * → 派发）。Pi 时代反过来，所以 `recordToolStarted` 在没有策略指纹时刻意留一行
+ * → 派发）。旧引擎时代反过来，所以 `recordToolStarted` 在没有策略指纹时刻意留一行
  * PROPOSED 占位等策略来接管；DSH 下没人接管，命令执行期间账本一直是 PROPOSED，
  * `request_hash` / `execution_fence_token` 也从未绑定（真实 DSH gate 场景 3 观测）。
  *
@@ -65,7 +65,7 @@ function seedWorld(state, { sessionFence = FENCE, sandboxSessionId = SBX } = {})
       sandbox_session_id: sandboxSessionId,
       workspace_id: WSP,
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: RUN,
       execution_fence_token: sessionFence,
       recovery_reason_code: null,

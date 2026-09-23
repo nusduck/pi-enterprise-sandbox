@@ -33,7 +33,6 @@ import { A2aStreamService } from '../application/a2a/stream-service.js';
 import { buildArtifactDownloadUri as mintArtifactDownloadUri } from '../application/a2a/artifact-download.js';
 import { ulid } from '../domain/shared/ulid.js';
 import { createRunWorkerRuntime } from './run-worker.js';
-import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import {
   createRepositoryBundle,
   resolveMysqlUrlFromEnv,
@@ -322,7 +321,7 @@ export class ServiceContainer {
     const factory = resolveWorkerExecutorFactory(this.env, {});
     if (!factory) {
       const err = new Error(
-        'Run executor factory is not pre-configured. Production workers wire the Pi factory in createWorkerServices (ensureWorkerRunExecutorFactory). For offline tests inject runExecutorFactory, or set AGENT_ALLOW_STUB_EXECUTOR=true in non-production only.',
+        'Run executor factory is not pre-configured. Production workers wire the DSH factory in createWorkerServices (ensureWorkerRunExecutorFactory). For offline tests inject runExecutorFactory, or set AGENT_ALLOW_STUB_EXECUTOR=true in non-production only.',
       );
       // @ts-ignore
       err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
@@ -333,7 +332,7 @@ export class ServiceContainer {
 
   /**
    * Default modelResolver: AgentVersion embedded model, else modelPolicy id /
-   * MODEL_ID registry entry → pi-ai Model (LLMIO baseUrl/apiKey from env).
+   * MODEL_ID registry entry → runtime Model descriptor (LLMIO baseUrl/apiKey from env).
    */
   createDefaultModelResolver(): (
     agentVersion: Loose,
@@ -344,14 +343,14 @@ export class ServiceContainer {
       const { bindAgentVersionConfig, resolveConcreteModel } = await import(
         '../infrastructure/dsh/agent-version-bindings.js'
       );
-      const { resolveModel, toPiModel, buildCachedRegistry, resolveDefaultModelId } =
+      const { resolveModel, toRuntimeModel, buildCachedRegistry, resolveDefaultModelId } =
         await import('../infrastructure/model-registry.js');
       const bound = bindAgentVersionConfig(agentVersion);
       if (bound.model) {
         if (selection.modelId && String((bound.model as Loose).id) !== selection.modelId) {
           return resolveConcreteModel(
             bound,
-            toPiModel(resolveModel(selection.modelId, { env }), {
+            toRuntimeModel(resolveModel(selection.modelId, { env }), {
               baseUrl: String(env.LLMIO_BASE_URL || '').trim(),
             }),
           );
@@ -375,27 +374,25 @@ export class ServiceContainer {
         resolveDefaultModelId(buildCachedRegistry(env));
       const entry = resolveModel(modelId, { env, useCached: true });
       const baseUrl = String(env.LLMIO_BASE_URL || '').trim();
-      const piModel = toPiModel(entry, {
+      const runtimeModel = toRuntimeModel(entry, {
         baseUrl,
       });
-      return resolveConcreteModel(bound, piModel);
+      return resolveConcreteModel(bound, runtimeModel);
     };
   }
 
   /**
-   * Default workspaceResolver: logical Pi cwd from env (Agent does not mount
+   * Default workspaceResolver: logical DSH cwd from env (Agent does not mount
    * physical workspace volumes; Sandbox owns physical roots).
    * @returns {(agentSession: object) => Promise<string>}
    */
   createDefaultWorkspaceResolver() {
     const env = this.env;
     return async (_agentSession) => {
-      const cwd = String(
-        env.AGENT_SESSION_WORKSPACE_CWD || env.AGENT_PI_DEFAULT_CWD || '',
-      ).trim();
+      const cwd = String(env.AGENT_SESSION_WORKSPACE_CWD || '').trim();
       if (!cwd) {
         throw new Error(
-          'AGENT_SESSION_WORKSPACE_CWD (or AGENT_PI_DEFAULT_CWD) is required for the worker Pi executor',
+          'AGENT_SESSION_WORKSPACE_CWD is required for the worker DSH executor',
         );
       }
       return cwd;
@@ -404,7 +401,7 @@ export class ServiceContainer {
 
   /**
    * Resolve or build the worker RunExecutor factory.
-   * Order: explicit inject → non-prod stub allowlist → production Pi factory.
+   * Order: explicit inject → non-prod stub allowlist → production DSH factory.
    * Never uses stub under DEPLOYMENT_ENV/NODE_ENV=production.
    * @returns {Promise<Function>}
    */
@@ -529,7 +526,7 @@ export class ServiceContainer {
     return import('../infrastructure/dsh/runtime-factory.js').then(
       async ({ DshRuntimeFactory }) => {
         // 2026-08-31（ADR 0009 D9 / 计划 H7.4）：这里原本构造一个
-        // `createPiMcpResolver(...)` 传给 `DshRuntimeFactory`。那个参数
+        // `createMcpResolver(...)` 传给 `DshRuntimeFactory`。那个参数
         // **runtime-factory 从来没读过**——又一个终止在被忽略的参数上的装配
         // （与 extensionBundleFactory 同形）。MCP 现在由 overlay 里的
         // `dsh-mcp-client` 实例负责，一台服务器一个插件，与官方 dsh 一致。
@@ -547,28 +544,16 @@ export class ServiceContainer {
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
           loadSdk: opts.loadSdk,
-          defaultCwd:
-            this.env.AGENT_PI_DEFAULT_CWD ||
-            this.env.AGENT_SESSION_WORKSPACE_CWD ||
-            undefined,
+          defaultCwd: this.env.AGENT_SESSION_WORKSPACE_CWD || undefined,
           // Progressive skill disclosure: scan formal skill mount into loader
-          // → formatSkillsForPrompt (not Pi product docs under node_modules).
+          // → formatSkillsForPrompt (not package docs under node_modules).
           additionalSkillPaths: skillRoots,
           skillRoot: primarySkillRoot(skillRoots),
           workspaceRoot:
-            this.env.AGENT_SESSION_WORKSPACE_CWD ||
-            this.env.AGENT_PI_DEFAULT_CWD ||
-            '/home/sandbox/workspace',
+            this.env.AGENT_SESSION_WORKSPACE_CWD || '/home/sandbox/workspace',
         });
       },
     );
-  }
-
-  /**
-   * Backward-compatible alias for createDshRuntimeFactory.
-   */
-  createPiRuntimeFactory(opts: any = {}) {
-    return this.createDshRuntimeFactory(opts);
   }
 
   /**
@@ -583,14 +568,6 @@ export class ServiceContainer {
       },
       async dispose() {},
     });
-  }
-
-  /**
-   * Backward-compatible alias for createDshSessionAdapter.
-   * @param {object} [deps]
-   */
-  createPiSessionAdapter(deps = {}) {
-    return this.createDshSessionAdapter(deps);
   }
 
   /**
@@ -656,13 +633,12 @@ export class ServiceContainer {
       createRepositories,
       generateId: this.generateId,
       now: this.now,
-      runtimePiSdkVersion: PINNED_PI_SDK_VERSION,
     });
   }
 
 
   /**
-   * Explicit PiRunExecutor factory (PR-05 slice B).
+   * Explicit DshRunExecutor factory (PR-05 slice B).
    *
    * Requires modelResolver + workspaceResolver (+ typically extensionFactories /
    * resource configuration for the runtime). Production workers call this via
@@ -675,7 +651,7 @@ export class ServiceContainer {
    *   extensionFactories?: unknown[],
      *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
      *   sessionLockManager?: any,
-   *   piRuntimeFactory?: any,
+   *   dshRuntimeFactory?: any,
    *   sessionAdapter?: any,
    *   projector?: any,
    *   recoveryService?: SessionRecoveryService,
@@ -906,7 +882,7 @@ export class ServiceContainer {
 
   /**
    * Worker runtime + execute/recovery services.
-   * Wires real Pi RunExecutor factory after start (or non-prod stub when allowed).
+   * Wires real DSH RunExecutor factory after start (or non-prod stub when allowed).
    * Never leaves production without an executor factory.
    */
   async createWorkerServices() {

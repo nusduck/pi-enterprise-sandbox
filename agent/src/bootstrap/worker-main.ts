@@ -9,7 +9,7 @@
  * Initial recovery failure is degraded (logged) but process continues.
  *
  * Does not import agent/server.js or process-local RunManager.
- * Production wires real Pi RunExecutor via container.createWorkerServices →
+ * Production wires real DSH RunExecutor via container.createWorkerServices →
  * ensureWorkerRunExecutorFactory. Stub only with AGENT_ALLOW_STUB_EXECUTOR=true
  * in non-production (never production).
  */
@@ -112,7 +112,7 @@ async function runWorkerMain(
   drainTimeoutMs: number,
 ) {
   const telemetry = await startTelemetry(env, {
-    serviceName: 'pi-enterprise-agent-worker',
+    serviceName: 'dsh-enterprise-agent-worker',
   });
   const createContainer = hooks.createContainer || createServiceContainer;
   const container = createContainer(env);
@@ -152,7 +152,7 @@ async function runWorkerMain(
   await startRunWorkerRuntime(workerRuntime);
 
   // Cron is intentionally co-located with the durable Agent worker. It only
-  // creates standard Run records; it never executes tools or Pi sessions.
+  // creates standard Run records; it never executes tools or DSH sessions.
   // Older isolated bootstrap fakes do not expose the optional control-plane
   // service. Real ServiceContainer wiring always does; retaining this guard
   // keeps the Run worker's failure semantics independently testable.

@@ -55,7 +55,7 @@ describe('agent import/listen smoke', () => {
     try {
       const body = await waitForHealth(port);
       assert.equal(body.status, 'ok');
-      assert.equal(body.service, 'pi-enterprise-agent');
+      assert.equal(body.service, 'dsh-enterprise-agent');
     } finally {
       child.kill('SIGTERM');
       await Promise.race([once(child, 'exit'), new Promise((r) => setTimeout(r, 3000))]);

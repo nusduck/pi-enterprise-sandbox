@@ -2,7 +2,7 @@
  * Display parsing for the subagent-spawn and task-state tool results.
  *
  * Both Agent extensions return `toolOk(toolResultJson(...))`, i.e. a JSON
- * document inside a Pi tool-result envelope. Without these parsers the cards
+ * document inside a DSH tool-result envelope. Without these parsers the cards
  * would show the model's wire format to the user, so the envelope unwrapping
  * is the part worth pinning.
  */
@@ -44,7 +44,7 @@ const CHILD_A = '01K0G2PAV8FPMVC9QHJG7JPN60';
 const CHILD_B = '01K0G2PAV8FPMVC9QHJG7JPN61';
 
 describe('tool result envelope', () => {
-  it('unwraps the JSON document out of a Pi tool result', () => {
+  it('unwraps the JSON document out of a DSH tool result', () => {
     assert.deepEqual(parseToolResultJson(envelope({ childRunId: CHILD_A })), {
       childRunId: CHILD_A,
     });
@@ -227,7 +227,7 @@ describe('todo card fields', () => {
     );
   });
 
-  it('还认旧 Pi 会话的两种形状（arguments.items 与 result.todos）', () => {
+  it('还认旧引擎会话的两种形状（arguments.items 与 result.todos）', () => {
     // 历史会话里三种形状都存在，卡片要能继续渲染它们。
     const legacyArgs = parseTodoFields({ items: [{ content: 'from items' }] }, envelope({}));
     assert.deepEqual(legacyArgs.todos.map((t) => t.content), ['from items']);
@@ -335,7 +335,7 @@ describe('工具名换代后的识别', () => {
     // 出厂名（当前）
     assert.equal(isAskUserToolName('ask_user_question'), true);
     assert.equal(isSpawnSubagentToolName('subagent'), true);
-    // 旧 Pi 名（历史会话里有这些调用记录，卡片要能继续渲染）
+    // 旧引擎名（历史会话里有这些调用记录，卡片要能继续渲染）
     assert.equal(isAskUserToolName('ask_user'), true);
     assert.equal(isSpawnSubagentToolName('spawn_subagent'), true);
     // 不相干的名字仍然不认
@@ -353,7 +353,7 @@ describe('工具名换代后的识别', () => {
     for (const name of ['skill', 'subagent', 'ask_user_question']) {
       assert.equal(inferToolSource(name, {}), 'internal', `${name} 应归到 internal`);
     }
-    // 旧 Pi 名（历史会话）同样不能落进 unknown
+    // 旧引擎名（历史会话）同样不能落进 unknown
     for (const name of ['ls', 'find', 'python', 'process_start', 'spawn_subagent', 'ask_user']) {
       assert.notEqual(inferToolSource(name, {}), 'unknown', `${name} 是历史会话里的名字`);
     }

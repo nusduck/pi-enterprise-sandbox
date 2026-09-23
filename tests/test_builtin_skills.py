@@ -65,7 +65,7 @@ def test_skill_framework_remains_available() -> None:
 
 def test_runtime_uses_only_the_canonical_skill_path() -> None:
     canonical = "/home/sandbox/skill"
-    removed = ("/sandbox/skills", "/app/.pi/skills")
+    removed = ("/sandbox/skills",)
     sources: list[str] = []
     for path in RUNTIME_SKILL_PATH_FILES:
         text = path.read_text(encoding="utf-8")

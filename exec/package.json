@@ -1,5 +1,5 @@
 {
-  "name": "@pi/exec",
+  "name": "@dsh/exec",
   "version": "0.0.0",
   "private": true,
   "description": "执行面：Bubblewrap 隔离、文件、命令、作业、产物。取代 Python 版 sandbox/。",
@@ -18,7 +18,7 @@
     "@deepseek-ai/dsh-fs-local": "0.1.1-rc.2",
     "@deepseek-ai/dsh-shell": "0.1.1-rc.2",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@pi/contract": "file:../contract",
+    "@dsh/contract": "file:../contract",
     "hono": "4.13.5",
     "ioredis": "5.11.1",
     "mysql2": "3.15.3",

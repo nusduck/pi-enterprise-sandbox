@@ -16,12 +16,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { FsError } from '@deepseek-ai/dsh-fs';
-import { ContractError, toWireError } from '@pi/contract/errors.js';
-import type { RpcEnvelope } from '@pi/contract/envelope.js';
-import type { WireError } from '@pi/contract/errors.js';
-import { issueInternalToken, internalBindingForHtu } from '@pi/contract/hmac.js';
-import { canonicalQueryBytes, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
-import type { InternalHmacKeyringInput } from '@pi/contract/hmac.js';
+import { ContractError, toWireError } from '@dsh/contract/errors.js';
+import type { RpcEnvelope } from '@dsh/contract/envelope.js';
+import type { WireError } from '@dsh/contract/errors.js';
+import { issueInternalToken, internalBindingForHtu } from '@dsh/contract/hmac.js';
+import { canonicalQueryBytes, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
+import type { InternalHmacKeyringInput } from '@dsh/contract/hmac.js';
 import { classifyExecOutcomeUnknown } from './exec-outcome.js';
 
 /** 客户端必需的身份与签名材料——由 `runtime` 启动时从服务端环境变量注入，不落盘。 */

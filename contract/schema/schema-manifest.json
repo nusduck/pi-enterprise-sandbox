@@ -28,7 +28,8 @@
     "20260904000001_exec_artifacts_datasets.js",
     "20260904000002_workspace_quota_reservations.js",
     "20260912000001_claim_without_skip_locked.js",
-    "20260923000001_upspec_naming.js"
+    "20260923000001_upspec_naming.js",
+    "20260923000002_dsh_naming.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -911,15 +912,6 @@
           "collation": null,
           "generation": null
         },
-        "pi_sdk_version": {
-          "type": "varchar(64)",
-          "nullable": false,
-          "default": "",
-          "extra": "",
-          "charset": "utf8mb4",
-          "collation": "utf8mb4_unicode_ci",
-          "generation": null
-        },
         "snapshot_format": {
           "type": "varchar(32)",
           "nullable": false,
@@ -1073,15 +1065,6 @@
           "collation": "utf8mb4_unicode_ci",
           "generation": null
         },
-        "pi_session_version": {
-          "type": "bigint",
-          "nullable": false,
-          "default": "0",
-          "extra": "",
-          "charset": null,
-          "collation": null,
-          "generation": null
-        },
         "recovery_reason_code": {
           "type": "varchar(64)",
           "nullable": true,
@@ -1098,6 +1081,15 @@
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "session_version": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
           "generation": null
         },
         "status": {
@@ -1298,15 +1290,6 @@
           "type": "char(26)",
           "nullable": false,
           "default": null,
-          "extra": "",
-          "charset": "utf8mb4",
-          "collation": "utf8mb4_unicode_ci",
-          "generation": null
-        },
-        "pi_sdk_version": {
-          "type": "varchar(64)",
-          "nullable": false,
-          "default": "",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3880,24 +3863,6 @@
           "collation": "utf8mb4_unicode_ci",
           "generation": null
         },
-        "pi_entry_id": {
-          "type": "varchar(128)",
-          "nullable": true,
-          "default": null,
-          "extra": "",
-          "charset": "utf8mb4",
-          "collation": "utf8mb4_unicode_ci",
-          "generation": null
-        },
-        "pi_entry_kind": {
-          "type": "varchar(64)",
-          "nullable": true,
-          "default": null,
-          "extra": "",
-          "charset": "utf8mb4",
-          "collation": "utf8mb4_unicode_ci",
-          "generation": null
-        },
         "role": {
           "type": "varchar(32)",
           "nullable": false,
@@ -3924,6 +3889,24 @@
           "charset": null,
           "collation": null,
           "generation": null
+        },
+        "session_entry_id": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "session_entry_kind": {
+          "type": "varchar(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
         }
       },
       "indexes": {
@@ -3947,7 +3930,7 @@
           "type": "BTREE",
           "columns": [
             "agent_session_id",
-            "pi_entry_id"
+            "session_entry_id"
           ]
         },
         "ind_agsvc_msg_i1": {
@@ -3963,7 +3946,7 @@
           "type": "BTREE",
           "columns": [
             "agent_session_id",
-            "pi_entry_kind",
+            "session_entry_kind",
             "sequence_no"
           ]
         }

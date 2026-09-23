@@ -22,7 +22,7 @@ import type {
   FsWriteOutcome,
 } from '@deepseek-ai/dsh-fs';
 import type { Context } from '@deepseek-ai/cordis';
-import { ContractError } from '@pi/contract/errors.js';
+import { ContractError } from '@dsh/contract/errors.js';
 import { ExecRpcClient, guardIterable, resolveExecRpcConfig } from './exec-rpc.js';
 import type { ExecRpcConfig } from './exec-rpc.js';
 

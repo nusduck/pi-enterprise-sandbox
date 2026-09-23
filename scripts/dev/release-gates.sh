@@ -7,7 +7,7 @@
 # 步骤：
 #   1. 按当前工作树构建运行器镜像（node:22-slim + docker CLI，依赖与源码在镜像内）；
 #   2. 在开发栈网络里起专用 Redis 5.0.14 容器（AOF + noeviction）；
-#   3. 在开发栈 MySQL 里重建 pi_gate_dev 与 pi_gate_dev_side，并授权应用账号；
+#   3. 在开发栈 MySQL 里重建 dsh_gate_dev 与 dsh_gate_dev_side，并授权应用账号；
 #   4. 依次跑：UPRedis 放行测试（直连 → 经路由模拟代理）→ Redis 重启 → BullMQ Worker 重启 → Agent Worker 重启；
 #   5. 不论成败，删除专用 Redis 容器与两个测试库；任一项失败则脚本以非零退出。
 #
@@ -18,10 +18,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-REDIS_CONTAINER="pi-release-gate-redis-dev"
-GATE_DB="pi_gate_dev"
+REDIS_CONTAINER="dsh-release-gate-redis-dev"
+GATE_DB="dsh_gate_dev"
 SIDE_DB="${GATE_DB}_side"
-RUNNER_IMAGE="pi-release-gate-runner:local"
+RUNNER_IMAGE="dsh-release-gate-runner:local"
 GATE_REDIS_PASSWORD="gate_dev_only"
 
 mysql_root() {

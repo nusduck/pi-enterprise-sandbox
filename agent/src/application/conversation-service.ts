@@ -67,14 +67,14 @@ function isArchived(row) {
 
 /**
  * Extract display text from messages.content_json for browser transcript.
- * Skips pi_journal_* system rows; surfaces user turns and assistant text.
+ * Skips dsh_journal_* system rows; surfaces user turns and assistant text.
  */
 export function presentTranscriptMessage(msg) {
   if (!msg || typeof msg !== 'object') return null;
   const role = String(msg.role || '').toLowerCase();
   if (role !== 'user' && role !== 'assistant') return null;
   const messageType = String(msg.messageType || '').toLowerCase();
-  if (messageType.startsWith('pi_journal')) return null;
+  if (messageType.startsWith('dsh_journal')) return null;
 
   const content = msg.contentJson ?? {};
   let text = '';
@@ -132,7 +132,7 @@ function thinkingByJournalEntryId(messages: Record<string, any>[] = []) {
   const map = new Map<string, string>();
   for (const msg of messages) {
     const content = msg?.contentJson;
-    if (!content || content.kind !== 'pi_journal_entry') continue;
+    if (!content || content.kind !== 'session_journal_entry') continue;
     const entry = content.entry;
     const id = typeof entry?.id === 'string' ? entry.id : '';
     if (!id) continue;
@@ -161,8 +161,8 @@ export function presentConversation(row: Record<string, any>, messages: Record<s
       if (!presented || presented.role !== 'assistant' || presented.thinking) {
         return presented;
       }
-      const piEntryId = msg?.contentJson?.piEntryId;
-      const thinking = typeof piEntryId === 'string' ? journalThinking.get(piEntryId) : '';
+      const sessionEntryId = msg?.contentJson?.sessionEntryId;
+      const thinking = typeof sessionEntryId === 'string' ? journalThinking.get(sessionEntryId) : '';
       return thinking ? { ...presented, thinking } : presented;
     }).filter(Boolean)
     : [];

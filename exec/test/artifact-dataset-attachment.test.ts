@@ -27,7 +27,7 @@ import { WorkspaceQuotaLedger } from '../src/workspace/quota-ledger.js';
 import { InProcessWorkspaceLock } from '../src/workspace/lock.js';
 
 async function makeWs(): Promise<{ root: string; ctx: WorkspaceContext; fs: WorkspaceFileSystem; cleanup: () => Promise<void> }> {
-  const raw = await mkdtemp(path.join(await realpath(tmpdir()), 'pi-w3b-'));
+  const raw = await mkdtemp(path.join(await realpath(tmpdir()), 'dsh-w3b-'));
   const root = await realpath(raw);
   const workspaceRoot = path.join(root, 'ws');
   const tempRoot = path.join(root, 'tmp');

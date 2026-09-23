@@ -52,7 +52,7 @@ function compose(args, opts = {}) {
   });
 }
 
-/** 在 agent 容器里跑一段 ESM——那里同时有 `@pi/contract` 与到 sandbox 的网络。 */
+/** 在 agent 容器里跑一段 ESM——那里同时有 `@dsh/contract` 与到 sandbox 的网络。 */
 function inAgent(script) {
   return compose(['exec', '-T', 'agent', 'node', '--input-type=module', '-e', script]).trim();
 }

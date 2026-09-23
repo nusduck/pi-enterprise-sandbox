@@ -54,14 +54,14 @@ describe('thin BFF agent relay', () => {
     }
   });
 
-  it('does not depend on pi-coding-agent', () => {
-    const deps = pkg.dependencies || {};
-    assert.equal(
-      deps['@earendil-works/pi-coding-agent'],
-      undefined,
-      'api-server must not depend on SDK after cutover',
+  it('does not depend on the Agent SDK', () => {
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    assert.deepEqual(
+      Object.keys(deps).filter((name) => name.startsWith('@deepseek-ai/')),
+      [],
+      'api-server is a thin BFF and must not depend on the Agent SDK',
     );
-    assert.doesNotMatch(runsSrc, /createAgentSession|@earendil-works\/pi-coding-agent/);
+    assert.doesNotMatch(runsSrc, /@deepseek-ai\//);
   });
 
   it('agent-client exposes create / events / cancel', () => {

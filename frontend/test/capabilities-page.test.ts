@@ -32,13 +32,13 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
   });
 
   // 这条用例**在 2026-08-31 之前就是红的**：它读
-  // `agent/src/extensions/constants.js`，而那个目录在 Wave 6 删除 Pi Extension
+  // `agent/src/extensions/constants.js`，而那个目录在 Wave 6 删除旧引擎 Extension
   // 时就没了；`extension-diagnostics-service` 也早已从 `.js` 转成 `.ts`。
   // 也就是说它守的是一份已经不存在的名单。
   //
   // 改成守现在真正成立的事（ADR 0009 D11 / 计划 H8.5）：诊断投影的是 DSH 的
   // host 工具面，来源标注不再是那批已删除的 Extension。
-  it('projects the DSH host tool surface, not the deleted Pi extension list', () => {
+  it('projects the DSH host tool surface, not the deleted legacy extension list', () => {
     const diagnosticsSrc = readFileSync(
       join(__dirname, '../../agent/src/application/extension-diagnostics-service.ts'),
       'utf8',

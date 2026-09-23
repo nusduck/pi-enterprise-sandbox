@@ -12,7 +12,7 @@ Compose project's MySQL/Redis volumes and project-owned filesystem roots.
 ## Preconditions
 
 1. Stop Frontend, BFF, Agent, Agent Worker, and Sandbox. Block new requests.
-2. Confirm the target is the disposable `pi-enterprise-sandbox` development
+2. Confirm the target is the disposable `dsh-enterprise-sandbox` development
    project. Do not run this procedure against production or a shared MySQL.
 3. Set `RESET_ALLOWED_ROOT` to a narrow, project-owned state root. It must
    not be `/`, `$HOME`, or a shared parent directory.
@@ -25,7 +25,7 @@ Required environment (use absolute paths):
 
 ```bash
 export DEPLOYMENT_ENV=development
-export PROJECT_ID=pi-enterprise-sandbox
+export PROJECT_ID=dsh-enterprise-sandbox
 export RESET_ALLOWED_ROOT=/absolute/project-owned/state
 export SANDBOX_WORKSPACES_ROOT=/absolute/project-owned/state/workspaces
 export SANDBOX_ATTACHMENTS_ROOT=/absolute/project-owned/state/workspaces
@@ -44,7 +44,7 @@ Review the paths before deleting anything:
 
 ```bash
 test "$DEPLOYMENT_ENV" = development
-test "$PROJECT_ID" = pi-enterprise-sandbox
+test "$PROJECT_ID" = dsh-enterprise-sandbox
 test -d "$RESET_ALLOWED_ROOT"
 case "$SANDBOX_WORKSPACES_ROOT" in
   "$RESET_ALLOWED_ROOT"/*) ;;

@@ -4,7 +4,7 @@
  * 这段逻辑原先躺在 `internal-hmac.ts` 里，但它跟 HS256 令牌没有任何关系——
  * 它管的是"这个地址能不能拿来发内部请求"：不许带凭据、不许带 query/hash、
  * 明文 http 只允许字面 loopback（除非部署显式打开 `allowInsecureHttp`）。
- * HMAC 实现收口到 `@pi/contract/hmac.js` 时，这一段留在了 agent 侧。
+ * HMAC 实现收口到 `@dsh/contract/hmac.js` 时，这一段留在了 agent 侧。
  */
 
 /** baseUrl 配置不合法。`code` 稳定，不携带机密信息。 */

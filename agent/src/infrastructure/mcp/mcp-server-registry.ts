@@ -11,7 +11,7 @@ import {
   ENV_NAME_PATTERN,
   HEADER_NAME_PATTERN,
   MCP_TRANSPORT_VALUES,
-  PiMcpAdapterError,
+  McpRegistryError,
   SENSITIVE_QUERY_KEY,
   SERVER_ID_PATTERN,
 } from './mcp-constants.js';
@@ -29,13 +29,13 @@ function parseRegistryInput(raw: unknown) {
       if (!Array.isArray(parsed)) throw new Error('must be an array');
       return parsed;
     } catch (error) {
-      throw new PiMcpAdapterError('MCP_SERVERS_JSON must be valid JSON array', {
+      throw new McpRegistryError('MCP_SERVERS_JSON must be valid JSON array', {
         code: 'MCP_SERVER_REGISTRY_INVALID',
         cause: error,
       });
     }
   }
-  throw new PiMcpAdapterError('MCP server registry must be an array or JSON array', {
+  throw new McpRegistryError('MCP server registry must be an array or JSON array', {
     code: 'MCP_SERVER_REGISTRY_INVALID',
   });
 }
@@ -43,7 +43,7 @@ function parseRegistryInput(raw: unknown) {
 function parseReferenceMap(raw: unknown, field: string, keyPattern: RegExp) {
   if (raw == null) return Object.freeze({});
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new PiMcpAdapterError(`${field} must be an object of secret references`, {
+    throw new McpRegistryError(`${field} must be an object of secret references`, {
       code: 'MCP_SERVER_REGISTRY_INVALID',
     });
   }
@@ -51,7 +51,7 @@ function parseReferenceMap(raw: unknown, field: string, keyPattern: RegExp) {
   for (const [key, value] of Object.entries(raw)) {
     const ref = String(value ?? '').trim();
     if (!keyPattern.test(key) || !ref) {
-      throw new PiMcpAdapterError(`${field} contains an invalid key or secret reference`, {
+      throw new McpRegistryError(`${field} contains an invalid key or secret reference`, {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
@@ -89,19 +89,19 @@ export function loadMcpServerRegistry(raw: unknown) {
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new PiMcpAdapterError(`MCP_SERVERS_JSON[${index}] must be an object`, {
+      throw new McpRegistryError(`MCP_SERVERS_JSON[${index}] must be an object`, {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
     const value = (entry as Record<string, unknown>);
     const serverId = String(value.id ?? value.serverId ?? '').trim();
     if (!SERVER_ID_PATTERN.test(serverId)) {
-      throw new PiMcpAdapterError(`MCP_SERVERS_JSON[${index}].id is invalid`, {
+      throw new McpRegistryError(`MCP_SERVERS_JSON[${index}].id is invalid`, {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
     if (registry.has(serverId)) {
-      throw new PiMcpAdapterError(`duplicate MCP server registry id: ${serverId}`, {
+      throw new McpRegistryError(`duplicate MCP server registry id: ${serverId}`, {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
@@ -116,7 +116,7 @@ export function loadMcpServerRegistry(raw: unknown) {
       'env',
     ]) {
       if (Object.hasOwn(value, forbidden)) {
-        throw new PiMcpAdapterError(
+        throw new McpRegistryError(
           `MCP_SERVERS_JSON[${index}].${forbidden} must not contain plaintext credentials; use a *Ref field`,
           { code: 'MCP_PLAINTEXT_SECRET_FORBIDDEN' },
         );
@@ -126,7 +126,7 @@ export function loadMcpServerRegistry(raw: unknown) {
     const url = value.url == null ? null : String(value.url).trim();
     const command = value.command == null ? null : String(value.command).trim();
     if ((url ? 1 : 0) + (command ? 1 : 0) !== 1) {
-      throw new PiMcpAdapterError(
+      throw new McpRegistryError(
         `MCP server ${serverId} must configure exactly one of url or command`,
         { code: 'MCP_SERVER_REGISTRY_INVALID' },
       );
@@ -136,20 +136,20 @@ export function loadMcpServerRegistry(raw: unknown) {
       try {
         parsed = new URL(url);
       } catch (error) {
-        throw new PiMcpAdapterError(`MCP server ${serverId} has an invalid URL`, {
+        throw new McpRegistryError(`MCP server ${serverId} has an invalid URL`, {
           code: 'MCP_SERVER_REGISTRY_INVALID',
           cause: error,
         });
       }
       if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
-        throw new PiMcpAdapterError(
+        throw new McpRegistryError(
           `MCP server ${serverId} URL must be http(s) and must not embed credentials`,
           { code: 'MCP_SERVER_REGISTRY_INVALID' },
         );
       }
       for (const key of parsed.searchParams.keys()) {
         if (SENSITIVE_QUERY_KEY.test(key)) {
-          throw new PiMcpAdapterError(
+          throw new McpRegistryError(
             `MCP server ${serverId} URL must not embed credential query parameters`,
             { code: 'MCP_PLAINTEXT_SECRET_FORBIDDEN' },
           );
@@ -159,20 +159,20 @@ export function loadMcpServerRegistry(raw: unknown) {
 
     const args = value.args == null ? [] : value.args;
     if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) {
-      throw new PiMcpAdapterError(`MCP server ${serverId}.args must be strings`, {
+      throw new McpRegistryError(`MCP server ${serverId}.args must be strings`, {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
     const authTokenRef =
       value.authTokenRef == null ? null : String(value.authTokenRef).trim();
     if (authTokenRef === '') {
-      throw new PiMcpAdapterError(`MCP server ${serverId}.authTokenRef is empty`, {
+      throw new McpRegistryError(`MCP server ${serverId}.authTokenRef is empty`, {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
     const auth = value.auth == null ? null : value.auth;
     if (auth !== null && auth !== false && !['bearer', 'oauth'].includes(String(auth))) {
-      throw new PiMcpAdapterError(`MCP server ${serverId}.auth is invalid`, {
+      throw new McpRegistryError(`MCP server ${serverId}.auth is invalid`, {
         code: 'MCP_SERVER_REGISTRY_INVALID',
       });
     }
@@ -182,7 +182,7 @@ export function loadMcpServerRegistry(raw: unknown) {
       timeoutMs !== null &&
       (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000)
     ) {
-      throw new PiMcpAdapterError(
+      throw new McpRegistryError(
         `MCP server ${serverId}.timeoutMs must be 1000..300000`,
         { code: 'MCP_SERVER_REGISTRY_INVALID' },
       );
@@ -196,13 +196,13 @@ export function loadMcpServerRegistry(raw: unknown) {
     if (value.transport != null && String(value.transport).trim() !== '') {
       transport = String(value.transport).trim().toLowerCase();
       if (!MCP_TRANSPORT_VALUES.includes(transport)) {
-        throw new PiMcpAdapterError(
+        throw new McpRegistryError(
           `MCP server ${serverId}.transport must be one of ${MCP_TRANSPORT_VALUES.join(', ')}`,
           { code: 'MCP_SERVER_REGISTRY_INVALID' },
         );
       }
       if (!url && transport) {
-        throw new PiMcpAdapterError(
+        throw new McpRegistryError(
           `MCP server ${serverId}.transport is only valid for url servers`,
           { code: 'MCP_SERVER_REGISTRY_INVALID' },
         );

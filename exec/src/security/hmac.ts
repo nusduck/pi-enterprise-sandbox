@@ -17,9 +17,9 @@ import {
   type InternalHmacError,
   type InternalHmacKeyringInput,
   internalBindingForHtu,
-} from '@pi/contract/hmac.js';
-import { ContractError } from '@pi/contract/errors.js';
-import { canonicalQueryBytes } from '@pi/contract/skill-manifest.js';
+} from '@dsh/contract/hmac.js';
+import { ContractError } from '@dsh/contract/errors.js';
+import { canonicalQueryBytes } from '@dsh/contract/skill-manifest.js';
 
 /**
  * GET 请求参与 `body_sha256` 的字节：规范化后的 query（design §3.3 S1）。

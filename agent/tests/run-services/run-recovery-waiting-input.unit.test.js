@@ -7,15 +7,15 @@
  * Cell                         Offline unit                         Live release-gate (opt-in)
  * ---------------------------- ------------------------------------ ------------------------------------------
  * Graceful stop / drain        worker-main shutdown DI only         missing dedicated gate
- * SIGKILL mid-run (pre-tool)   execute-run.unit (lease-free replay) agent-worker-restart + pi-restart (evidence)
- * SIGKILL mid-tool             execute-run.unit (UNKNOWN manual)    agent-worker-restart + pi-restart (evidence)
- * Mid-waiting-input (PENDING)  this file                            pi-restart interaction case (not re-run here)
- * Mid-waiting-input (RESOLVED) this file                            pi-restart interaction case (not re-run here)
- * Session rehydrate            session-recovery.unit                pi-restart checkpoint assertions
- * Journal replay               session-recovery + pi-session-journal missing dedicated hard-kill journal live
+ * SIGKILL mid-run (pre-tool)   execute-run.unit (lease-free replay) agent-worker-restart + dsh-restart (evidence)
+ * SIGKILL mid-tool             execute-run.unit (UNKNOWN manual)    agent-worker-restart + dsh-restart (evidence)
+ * Mid-waiting-input (PENDING)  this file                            dsh-restart interaction case (not re-run here)
+ * Mid-waiting-input (RESOLVED) this file                            dsh-restart interaction case (not re-run here)
+ * Session rehydrate            session-recovery.unit                dsh-restart checkpoint assertions
+ * Journal replay               session-recovery + dsh-session-journal missing dedicated hard-kill journal live
  *
- * Pi-native only: recovery re-enqueues ref jobs; Session rebuild stays in
- * SessionRecoveryService / Pi JSONL — no second agent loop.
+ * DSH-native only: recovery re-enqueues ref jobs; Session rebuild stays in
+ * SessionRecoveryService / session JSONL — no second agent loop.
  */
 
 import { beforeEach, describe, it } from 'node:test';
@@ -168,7 +168,7 @@ function seed(state, opts = {}) {
       workspace_id: '01K0G2PAV8FPMVC9QHJG7JPN5G',
       status: 'ACTIVE',
       execution_fence_token: 1,
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: null,
       created_at: NOW,
       updated_at: NOW,

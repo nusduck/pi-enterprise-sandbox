@@ -830,7 +830,6 @@ describe('parent provisioning session version binding', () => {
       version_no: 2,
       config_json: '{}',
       config_hash: 'b'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: first.userId,
       created_at: '2026-07-18 07:00:00.000',

@@ -51,7 +51,7 @@ describeLive('schema release export and replay (TEST_SCHEMA_SHADOW_URL / TEST_SC
   }
 
   const drifts = async (knex) => {
-    const { diffSchemaManifest, loadSchemaManifest } = await import('@pi/contract/schema-manifest.js');
+    const { diffSchemaManifest, loadSchemaManifest } = await import('@dsh/contract/schema-manifest.js');
     return diffSchemaManifest(loadSchemaManifest(), await verify.introspectSchema(knex)).map((d) => `${d.kind} ${d.object}`);
   };
 

@@ -6,7 +6,7 @@ import { assertUlid } from '../../domain/shared/ulid.js';
 import {
   issueInternalToken,
   validateInternalHmacKeyring,
-} from '@pi/contract/hmac.js';
+} from '@dsh/contract/hmac.js';
 import { normalizeBaseUrl } from './transport-base-url.js';
 import { createTraceHeaders } from './trace-context.js';
 

@@ -149,7 +149,7 @@ export function createWorkerProbeServer(state: WorkerProbeState, options: Worker
   const server = http.createServer((req, res) => {
     const path = (req.url ?? '').split('?', 1)[0];
     if (req.method === 'GET' && path === '/health') {
-      sendJson(res, 200, { status: 'ok', service: 'pi-enterprise-agent-worker' });
+      sendJson(res, 200, { status: 'ok', service: 'dsh-enterprise-agent-worker' });
       return;
     }
     if (req.method === 'GET' && path === '/ready') {

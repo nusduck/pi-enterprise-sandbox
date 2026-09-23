@@ -3,7 +3,7 @@
 #
 # 开发与生产走同一流程——任何服务启动时都不迁移；agent / agent-worker / sandbox
 # 只按随包清单只读核对，结构不对即拒绝启动。本脚本扮演「DBA」：
-#   1. 在 mysql 容器里重建空影子库 pi_schema_shadow；
+#   1. 在 mysql 容器里重建空影子库 dsh_schema_shadow；
 #   2. 用 agent 镜像在影子库上跑迁移，导出分段 SQL 发布包到 .runtime/schema-release；
 #   3. 目标库为空时，用 mysql 客户端按文件顺序逐段执行，首个错误即停（不使用 --force）；
 #      目标库非空时不执行，只做第 4 步；
@@ -17,7 +17,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RELEASE_DIR="$ROOT/.runtime/schema-release"
-SHADOW_DB="pi_schema_shadow"
+SHADOW_DB="dsh_schema_shadow"
 CLI="dist/src/infrastructure/mysql/cli-schema.js"
 
 cd "$ROOT"

@@ -13,7 +13,7 @@ import {
   fetchDbpmCredentials,
   readDbpmSettings,
   type FetchDbpmCredentialsOptions,
-} from '@pi/contract/dbpm-config.js';
+} from '@dsh/contract/dbpm-config.js';
 import { ExecDbConfigError, type ExecDbConfig } from './db/client.js';
 
 type FetchOptions = Omit<FetchDbpmCredentialsOptions, 'process'>;

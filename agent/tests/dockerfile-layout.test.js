@@ -11,7 +11,7 @@ const dockerfile = readFileSync(join(agentRoot, 'Dockerfile'), 'utf8');
 const compose = readFileSync(join(repositoryRoot, 'docker-compose.yml'), 'utf8');
 
 describe('Agent image workspace boundary', () => {
-  it('creates the logical Pi cwd without linking a physical workspace', () => {
+  it('creates the logical DSH cwd without linking a physical workspace', () => {
     assert.match(dockerfile, /mkdir -p[^\n]*\/home\/sandbox\/workspace/);
     assert.doesNotMatch(dockerfile, /\bln\s+-s(?:f)?\b[^\n]*\/home\/sandbox\/workspace/);
   });

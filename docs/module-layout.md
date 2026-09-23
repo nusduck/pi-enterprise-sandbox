@@ -30,7 +30,7 @@
 | `contract/` | exec↔agent runtime 共享类型与 RPC 信封（TS） | `contract/src/**` | `src/index.ts` |
 
 DSH 组合层是 `agent/src/runtime/`，不是独立包、也不是第六个服务。它曾经短暂
-作为 `agent/runtime/`（`@pi/runtime`），阶段 F 并进主树，与其余源码同一次
+作为独立包 `agent/runtime/`，阶段 F 并进主树，与其余源码同一次
 `tsc` 编译。`contract/` 留在顶层，因为 exec 与 agent runtime 都用它。
 
 Do **not** reintroduce parallel production trees at the package root that mirror `src/` (e.g. `agent/application` next to `agent/src/application`).
@@ -114,7 +114,7 @@ agent/
 **Rules**
 
 - New production modules land under `src/` only. 入口是 `.ts`，容器跑 `dist/`。
-- `application/` 不 import cordis / `@pi/runtime` / `@deepseek-ai/dsh-*`。
+- `application/` 不 import cordis / `src/runtime/` / `@deepseek-ai/dsh-*`。
 - 新增 plugin 只改 `src/runtime/plugins/manifest.ts`，然后 `npm run gen:patch`。
 - Obsolete approval-waiter code is deleted; do not add a package-root `legacy/` tree.
 - `tests/support/` is the only home for gates and local fakes. Production code
@@ -214,7 +214,7 @@ Unchanged: feature-sliced style under `frontend/src/` (`pages/`, `widgets/`, `fe
 
 ## VM release（exec 裸装）
 
-- `deploy/vm/`：随 release 分发的部署资产——`pi-exec.service`、`exec.env.example`、`exec-preflight.sh`
+- `deploy/vm/`：随 release 分发的部署资产——`dsh-exec.service`、`exec.env.example`、`exec-preflight.sh`
   （ExecStartPre）、`install-release.sh`（init / install / activate / list）。release 内位于 `vm/`。
 - `scripts/vm/`：仓库侧工具——`build-exec-release.sh` + `release-builder.Dockerfile`（在目标架构 Linux 容器里
   构建，产物写到 `.runtime/vm-release/`）、`write-release-manifest.mjs`、开发用 `systemd-sim.Dockerfile`。

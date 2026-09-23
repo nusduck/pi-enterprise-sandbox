@@ -31,7 +31,7 @@ describe('internal MCP bridge', () => {
   let artifactService: ArtifactService;
 
   before(async () => {
-    base = await mkdtemp(path.join(await realpath(tmpdir()), 'pi-mcpbridge-'));
+    base = await mkdtemp(path.join(await realpath(tmpdir()), 'dsh-mcpbridge-'));
     workspaceManager = new WorkspaceManager({
       workspacesBaseRoot: path.join(base, 'workspaces'),
       tempBaseRoot: path.join(base, 'tmp'),

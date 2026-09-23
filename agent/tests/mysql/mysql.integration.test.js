@@ -322,7 +322,6 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
       version_no: 1,
       config_json: JSON.stringify({ modelPolicy: {} }),
       config_hash: 'a'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: USER,
       created_at: knex.fn.now(3),

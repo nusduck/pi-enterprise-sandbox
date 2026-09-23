@@ -1,8 +1,8 @@
 /**
  * Session recovery + atomic checkpoint (PR-05 slice B).
  *
- * Truth: Messages (Pi JSONL journal) + Run Events.
- * Acceleration: agent_session_snapshots pointed by agent_sessions.pi_session_version.
+ * Truth: Messages (session JSONL journal) + Run Events.
+ * Acceleration: agent_session_snapshots pointed by agent_sessions.session_version.
  *
  * Recovery priority (plan §12.5):
  * 1. Exact pointed snapshot (checksum / SDK / identity)
@@ -28,25 +28,24 @@ import {
   checksumSnapshotPayload,
   validateSnapshotPayload,
   materializeJsonl,
-  PI_SESSION_JSONL_VERSION,
+  SESSION_JSONL_VERSION,
   buildSessionHeader,
   findLeafEntryId,
 } from './session-json-codec.js';
 import {
   SNAPSHOT_FORMAT,
 } from '../infrastructure/mysql/repositories/agent-session-snapshot-repository.js';
-import { PINNED_PI_SDK_VERSION } from '../infrastructure/dsh/constants.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import { createHash } from 'node:crypto';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
 
-/** customType for protected platform manifest inside Pi JSONL. */
+/** customType for protected platform manifest inside session JSONL. */
 export const PLATFORM_MANIFEST_CUSTOM_TYPE = 'platform.session.manifest';
 
 /**
- * Build a Pi `custom` entry binding recovery identity to the journal.
+ * Build a DSH `custom` entry binding recovery identity to the journal.
  *
  * parentId must attach to the current leaf (append-order leaf of content
  * entries). Only an empty session may use parentId: null (sole root).
@@ -60,11 +59,10 @@ export const PLATFORM_MANIFEST_CUSTOM_TYPE = 'platform.session.manifest';
  *   workspaceId: string,
  *   journalHighWaterMark: number,
  *   journalDigest: string,
- *   piSdkVersion?: string,
  *   agentSessionId: string,
  * }} input
  */
-export function buildProtectedManifestEntry(input: { id: string, parentId?: string | null, timestamp?: string, agentVersionId: string, configHash: string, workspaceId: string, journalHighWaterMark: number, journalDigest: string, piSdkVersion?: string, agentSessionId: string, }) {
+export function buildProtectedManifestEntry(input: { id: string, parentId?: string | null, timestamp?: string, agentVersionId: string, configHash: string, workspaceId: string, journalHighWaterMark: number, journalDigest: string, agentSessionId: string, }) {
   const timestamp = input.timestamp || new Date().toISOString();
   const parentId =
     input.parentId === undefined ? null : input.parentId;
@@ -81,8 +79,7 @@ export function buildProtectedManifestEntry(input: { id: string, parentId?: stri
       workspaceId: input.workspaceId,
       journalHighWaterMark: Number(input.journalHighWaterMark),
       journalDigest: String(input.journalDigest),
-      piSdkVersion: input.piSdkVersion ?? PINNED_PI_SDK_VERSION,
-      piSessionJsonlVersion: PI_SESSION_JSONL_VERSION,
+      sessionJsonlVersion: SESSION_JSONL_VERSION,
     },
   };
 }
@@ -122,7 +119,6 @@ export class SessionRecoveryService {
   createRepositories: Loose;
   generateId: Loose;
   now: Loose;
-  runtimePiSdkVersion: Loose;
 
   /**
    * @param {{
@@ -138,10 +134,9 @@ export class SessionRecoveryService {
    *   },
    *   generateId: () => string,
    *   now?: () => Date,
-   *   runtimePiSdkVersion?: string,
    * }} deps
    */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => { sessions: any, sessionSnapshots: any, journal: any, runEvents?: any, outbox?: any, runs?: any, catalog?: any, }, generateId: () => string, now?: () => Date, runtimePiSdkVersion?: string, }) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => { sessions: any, sessionSnapshots: any, journal: any, runEvents?: any, outbox?: any, runs?: any, catalog?: any, }, generateId: () => string, now?: () => Date, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SessionRecoveryService requires transactionManager.run');
     }
@@ -155,12 +150,10 @@ export class SessionRecoveryService {
     this.createRepositories = deps.createRepositories;
     this.generateId = deps.generateId;
     this.now = deps.now ?? (() => new Date());
-    this.runtimePiSdkVersion =
-      deps.runtimePiSdkVersion ?? PINNED_PI_SDK_VERSION;
   }
 
   /**
-   * Recover a logical Pi snapshot payload for runtime open.
+   * Recover a logical DSH snapshot payload for runtime open.
    *
    * @param {{
    *   agentSessionId: string,
@@ -301,7 +294,7 @@ export class SessionRecoveryService {
     if (
       (!snapshot || snapshot.__error) &&
       !journalComplete &&
-      Number(session.piSessionVersion) === 0
+      Number(session.sessionVersion) === 0
     ) {
       return {
         source: 'empty',
@@ -360,7 +353,7 @@ export class SessionRecoveryService {
         source: 'journal',
         payload: journalPayload,
         checksum: journalChecksum,
-        snapshotVersion: Number(session.piSessionVersion),
+        snapshotVersion: Number(session.sessionVersion),
         journalDigest: journal.digest,
       };
     }
@@ -398,11 +391,10 @@ export class SessionRecoveryService {
    *   agentVersionId: string,
    *   configHash: string,
    *   workspaceId: string,
-   *   piSdkVersion?: string,
    *   interactionResumeId?: string | null,
    * }} input
    */
-  async checkpoint(input: { agentSessionId: string, orgId: string, userId: string, executionFenceToken: number, runId: string, traceId: string, payload: { header: Record<string, any>, entries: Record<string, any>[] }, workspacePath?: string | null, agentVersionId: string, configHash: string, workspaceId: string, piSdkVersion?: string, interactionResumeId?: string | null, }) {
+  async checkpoint(input: { agentSessionId: string, orgId: string, userId: string, executionFenceToken: number, runId: string, traceId: string, payload: { header: Record<string, any>, entries: Record<string, any>[] }, workspacePath?: string | null, agentVersionId: string, configHash: string, workspaceId: string, interactionResumeId?: string | null, }) {
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const scope = {
       orgId: assertUlid(input.orgId, 'orgId'),
@@ -414,7 +406,6 @@ export class SessionRecoveryService {
     const agentVersionId = assertUlid(input.agentVersionId, 'agentVersionId');
     const workspaceId = assertUlid(input.workspaceId, 'workspaceId');
     const configHash = String(input.configHash || '');
-    const piSdkVersion = input.piSdkVersion ?? this.runtimePiSdkVersion;
 
     const entries = [...(input.payload?.entries || [])];
 
@@ -488,7 +479,6 @@ export class SessionRecoveryService {
         workspaceId,
         journalHighWaterMark: journalAfter.highWaterSequence,
         journalDigest: journalAfter.digest,
-        piSdkVersion,
       });
       await repos.journal.appendEntry({
         messageId: this.generateId(),
@@ -507,8 +497,8 @@ export class SessionRecoveryService {
       });
       const committedChecksum = materializeChecksum(journalPayload);
 
-      const expectedPi = Number(session.piSessionVersion);
-      const snapshotVersion = expectedPi + 1;
+      const expectedVersion = Number(session.sessionVersion);
+      const snapshotVersion = expectedVersion + 1;
       const snapshotId = assertUlid(this.generateId(), 'snapshotId');
 
       // Fence gate immediately before snapshot write.
@@ -525,12 +515,11 @@ export class SessionRecoveryService {
         orgId: scope.orgId,
         userId: scope.userId,
         snapshotVersion,
-        expectedPiSessionVersion: expectedPi,
+        expectedSessionVersion: expectedVersion,
         expectedExecutionFenceToken: fence,
-        snapshotFormat: SNAPSHOT_FORMAT.PI_JSONL_V3,
+        snapshotFormat: SNAPSHOT_FORMAT.SESSION_JSONL_V3,
         snapshotJson: journalPayload,
         workspacePath: input.workspacePath ?? null,
-        piSdkVersion,
         checksum: committedChecksum,
       });
 
@@ -563,7 +552,7 @@ export class SessionRecoveryService {
             snapshotId: snap.snapshotId,
             snapshotVersion: snap.snapshotVersion,
             checksum: committedChecksum,
-            piSessionVersion: snap.snapshotVersion,
+            sessionVersion: snap.snapshotVersion,
             journalDigest: journalFull.digest,
             journalHighWaterMark: journalFull.highWaterSequence,
           },

@@ -18,7 +18,7 @@
  */
 
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell';
-import { parseShellWorkdir, type ShellWorkdir } from '@pi/contract/shell-payload.js';
+import { parseShellWorkdir, type ShellWorkdir } from '@dsh/contract/shell-payload.js';
 import type { ResourceLimitPlan } from '../isolation/profile.js';
 import type { SandboxMode, WorkspaceContext } from '../types.js';
 import { redactPhysicalRoots } from '../fs/redact.js';

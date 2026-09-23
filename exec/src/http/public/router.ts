@@ -13,7 +13,7 @@
 
 import { Hono } from 'hono';
 import { timingSafeEqual } from 'node:crypto';
-import { toWireError } from '@pi/contract/errors.js';
+import { toWireError } from '@dsh/contract/errors.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
 import { ArtifactService } from '../../artifact/service.js';

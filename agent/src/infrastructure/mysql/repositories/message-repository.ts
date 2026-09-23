@@ -37,12 +37,12 @@ export class MessageRepository {
    *   messageType: string,
    *   contentJson: Record<string, unknown>,
    *   sequenceNo?: number,
-   *   piEntryId?: string | null,
-   *   piEntryKind?: string | null,
+   *   sessionEntryId?: string | null,
+   *   sessionEntryKind?: string | null,
    *   createdAt?: Date | string,
    * }} input
    */
-  async append(input: { messageId: string, conversationId: string, orgId: string, userId: string, agentSessionId?: string | null, runId?: string | null, role: string, messageType: string, contentJson: Record<string, unknown>, sequenceNo?: number, piEntryId?: string | null, piEntryKind?: string | null, createdAt?: Date | string, }) {
+  async append(input: { messageId: string, conversationId: string, orgId: string, userId: string, agentSessionId?: string | null, runId?: string | null, role: string, messageType: string, contentJson: Record<string, unknown>, sequenceNo?: number, sessionEntryId?: string | null, sessionEntryKind?: string | null, createdAt?: Date | string, }) {
     const scope = requireOwnerScope(input);
     const runInTxn = async (trx) => {
       const conv = await applyOwnerScope(
@@ -81,15 +81,15 @@ export class MessageRepository {
           message_type: input.messageType,
           content_json: JSON.stringify(input.contentJson ?? {}),
           sequence_no: sequenceNo,
-          // Optional Pi journal markers (PR-05 slice B); null for ordinary messages.
-          pi_entry_id:
-            input.piEntryId == null || input.piEntryId === ''
+          // Optional DSH journal markers (PR-05 slice B); null for ordinary messages.
+          session_entry_id:
+            input.sessionEntryId == null || input.sessionEntryId === ''
               ? null
-              : String(input.piEntryId),
-          pi_entry_kind:
-            input.piEntryKind == null || input.piEntryKind === ''
+              : String(input.sessionEntryId),
+          session_entry_kind:
+            input.sessionEntryKind == null || input.sessionEntryKind === ''
               ? null
-              : String(input.piEntryKind),
+              : String(input.sessionEntryKind),
           created_at: toMysqlDateTime(input.createdAt || new Date()),
         });
       } catch (err) {
@@ -162,7 +162,7 @@ export class MessageRepository {
    * The newest assistant message written by one Run.
    *
    * `check_subagent` needs a finished child's answer, and the assistant
-   * transcript rows (written by the executor from the Pi payload) are where it
+   * transcript rows (written by the executor from the DSH payload) are where it
    * lives — the run row only carries status. Owner scope is proven the same
    * way {@link listByConversation} proves it: the conversation is read under
    * the scope first, and messages are only reachable through it.

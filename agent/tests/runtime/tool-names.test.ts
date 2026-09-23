@@ -32,7 +32,7 @@ test('事实源只有一份：分类器与风险表都认同一批本地工具',
   assert.equal(classifyTool(ASK_USER_TOOL_NAME), 'internal_interaction');
 });
 
-test('旧 Pi 名字一个都不在新工具面里（否则改名没改干净）', () => {
+test('旧引擎名字一个都不在新工具面里（否则改名没改干净）', () => {
   for (const legacy of Object.keys(LEGACY_TOOL_NAME_ALIASES)) {
     assert.equal(
       SANDBOX_TOOL_NAMES.includes(legacy),

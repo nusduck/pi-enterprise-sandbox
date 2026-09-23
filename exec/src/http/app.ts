@@ -44,12 +44,12 @@ import type { ExecDbPool as Pool } from '../db/failover-pool.js';
 import { assertExecDbConfigWithoutPassword } from '../startup-credentials.js';
 import { assertSchemaMatchesManifest } from '../db/schema-verify.js';
 import { AGENT_SKILL_PATH } from '../isolation/profile.js';
-import { ContractError } from '@pi/contract/errors.js';
+import { ContractError } from '@dsh/contract/errors.js';
 import {
   parseSkillVersionSidecar,
   skillVersionPaths,
   type EnabledSkillRef,
-} from '@pi/contract/skill-manifest.js';
+} from '@dsh/contract/skill-manifest.js';
 import type { EnabledSkillPackage } from '../types.js';
 import { preflightCheck } from '../isolation/bubblewrap.js';
 import { buildPreflightProfile } from '../isolation/preflight.js';

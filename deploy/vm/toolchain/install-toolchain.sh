@@ -6,10 +6,10 @@
 # --cache           预先下载的制品目录。每个制品按 toolchain-sources.json 里的文件名查找，
 #                   **一律先核对 SHA256 再使用**，不匹配即失败。
 # --allow-download  缓存里缺的制品按清单 URL 下载到 --cache 再核对；不给则缺失即失败（离线部署）。
-# --assets DIR      release 的 toolchain/ 目录（requirements.txt、skill-runtime/、pi-skill-runtime/）；
+# --assets DIR      release 的 toolchain/ 目录（requirements.txt、skill-runtime/、dsh-skill-runtime/）；
 #                   默认为本脚本所在 release 的 ../../toolchain。
 #
-# 安装位置都在 Bubblewrap 可见的 /usr/local 与 /opt/pi-python/venv 下——exec 的沙箱只暴露
+# 安装位置都在 Bubblewrap 可见的 /usr/local 与 /opt/dsh-python/venv 下——exec 的沙箱只暴露
 # /usr /bin /sbin /lib /lib64 /usr/local 与 Python venv，装在 /opt 的工具在沙箱里不可见。
 # PyPI / npm 依赖仍从配置的索引安装（可用 UV_INDEX_URL、npm_config_registry 指向内网镜像）。
 # 从不执行 `curl | sh`；重复运行时已装的同版本组件跳过。
@@ -21,8 +21,8 @@ ASSETS="$SCRIPT_DIR/../../toolchain"
 CACHE=""
 ALLOW_DOWNLOAD=false
 SKIP_VERIFY=false
-STATE_DIR=/usr/local/share/pi-toolchain
-VENV=/opt/pi-python/venv
+STATE_DIR=/usr/local/share/dsh-toolchain
+VENV=/opt/dsh-python/venv
 
 log() { printf '[toolchain] %s\n' "$*"; }
 die() { printf '[toolchain] FAIL: %s\n' "$*" >&2; exit 1; }
@@ -201,16 +201,16 @@ install_chromium() {
     python3 -m zipfile -e "$file" "$tmp"
     dir="$(find "$tmp" -maxdepth 1 -type d -name 'chrome-linux*' | head -1)"
     [ -n "$dir" ] && [ -f "$dir/chrome" ] || die "chrome binary not found in chromium archive"
-    rm -rf /usr/local/lib/pi-chromium
-    mkdir -p /usr/local/lib/pi-chromium
-    mv "$dir" /usr/local/lib/pi-chromium/chrome
-    chown -R root:root /usr/local/lib/pi-chromium
+    rm -rf /usr/local/lib/dsh-chromium
+    mkdir -p /usr/local/lib/dsh-chromium
+    mv "$dir" /usr/local/lib/dsh-chromium/chrome
+    chown -R root:root /usr/local/lib/dsh-chromium
     # python zipfile 不保留权限位：可执行文件逐个恢复。
-    chmod -R a+rX /usr/local/lib/pi-chromium
+    chmod -R a+rX /usr/local/lib/dsh-chromium
     for binary in chrome chrome_crashpad_handler chrome_sandbox chrome-wrapper; do
-        [ -f "/usr/local/lib/pi-chromium/chrome/$binary" ] && chmod 0755 "/usr/local/lib/pi-chromium/chrome/$binary"
+        [ -f "/usr/local/lib/dsh-chromium/chrome/$binary" ] && chmod 0755 "/usr/local/lib/dsh-chromium/chrome/$binary"
     done
-    find /usr/local/lib/pi-chromium/chrome -maxdepth 1 -name '*.so*' -exec chmod 0755 {} +
+    find /usr/local/lib/dsh-chromium/chrome -maxdepth 1 -name '*.so*' -exec chmod 0755 {} +
     rm -rf "$tmp"
     mark_done "$marker"
 }
@@ -238,20 +238,20 @@ install_js_globals() {
 }
 
 install_skill_runtime() {
-    local base=/usr/local/lib/pi-skill-runtime
+    local base=/usr/local/lib/dsh-skill-runtime
     mkdir -p "$base"
     rm -rf "$base/baoyu-format-markdown" "$base/baoyu-markdown-to-html"
-    cp -R "$ASSETS/pi-skill-runtime/baoyu-format-markdown" "$base/"
-    cp -R "$ASSETS/pi-skill-runtime/baoyu-markdown-to-html" "$base/"
+    cp -R "$ASSETS/dsh-skill-runtime/baoyu-format-markdown" "$base/"
+    cp -R "$ASSETS/dsh-skill-runtime/baoyu-markdown-to-html" "$base/"
     (cd "$base/baoyu-format-markdown" && /usr/local/bin/npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
     (cd "$base/baoyu-markdown-to-html" && /usr/local/bin/bun install --frozen-lockfile --production --no-progress)
     chown -R root:root "$base"
     install -m 0555 "$ASSETS/skill-runtime/baoyu-format-markdown" /usr/local/bin/baoyu-format-markdown
     install -m 0555 "$ASSETS/skill-runtime/baoyu-markdown-to-html" /usr/local/bin/baoyu-markdown-to-html
     # 镜像里的 wrapper 指向 Debian 的 /usr/lib/chromium/chromium；VM 上换成本脚本装的路径。
-    sed 's#/usr/lib/chromium/chromium#/usr/local/lib/pi-chromium/chrome/chrome#' \
+    sed 's#/usr/lib/chromium/chromium#/usr/local/lib/dsh-chromium/chrome/chrome#' \
         "$ASSETS/skill-runtime/baoyu-chromium" > /usr/local/bin/baoyu-chromium.new
-    grep -q '/usr/local/lib/pi-chromium/chrome/chrome' /usr/local/bin/baoyu-chromium.new \
+    grep -q '/usr/local/lib/dsh-chromium/chrome/chrome' /usr/local/bin/baoyu-chromium.new \
         || die "baoyu-chromium template no longer references /usr/lib/chromium/chromium"
     chmod 0555 /usr/local/bin/baoyu-chromium.new
     mv -f /usr/local/bin/baoyu-chromium.new /usr/local/bin/baoyu-chromium
@@ -280,13 +280,13 @@ verify() {
     check pandoc /usr/local/bin/pandoc --version
     check bun /usr/local/bin/bun --version
     check soffice /usr/local/bin/soffice --version
-    check chromium /usr/local/lib/pi-chromium/chrome/chrome --version
+    check chromium /usr/local/lib/dsh-chromium/chrome/chrome --version
     check bwrap /usr/bin/bwrap --version
     check setpriv /usr/bin/setpriv --version
     check tesseract-langs sh -c 'tesseract --list-langs 2>&1 | grep -qx chi_sim && tesseract --list-langs 2>&1 | grep -qx eng && echo "eng chi_sim"'
     check python-imports "$VENV/bin/python3" -c 'import docx, openpyxl, pptx, reportlab, pymupdf, pypdfium2, pytesseract, pandas; print("imports ok")'
     check node-docx env NODE_PATH=/usr/local/lib/node_modules /usr/local/bin/node -e 'require("docx"); require("pptxgenjs"); console.log("docx pptxgenjs ok")'
-    for binary in /usr/local/lib/pi-chromium/chrome/chrome /usr/local/lib/libreoffice*/program/soffice.bin; do
+    for binary in /usr/local/lib/dsh-chromium/chrome/chrome /usr/local/lib/libreoffice*/program/soffice.bin; do
         missing="$(ldd "$binary" 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')"
         if [ -n "$missing" ]; then log "BAD missing shared libraries for $binary: $missing"; failed=1; fi
     done

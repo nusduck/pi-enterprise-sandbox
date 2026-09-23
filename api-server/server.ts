@@ -664,7 +664,7 @@ const server = http.createServer(async (rawReq, res) => {
 
 server.listen(config.PORT, async () => {
   console.log(
-    `[server] pi-enterprise-api-server v4.0.0 (${config.DEPLOYMENT_ENV}/${config.NODE_ENV}) on port ${config.PORT}`,
+    `[server] dsh-enterprise-api-server v4.0.0 (${config.DEPLOYMENT_ENV}/${config.NODE_ENV}) on port ${config.PORT}`,
   );
   console.log(`[server] Agent base URL: ${config.AGENT_BASE_URL}`);
   console.log('[server] Effective config:', JSON.stringify(effectiveConfig()));

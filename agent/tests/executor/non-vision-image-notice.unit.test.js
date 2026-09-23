@@ -3,7 +3,7 @@
  *
  * The executor used to return FAILED with "does not support image input",
  * throwing away the user's typed question along with the picture. The images
- * are dropped and the model is told why, mirroring the note Pi's own read tool
+ * are dropped and the model is told why, mirroring the note DSH's own read tool
  * emits for a non-vision model.
  */
 

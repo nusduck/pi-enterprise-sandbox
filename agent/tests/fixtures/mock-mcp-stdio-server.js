@@ -5,7 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod/v4';
 
 const server = new McpServer({
-  name: 'pi-enterprise-mock-mcp',
+  name: 'dsh-enterprise-mock-mcp',
   version: '1.0.0',
 });
 

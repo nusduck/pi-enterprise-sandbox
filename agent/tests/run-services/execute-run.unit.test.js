@@ -1108,7 +1108,7 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
       idempotencyKey: 'ex-rec-current-checkpoint',
     });
     world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
-    world.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 1;
+    world.tables.tbl_agsvc_agent_sessions[0].session_version = 1;
     world.tables.tbl_agsvc_agent_sessions[0].last_run_id = created.runId;
     const jobsBefore = world.enqueuedJobs.length;
 

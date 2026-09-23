@@ -1,4 +1,4 @@
-# ── Pi Enterprise Sandbox — Production Docker Compose ─────────────
+# ── DSH Enterprise Sandbox — Production Docker Compose ─────────────
 # Overlay on top of docker-compose.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
@@ -128,7 +128,7 @@ services:
       context: .
       dockerfile: nginx/Dockerfile
     image: enterprise-sandbox-nginx:latest
-    container_name: pi-enterprise-nginx
+    container_name: dsh-enterprise-nginx
     # Sole public edge: host 80/443 only (not loopback-restricted).
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"
@@ -291,8 +291,8 @@ services:
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
       SANDBOX_JWT_SECRET: ${SANDBOX_JWT_SECRET:?Set SANDBOX_JWT_SECRET for production}
       SANDBOX_JWT_TTL_SECONDS: ${SANDBOX_JWT_TTL_SECONDS:-86400}
-      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-pi-enterprise-sandbox}
-      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-pi-enterprise-sandbox}
+      SANDBOX_JWT_ISSUER: ${SANDBOX_JWT_ISSUER:-dsh-enterprise-sandbox}
+      SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-dsh-enterprise-sandbox}
       SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: "false"
       SANDBOX_AUTH_ADMIN_USERNAMES: ${SANDBOX_AUTH_ADMIN_USERNAMES:-}
       A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:?Set A2A_PUBLIC_BASE_URL for production}

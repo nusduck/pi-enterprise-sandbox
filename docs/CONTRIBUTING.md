@@ -1,4 +1,4 @@
-# Contributing to Pi Enterprise Sandbox
+# Contributing to DSH Enterprise Sandbox
 
 Thank you for considering contributing! This document outlines the guidelines.
 
@@ -23,8 +23,8 @@ Runtime/SDK pins are machine-checked by `tests/test_runtime_versions.py`.
 
 ```bash
 # Clone and enter
-git clone <repo-url>
-cd pi-enterprise-sandbox
+git clone <repo-url> dsh-enterprise-sandbox
+cd dsh-enterprise-sandbox
 
 cp .env.example .env   # fill LLMIO_*; never commit real secrets
 
@@ -67,7 +67,7 @@ Python `tests/` 只做仓库卫生。
 权威源根见 [`module-layout.md`](./module-layout.md)。摘要：
 
 ```
-pi-enterprise-sandbox/
+dsh-enterprise-sandbox/
 ├── frontend/          # Vite + React SPA → Nginx；src/ (pure UI, no Agent SDK)
 ├── api-server/        # Thin Node BFF (auth, files, SSE relay)；server.js
 ├── agent/             # Independent DSH agent（TypeScript；容器跑 dist/）

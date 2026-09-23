@@ -13,7 +13,7 @@ import {
   fetchDbpmCredentials,
   readDbpmSettings,
   type FetchDbpmCredentialsOptions,
-} from '@pi/contract/dbpm-config.js';
+} from '@dsh/contract/dbpm-config.js';
 
 type FetchOptions = Omit<FetchDbpmCredentialsOptions, 'process'>;
 

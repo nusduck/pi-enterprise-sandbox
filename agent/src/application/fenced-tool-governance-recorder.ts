@@ -362,7 +362,7 @@ export class FencedToolGovernanceRecorder {
           toolExecution = tr.toolExecution;
         }
 
-        // Pi's start event precedes beforeToolCall. Only an allowed policy
+        // DSH's start event precedes beforeToolCall. Only an allowed policy
         // decision may move the side-effect-free PROPOSED row into RUNNING.
         let startedEnvelope = null;
         if (
@@ -1004,7 +1004,7 @@ export class FencedToolGovernanceRecorder {
           toolExecution.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL
         ) {
           // DSH: this call IS the dispatch boundary (tools/pre-execute already
-          // allowed it). Pi's "leave a PROPOSED placeholder for policy to adopt"
+          // allowed it). DSH's "leave a PROPOSED placeholder for policy to adopt"
           // left DSH commands running under PROPOSED (G2 gate, 2026-09-17).
           const tr = await repos.toolExecutions.transitionStatus({
             toolExecutionId: toolExecution.toolExecutionId,
@@ -1116,7 +1116,7 @@ export class FencedToolGovernanceRecorder {
           { forUpdate: true },
         );
 
-        // End event has name/status/result; args often absent from Pi end event.
+        // End event has name/status/result; args often absent from DSH end event.
         // Validate name + derived source; args integrity only when args provided.
         if (existing) {
           assertToolExecutionReplayMatch(existing, {

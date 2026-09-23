@@ -81,8 +81,8 @@ export function isTaskStateToolName(name: string | null | undefined): boolean {
  *
  * 三个来源都留着，因为历史会话里三种形状都存在：
  * - `arguments.todos`  出厂 `tool-todo`（当前）
- * - `arguments.items`  旧 Pi `task-state` extension
- * - `result.todos`     旧 Pi 的结果形状
+ * - `arguments.items`  旧引擎 `task-state` extension
+ * - `result.todos`     旧引擎的结果形状
  *
  * @param input `todo_write` arguments
  * @param result the tool result, when it has arrived

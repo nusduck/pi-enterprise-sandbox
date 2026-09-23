@@ -2,7 +2,7 @@
 //
 // 只在构建容器里运行。SHA256SUMS 覆盖除这两个文件以外的每个普通文件，供
 // exec-preflight.sh / install-release.sh 用 `sha256sum -c` 核对；符号链接不参与
-// 哈希，但记录在 manifest 里（exec/node_modules/@pi/contract → ../../contract）。
+// 哈希，但记录在 manifest 里（exec/node_modules/@dsh/contract → ../../contract）。
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -65,7 +65,7 @@ const manifest = {
     node_bin: '/usr/local/bin/node',
   },
   entry: 'exec/dist/main.js',
-  systemd_unit: 'vm/pi-exec.service',
+  systemd_unit: 'vm/dsh-exec.service',
   schema_manifest_sha256: createHash('sha256').update(schemaManifest).digest('hex'),
   native_modules: nativeModules,
   symlinks,

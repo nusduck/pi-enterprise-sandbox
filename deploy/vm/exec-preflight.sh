@@ -1,13 +1,13 @@
 #!/bin/sh
-# pi-exec.service 的 ExecStartPre：进程启动前的部署检查（design §9.1 / §9.2）。
+# dsh-exec.service 的 ExecStartPre：进程启动前的部署检查（design §9.1 / §9.2）。
 #
 # 只检查部署形态；取密、schema、bwrap 真跑与孤儿回收由 exec 进程自己按顺序做，失败同样拒启。
 # 任何一项失败即非零退出，systemd 不会启动 ExecStart。不输出任何配置值。
 set -eu
 
-ME=pi-exec-preflight
-RELEASE_DIR="${PI_EXEC_RELEASE_DIR:-$(cd "$(dirname "$0")/.." && pwd -P)}"
-NODE_BIN="${PI_EXEC_NODE:-/usr/local/bin/node}"
+ME=dsh-exec-preflight
+RELEASE_DIR="${DSH_EXEC_RELEASE_DIR:-$(cd "$(dirname "$0")/.." && pwd -P)}"
+NODE_BIN="${DSH_EXEC_NODE:-/usr/local/bin/node}"
 
 fail() {
     echo "$ME: FAIL: $1" >&2

@@ -33,7 +33,7 @@ const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 
 async function scratchDir(): Promise<{ root: string; cleanup: () => Promise<void> }> {
   const resolved = await realpath(tmpdir());
-  const root = await mkdtemp(join(resolved, 'pi-isolation-bwrap-'));
+  const root = await mkdtemp(join(resolved, 'dsh-isolation-bwrap-'));
   return { root, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 

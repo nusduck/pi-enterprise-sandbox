@@ -1,6 +1,6 @@
 # API Reference
 
-Pi Enterprise Sandbox API 分层：
+DSH Enterprise Sandbox API 分层：
 
 | 层 | 组件 | 说明 |
 |----|------|------|
@@ -270,7 +270,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `mcpServers` | ✅（授权面） | 引用哪台 server、`enabledTools` 授权哪些工具。**连接配置仍只来自 `MCP_SERVERS_JSON`**：版本里不接收地址、密钥引用、超时。省略或 `[]` = 不授权任何 MCP 工具 |
 | `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
 | `skills` | ❌ | 运行时的 skill 只来自**调用者自己的 skill 目录**；这里的值仅用于 A2A agent card 展示 |
-| `extensions` | ❌ | Pi Extension 机制已随 ADR 0009 H7 退役 |
+| `extensions` | ❌ | 旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
 | `sandboxPolicy` | ❌ | **保留字段，没有执行路径**。沙箱模式、网络模式、可写根都由 exec 的部署级配置决定，不按 Agent 分（ADR 0002 起就是如此） |
 | `a2a` / `contextPolicy` | ❌ | 无读取方 |
 
@@ -444,7 +444,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   `GET /internal/v1/fs/stream-text` 也要签，于是校验侧写了一条「htm 是 POST 但
   方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。现在
   `htm` 允许 `'GET'`，例外删除。
-- `scope` / `tool_name` 按路由族校验，表在 `@pi/contract` 的
+- `scope` / `tool_name` 按路由族校验，表在 `@dsh/contract` 的
   `internalBindingForHtu()`，签发与校验两侧共用：`fs/*` → `sandbox.fs` / `fs`，
   `shell/*` → `sandbox.shell` / `shell`，`jobs/*` → `sandbox.jobs` / `jobs`，
   `artifacts/submit` → `sandbox.artifacts.submit` / `artifact.submit`，
@@ -455,7 +455,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 
 #### `shell/run` 与 `shell/start` 的请求体
 
-两侧共用 `@pi/contract` 的 `parseShellRunPayload()` / `parseShellStartPayload()`；
+两侧共用 `@dsh/contract` 的 `parseShellRunPayload()` / `parseShellStartPayload()`；
 **越界或类型非法在执行前拒绝**（`ENVELOPE_INVALID` → 400），不静默退回默认值。
 2026-09-16 之前路由只挑 `command` 与 `timeoutMs`，其余字段丢掉仍返回 200——
 「指定了子目录却在工作区根执行」不会报错，只会写错文件。

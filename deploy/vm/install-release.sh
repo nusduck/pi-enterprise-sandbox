@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # exec release 的初始化、安装、切换与列表（design §9.1、§10）。以 root 运行。
 #
-#   install-release.sh init                     建运行用户、数据目录、/etc/pi-exec（已存在不覆盖）
+#   install-release.sh init                     建运行用户、数据目录、/etc/dsh-exec（已存在不覆盖）
 #   install-release.sh install <tarball>        校验 .sha256 与 SHA256SUMS，解包为只读 release
 #   install-release.sh activate <release-id>    切换 current、安装 unit、daemon-reload（不重启）
 #   install-release.sh list                     列出已安装 release 与 current
@@ -10,11 +10,11 @@
 # 单 VM 升级要先停准入、drain 或停止执行（design §9.2），这一步由运维决定时机。
 set -euo pipefail
 
-PREFIX="${PI_EXEC_PREFIX:-/opt/pi-exec}"
-DATA="${PI_EXEC_DATA:-/var/lib/pi-exec}"
-ETC_DIR="${PI_EXEC_ETC:-/etc/pi-exec}"
-UNIT_PATH="${PI_EXEC_UNIT_PATH:-/etc/systemd/system/pi-exec.service}"
-SERVICE_USER="pi-exec"
+PREFIX="${DSH_EXEC_PREFIX:-/opt/dsh-exec}"
+DATA="${DSH_EXEC_DATA:-/var/lib/dsh-exec}"
+ETC_DIR="${DSH_EXEC_ETC:-/etc/dsh-exec}"
+UNIT_PATH="${DSH_EXEC_UNIT_PATH:-/etc/systemd/system/dsh-exec.service}"
+SERVICE_USER="dsh-exec"
 ID_RE='^exec-[0-9a-f]{12}-(amd64|arm64)(-dirty-[0-9]{14})?$'
 
 die() {
@@ -108,13 +108,13 @@ cmd_activate() {
     fi
     ln -sfn "releases/$id" "$PREFIX/current.new"
     mv -Tf "$PREFIX/current.new" "$PREFIX/current"
-    install -m 0644 -o root -g root "$dir/vm/pi-exec.service" "$UNIT_PATH"
+    install -m 0644 -o root -g root "$dir/vm/dsh-exec.service" "$UNIT_PATH"
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
     fi
     echo "current -> $id${previous:+ (previous: $previous)}"
-    echo "the running service is unchanged; restart it inside a maintenance window: systemctl restart pi-exec"
-    [ -z "$previous" ] || echo "rollback: $0 activate $previous && systemctl restart pi-exec"
+    echo "the running service is unchanged; restart it inside a maintenance window: systemctl restart dsh-exec"
+    [ -z "$previous" ] || echo "rollback: $0 activate $previous && systemctl restart dsh-exec"
 }
 
 cmd_list() {

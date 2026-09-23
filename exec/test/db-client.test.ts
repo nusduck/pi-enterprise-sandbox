@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { EndpointConfigError } from '@pi/contract/endpoint-failover.js';
+import { EndpointConfigError } from '@dsh/contract/endpoint-failover.js';
 import {
   readExecDbConfig,
   ExecDbConfigError,

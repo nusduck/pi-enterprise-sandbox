@@ -10,7 +10,7 @@ const ZERO_TRACE_ID = '0'.repeat(32);
 const ZERO_SPAN_ID = '0'.repeat(16);
 
 export const REQUEST_TRACE_CONTEXT: unique symbol = Symbol.for(
-  'pi-enterprise.request-trace-context',
+  'dsh-enterprise.request-trace-context',
 );
 
 export interface Traceparent {

@@ -5,7 +5,7 @@
  *
  * `FencedToolGovernanceRecorder.requestApproval()` 才是真正落库并把 Run 迁到
  * WAITING_APPROVAL 的那一环，而它**只经 `extensionBundleFactory` 到达运行时**
- * ——那批 Pi Extension 在 DSH 重建时已经删掉。于是 DSH 的策略挂载点用的是进程内的
+ * ——那批旧引擎 Extension 在 DSH 重建时已经删掉。于是 DSH 的策略挂载点用的是进程内的
  * `InMemoryApprovalStore`：判定对，但不落库、不发事件、不停泊、不释放 Worker。
  *
  * 本文件断言的是**接线**，不是判定：判定的用例在 `policy-install.test.ts`。

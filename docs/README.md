@@ -1,6 +1,6 @@
 # Documentation map
 
-This directory is the **active** documentation set for Pi Enterprise Sandbox.
+This directory is the **active** documentation set for DSH Enterprise Sandbox.
 `plan.md` is the frozen refactor baseline and final acceptance criteria.
 
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent / api-server / exec / frontend / contract)

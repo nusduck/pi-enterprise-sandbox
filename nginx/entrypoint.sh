@@ -8,7 +8,7 @@ set -euo pipefail
 DOMAIN="${DOMAIN:-localhost}"
 TLS_ENABLED="${TLS_ENABLED:-true}"
 SSL_DIR="/etc/nginx/ssl"
-TEMPLATE_DIR="/etc/nginx/pi-templates"
+TEMPLATE_DIR="/etc/nginx/dsh-templates"
 TARGET="/etc/nginx/conf.d/sandbox.conf"
 
 # 拼错的值不猜意图：既不能当成 true（可能没有证书）也不能当成 false
@@ -29,7 +29,7 @@ if [ "$TLS_ENABLED" = "true" ]; then
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
             -keyout "$SSL_DIR/privkey.pem" \
             -out "$SSL_DIR/fullchain.pem" \
-            -subj "/CN=$DOMAIN/O=Pi Enterprise Sandbox/C=CN" \
+            -subj "/CN=$DOMAIN/O=DSH Enterprise Sandbox/C=CN" \
             2>/dev/null
         echo "[entrypoint] Self-signed cert generated"
     fi

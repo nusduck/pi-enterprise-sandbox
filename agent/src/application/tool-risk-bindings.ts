@@ -68,7 +68,7 @@ export function readAgentVersionToolPolicy(agentVersion: unknown) {
  * 把一张按工具名索引的表投影到当前工具名（ADR 0009 D4 的存量处置 / 计划 H1.6）。
  *
  * `AgentVersion.configJson` 是 Run 创建时冻结的**不可变快照**，2026-08-31 之前建的
- * 那些里面存的是旧 Pi 工具名。不迁移、不回写——只在**读取**时投影一次。
+ * 那些里面存的是旧引擎工具名。不迁移、不回写——只在**读取**时投影一次。
  * 不处置的后果不是「少一条策略」，而是老 Run 静默全拒：分类器 fail-closed，
  * 旧名在新工具面上一个都命中不了。
  *

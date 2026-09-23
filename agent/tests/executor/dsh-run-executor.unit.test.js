@@ -1,5 +1,5 @@
 /**
- * PiRunExecutor offline tests with fakes (PR-05 slice B).
+ * DshRunExecutor offline tests with fakes (PR-05 slice B).
  */
 
 import { describe, it, beforeEach } from 'node:test';
@@ -24,7 +24,6 @@ import { ExecuteRunService } from '../../src/application/execute-run-service.js'
 import { createStubRunExecutor } from '../../src/application/run-executor.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { RUN_STATUS } from '../../src/domain/run/run-status.js';
-import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/dsh/runtime-factory.js';
 
 import {
   CONV,
@@ -43,7 +42,7 @@ import {
 
 
 /**
- * Minimal fake Pi runtime factory for offline tests.
+ * Minimal fake DSH runtime factory for offline tests.
  * @param {{
  *   onPrompt?: Function,
  *   onSteer?: Function,
@@ -53,7 +52,7 @@ import {
  *   messageEnds?: object[],
  * }} [opts]
  */
-function createFakePiRuntimeFactory(opts = {}) {
+function createFakeDshRuntimeFactory(opts = {}) {
   const entries = opts.entries ?? [
     {
       type: 'message',
@@ -92,8 +91,8 @@ function createFakePiRuntimeFactory(opts = {}) {
           cwd: input.cwd,
         }),
         getEntries: () =>
-          opts.captureFromSnapshot && input.piSnapshot?.snapshotJson?.entries
-            ? [...input.piSnapshot.snapshotJson.entries, ...entries]
+          opts.captureFromSnapshot && input.sessionSnapshot?.snapshotJson?.entries
+            ? [...input.sessionSnapshot.snapshotJson.entries, ...entries]
             : [...entries],
         getCwd: () => input.cwd,
         getSessionId: () => input.agentSession.agentSessionId,
@@ -159,7 +158,7 @@ describe('derivePromptFromTriggeringMessage', () => {
     assert.equal(prompt[1].type, 'image');
   });
 
-  it('adapts stored content parts to the Pi prompt(text, { images }) API', () => {
+  it('adapts stored content parts to the DSH prompt(text, { images }) API', () => {
     const invocation = toDshPromptInvocation([
       { type: 'text', text: 'first' },
       { type: 'text', text: 'second' },
@@ -266,7 +265,7 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: createFakePiRuntimeFactory(factoryOpts),
+      dshRuntimeFactory: createFakeDshRuntimeFactory(factoryOpts),
       modelResolver: async () => factoryOpts.model ?? fullModel,
       promptImageLoader: factoryOpts.promptImageLoader,
       workspaceResolver: async (sess) => `/workspace/${sess.workspaceId}`,
@@ -305,20 +304,20 @@ describe('DshRunExecutor', () => {
       signal: new AbortController().signal,
     });
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 1);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 1);
     assert.ok(state.tables.tbl_agsvc_run_events.some((e) => e.event_type === 'message.completed'));
     assert.ok(
-      state.tables.tbl_agsvc_messages.some((m) => m.pi_entry_id != null),
+      state.tables.tbl_agsvc_messages.some((m) => m.session_entry_id != null),
       'journal rows written',
     );
     // Ordinary UI assistant message (not journal system channel)
     const uiAssistant = state.tables.tbl_agsvc_messages.find(
       (m) =>
         m.role === 'assistant' &&
-        String(m.pi_entry_id || '').startsWith('ui:assistant:'),
+        String(m.session_entry_id || '').startsWith('ui:assistant:'),
     );
     assert.ok(uiAssistant, 'UI assistant message persisted for history');
-    assert.notEqual(uiAssistant.message_type, 'pi_journal_entry');
+    assert.notEqual(uiAssistant.message_type, 'session_journal_entry');
     await exec.dispose();
   });
 
@@ -408,7 +407,7 @@ describe('DshRunExecutor', () => {
     await exec.dispose();
   });
 
-  it('loads current-turn image ids and passes Pi prompt image content directly', async () => {
+  it('loads current-turn image ids and passes DSH prompt image content directly', async () => {
     state.tables.tbl_agsvc_messages[0].content_json = JSON.stringify({
       modelId: 'deepseek-v4-flash-vision-exp',
       messages: [{
@@ -462,7 +461,7 @@ describe('DshRunExecutor', () => {
     await exec.dispose();
   });
 
-  it('returns FAILED when Pi resolves with a terminal assistant stopReason=error', async () => {
+  it('returns FAILED when DSH resolves with a terminal assistant stopReason=error', async () => {
     const exec = makeExecutor({
       entries: [
         {
@@ -510,7 +509,7 @@ describe('DshRunExecutor', () => {
   });
 
   it('ignores intermediate Connection error when the final assistant stopReason is stop', async () => {
-    // Provider/network flakes record stopReason=error mid-prompt; Pi may retry
+    // Provider/network flakes record stopReason=error mid-prompt; DSH may retry
     // and finish successfully. Only the last new assistant entry is terminal.
     const exec = makeExecutor({
       entries: [
@@ -641,7 +640,7 @@ describe('DshRunExecutor', () => {
     await exec.dispose();
   });
 
-  it('returns CANCELLED when Pi resolves with a terminal assistant stopReason=aborted', async () => {
+  it('returns CANCELLED when DSH resolves with a terminal assistant stopReason=aborted', async () => {
     const exec = makeExecutor({
       entries: [
         {
@@ -698,8 +697,8 @@ describe('DshRunExecutor', () => {
       message_type: 'steer_instruction',
       content_json: JSON.stringify({ text: 'inspect the outliers first' }),
       sequence_no: 2,
-      pi_entry_id: null,
-      pi_entry_kind: null,
+      session_entry_id: null,
+      session_entry_kind: null,
       created_at: '2026-07-18 00:00:01.000',
     });
     state.tables.tbl_agsvc_run_events.push({
@@ -743,7 +742,7 @@ describe('DshRunExecutor', () => {
     await exec.dispose();
   });
 
-  it('provisions the exact SandboxSession binding before Pi runtime work', async () => {
+  it('provisions the exact SandboxSession binding before DSH runtime work', async () => {
     const calls = [];
     const exec = makeExecutor();
     exec.sandboxSessionProvisioner = {
@@ -782,7 +781,7 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: createFakePiRuntimeFactory({
+      dshRuntimeFactory: createFakeDshRuntimeFactory({
         messageEnds: [
           {
             type: 'message_end',
@@ -871,7 +870,7 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: createFakePiRuntimeFactory(),
+      dshRuntimeFactory: createFakeDshRuntimeFactory(),
       modelResolver: async () => fullModel,
       workspaceResolver: async () => `/workspace/${WSP}`,
       generateId,
@@ -912,10 +911,10 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: {
+      dshRuntimeFactory: {
         async create(input) {
           runtimeContexts.push(input.context);
-          const base = await createFakePiRuntimeFactory().create(input);
+          const base = await createFakeDshRuntimeFactory().create(input);
           return base;
         },
       },
@@ -953,7 +952,7 @@ describe('DshRunExecutor', () => {
     // 2026-08-31（计划 H8）：以下这些以前是**经 extensionBundleFactory 的 deps**
     // 观察的（observability / getAgentSession / isDurableInteractionPending /
     // runSuspensionPort）。bundle 形参删掉之后，前两样随之消失（那是给已删除的
-    // Pi Extension 用的），而**停泊标记的生命周期是真实不变量**，改成直接断言。
+    // 旧引擎 Extension 用的），而**停泊标记的生命周期是真实不变量**，改成直接断言。
     //
     // 标记本身由 `onDurableInteractionPending` 写入（ask_user 落 durable 请求时），
     // 这里只验它的两端：写入前是空的、dispose 之后被清掉。中间那一段的写入由
@@ -977,7 +976,7 @@ describe('DshRunExecutor', () => {
     // Regression: the factory rejects a non-empty configJson.toolPolicy unless
     // a binding proves it is honoured, and nothing used to supply one — so any
     // AgentVersion that configured tool policy at all failed every Run with
-    // PI_BINDING_REQUIRED.
+    // DSH_BINDING_REQUIRED.
     state.tables.tbl_agsvc_agent_versions[0].config_json = JSON.stringify({
       systemPrompt: 'hi',
       toolPolicy: {
@@ -996,10 +995,10 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: {
+      dshRuntimeFactory: {
         async create(input) {
           createInputs.push(input);
-          return createFakePiRuntimeFactory().create(input);
+          return createFakeDshRuntimeFactory().create(input);
         },
       },
       modelResolver: async () => fullModel,
@@ -1032,7 +1031,7 @@ describe('DshRunExecutor', () => {
     assert.equal(result.outcome, RUN_STATUS.SUCCEEDED);
     assert.equal(createInputs.length, 1);
     const binding = createInputs[0].toolPolicyBinding;
-    assert.ok(binding, 'toolPolicyBinding must reach piRuntimeFactory.create');
+    assert.ok(binding, 'toolPolicyBinding must reach dshRuntimeFactory.create');
     assert.equal(binding.appliedBy, 'enterprise-policy');
     assert.deepEqual(binding.tools, { bash: 'deny' });
     assert.ok(binding.riskPolicy, 'riskLevels must project into the risk table');
@@ -1054,10 +1053,10 @@ describe('DshRunExecutor', () => {
     /** @type {object[]} */
     const createInputs = [];
     const exec = makeExecutor();
-    exec.piRuntimeFactory = {
+    exec.dshRuntimeFactory = {
       async create(input) {
         createInputs.push(input);
-        return createFakePiRuntimeFactory().create(input);
+        return createFakeDshRuntimeFactory().create(input);
       },
     };
     await exec.execute({
@@ -1123,7 +1122,7 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: {
+      dshRuntimeFactory: {
         async create() {
           runtimeCalled += 1;
           throw new Error('runtime must not be created');
@@ -1287,16 +1286,15 @@ describe('DshRunExecutor', () => {
         snapshot_id: '01K0G2PAV8FPMVC9QHJG7JPN9B',
         agent_session_id: SESS,
         snapshot_version: 1,
-        snapshot_format: 'pi_jsonl_v3',
+        snapshot_format: 'session_jsonl_v3',
         snapshot_json: oldPayload,
         workspace_path: `/workspace/${WSP}`,
         checksum,
-        pi_sdk_version: PINNED_PI_SDK_VERSION,
         captured_fence_token: 0,
         created_at: '2026-07-18 00:00:00.000',
       },
     ];
-    state.tables.tbl_agsvc_agent_sessions[0].pi_session_version = 1;
+    state.tables.tbl_agsvc_agent_sessions[0].session_version = 1;
     // Journal rows for old entry (recovery truth) — no ui:assistant:e-old
     state.tables.tbl_agsvc_messages.push({
       message_id: '01K0G2PAV8FPMVC9QHJG7JPN9C',
@@ -1304,9 +1302,9 @@ describe('DshRunExecutor', () => {
       agent_session_id: SESS,
       run_id: '01K0G2PAV8FPMVC9QHJG7JPN9D',
       role: 'system',
-      message_type: 'pi_journal_header',
+      message_type: 'session_journal_header',
       content_json: JSON.stringify({
-        kind: 'pi_journal_header',
+        kind: 'session_journal_header',
         header: oldPayload.header,
         payloadHash: checksumSnapshotPayload({
           header: oldPayload.header,
@@ -1314,8 +1312,8 @@ describe('DshRunExecutor', () => {
         }).slice(0, 64),
       }),
       sequence_no: 2,
-      pi_entry_id: '__pi_session_header__',
-      pi_entry_kind: 'session',
+      session_entry_id: '__pi_session_header__',
+      session_entry_kind: 'session',
       created_at: '2026-07-18 00:00:00.000',
     });
     // Note: payloadHash for header alone may not match full checksum — use real hash helper
@@ -1324,7 +1322,7 @@ describe('DshRunExecutor', () => {
     );
     state.tables.tbl_agsvc_messages[state.tables.tbl_agsvc_messages.length - 1].content_json =
       JSON.stringify({
-        kind: 'pi_journal_header',
+        kind: 'session_journal_header',
         header: oldPayload.header,
         payloadHash: hashJournalPayload(oldPayload.header),
       });
@@ -1334,15 +1332,15 @@ describe('DshRunExecutor', () => {
       agent_session_id: SESS,
       run_id: '01K0G2PAV8FPMVC9QHJG7JPN9D',
       role: 'system',
-      message_type: 'pi_journal_entry',
+      message_type: 'session_journal_entry',
       content_json: JSON.stringify({
-        kind: 'pi_journal_entry',
+        kind: 'session_journal_entry',
         entry: oldPayload.entries[0],
         payloadHash: hashJournalPayload(oldPayload.entries[0]),
       }),
       sequence_no: 3,
-      pi_entry_id: 'e-old',
-      pi_entry_kind: 'message',
+      session_entry_id: 'e-old',
+      session_entry_kind: 'message',
       created_at: '2026-07-18 00:00:00.000',
     });
 
@@ -1378,13 +1376,13 @@ describe('DshRunExecutor', () => {
     const uiRows = state.tables.tbl_agsvc_messages.filter(
       (m) =>
         m.role === 'assistant' &&
-        String(m.pi_entry_id || '').startsWith('ui:assistant:'),
+        String(m.session_entry_id || '').startsWith('ui:assistant:'),
     );
     assert.equal(uiRows.length, 1);
-    assert.equal(uiRows[0].pi_entry_id, 'ui:assistant:e-new');
+    assert.equal(uiRows[0].session_entry_id, 'ui:assistant:e-new');
     assert.equal(uiRows[0].run_id, RUN);
     // Must not have re-bound old history to this run
-    assert.ok(!uiRows.some((m) => m.pi_entry_id === 'ui:assistant:e-old'));
+    assert.ok(!uiRows.some((m) => m.session_entry_id === 'ui:assistant:e-old'));
     await exec.dispose();
   });
 
@@ -1417,7 +1415,7 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: createFakePiRuntimeFactory(),
+      dshRuntimeFactory: createFakeDshRuntimeFactory(),
       modelResolver: async () => fullModel,
       workspaceResolver: async () => `/workspace/${WSP}`,
       generateId,
@@ -1469,7 +1467,7 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: createFakePiRuntimeFactory(),
+      dshRuntimeFactory: createFakeDshRuntimeFactory(),
       modelResolver: async () => fullModel,
       workspaceResolver: async () => `/workspace/${WSP}`,
       generateId,
@@ -1536,7 +1534,7 @@ describe('DshRunExecutor', () => {
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
       sessionLockManager: locks,
-      piRuntimeFactory: createFakePiRuntimeFactory({
+      dshRuntimeFactory: createFakeDshRuntimeFactory({
         onPrompt: async () => {
           // After prompt work, pre-write confirmSessionLock must fail.
           allowRenew = false;
@@ -1570,12 +1568,12 @@ describe('DshRunExecutor', () => {
     assert.match(String(result.statusReason), /lock lost/i);
     assert.equal(
       state.tables.tbl_agsvc_messages.filter((m) =>
-        String(m.pi_entry_id || '').startsWith('ui:assistant:'),
+        String(m.session_entry_id || '').startsWith('ui:assistant:'),
       ).length,
       0,
     );
     assert.equal(state.tables.tbl_agsvc_agent_session_snapshots.length, 0);
-    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].pi_session_version, 0);
+    assert.equal(state.tables.tbl_agsvc_agent_sessions[0].session_version, 0);
     await exec.dispose().catch(() => {});
   });
 
@@ -1588,7 +1586,6 @@ describe('DshRunExecutor', () => {
       version_no: 2,
       config_json: JSON.stringify({ systemPrompt: 'new default' }),
       config_hash: 'f'.repeat(64),
-      pi_sdk_version: PINNED_PI_SDK_VERSION,
       status: 'active',
       created_by: USER,
       created_at: '2026-07-18 00:00:00.000',
@@ -1608,7 +1605,7 @@ describe('DshRunExecutor', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: createFakePiRuntimeFactory(),
+      dshRuntimeFactory: createFakeDshRuntimeFactory(),
       modelResolver: async (agentVersion) => {
         resolvedVersionId = agentVersion.agentVersionId;
         return fullModel;
@@ -1669,7 +1666,7 @@ describe('DshRunExecutor', () => {
     const exec = makeExecutor();
     // Pre-advance fence so acquire gets 1, then we break by changing fence mid-flight
     // via onPrompt
-    const factory = createFakePiRuntimeFactory({
+    const factory = createFakeDshRuntimeFactory({
       onPrompt: async () => {
         state.tables.tbl_agsvc_agent_sessions[0].execution_fence_token = 999;
       },
@@ -1680,7 +1677,7 @@ describe('DshRunExecutor', () => {
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
       sessionLockManager: new SessionLockManager(redis, { ttlMs: 30_000 }),
-      piRuntimeFactory: factory,
+      dshRuntimeFactory: factory,
       modelResolver: async () => fullModel,
       workspaceResolver: async () => '/ws',
       generateId,
@@ -1764,7 +1761,7 @@ describe('DshRunExecutor', () => {
       createRepositories: (db) =>
         createRepositoryBundle(db, { now: () => new Date(), generateId }),
       sessionLockManager: locks,
-      piRuntimeFactory: factory,
+      dshRuntimeFactory: factory,
       modelResolver: async () => fullModel,
       workspaceResolver: async () => '/ws',
       generateId,
@@ -1826,7 +1823,7 @@ describe('DshRunExecutor', () => {
         renew: async () => true,
         release: async () => true,
       },
-      piRuntimeFactory: { create: async () => ({}) },
+      dshRuntimeFactory: { create: async () => ({}) },
       modelResolver: () => fullModel,
       workspaceResolver: () => '/tmp',
       generateId: () => '1',
@@ -1842,7 +1839,7 @@ describe('DshRunExecutor', () => {
           transactionManager: { run: async (fn) => fn({}) },
           createRepositories: () => ({}),
           sessionLockManager: {},
-          piRuntimeFactory: { create: async () => ({}) },
+          dshRuntimeFactory: { create: async () => ({}) },
           modelResolver: () => fullModel,
           workspaceResolver: () => '/tmp',
           generateId: () => '1',

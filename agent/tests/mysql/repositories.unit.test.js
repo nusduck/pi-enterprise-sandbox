@@ -177,7 +177,7 @@ describe('repositories with fake knex', () => {
         sandbox_session_id: SBX,
         workspace_id: WSP,
         status: 'ACTIVE',
-        pi_session_version: 0,
+        session_version: 0,
         last_run_id: null,
         created_at: '2026-07-18 00:00:00.000',
         updated_at: '2026-07-18 00:00:00.000',

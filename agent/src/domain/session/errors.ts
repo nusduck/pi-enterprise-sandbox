@@ -105,24 +105,24 @@ export class SessionRecoveryRequiredError extends Error {
 }
 
 /**
- * Pi JSONL journal append / load failures (idempotency hash conflict, scope).
+ * Session JSONL journal append / load failures (idempotency hash conflict, scope).
  */
 export class SessionJournalError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: Loose;
   agentSessionId: Loose;
-  piEntryId: Loose;
+  sessionEntryId: Loose;
 
   /**
    * @param message
    * @param {{
    *   code?: string,
    *   agentSessionId?: string,
-   *   piEntryId?: string | null,
+   *   sessionEntryId?: string | null,
    *   cause?: unknown,
    * }} [meta]
    */
-  constructor(message: string, meta: { code?: string, agentSessionId?: string, piEntryId?: string | null, cause?: unknown, } = {}) {
+  constructor(message: string, meta: { code?: string, agentSessionId?: string, sessionEntryId?: string | null, cause?: unknown, } = {}) {
     super(
       message,
       meta.cause !== undefined ? { cause: meta.cause } : undefined,
@@ -130,6 +130,6 @@ export class SessionJournalError extends Error {
     this.name = 'SessionJournalError';
     this.code = meta.code ?? 'SESSION_JOURNAL_ERROR';
     this.agentSessionId = meta.agentSessionId ?? null;
-    this.piEntryId = meta.piEntryId ?? null;
+    this.sessionEntryId = meta.sessionEntryId ?? null;
   }
 }

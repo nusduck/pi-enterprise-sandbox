@@ -1,4 +1,4 @@
-/** Secure attachment-id → Pi ImageContent adapter. */
+/** Secure attachment-id → DSH ImageContent adapter. */
 
 import { createHash } from 'node:crypto';
 

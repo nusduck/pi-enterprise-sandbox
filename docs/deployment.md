@@ -155,12 +155,12 @@ Bubblewrap 只暴露 `/usr /bin /sbin /lib /lib64`，装在 `/opt` 的 Node 在�
 **安装与切换**（root，脚本在 release 的 `vm/` 下）：
 
 ```bash
-vm/install-release.sh init                              # 建 pi-exec 系统用户、/var/lib/pi-exec/*（0700）、/etc/pi-exec
+vm/install-release.sh init                              # 建 dsh-exec 系统用户、/var/lib/dsh-exec/*（0700）、/etc/dsh-exec
 vm/install-release.sh install exec-<id>.tar.gz          # 校验 .sha256 与 SHA256SUMS，解包为 root 所有的只读目录
-install -m 0640 -o root -g pi-exec exec.env /etc/pi-exec/exec.env   # 由 vm/exec.env.example 填写
-vm/install-release.sh activate exec-<id>                # 原子切换 /opt/pi-exec/current，安装 unit，daemon-reload
-systemctl enable pi-exec                                # 首次
-systemctl restart pi-exec                               # 在维护窗口内：先停准入、drain 或停止执行
+install -m 0640 -o root -g dsh-exec exec.env /etc/dsh-exec/exec.env   # 由 vm/exec.env.example 填写
+vm/install-release.sh activate exec-<id>                # 原子切换 /opt/dsh-exec/current，安装 unit，daemon-reload
+systemctl enable dsh-exec                                # 首次
+systemctl restart dsh-exec                               # 在维护窗口内：先停准入、drain 或停止执行
 ```
 
 脚本从不自动重启服务；同一 release id 不能重复安装。回滚 = `activate <旧 id>` 后在维护窗口内重启。
@@ -176,10 +176,10 @@ exec 自身按 取密 → schema 核对 → 存储与 bwrap 预检 → 孤儿回
 cgroup 里剩余的 bwrap 子进程一律 SIGKILL；被中断作业的账本由下次启动的孤儿回收收口。
 
 **启动失败的重试**：`Restart=on-failure` 同样作用于 ExecStartPre 与 exec 启动期检查失败——每 5 秒重试，300 秒内 5 次后
-unit 进入 failed。修好配置后需 `systemctl reset-failed pi-exec` 再启动。
+unit 进入 failed。修好配置后需 `systemctl reset-failed dsh-exec` 再启动。
 
 **加固项**：unit 启用 `NoNewPrivileges`、空 capability、`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp`、
-`ProtectProc=invisible` 等，`ReadWritePaths` 只放 `/var/lib/pi-exec` 与共享草稿根。兼容性以 exec 启动期 bwrap 预检为准，
+`ProtectProc=invisible` 等，`ReadWritePaths` 只放 `/var/lib/dsh-exec` 与共享草稿根。兼容性以 exec 启动期 bwrap 预检为准，
 2026-09-15 在 Debian bookworm（systemd 252）与 openEuler 24.03 LTS（systemd 255）容器中逐项实测：
 
 | 指令 | 结果 | unit |
@@ -196,15 +196,15 @@ unit 进入 failed。修好配置后需 `systemctl reset-failed pi-exec` 再启�
 **模型工具链**（dnf 系：openEuler / 麒麟，root 运行，脚本随 release 在 `vm/toolchain/`）：
 
 ```bash
-vm/toolchain/install-toolchain.sh --cache /srv/pi-toolchain-cache            # 离线：缓存里必须已有全部制品
-vm/toolchain/install-toolchain.sh --cache /srv/pi-toolchain-cache --allow-download   # 缺的按清单 URL 下载
+vm/toolchain/install-toolchain.sh --cache /srv/dsh-toolchain-cache            # 离线：缓存里必须已有全部制品
+vm/toolchain/install-toolchain.sh --cache /srv/dsh-toolchain-cache --allow-download   # 缺的按清单 URL 下载
 ```
 
 - 制品清单 `vm/toolchain/toolchain-sources.json` 钉住 Node、uv、ripgrep、fd、pandoc、LibreOffice、Chromium 两种架构的文件名 / URL / SHA256，并写明哈希来源（发布方摘要、签名验证后记录、首次下载记录）。脚本**先核对 SHA256 再使用**，不匹配或未钉版即失败，从不 `curl | sh`。
 - openEuler 24.03 LTS 官方源（OS / everything / EPOL / update）不提供 ripgrep、fd、pandoc、LibreOffice、Chromium，按决定使用上游官方包：ripgrep / fd / pandoc 为 GitHub release（musl 静态版 / 官方 tar 包），LibreOffice 为 TDF 官方 RPM（GPG 签名验证后钉 SHA256），Chromium 为 Playwright 1.63.0 分发的 Chrome for Testing 构建（发布方无摘要，按下载记录）。是否允许在目标 VM 使用这些第三方二进制需另行确认。
-- 其余来自 dnf 源（清单 `dnf_packages`，包名按 openEuler 24.03 核对，麒麟上需复核）、PyPI（`requirements.txt`，未钉版本，安装后把实际版本写入 `/usr/local/share/pi-toolchain/python-freeze.txt`）与 npm（bun / docx / pptxgenjs 与 BaoYu 锁文件，版本同 `runtime-versions.json`）；可用 `UV_INDEX_URL`、`npm_config_registry` 指向内网镜像。
+- 其余来自 dnf 源（清单 `dnf_packages`，包名按 openEuler 24.03 核对，麒麟上需复核）、PyPI（`requirements.txt`，未钉版本，安装后把实际版本写入 `/usr/local/share/dsh-toolchain/python-freeze.txt`）与 npm（bun / docx / pptxgenjs 与 BaoYu 锁文件，版本同 `runtime-versions.json`）；可用 `UV_INDEX_URL`、`npm_config_registry` 指向内网镜像。
 - 沙箱另外只读挂入 `/etc/fonts` 与 CA 信任库（Debian 的 `/etc/ssl`、`/etc/ca-certificates`；RHEL 系的 `/etc/pki/tls/certs`、`/etc/pki/tls/cert.pem`、`/etc/pki/tls/openssl.cnf`、`/etc/pki/ca-trust/extracted`，不含 `/etc/pki/tls/private` 等），系统自带的字体配置与 CA 包无需复制到 `/usr/local`。
-- 安装位置全部在 Bubblewrap 可见的 `/usr/local` 与 `/opt/pi-python/venv`：官方 LibreOffice RPM 默认装到 `/opt`，脚本解包后搬到 `/usr/local/lib/libreofficeX.Y`；`baoyu-chromium` 改写为指向 `/usr/local/lib/pi-chromium/chrome/chrome`。
+- 安装位置全部在 Bubblewrap 可见的 `/usr/local` 与 `/opt/dsh-python/venv`：官方 LibreOffice RPM 默认装到 `/opt`，脚本解包后搬到 `/usr/local/lib/libreofficeX.Y`；`baoyu-chromium` 改写为指向 `/usr/local/lib/dsh-chromium/chrome/chrome`。
 - 结束时核对各工具版本、Python / Node 文档库可导入、`soffice.bin` 与 `chrome` 无缺失共享库，失败即非零退出。重复运行跳过已装的同版本组件。
 
 **本仓库的演练范围**：release 在带 systemd 的 Debian 容器中验证过安装、负对照、启动、停止清理、孤儿回收与回滚；
@@ -275,7 +275,7 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `EXEC_INTERNAL_ALLOW_CIDR` | 开发 Compose：`127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`；生产 overlay：必填 | exec 内部面（`/internal/v1/*`）的来源 CIDR 白名单（逗号分隔）。**空值 = 拒绝全部内部面请求**（启动日志告警），非法 CIDR = 拒绝启动，放行全部须显式写 `0.0.0.0/0,::/0`。判定用的对端地址取自 TCP socket（IPv4-mapped IPv6 按 IPv4 匹配），**不采信 `X-Forwarded-For` / `X-Real-IP`**，取不到对端地址一律拒绝 |
 | `EXEC_HTTP_LOG` | 空 | 设为 `1` 打开 exec 内部面的请求行日志（JSON 一行：方法/路径/状态码，不含 query）|
 | `SANDBOX_JWT_SECRET` | — | **Agent HTTP 进程**签发/校验浏览器 JWT 的 HMAC 密钥；变量名为迁移兼容保留，生产必须是强密钥且不会传给 exec |
-| `SANDBOX_JWT_TTL_SECONDS` / `SANDBOX_JWT_ISSUER` / `SANDBOX_JWT_AUDIENCE` | `86400` / `pi-enterprise-sandbox` | Agent 浏览器会话 token 的有效期与签发约束 |
+| `SANDBOX_JWT_TTL_SECONDS` / `SANDBOX_JWT_ISSUER` / `SANDBOX_JWT_AUDIENCE` | `86400` / `dsh-enterprise-sandbox` | Agent 浏览器会话 token 的有效期与签发约束 |
 | `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 注册入口开关；生产 compose 强制 `false` |
 | `SANDBOX_AUTH_ADMIN_USERNAMES` | — | 注册即晋升 admin 的用户名列表（逗号分隔）。注册始终忽略客户端提供的 role/organization_id，这是真实部署上创建首个管理员的唯一途径 |
 | `AGENT_REQUEST_TIMEOUT_MS` | `15000` | BFF → Agent 出站调用超时（SSE 长连接除外）；防止挂起的依赖拖垮无关路由 |
@@ -537,7 +537,7 @@ exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-1
 | `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`；带口令拒绝启动） |
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试 DSN |
 | `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue 的**基名**（深度 0）。深层队列由它派生：`<base>-d1`、`<base>-d2`（见下文分层拓扑） |
-| `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，HTTP 与 Worker 必须一致；必须含非空 hash tag，否则拒绝启动。Redis 被多环境复用时用环境独立值（如 `{pi-test-bull}`）。改值前按 [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain |
+| `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，HTTP 与 Worker 必须一致；必须含非空 hash tag，否则拒绝启动。Redis 被多环境复用时用环境独立值（如 `{dsh-test-bull}`）。改值前按 [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
@@ -831,7 +831,29 @@ stdout/stderr 增量缓冲和活进程句柄只在当前 exec 进程内：重启
 收敛为终态。需要跨 exec 重启续读/续控时，应先增加持久日志与可重附着的进程监管，
 当前不能把这项写成已支持。
 
-Node / DSH / 模型工具链版本钉以根目录 `runtime-versions.json` 为准：服务镜像与 CI 统一 **Node 22**（`node:22-slim`、`engines >=22.19.0 <23`），Agent 精确钉 DSH **0.1.1-rc.2**；Python 3.11 仅作 pytest 与 exec 镜像内的模型工具链。Pi SDK 已移除，`runtime-versions.json` 只保留其历史钉记录。一致性由 `tests/test_runtime_versions.py` 校验。
+Node / DSH / 模型工具链版本钉以根目录 `runtime-versions.json` 为准：服务镜像与 CI 统一 **Node 22**（`node:22-slim`、`engines >=22.19.0 <23`），Agent 精确钉 DSH **0.1.1-rc.2**；Python 3.11 仅作 pytest 与 exec 镜像内的模型工具链。旧引擎的 SDK 与版本钉已全部移除。一致性由 `tests/test_runtime_versions.py` 校验。
+
+## 从 pi 命名升级（2026-09-23）
+
+旧引擎退役后，产品、镜像、路径与库字段里的 `pi` 命名统一改为 `dsh`（或与引擎无关的中性名）。已有部署升级时
+逐项处理；新部署不涉及。
+
+| 项 | 旧 | 新 | 升级动作 |
+|---|---|---|---|
+| 数据库 | `pi_session_version`、`pi_entry_id` / `pi_entry_kind`、`pi_sdk_version` 与存储标记 | 迁移 `20260923000002_dsh_naming.js` | 停写 → 按 `schema:sql --from 20260923000001_upspec_naming.js` 导出增量包并执行 → `schema:verify` → 部署新镜像；新旧代码与新旧库互不兼容，不能滚动发布 |
+| 镜像 / 容器名 | `pi-enterprise-*` | `dsh-enterprise-*` | 自建编排里引用镜像名、容器名的地方同步修改；`.env` 里显式写了旧名的 `*_IMAGE` / `*_CONTAINER` 一并改 |
+| Compose 项目名 | `COMPOSE_PROJECT_NAME=pi-enterprise-sandbox` | `dsh-enterprise-sandbox` | **已有部署保留旧值**：项目名决定数据卷名，改了会拿到空卷 |
+| 浏览器会话 Cookie | `pi_enterprise_session` | `dsh_enterprise_session` | 无需操作；升级后所有用户需重新登录一次 |
+| JWT issuer / audience 默认值 | `pi-enterprise-sandbox` | `dsh-enterprise-sandbox` | `.env` 已显式设置的保持不变即可；未设置的升级后旧 token 失效，重新登录 |
+| VM exec | `pi-exec` 用户 / unit，`/opt/pi-exec`、`/etc/pi-exec`、`/var/lib/pi-exec` | `dsh-exec` 同构路径 | 维护窗口内停 `pi-exec` → `install-release.sh init` 建新用户与目录 → 迁移 `exec.env` 与数据根（`chown -R dsh-exec`，并把 `exec.env` 里的路径改成新根）→ `activate` → 启用 `dsh-exec`、禁用并删除旧 unit |
+| VM 工具链 | `/opt/pi-python/venv`、`/usr/local/lib/pi-chromium`、`/usr/local/lib/pi-skill-runtime`、`/usr/local/share/pi-toolchain` | `dsh-*` 同构路径 | 用新 release 重跑 `install-toolchain.sh`；确认无引用后删除旧目录 |
+| 共享 Skill 根 | `/mnt/pi-skill/*` | `/mnt/dsh-skill/*` | 挂载点与 `exec.env` 的 `SANDBOX_*SKILL*_ROOT` 同步修改 |
+| A2A 扩展 URI | `https://pi-enterprise.local/a2a/extensions/enterprise/v1` | `https://dsh-enterprise.local/...` | 通知按 URI 识别扩展的 A2A 客户端 |
+| 备份格式标记 | `format=pi-enterprise-backup-v1` | `format=dsh-enterprise-backup-v1` | 无需操作；`restore.sh` 两种都接受 |
+| 前端模型偏好 | localStorage `pi.*` | `dsh.*` | 无需操作；各会话的模型选择会回到默认一次 |
+
+库里有一个值有意保留：会话 journal 的 header 行 `session_entry_id = '__pi_session_header__'`。journal digest 按
+`<entry_id>:<payloadHash>` 计算，已持久化的 protected manifest 绑定了这些 digest，改写会让所有存量会话无法恢复。
 
 ## Backup
 
@@ -866,7 +888,7 @@ credential。MySQL 使用 `--single-transaction`；需要数据库与运行文�
 
 ```bash
 # 资源使用
-docker stats pi-enterprise-frontend pi-enterprise-api pi-enterprise-sandbox
+docker stats dsh-enterprise-frontend dsh-enterprise-api dsh-enterprise-sandbox
 
 # 日志
 docker compose logs -f --tail=100 sandbox
@@ -893,13 +915,13 @@ docker cp /etc/letsencrypt/live/your-domain.com/fullchain.pem nginx:/etc/nginx/s
 docker cp /etc/letsencrypt/live/your-domain.com/privkey.pem nginx:/etc/nginx/ssl/
 
 # 重新加载 nginx
-docker exec pi-enterprise-nginx nginx -s reload
+docker exec dsh-enterprise-nginx nginx -s reload
 ```
 
 自动续期 cron：
 ```bash
 # /etc/cron.d/certbot-renew
-0 3 * * * root certbot renew --quiet && docker exec pi-enterprise-nginx nginx -s reload
+0 3 * * * root certbot renew --quiet && docker exec dsh-enterprise-nginx nginx -s reload
 ```
 
 ## Scaling
@@ -927,7 +949,7 @@ docker compose run --rm sandbox python -c "import fastapi; print('ok')"
 curl http://localhost:4000/health/ready
 
 # 检查 API Server → Sandbox 通信
-docker exec pi-enterprise-api curl -f http://sandbox:8081/health
+docker exec dsh-enterprise-api curl -f http://sandbox:8081/health
 
 # 重启服务
 docker compose restart api-server
@@ -937,9 +959,9 @@ docker compose restart api-server
 
 ```bash
 # 仅检查变量名是否存在，不打印值
-docker exec pi-enterprise-sandbox sh -c \
+docker exec dsh-enterprise-sandbox sh -c \
   'test -n "$SANDBOX_INTERNAL_HMAC_KEYRING" && test -n "$SANDBOX_INTERNAL_HMAC_ACTIVE_KID"'
-docker exec pi-enterprise-agent sh -c \
+docker exec dsh-enterprise-agent sh -c \
   'test -n "$SANDBOX_INTERNAL_HMAC_KEYRING" && test -n "$SANDBOX_INTERNAL_HMAC_ACTIVE_KID"'
 
 # 检查 Sandbox readiness（exec 不连 Redis，没有 replay 实例可查）
@@ -955,11 +977,11 @@ docker compose down -v
 docker compose up -d
 
 # 备份 MySQL（示例；生产请用受控备份链路）
-docker exec pi-enterprise-mysql \
+docker exec dsh-enterprise-mysql \
   mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" > backup.sql
 
 # 运行 SQL 查询（交互）
-docker exec -it pi-enterprise-mysql \
+docker exec -it dsh-enterprise-mysql \
   mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"
 ```
 

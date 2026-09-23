@@ -36,7 +36,7 @@ describe('agent single production source root', () => {
       const dir = path.join(root, name);
       if (!fs.existsSync(dir)) continue;
       // One narrow exception: a nested npm package (its own package.json, its
-      // own build) is not a dual tree. `agent/runtime/` is `@pi/runtime`, the
+      // own build) is not a dual tree. `agent/runtime/` is `@dsh/runtime`, the
       // TypeScript DSH composition layer that only agent consumes. The gate
       // still has to hold, so prove it is a package and that it contributes no
       // production JS that could shadow agent/src/<name>/.

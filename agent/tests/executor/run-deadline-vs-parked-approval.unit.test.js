@@ -24,7 +24,7 @@ import { seedExecutorWorld, ORG, USER, CONV, SESS, VER, TRIG, RUN, fullModel } f
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Pi runtime double whose prompt() outlives the run deadline. */
+/** DSH runtime double whose prompt() outlives the run deadline. */
 function slowRuntimeFactory(onPromptStart) {
   return {
     async create(input) {
@@ -108,7 +108,7 @@ describe('run deadline vs a durably parked approval', () => {
         ttlMs: 30_000,
         renewIntervalMs: 60_000,
       }),
-      piRuntimeFactory: factory,
+      dshRuntimeFactory: factory,
       modelResolver: async () => fullModel,
       workspaceResolver: async (sess) => `/workspace/${sess.workspaceId}`,
       generateId,

@@ -10,25 +10,12 @@
  * MODEL_CONTEXT_WINDOW, MODEL_MAX_TOKENS) remain backward-compatible but are
  * no longer the sole source of capability constants on the hot path.
  *
- * Why this is not `pi.registerProvider()`
- * ---------------------------------------
- * Pi's ExtensionAPI can register a whole provider with its models, and that is
- * the right tool for an interactive client where the user picks a model from a
- * list. It does not fit here, for two reasons:
- *
- *  1. Ordering. `registerProvider` is only reachable from inside an extension
- *     factory, and extensions bind *after* `createAgentSessionFromServices`
- *     has already been handed the model. A Run's model is AgentVersion policy
- *     decided before the session exists, so registering a catalog the session
- *     will never consult buys nothing.
- *  2. Credentials. `ProviderConfig.apiKey` is a literal or env reference baked
- *     into the registration. The current path keeps the LLMIO key in a
- *     request-scoped `AuthStorage.inMemory` and out of the Model descriptor
- *     entirely (`assertModelShape` actively rejects credential fields on it).
- *     Moving the key into a per-Run provider registration widens that boundary.
- *
- * So this module stays the enterprise catalog and `toPiModel` stays the seam
- * that hands one concrete pi-ai Model to the runtime.
+ * `toRuntimeModel` is the seam that hands one concrete Model descriptor to the
+ * DSH runtime factory. The factory reads only `provider` (→ DSH provider route),
+ * `id` and `input` (image support); the remaining fields are the descriptor
+ * contract that `assertModelShape` validates on AgentVersion model policies.
+ * Reasoning effort does not travel on the descriptor — see
+ * `dsh/reasoning-efforts.ts`.
  */
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -124,7 +111,6 @@ export type ModelEntry = {
   pricing: ModelPricing;
   enabled: boolean;
   default?: boolean;
-  thinking_wire_map?: Record<string, string|null>;
 };
 
 export class ModelRegistryError extends Error {
@@ -201,18 +187,6 @@ export function normalizeModelEntry(raw: Record<string, unknown>) {
     supports_developer_role: bool(raw.supports_developer_role, false),
     supports_reasoning: bool(raw.supports_reasoning, false),
     thinking_levels: thinking,
-    // Explicit provider wire values per thinking level (e.g. xhigh → "max"
-    // for deepseek/anthropic). Absent → pi-ai default mapping applies.
-    thinking_wire_map: isPlainObject(raw.thinking_wire_map)
-      ? Object.freeze(
-          Object.fromEntries(
-            Object.entries(raw.thinking_wire_map).map(([k, v]) => [
-              String(k),
-              v == null ? null : String(v),
-            ]),
-          ),
-        )
-      : undefined,
     // Marks the fallback model used when neither the request, the
     // AgentVersion policy, nor MODEL_ID names one. Exactly one entry should
     // carry `default: true`; when several do, buildRegistry keeps the first.
@@ -309,7 +283,7 @@ export const buildCachedRegistry = (() => {
 
 /**
  * Load raw model list from a registry file.
- * Supports enterprise `{ models: [...] }` and pi-style `{ providers: { p: { models: [...] } } }`.
+ * Supports enterprise `{ models: [...] }` and dsh-style `{ providers: { p: { models: [...] } } }`.
  * @param filePath
  * @returns {ModelEntry[]}
  */
@@ -520,115 +494,8 @@ export function resolveModel(modelId: string|null|undefined, opts: { registry?: 
   return entry;
 }
 
-/** pi-ai ThinkingLevel values, weakest to strongest. */
-export const THINKING_LEVELS = Object.freeze([
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-]);
-
 /**
- * Project a registry entry's `thinking_levels` allowlist into the pi-ai
- * `thinkingLevelMap`.
- *
- * pi-ai reads the map two ways at once, and both matter here:
- *
- *  - support: `null` marks a level unsupported; `undefined` means "supported,
- *    use the provider default". `xhigh` is the exception — it counts as
- *    supported only when explicitly mapped (`models.js` getSupportedThinkingLevels).
- *  - wire value: whatever the map holds is sent verbatim, e.g.
- *    `reasoning_effort = thinkingLevelMap?.[level] ?? level`
- *    (`api/openai-completions.js`).
- *
- * So a declared level must be left unmapped: inventing a value here would
- * change what goes on the wire for models that already work. That leaves no way
- * to express a supported `xhigh` without also naming the provider's literal for
- * it — providers disagree (`deepseek` and `anthropic` both use `"max"`, while
- * an OpenAI-compatible gateway only accepts `minimal|low|medium|high`). Rather
- * than guess and turn a config typo into a 400 for the whole Run, `xhigh` is
- * mapped to null until the registry carries an explicit wire value for it.
- *
- * Returns undefined when the entry declares nothing, which preserves pi-ai's
- * default for reasoning models.
- *
- * @param entry
- * @returns {Record<string, string|null> | undefined}
- */
-export function toThinkingLevelMap(entry: ModelEntry) {
-  if (!entry?.supports_reasoning) return undefined;
-  const allowed = declaredThinkingLevels(entry);
-  if (allowed.size === 0) return undefined;
-
-  // Explicit per-level wire values from the registry entry (thinking_wire_map)
-  // override the conservative defaults below. This is how xhigh becomes
-  // usable: a provider that accepts it (deepseek/anthropic "max") declares
-  // the mapping, providers that do not simply leave it out.
-  const wireMap = entry.thinking_wire_map ?? {};
-
-  const map: Record<string, string|null> = {};
-  for (const level of THINKING_LEVELS) {
-    // A wire value says *how* to send a level, not *whether* the model offers
-    // it. Applying it to an undeclared level would make pi-ai report a level
-    // that supportedThinkingLevels() still filters out, and the two must
-    // agree (see that function's contract).
-    if (
-      allowed.has(level) &&
-      Object.prototype.hasOwnProperty.call(wireMap, level)
-    ) {
-      map[level] = wireMap[level]; // explicit wire value (string or null)
-      continue;
-    }
-    // Without an explicit wire value, xhigh has no portable mapping and stays
-    // unsupported rather than guessed.
-    if (!allowed.has(level) || level === 'xhigh') {
-      map[level] = null;
-    }
-  }
-  return Object.keys(map).length > 0 ? map : undefined;
-}
-
-/**
- * @param entry
- * @returns {Set<string>}
- */
-function declaredThinkingLevels(entry: ModelEntry) {
-  const declared = Array.isArray(entry?.thinking_levels)
-    ? entry.thinking_levels.map((level) => String(level).trim().toLowerCase())
-    : [];
-  return new Set(declared.filter((level) => THINKING_LEVELS.includes(level)));
-}
-
-/**
- * Thinking levels this entry actually offers, in pi-ai order.
- * `[]` for a non-reasoning model.
- *
- * Must agree with what pi-ai's `getSupportedThinkingLevels` will report for the
- * Model that `toPiModel` produces — an admin or capability UI built on this
- * should not advertise a level the session then clamps away. That is why
- * `xhigh` is excluded unless the entry declares an explicit wire value for it
- * via `thinking_wire_map` (pi-ai drops xhigh whenever the map does not name it).
- *
- * @param entry
- * @returns {string[]}
- */
-export function supportedThinkingLevels(entry: ModelEntry) {
-  if (!entry?.supports_reasoning) return [];
-  const wireMap = entry.thinking_wire_map ?? {};
-  const portable = THINKING_LEVELS.filter(
-    (level) =>
-      level !== 'xhigh' ||
-      (Object.prototype.hasOwnProperty.call(wireMap, level) &&
-        wireMap[level] != null),
-  );
-  const allowed = declaredThinkingLevels(entry);
-  if (allowed.size === 0) return portable;
-  return portable.filter((level) => allowed.has(level));
-}
-
-/**
- * Convert a registry entry into a pi-ai Model object for createAgentSession.
+ * Convert a registry entry into the Model descriptor the DSH runtime factory takes.
  *
  * @param entry
  * @param {{
@@ -637,17 +504,16 @@ export function supportedThinkingLevels(entry: ModelEntry) {
  *   headers?: Record<string, string>,
  * }} [runtime]
  */
-export function toPiModel(entry: ModelEntry, runtime: { baseUrl?: string, apiKey?: string, headers?: Record<string, string>, } = {}) {
+export function toRuntimeModel(entry: ModelEntry, runtime: { baseUrl?: string, apiKey?: string, headers?: Record<string, string>, } = {}) {
   const cost = {
     input: entry.pricing.input_per_mtok,
     output: entry.pricing.output_per_mtok,
     cacheRead: entry.pricing.cache_read_per_mtok,
     cacheWrite: entry.pricing.cache_write_per_mtok,
   };
-  const thinkingLevelMap = toThinkingLevelMap(entry);
-  // pi-ai Model shape (types.d.ts): id, name, api, provider, baseUrl, reasoning,
-  // input, cost, contextWindow, maxTokens, optional headers/compat.
-  // Do NOT set ImagesModel-only `output`.
+  // Descriptor shape checked by assertModelShape: id, name, api, provider,
+  // baseUrl, reasoning, input, cost, contextWindow, maxTokens, optional
+  // headers/compat. Do NOT set image-model-only `output`.
   return {
     id: entry.model_id,
     name: entry.name || entry.model_id,
@@ -655,11 +521,7 @@ export function toPiModel(entry: ModelEntry, runtime: { baseUrl?: string, apiKey
     provider: entry.provider,
     baseUrl: runtime.baseUrl || '',
     reasoning: Boolean(entry.supports_reasoning),
-    // Registry `thinking_levels` is the capability contract; without this the
-    // field was collected and then dropped, and pi-ai treated every reasoning
-    // model as supporting all five levels.
-    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-    // Request credentials belong to Pi ModelRegistry/AuthStorage, not the
+    // Request credentials belong to DSH ModelRegistry/AuthStorage, not the
     // immutable Model descriptor.
     headers: runtime.headers,
     input: [...entry.input_modalities],
@@ -674,21 +536,6 @@ export function toPiModel(entry: ModelEntry, runtime: { baseUrl?: string, apiKey
     },
   };
 }
-
-/**
- * Token accounting and cost live in pi-ai, not here.
- *
- * There used to be a second cost engine in this module (estimateCost /
- * aggregateUsageFromMessages / usageFromProviderResponse). It ran on the same
- * inputs pi-ai already uses — `Model.cost`, which `toPiModel` fills from this
- * registry's `pricing` — so pi-ai's `usage.cost` on every assistant message was
- * always the same number, computed one layer down. Nothing in the service read
- * the local copy; the observability extension takes usage and cost straight off
- * the assistant message via `extractUsageSummary`.
- *
- * Pricing stays here because it is enterprise catalog data. The arithmetic on
- * it does not.
- */
 
 /**
  * List enabled models (for admin / capability switch UIs).

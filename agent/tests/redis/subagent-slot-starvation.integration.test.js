@@ -48,7 +48,7 @@ const describeLive = enabled ? describe : describe.skip;
 
 /** 一次实验的隔离命名空间：hash tag 让同队列的 key 落同一 slot。 */
 function uniquePrefix() {
-  return `{pi-r3-${randomBytes(4).toString('hex')}}`;
+  return `{dsh-r3-${randomBytes(4).toString('hex')}}`;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

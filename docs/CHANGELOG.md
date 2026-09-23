@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
+
+- **产品与部署标识统一改为 `dsh`**：镜像 / 容器 `dsh-enterprise-*`，包名 `@dsh/contract`、`@dsh/exec`，VM 上的
+  `dsh-exec` 用户与 unit、`/opt|/etc|/var/lib/dsh-exec`，工具链路径 `dsh-python` / `dsh-chromium` /
+  `dsh-skill-runtime`，共享 Skill 根 `/mnt/dsh-skill`，本地 K8s 命名空间 `dsh-dev` / `dsh-sim`。
+  浏览器会话 Cookie 改为 `dsh_enterprise_session`（升级后需重新登录一次），JWT issuer / audience 默认值、
+  A2A 扩展 URI 同步改名。已有部署的升级步骤见 [deployment.md](deployment.md#从-pi-命名升级2026-09-23)。
+- **库字段去掉 pi 命名**（迁移 `20260923000002_dsh_naming.js`）：`agent_sessions.session_version`、
+  `messages.session_entry_id` / `session_entry_kind`；journal 标记改为 `session_journal_header|entry`，快照格式
+  改为 `session_jsonl_v3`，UI 消息里的 `piEntryId` 改为 `sessionEntryId`。header 哨兵值为保住 journal digest 不改。
+  新旧代码与新旧库互不兼容，须停写后执行增量发布包。
+- **删除 `pi_sdk_version`**（`agent_versions` 与 `agent_session_snapshots` 两列、Agent 版本 API 的
+  `pi_sdk_version` 字段、`run.agent_version` 事件里的 `piSdkVersion`）：写入与校验用同一个常量，校验永远成立。
+- **删除旧引擎遗留代码**：`createPiRuntimeFactory` / `createPiSessionAdapter` / `PiSessionJournalRepository`
+  等兼容别名，`AGENT_PI_DEFAULT_CWD` 兜底，给旧引擎用的 thinking-level 线路映射（`toThinkingLevelMap`、
+  `supportedThinkingLevels`、`thinking_wire_map`），`runtime-versions.json` 的 `pi_sdk` 段，以及一批无调用方的导出。
+  错误码 `PI_*` 改为 `DSH_*` / `SESSION_JSONL_*` / `SESSION_SNAPSHOT_*`。
+
 ### Changed（破坏性：库表命名按 UPspec 落标）
 
 - **共享 MySQL 的表、索引与字段约束按公司《数据库设计规范》落标**（[ADR 0013](adr/0013-upspec-table-naming.md)，

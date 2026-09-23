@@ -151,7 +151,7 @@ export class InteractionRepository {
   }
 
   /**
-   * Idempotently create one pending interaction for a Pi tool call.
+   * Idempotently create one pending interaction for a DSH tool call.
    * @param input
    */
   async getOrCreatePending(input: {interactionId:string,orgId:string,userId:string,runId:string,agentSessionId:string,toolExecutionId:string,toolCallId:string,interactionType:string,requestJson:unknown}) {
@@ -421,7 +421,7 @@ export class InteractionRepository {
     return { changed: true, interaction: await this.getById(id, scope) };
   }
 
-  /** Mark the answer present in the durable Pi checkpoint. */
+  /** Mark the answer present in the durable DSH checkpoint. */
   async markResumeAppliedIfClaimed(interactionId, scope) {
     const id = assertUlid(interactionId, 'interactionId');
     const current = await this.getById(id, scope, { forUpdate: true });

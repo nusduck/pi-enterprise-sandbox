@@ -9,7 +9,7 @@
  * "tool_call_id replay conflicts with existing args integrity" — and had it
  * matched, the approved tool would have executed on truncated input.
  *
- * The Pi session holds what the model actually emitted, so that is the
+ * The DSH session holds what the model actually emitted, so that is the
  * authority; the ledger view is used only when it provably equals the original.
  */
 
@@ -117,7 +117,7 @@ describe('ledger view of long arguments', () => {
   });
 });
 
-describe('recovering approved-replay arguments from the Pi session', () => {
+describe('recovering approved-replay arguments from the DSH session', () => {
   it('returns the original long arguments the model emitted', () => {
     const original = { command: LONG_COMMAND, timeoutMs: 30000 };
     const found = findToolCallArgumentsInSession(

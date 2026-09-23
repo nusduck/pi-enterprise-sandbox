@@ -4,7 +4,7 @@ Use this when bumping the pinned DeepSeek Harness packages in `agent/`. Do
 **not** widen the pin to a semver range (`^` / `~`). The BFF (`api-server/`)
 must **not** depend on DSH.
 
-Pi (`@earendil-works/pi-coding-agent`) 已移除。相关决策见
+旧引擎（`@earendil-works/*`）已移除。相关决策见
 [ADR 0007](../adr/0007-agent-runtime-rebuild-on-dsh.md)，测试套件在
 `agent/tests/runtime/`，版本 SSOT 是
 `runtime-versions.json` → `dsh.packages`。

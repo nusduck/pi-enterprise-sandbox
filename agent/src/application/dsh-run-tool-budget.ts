@@ -1,10 +1,10 @@
 /**
- * Per-Run convergence guard for Pi's otherwise open-ended coding-agent loop.
+ * Per-Run convergence guard for DSH's otherwise open-ended coding-agent loop.
  *
- * Pi intentionally keeps calling the model while it requests tools. That is
+ * DSH intentionally keeps calling the model while it requests tools. That is
  * useful interactively, but a worker Run needs a finite service boundary. This
  * adapter uses the public Agent hook points exposed by AgentSession; it does
- * not patch Pi's installed source or bypass its policy hooks.
+ * not patch DSH's installed source or bypass its policy hooks.
  */
 
 export const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 200;
@@ -70,7 +70,7 @@ function budgetInstruction(reason) {
 }
 
 /**
- * Install a temporary convergence guard on a Pi AgentSession.
+ * Install a temporary convergence guard on a DSH AgentSession.
  *
  * Policy hooks already installed by AgentSession always run first. Once a
  * budget is reached, the next model turn receives no tools plus an explicit

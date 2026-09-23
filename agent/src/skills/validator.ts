@@ -7,7 +7,7 @@ import { parseSkillFrontmatter } from './frontmatter.js';
 /**
  * Parse the required name and description from SKILL.md frontmatter.
  *
- * Delegates the YAML to the same parser Pi's skill loader uses, so a package
+ * Delegates the YAML to the same parser DSH's skill loader uses, so a package
  * that installs is a package the runtime can actually load. Only the enterprise
  * name policy is applied on top.
  *

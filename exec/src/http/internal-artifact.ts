@@ -9,9 +9,9 @@
  */
 
 import type { Hono } from 'hono';
-import { ContractError, toWireError } from '@pi/contract/errors.js';
-import { parseEnvelope } from '@pi/contract/envelope.js';
-import { parseEnabledSkills, type EnabledSkillRef } from '@pi/contract/skill-manifest.js';
+import { ContractError, toWireError } from '@dsh/contract/errors.js';
+import { parseEnvelope } from '@dsh/contract/envelope.js';
+import { parseEnabledSkills, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
 import type { ArtifactService } from '../artifact/service.js';
 import { ArtifactError } from '../artifact/service.js';
 import type { WorkspaceManager } from '../workspace/manager.js';

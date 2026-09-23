@@ -124,7 +124,7 @@ describe('FencedRunEventRecorder', () => {
         sandbox_session_id: '01K0G2PAV8FPMVC9QHJG7JPN5F',
         workspace_id: '01K0G2PAV8FPMVC9QHJG7JPN5G',
         status: 'ACTIVE',
-        pi_session_version: 0,
+        session_version: 0,
         last_run_id: RUN,
         execution_fence_token: 7,
         recovery_reason_code: null,

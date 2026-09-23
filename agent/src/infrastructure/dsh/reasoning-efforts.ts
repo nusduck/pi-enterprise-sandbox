@@ -1,7 +1,7 @@
 /**
  * Reasoning-effort ids the **currently routed DSH adapter** accepts.
  *
- * Why this file exists: the model registry inherited a pi-ai thinking-level
+ * Why this file exists: the model registry inherited a legacy thinking-level
  * enum (`off|minimal|low|medium|high|xhigh`) that no longer describes the wire.
  * Under DSH the effort travels on `ModelSelection.reasoningEffort` and is
  * interpreted by the provider adapter, and `@deepseek-ai/dsh-llm-deepseek`

@@ -20,7 +20,7 @@ ENTRYPOINT = NGINX_DIR / "entrypoint.sh"
 DOCKERFILE = NGINX_DIR / "Dockerfile"
 COMPOSE_PROD = ROOT / "docker-compose.prod.yml"
 
-INCLUDE_DIRECTIVE = "include /etc/nginx/pi-templates/locations.conf;"
+INCLUDE_DIRECTIVE = "include /etc/nginx/dsh-templates/locations.conf;"
 
 
 def _directives(path: Path) -> str:
@@ -128,7 +128,7 @@ def test_entrypoint_picks_a_template_and_fails_closed() -> None:
 def test_templates_are_not_auto_loaded_from_conf_d() -> None:
     # 两套 server 模板若留在 conf.d，nginx.conf 的 include 会同时加载，80 冲突。
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    assert "COPY nginx/templates/ /etc/nginx/pi-templates/" in dockerfile
+    assert "COPY nginx/templates/ /etc/nginx/dsh-templates/" in dockerfile
     assert "COPY nginx/conf.d/" not in dockerfile
     assert not (NGINX_DIR / "conf.d").exists()
 

@@ -1,7 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { DshRunExecutor } from '../../src/application/dsh-run-executor.js';
-import { PINNED_PI_SDK_VERSION } from '../../src/infrastructure/dsh/runtime-factory.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 import { RUN_STATUS } from '../../src/domain/run/run-status.js';
 
@@ -145,7 +144,6 @@ function makeDeps(observed) {
   };
   const agentVersion = {
     agentVersionId: VERSION,
-    piSdkVersion: PINNED_PI_SDK_VERSION,
     configHash: 'a'.repeat(64),
   };
   const repos = {
@@ -231,7 +229,7 @@ function makeDeps(observed) {
         return true;
       },
     },
-    piRuntimeFactory: makeRuntimeFactory(observed),
+    dshRuntimeFactory: makeRuntimeFactory(observed),
     modelResolver: async () => MODEL,
     workspaceResolver: async () => '/workspace/test',
     generateId,

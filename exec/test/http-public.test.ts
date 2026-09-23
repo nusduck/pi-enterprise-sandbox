@@ -36,7 +36,7 @@ describe('public: byte-identical contract vs Python', () => {
 
   before(async () => {
     const resolved = await realpath(tmpdir());
-    base = await mkdtemp(path.join(resolved, 'pi-public-'));
+    base = await mkdtemp(path.join(resolved, 'dsh-public-'));
     workspaceManager = new WorkspaceManager({
       workspacesBaseRoot: path.join(base, 'workspaces'),
       tempBaseRoot: path.join(base, 'tmp'),

@@ -12,7 +12,7 @@ export const RECOVERY_REASON_CODE = Object.freeze({
   RECOVERY_REQUIRED: 'RECOVERY_REQUIRED',
   /** Worker lost lease mid-run; durable reconciliation needed. */
   LEASE_LOST: 'LEASE_LOST',
-  /** Pi snapshot missing or checksum failed; rebuild from journal. */
+  /** DSH snapshot missing or checksum failed; rebuild from journal. */
   SNAPSHOT_INVALID: 'SNAPSHOT_INVALID',
   /** SDK / snapshot_format incompatibility. */
   VERSION_INCOMPATIBLE: 'VERSION_INCOMPATIBLE',

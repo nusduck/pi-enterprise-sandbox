@@ -41,7 +41,6 @@ function addAgentVersion(world, { agentId, versionId, versionNo, createdBy }) {
     version_no: versionNo,
     config_json: '{}',
     config_hash: String(versionNo).padStart(1, '0').repeat(64).slice(0, 64),
-    pi_sdk_version: '0.80.3',
     status: 'active',
     created_by: createdBy,
     created_at: '2026-07-18 07:00:00.000',

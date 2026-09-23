@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { loadSchemaManifest, SchemaDriftError } from '@pi/contract/schema-manifest.js';
+import { loadSchemaManifest, SchemaDriftError } from '@dsh/contract/schema-manifest.js';
 
 import { createExecDbPool, closeExecDbPool } from '../src/db/client.js';
 import { assertSchemaMatchesManifest, introspectSchema } from '../src/db/schema-verify.js';
