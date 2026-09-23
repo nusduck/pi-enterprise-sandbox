@@ -889,7 +889,3 @@ export class AgentConfigValidator {
   }
 }
 
-export function createAgentConfigValidator(opts: ConstructorParameters<typeof AgentConfigValidator>[0] = {}) {
-  return new AgentConfigValidator(opts);
-}
-

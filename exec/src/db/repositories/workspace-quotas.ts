@@ -33,10 +33,3 @@ CREATE TABLE tbl_agsvc_workspace_quota_reservations (
   PRIMARY KEY (workspace_id, reservation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `.trim();
-
-/** 索引说明：`PRIMARY KEY (workspace_id, reservation_id)` 已是
- * `WHERE workspace_id = ?` 的最左前缀，无需额外索引；`reservation_id`
- * 的单列索引也不需要——所有查询都带 `workspace_id`。 */
-export const WORKSPACE_QUOTA_RESERVATIONS_INDEXES: readonly string[] = [
-  'PRIMARY KEY (workspace_id, reservation_id) covers sumReserved()',
-];

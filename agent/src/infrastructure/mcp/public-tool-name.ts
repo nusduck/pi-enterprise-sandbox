@@ -29,27 +29,3 @@ export function publicMcpToolName(serverName: string, rawName: string): string {
     .slice(0, HASH_LENGTH);
   return `${normalized.slice(0, MAX_PUBLIC_NAME_LENGTH - HASH_LENGTH - 1)}_${hash}`;
 }
-
-export interface McpPublicNameServer {
-  readonly serverId: string;
-  readonly enabledTools: readonly string[];
-}
-
-/**
- * Resolve a registered public name against known raw MCP identities.
- * Returning null is intentional: an unlisted live tool remains subject to the
- * platform fail-closed MCP policy and is not guessed from delimiters.
- */
-export function resolveMcpPublicIdentity(
-  publicName: string,
-  servers: readonly McpPublicNameServer[],
-): { serverId: string; toolName: string } | null {
-  for (const server of servers) {
-    for (const toolName of server.enabledTools) {
-      if (publicMcpToolName(server.serverId, toolName) === publicName) {
-        return { serverId: server.serverId, toolName };
-      }
-    }
-  }
-  return null;
-}

@@ -54,10 +54,3 @@ CREATE TABLE tbl_agsvc_exec_jobs (
   KEY ind_agsvc_ej_i1 (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `.trim();
-
-export const EXEC_JOBS_INDEXES: readonly string[] = [
-  'PRIMARY KEY (process_id)',
-  'KEY ind_agsvc_ej_i2 (org_id, user_id, workspace_id) for owner-scoped reads',
-  'KEY ind_agsvc_ej_i3 (run_id) for listByRun',
-  'KEY ind_agsvc_ej_i4 (status) for active/recovery scans',
-];

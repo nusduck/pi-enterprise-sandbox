@@ -156,10 +156,6 @@ export function toolDecisionsOf(config: Record<string, unknown>): Record<string,
   return result;
 }
 
-export function toolDecisionOf(config: Record<string, unknown>, name: string): ToolDecision {
-  return toolDecisionsOf(config)[name] ?? 'inherit';
-}
-
 /** Set a tool's explicit decision; inherit removes only that known key. */
 export function setToolDecision(
   config: Record<string, unknown>,
