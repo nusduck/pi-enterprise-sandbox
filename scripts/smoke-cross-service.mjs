@@ -431,6 +431,8 @@ async function main() {
     {
       DEPLOYMENT_ENV: 'development',
       SANDBOX_PORT: String(sandboxPort),
+      // 公共会话面必填（fail-closed）；BFF 以同一令牌经 X-API-Key 代理。
+      SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
       SANDBOX_DATABASE_URL: appSandboxMysqlUrl,
       ...dbpmHandle.env,
       SANDBOX_WORKSPACES_ROOT: wsPath,

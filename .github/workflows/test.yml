@@ -265,6 +265,15 @@ jobs:
           npm ci --prefix agent
           npm ci --prefix api-server
 
+      # exec 启动时真跑一次 bwrap 预检，失败即拒启（fail-closed，无旁路）。
+      # Ubuntu 24.04 默认经 AppArmor 限制非特权 user namespace，bwrap 需要它。
+      - name: Install Bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true
+
       - name: Build TypeScript services for smoke entrypoints
         run: |
           npm run build --prefix contract
