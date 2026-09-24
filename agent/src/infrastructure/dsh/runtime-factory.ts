@@ -26,6 +26,7 @@ import { FileSystemSkillProvider } from '@deepseek-ai/dsh-skill-filesystem';
 import { createPublishedSkillsProvider, isPublishedSkillVersion } from './published-skills-provider.js';
 import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { DshRuntimeFactoryError } from './errors.js';
+import { waitForPendingTitle } from './session-title-grace.js';
 import { PINNED_DSH_VERSION } from './constants.js';
 import { bindAgentVersionConfig } from './agent-version-bindings.js';
 import { dshProviderRoute, reasoningEffortsForRoute } from './reasoning-efforts.js';
@@ -692,6 +693,9 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
             }
           }
           try {
+            // 在途的模型标题随会话 dispose 被中止；短回答的 Run 会因此丢标题。
+            // 有界等一下（session-title-grace.ts），等不到就放弃。
+            await waitForPendingTitle(() => agent?.session?.events).catch(() => undefined);
             if (typeof handle?.dispose === 'function') {
               await sessionStore.runAsOwner(sessionOwner, () => handle.dispose());
             }
