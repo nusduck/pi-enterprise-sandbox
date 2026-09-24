@@ -443,6 +443,10 @@ Exec internal plane (TypeScript)
   `tool_call_id` 和规范化参数生成；pending/approved/rejected 与 operation
   fingerprint 由 Agent MySQL ledger 原子维护。resume 只授权完全相同的
   外部副作用操作，不把一次批准扩展成 Sandbox 通用执行权限。
+- 续跑时模型以**新** `tool_call_id` 原样重发被批准的调用：`tools/pre-execute` 按「工具名 + 参数指纹」
+  认领那条批准（把被批准的 ToolExecution 从 `WAITING_APPROVAL` 推到 `RUNNING`，一次性），并记下
+  「新 callId → 被批准的 callId」；`tools/execute` 的账本两端随之记在**被批准的那一行**上，
+  一次被批准的执行只有一行、结果与审批对得上（`runtime/policy/install.ts` 的 `replayOf`）。
 - 实现：`agent/src/runtime/policy/`、`agent/src/runtime/providers/remote-*.ts`、
   `agent/src/infrastructure/mysql/repositories/approval-repository.ts`、
   `exec/src/security/hmac.ts`、`exec/src/shell/blocked-commands.ts`。

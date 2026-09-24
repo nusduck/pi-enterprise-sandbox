@@ -684,3 +684,43 @@ test('结果未知：执行面在请求送达后断开时记 unknown，不记 en
   }));
   assert.deepEqual(calls.map((c) => c.phase), ['started', 'ended']);
 });
+
+test('批准后重发的调用把账本记在被批准的那一行上，不另起一行（原行不得永远 RUNNING）', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  const ledger: Array<{ phase: string; toolCallId: string }> = [];
+  installEnterprisePolicy(ctx as never, {
+    approvalStore: store,
+    riskOverrides: { bash: 'high' },
+    toolLedger: {
+      async started({ toolCallId }: { toolCallId: string }) {
+        ledger.push({ phase: 'started', toolCallId });
+      },
+      async ended({ toolCallId }: { toolCallId: string }) {
+        ledger.push({ phase: 'ended', toolCallId });
+      },
+    },
+  } as never);
+  const args = { command: 'echo baseline-42' };
+
+  // 第一次：停在审批，人批准。
+  const first = (await ctx.pre({ name: 'bash', arguments: args, id: 'c-orig' })) as { kind: string };
+  assert.equal(first.kind, 'ask');
+  const [pending] = [...store.records.values()];
+  assert.ok(pending);
+  store.records.set(pending.id, { ...pending, status: 'APPROVED' });
+
+  // 续跑：模型以新的 callId 原样重发，认领那条批准后执行。
+  const replay = (await ctx.pre({ name: 'bash', arguments: args, id: 'c-new' })) as { kind: string };
+  assert.equal(replay.kind, 'allow');
+  await ctx.execute({ name: 'bash', arguments: args, id: 'c-new' }, async () => ({ isError: false }));
+  assert.deepEqual(ledger, [
+    { phase: 'started', toolCallId: 'c-orig' },
+    { phase: 'ended', toolCallId: 'c-orig' },
+  ]);
+
+  // 对照：普通调用仍记在自己的 callId 上。
+  ledger.length = 0;
+  await ctx.execute({ name: 'read', arguments: {}, id: 'c-plain' }, async () => ({ isError: false }));
+  assert.deepEqual(ledger.map((e) => e.toolCallId), ['c-plain', 'c-plain']);
+});
