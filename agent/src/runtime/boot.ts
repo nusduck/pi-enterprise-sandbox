@@ -34,6 +34,7 @@ import {
   MysqlSessionStore,
   MysqlSessionStoreConfigError,
   readMysqlSessionStoreConfig,
+  type SessionEventsCommittedHook,
   type SessionStoreOwner,
 } from './providers/mysql-session-store.js';
 import {
@@ -118,6 +119,7 @@ export function createSessionBackend(opts?: {
   password?: string | undefined;
   ownerForSession?: (sessionId: string) => SessionStoreOwner;
   currentOwner?: () => SessionStoreOwner;
+  onEventsCommitted?: SessionEventsCommittedHook | undefined;
 }): PersistenceBackend<string> {
   const roots = opts?.physicalRoots ?? [];
   if (opts?.requireMysql === true) {
@@ -129,6 +131,7 @@ export function createSessionBackend(opts?: {
       physicalRoots: roots,
       ownerForSession: opts.ownerForSession,
       currentOwner: opts.currentOwner,
+      onEventsCommitted: opts.onEventsCommitted,
     });
   }
   try {
@@ -137,6 +140,7 @@ export function createSessionBackend(opts?: {
       physicalRoots: roots,
       ownerForSession: opts?.ownerForSession,
       currentOwner: opts?.currentOwner,
+      onEventsCommitted: opts?.onEventsCommitted,
     });
   } catch (err) {
     if (err instanceof MysqlSessionStoreConfigError) {
@@ -149,7 +153,13 @@ export function createSessionBackend(opts?: {
 /** Mount the one process-wide DSH persistence service; every session bind stays owner-scoped. */
 export function mountSessionPersistence(
   ctx: Context,
-  opts: { physicalRoots?: readonly string[]; requireMysql?: boolean; password?: string | undefined } = {},
+  opts: {
+    physicalRoots?: readonly string[];
+    requireMysql?: boolean;
+    password?: string | undefined;
+    /** 会话事件提交之后的观察者（application 的会话标题投影）。只在首次挂载时生效。 */
+    onEventsCommitted?: SessionEventsCommittedHook | undefined;
+  } = {},
 ): MysqlSessionPersistence {
   let existing: MysqlSessionPersistence | undefined;
   try {
@@ -179,6 +189,7 @@ export function mountSessionPersistence(
     password: opts.password,
     ownerForSession: (sessionId) => bindings.ownerForSession(sessionId),
     currentOwner: () => bindings.currentOwner(),
+    onEventsCommitted: opts.onEventsCommitted,
   });
   return new MysqlSessionPersistence(ctx, backend, bindings);
 }

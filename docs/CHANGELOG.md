@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **会话列表显示模型生成的标题**：DSH 在首条提问后会用模型生成会话标题，但此前没有任何代码读取，
+  每个会话白花一次模型调用、标题停在占位值，列表只能显示首条提问的截断。现在模型标题会写回会话
+  （只替换占位标题，显式传入的标题不受影响），每轮结束后刷新列表即可看到。
+
 ### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
 
 - **产品与部署标识统一改为 `dsh`**：镜像 / 容器 `dsh-enterprise-*`，包名 `@dsh/contract`、`@dsh/exec`，VM 上的

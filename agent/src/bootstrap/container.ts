@@ -538,9 +538,15 @@ export class ServiceContainer {
         // into every prompt.
         const { systemRoot } = resolveSkillMountRoots(this.env);
         const skillRoots = [systemRoot];
+        const { createSessionTitleProjector } = await import('../application/session-title-projection.js');
         return new DshRuntimeFactory({
           // DSH 会话存储的 MySQL 口令同样来自 DBPM，不从连接串读。
           mysqlPassword: this.credentials.mysql,
+          // DSH 生成的会话标题 → Conversation.title（只覆盖占位标题）。
+          onSessionEventsCommitted: createSessionTitleProjector({
+            transactionManager: this.getTransactionManager(),
+            createRepositories: (db: Loose) => this.createRepositories(db),
+          }),
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
           loadSdk: opts.loadSdk,
