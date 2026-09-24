@@ -129,6 +129,9 @@ AgentVersion 里**不接受**地址、凭据、超时（与 `mcpServers` 的 `MC
 
 返回 `{ remoteAgent, taskId, state, text, artifacts: [{ name, mimeType, url? }] }`。
 `text` 取最终状态消息与文本类 artifact 的文本部分，合计截断到 16 000 字符；字节内容不下载。
+两处都没有文本时，再带 `historyLength` 读一次 `GetTask`，取 history 里最后一条 agent 消息——
+本仓库自己的 A2A 面就只把回答放在 history 里（2026-09-24 真实链路发现）。仍读不到则报
+`A2A_REMOTE_UNAVAILABLE`，不把「读不到答案」报成「完成但没有回答」。
 
 ### D7 审计
 

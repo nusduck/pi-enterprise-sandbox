@@ -13,6 +13,7 @@
 import { createHash } from 'node:crypto';
 import {
   GetTaskRequest,
+  Role,
   SendMessageRequest,
   TaskState,
   type AgentCard,
@@ -34,6 +35,8 @@ export const CANCEL_REQUEST_TIMEOUT_MS = 5_000;
 export const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 export const CARD_CACHE_TTL_MS = 5 * 60 * 1000;
 export const RESULT_TEXT_MAX_CHARS = 16_000;
+/** 终态没有 status/artifact 文本时，回读多少条 history 找答案。 */
+const ANSWER_HISTORY_LENGTH = 20;
 const POLL_MIN_DELAY_MS = 2_000;
 const POLL_MAX_DELAY_MS = 15_000;
 
@@ -322,10 +325,25 @@ export class RemoteA2aClient {
     }
 
     const state = stateName(task.status?.state);
-    const texts = [
+    let texts = [
       ...partsText(task.status?.message?.parts),
       ...(task.artifacts ?? []).flatMap((a) => partsText(a.parts)),
     ];
+    if (texts.length === 0 && state === 'completed') {
+      // A2A 允许把回答只放在 history 里——本仓库自己的 A2A 面就是这样
+      // （task-service.ts：status 不带 message、纯文本回答不产 artifact）。
+      // 轮询时不带 history 省带宽，这里补读一次，取最后一条 agent 消息。
+      try {
+        const withHistory = await client.getTask(
+          GetTaskRequest.fromJSON({ id: task.id, historyLength: ANSWER_HISTORY_LENGTH }),
+          { signal },
+        );
+        const lastAgent = [...(withHistory.history ?? [])].reverse().find((m) => m.role === Role.ROLE_AGENT);
+        texts = partsText(lastAgent?.parts);
+      } catch (err) {
+        throw wrap(err);
+      }
+    }
     const artifacts = (task.artifacts ?? []).map((a) => {
       const urlPart = (a.parts ?? []).find((p) => p?.content?.$case === 'url');
       return {

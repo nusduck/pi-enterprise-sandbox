@@ -319,7 +319,7 @@ WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.ts`�
 - 发送时 `returnImmediately`，未终态则 `GetTask` 轮询（2 s 起退避到 15 s）直到终态或 `timeoutMs`；
   超时或父 Run 取消时尽力 `CancelTask`。`messageId` 由 `(runId, callId)` 派生，重试时远端可去重。
 - 所有出站经 `boundedFetch`：只发往 `cardUrl` 同源、不跟随重定向、单请求 30 s、响应 1 MiB 上限。
-- 结果只取文本（≤16 000 字符）与产物的名称/链接，不下载字节；日志不记 prompt 与凭据。
+- 结果只取文本（≤16 000 字符；状态消息与 artifact 都没有文本时回读 history 里最后一条 agent 消息）与产物的名称/链接，不下载字节；日志不记 prompt 与凭据。
 - 不新增表：参数、结果与审批都在工具账本里。
 
 `LEGACY_REQUIRED_EXTENSION_NAMES`（三个，不含 `user-interaction`）仅用于兼容

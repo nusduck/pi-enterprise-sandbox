@@ -133,6 +133,23 @@ describe('RemoteA2aClient', () => {
     assert.ok(fake.calls.every((c) => c.auth === `Bearer ${TOKEN}`));
   });
 
+  it('reads the answer from history when the remote puts it only there (our own A2A server does)', async () => {
+    fake.handlers['message/send'] = () => task('t-h', 'working');
+    fake.handlers['tasks/get'] = (params) => ({
+      ...task('t-h', 'completed'),
+      // Honour historyLength like agent/src/application/a2a/task-service.ts does.
+      history: Number(params.historyLength) > 0
+        ? [
+            { kind: 'message', role: 'user', messageId: 'u1', parts: [{ kind: 'text', text: 'What is 19 * 21?' }] },
+            { kind: 'message', role: 'agent', messageId: 'a1', parts: [{ kind: 'text', text: 'first draft' }] },
+            { kind: 'message', role: 'agent', messageId: 'a2', parts: [{ kind: 'text', text: 'ZEBRA-7731 399' }] },
+          ]
+        : [],
+    });
+    const result = await client().delegate({ entry: entry(fake), prompt: 'x', messageId: 'm-h' });
+    assert.equal(result.text, 'ZEBRA-7731 399');
+  });
+
   it('derives the same message id for the same tool call', () => {
     assert.equal(deriveMessageId('r', 'c'), deriveMessageId('r', 'c'));
     assert.notEqual(deriveMessageId('r', 'c'), deriveMessageId('r', 'd'));
@@ -204,6 +221,14 @@ describe('RemoteA2aClient', () => {
     assert.equal(fake.calls.length, 0);
   });
 
+  it('reports an unreadable answer instead of an empty success', async () => {
+    fake.handlers['message/send'] = () => task('t-8', 'completed');
+    await assert.rejects(
+      client().delegate({ entry: entry(fake), prompt: 'x', messageId: 'm-8' }),
+      (err: RemoteA2aError) => err.code === 'A2A_REMOTE_UNAVAILABLE',
+    );
+  });
+
   it('refuses an oversized response', async () => {
     fake.handlers['message/send'] = () => ({ ...task('t-6', 'completed'), metadata: { pad: 'x'.repeat(4096) } });
     await assert.rejects(
@@ -221,7 +246,9 @@ describe('RemoteA2aClient', () => {
   });
 
   it('caches the agent card between calls', async () => {
-    fake.handlers['message/send'] = () => task('t-7', 'completed');
+    fake.handlers['message/send'] = () => task('t-7', 'completed', {
+      message: { kind: 'message', role: 'agent', messageId: 'm7', parts: [{ kind: 'text', text: 'ok' }] },
+    });
     const c = client();
     await c.delegate({ entry: entry(fake), prompt: 'x', messageId: 'm-1' });
     await c.delegate({ entry: entry(fake), prompt: 'y', messageId: 'm-2' });
