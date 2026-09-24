@@ -65,6 +65,9 @@ export interface RemoteDelegationResult {
 
 type Sleep = (ms: number, signal: AbortSignal) => Promise<void>;
 
+/** 卡片缓存条目。具名而不内联：B3 瞬态 Map 棘轮的扫描正则认不出带 `{ ; }` 的内联泛型。 */
+type CardCacheEntry = { card: AgentCard; expiresAt: number };
+
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
     if (signal.aborted) return resolve();
@@ -151,7 +154,7 @@ export class RemoteA2aClient {
   readonly #sleep: Sleep;
   readonly #requestTimeoutMs: number;
   readonly #maxResponseBytes: number;
-  readonly #cards = new Map<string, { card: AgentCard; expiresAt: number }>();
+  readonly #cards = new Map<string, CardCacheEntry>();
 
   constructor(opts: {
     env?: Record<string, string | undefined>;

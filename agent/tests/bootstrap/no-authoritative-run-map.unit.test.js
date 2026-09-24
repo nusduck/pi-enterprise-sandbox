@@ -218,6 +218,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'runtime/providers/a2a-remote-client.ts',
+    match: /readonly\s+#cards\s*=\s*new\s+Map/,
+    purpose:
+      'Process-local agent card cache per registered remote A2A agent (5 min TTL); holds no Run facts, the remote card is authoritative',
+    scope: 'instance',
+  },
+  {
     rel: 'runtime/policy/pre-execute.ts',
     match: /readonly\s+records\s*=\s*new\s+Map/,
     purpose:
@@ -480,9 +487,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 2026-09-25: 34 → 35。`runtime/policy/install.ts` 的 `replayOf`：一次 Run 内
     // 「模型重发的 callId → 被认领的已批准 callId」，只用来把续跑执行的账本记回
     // 被批准的那一行；一次性认领的权威是 MySQL 里的审批与 ToolExecution 行。
+    // 2026-09-25: 35 → 36（两支合并）。`runtime/providers/a2a-remote-client.ts` 的 `#cards`：
+    // 按远端 id 缓存 A2A Agent Card（5 分钟），没有任何 Run 事实。它此前写成内联
+    // 对象类型的泛型，扫描正则认不出（`<[^;\n(){}]*>` 不允许 `{ ; }`），于是漏登记。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      35,
+      36,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
