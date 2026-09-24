@@ -15,11 +15,16 @@ export const DELEGATION_AGENT_NAME_MAX = 255;
 /** 名单长度上限。名单会进系统提示，太长就是在给模型塞噪声。 */
 export const DELEGATION_MAX_ENTRIES = 20;
 
-export const DELEGATION_KEYS = Object.freeze(['agents']);
+export const DELEGATION_KEYS = Object.freeze(['agents', 'remoteAgents']);
+
+/** 与 `A2A_REMOTE_AGENTS_JSON` 的 id 规则一致（a2a-remote-registry.ts）。 */
+const REMOTE_AGENT_ID = /^[A-Za-z0-9_-]{1,32}$/;
 
 export interface DelegationConfig {
   /** 同 org 内可委派的 Agent `name`，已 trim、去重、保序。 */
   readonly agents: readonly string[];
+  /** 可调用的远端 A2A Agent id（`A2A_REMOTE_AGENTS_JSON` 登记表里的 id）。 */
+  readonly remoteAgents: readonly string[];
 }
 
 export interface DelegationDiagnostic {
@@ -30,6 +35,7 @@ export interface DelegationDiagnostic {
 
 export const EMPTY_DELEGATION: DelegationConfig = Object.freeze({
   agents: Object.freeze([]) as readonly string[],
+  remoteAgents: Object.freeze([]) as readonly string[],
 });
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -92,12 +98,46 @@ export function parseDelegationConfig(raw: unknown): {
     });
   }
 
+  const remoteAgents: string[] = [];
+  const rawRemote = raw.remoteAgents;
+  if (rawRemote !== undefined && !Array.isArray(rawRemote)) {
+    errors.push({ path: 'delegation.remoteAgents', code: 'CONFIG_TYPE', message: 'delegation.remoteAgents must be an array of remote agent ids' });
+  } else if (Array.isArray(rawRemote)) {
+    if (rawRemote.length > DELEGATION_MAX_ENTRIES) {
+      errors.push({
+        path: 'delegation.remoteAgents',
+        code: 'CONFIG_LIMIT',
+        message: `delegation.remoteAgents allows at most ${DELEGATION_MAX_ENTRIES} entries`,
+      });
+    }
+    const seen = new Set<string>();
+    rawRemote.forEach((entry, index) => {
+      const path = `delegation.remoteAgents[${index}]`;
+      const id = typeof entry === 'string' ? entry.trim() : '';
+      if (!REMOTE_AGENT_ID.test(id)) {
+        errors.push({ path, code: 'DELEGATION_REMOTE_AGENT_INVALID', message: 'remote agent id must match [A-Za-z0-9_-]{1,32}' });
+        return;
+      }
+      if (seen.has(id)) {
+        errors.push({ path, code: 'DELEGATION_AGENT_DUPLICATE', message: `remote agent "${id}" is listed twice` });
+        return;
+      }
+      seen.add(id);
+      remoteAgents.push(id);
+    });
+  }
+
   if (errors.length > 0) return { config: null, errors };
-  return { config: Object.freeze({ agents: Object.freeze(agents) }), errors };
+  return {
+    config: Object.freeze({ agents: Object.freeze(agents), remoteAgents: Object.freeze(remoteAgents) }),
+    errors,
+  };
 }
 
 /** 规范化后写回配置的形状；不可委派时返回 `undefined`（键整个省略）。 */
 export function normalizedDelegation(config: DelegationConfig): Record<string, unknown> | undefined {
-  if (config.agents.length === 0) return undefined;
-  return { agents: [...config.agents] };
+  const out: Record<string, unknown> = {};
+  if (config.agents.length > 0) out.agents = [...config.agents];
+  if (config.remoteAgents.length > 0) out.remoteAgents = [...config.remoteAgents];
+  return Object.keys(out).length > 0 ? out : undefined;
 }

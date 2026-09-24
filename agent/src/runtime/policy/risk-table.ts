@@ -8,6 +8,7 @@ import { makePolicyDecision, type PolicyDecision, type PolicyRiskLevel } from '.
 import {
   ASK_USER_TOOL_NAME,
   SANDBOX_TOOL_NAMES,
+  EXTERNAL_HOST_TOOL_NAMES,
   isRetiredToolName,
   RETIRED_TOOL_REASON_CODE,
 } from './tool-names.js';
@@ -19,6 +20,7 @@ export type ToolRiskClass = 'internal_interaction' | 'local_low' | 'external_rea
  * ——2026-08-31 之前这里与 `constants.ts` 就已经漂到两套进程族名字了。
  */
 const LOCAL_TOOLS: ReadonlySet<string> = new Set(SANDBOX_TOOL_NAMES);
+const EXTERNAL_HOST_TOOLS: ReadonlySet<string> = new Set(EXTERNAL_HOST_TOOL_NAMES);
 
 export const DEFAULT_CLASS_RISK: Record<Exclude<ToolRiskClass, 'unknown'>, PolicyRiskLevel> = {
   internal_interaction: 'low',
@@ -37,6 +39,7 @@ export const DEFAULT_RISK_APPROVAL: Record<PolicyRiskLevel, PolicyDecision['deci
 export function classifyTool(toolName: string): ToolRiskClass {
   if (toolName === ASK_USER_TOOL_NAME) return 'internal_interaction';
   if (LOCAL_TOOLS.has(toolName)) return 'local_low';
+  if (EXTERNAL_HOST_TOOLS.has(toolName)) return 'external_high';
   if (toolName.startsWith('mcp__')) return 'external_high';
   return 'unknown';
 }

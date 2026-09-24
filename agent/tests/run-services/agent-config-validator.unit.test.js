@@ -200,7 +200,7 @@ describe('AgentConfigValidator delegation (agent-delegation.md D2)', () => {
     });
     assert.deepEqual(result.errors, []);
     assert.deepEqual(result.normalizedConfig.delegation, { agents: ['data-analyst', '代码审查助手'] });
-    assert.deepEqual(result.effectiveSummary.delegation, { agents: ['data-analyst', '代码审查助手'] });
+    assert.deepEqual(result.effectiveSummary.delegation, { agents: ['data-analyst', '代码审查助手'], remoteAgents: [] });
     const again = subject.validate(result.normalizedConfig);
     assert.deepEqual(again.normalizedConfig, result.normalizedConfig);
   });
@@ -209,7 +209,7 @@ describe('AgentConfigValidator delegation (agent-delegation.md D2)', () => {
     const result = validator().validate({ schemaVersion: 1, delegation: { agents: [] } });
     assert.equal(result.valid, true);
     assert.equal('delegation' in result.normalizedConfig, false);
-    assert.deepEqual(result.effectiveSummary.delegation, { agents: [] });
+    assert.deepEqual(result.effectiveSummary.delegation, { agents: [], remoteAgents: [] });
   });
 
   it('reports each malformed entry at its own path', () => {
@@ -231,5 +231,36 @@ describe('AgentConfigValidator delegation (agent-delegation.md D2)', () => {
     const result = subject.validate({ schemaVersion: 1, delegation: ['data-analyst'] });
     assert.deepEqual(result.errors.map((e) => [e.path, e.code]), [['delegation', 'CONFIG_TYPE']]);
     assert.equal(subject.options().fieldSupport.delegation.supported, true);
+  });
+});
+
+describe('AgentConfigValidator delegation.remoteAgents (a2a-remote-delegation.md D3)', () => {
+  const REMOTE = [{ id: 'finance-bot', name: '财务助手', description: '报销' }];
+
+  it('accepts a registered remote agent and exposes only display fields', () => {
+    const subject = validator({ remoteAgents: REMOTE });
+    const result = subject.validate({ schemaVersion: 1, delegation: { remoteAgents: ['finance-bot'] } });
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.normalizedConfig.delegation, { remoteAgents: ['finance-bot'] });
+    const constraints = subject.options().platformConstraints;
+    assert.deepEqual(constraints.remoteAgents, REMOTE);
+    assert.equal(JSON.stringify(constraints).includes('cardUrl'), false);
+  });
+
+  it('rejects an unregistered remote agent at its path', () => {
+    const result = validator({ remoteAgents: REMOTE }).validate({
+      schemaVersion: 1,
+      delegation: { remoteAgents: ['finance-bot', 'ghost'] },
+    });
+    assert.equal(result.valid, false);
+    assert.deepEqual(
+      result.errors.map((e) => [e.path, e.code]),
+      [['delegation.remoteAgents[1]', 'DELEGATION_REMOTE_AGENT_UNKNOWN']],
+    );
+  });
+
+  it('treats an empty registry as authoritative: nothing is callable', () => {
+    const result = validator().validate({ schemaVersion: 1, delegation: { remoteAgents: ['finance-bot'] } });
+    assert.equal(result.valid, false);
   });
 });

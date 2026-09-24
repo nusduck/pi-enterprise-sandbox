@@ -363,6 +363,9 @@ services:
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
       AGENT_SYSTEM_PROMPT_FILE: ${AGENT_SYSTEM_PROMPT_FILE:-}
       MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}
+      # Remote A2A agents this Agent may call (docs/design/a2a-remote-delegation.md).
+      # Credentials are referenced by env var name (authTokenRef) and come from env_file.
+      A2A_REMOTE_AGENTS_JSON: ${A2A_REMOTE_AGENTS_JSON:-}
       APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       SKILLS_ROOT: /home/sandbox/skill
@@ -481,6 +484,9 @@ services:
       AGENT_SYSTEM_PROMPT: ${AGENT_SYSTEM_PROMPT:-}
       AGENT_SYSTEM_PROMPT_FILE: ${AGENT_SYSTEM_PROMPT_FILE:-}
       MCP_SERVERS_JSON: ${MCP_SERVERS_JSON:-[]}
+      # Remote A2A agents this Agent may call (docs/design/a2a-remote-delegation.md).
+      # Credentials are referenced by env var name (authTokenRef) and come from env_file.
+      A2A_REMOTE_AGENTS_JSON: ${A2A_REMOTE_AGENTS_JSON:-}
       APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       SKILLS_ROOT: /home/sandbox/skill

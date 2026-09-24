@@ -179,6 +179,12 @@ const ADDITIONS: readonly PatchEntry[] = [
       '出厂 subagent 只能派出同一个 Agent 的分身，参数表写死在包里，所以自建。',
     insert: [{ id: 'delegate-to-agent', name: ownModule('delegate-to-agent'), config: {} }],
   },
+  {
+    comment:
+      'delegate_to_remote_agent：调用运维登记的远端 A2A Agent（docs/design/a2a-remote-delegation.md）。' + '\n' +
+      '清单只来自 A2A_REMOTE_AGENTS_JSON，风险分类 external_high（默认需要审批）。',
+    insert: [{ id: 'delegate-to-remote-agent', name: ownModule('delegate-to-remote-agent'), config: {} }],
+  },
 ];
 
 // ── 明确关掉的出厂插件 ────────────────────────────────────────────────────

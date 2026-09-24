@@ -21,6 +21,7 @@ import {
   normalizedDelegation,
   parseDelegationConfig,
 } from '../domain/agent/delegation-config.js';
+import { parseRemoteAgentRegistry } from '../runtime/providers/a2a-remote-registry.js';
 
 export const AGENT_CONFIG_SCHEMA_VERSION = 1 as const;
 
@@ -317,6 +318,8 @@ export class AgentConfigValidator {
   readonly mcpServers: Array<{ serverId: string; toolNames: string[] }>;
   readonly mcpReadiness: McpReadiness;
   readonly platformToolNames: readonly string[];
+  /** `A2A_REMOTE_AGENTS_JSON` 里启用的远端；只留展示字段，地址与凭据引用不进配置面。 */
+  readonly remoteAgents: ReadonlyArray<{ id: string; name: string; description: string }>;
   readonly optionsDto: AgentConfigOptions;
 
   constructor(opts: {
@@ -329,6 +332,7 @@ export class AgentConfigValidator {
      */
     mcpDiscovery?: { ready?: boolean; servers?: unknown; error?: string } | null;
     platformToolNames?: readonly string[];
+    remoteAgents?: ReadonlyArray<{ id: string; name?: string; description?: string }>;
   } = {}) {
     const env = opts.env ?? process.env;
     this.registry = opts.registry ?? buildRegistry({ env });
@@ -355,6 +359,13 @@ export class AgentConfigValidator {
       this.mcpServers = loaded.servers;
       this.mcpReadiness = Object.freeze(loaded.readiness);
     }
+    this.remoteAgents = Object.freeze(
+      (opts.remoteAgents ?? parseRemoteAgentRegistry(env)).map((agent) => ({
+        id: agent.id,
+        name: agent.name ?? agent.id,
+        description: agent.description ?? '',
+      })),
+    );
     this.platformToolNames = Object.freeze([
       ...new Set((opts.platformToolNames ?? ENTERPRISE_DEFAULT_TOOLS).map(String)),
     ]);
@@ -383,7 +394,10 @@ export class AgentConfigValidator {
       delegation: {
         supported: true,
         type: 'object',
-        fields: { agents: { supported: true, type: 'array', maxItems: DELEGATION_MAX_ENTRIES } },
+        fields: {
+          agents: { supported: true, type: 'array', maxItems: DELEGATION_MAX_ENTRIES },
+          remoteAgents: { supported: true, type: 'array', maxItems: DELEGATION_MAX_ENTRIES },
+        },
       },
       extensions: { supported: false, readOnly: true },
       skills: { supported: false, readOnly: true },
@@ -397,6 +411,7 @@ export class AgentConfigValidator {
       tools: [...this.platformToolNames],
       mcpServers,
       mcpReadiness: { ...this.mcpReadiness },
+      remoteAgents: this.remoteAgents.map((agent) => ({ ...agent })),
       maxConfigBytes: 256 * 1024,
     };
     const revisionMaterial = canonicalObject({
@@ -821,6 +836,16 @@ export class AgentConfigValidator {
     // catalog service, which owns the org scope (this validator has no I/O).
     const delegation = parseDelegationConfig(config.delegation);
     errors.push(...delegation.errors);
+    const registeredRemote = new Set(this.remoteAgents.map((agent) => agent.id));
+    delegation.config?.remoteAgents.forEach((id, index) => {
+      if (!registeredRemote.has(id)) {
+        errors.push(diagnostic(
+          `delegation.remoteAgents[${index}]`,
+          'DELEGATION_REMOTE_AGENT_UNKNOWN',
+          `Remote agent "${id}" is not registered on this platform`,
+        ));
+      }
+    });
 
     for (const key of LEGACY_TOP_LEVEL_KEYS) {
       if (!Object.hasOwn(config, key)) continue;
@@ -854,7 +879,10 @@ export class AgentConfigValidator {
         serverId: entry.serverId,
         enabledTools: Array.isArray(entry.enabledTools) ? [...entry.enabledTools] : [],
       })),
-      delegation: { agents: delegation.config ? [...delegation.config.agents] : [] },
+      delegation: {
+        agents: delegation.config ? [...delegation.config.agents] : [],
+        remoteAgents: delegation.config ? [...delegation.config.remoteAgents] : [],
+      },
       persona: {
         configured: typeof config.systemPrompt === 'string' && config.systemPrompt.length > 0,
         chars: typeof config.systemPrompt === 'string' ? config.systemPrompt.length : 0,

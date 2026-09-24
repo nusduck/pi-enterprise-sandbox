@@ -685,7 +685,7 @@ export class DshRunExecutor {
         agentVersion,
         // 企业条款由 `assembleSystemPrompt` 追加在它之后且不可被覆盖，所以这里
         // 传的是"租户自定义的那一段"，不是最终提示词。
-        systemPrompt: await withDelegationSection({ lead: boundVersion.systemPrompt, agents: boundVersion.delegation.agents, orgId: scope.orgId, transactionManager: this.tx, createRepositories: this.createRepositories }),
+        systemPrompt: await withDelegationSection({ lead: boundVersion.systemPrompt, delegation: boundVersion.delegation, orgId: scope.orgId, transactionManager: this.tx, createRepositories: this.createRepositories }),
         agentSession: session,
         sessionSnapshot,
         cwd,
@@ -717,7 +717,7 @@ export class DshRunExecutor {
                 spawnPort: this.subagentSpawnPort,
                 parentRunId: runId,
                 tenant: { orgId: eventContext.orgId, userId: eventContext.userId },
-                delegationAgents: boundVersion.delegation.agents,
+                delegation: boundVersion.delegation,
               }),
             }
           : {}),

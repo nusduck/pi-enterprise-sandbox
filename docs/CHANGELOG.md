@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   子 Run 以目标 Agent 的活跃版本执行并把结果交回父 Run。由 AgentVersion 配置
   `delegation.agents` 显式授权，缺省不可委派；复用子 Run 的深度 / 并发上限、分层队列与级联取消。
   时间线的子 Agent 卡片显示委派目标。见 [design/agent-delegation.md](design/agent-delegation.md)。
+- **远端 A2A 委派**：新工具 `delegate_to_remote_agent` 经官方 `@a2a-js/sdk/client` 调用运维在
+  `A2A_REMOTE_AGENTS_JSON` 里登记的远端 A2A Agent（含本部署自己的 A2A 面），默认需要审批。
+  由 AgentVersion 配置 `delegation.remoteAgents` 授权，缺省不可调用；出站只发往卡片同源、有超时与响应上限。
+  见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。
 
 ### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
 

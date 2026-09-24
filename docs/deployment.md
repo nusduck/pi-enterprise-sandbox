@@ -282,6 +282,7 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `SANDBOX_REQUEST_TIMEOUT_MS` | `15000` | BFF → Sandbox 出站调用超时（SSE 长连接除外） |
 | `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL` | dev `true` / 生产禁止 | Agent `/internal/*` 平面的鉴权开关。token 未配置且未显式设为 true 时启动即失败（fail-closed）；生产配置校验拒绝 true |
 | `MCP_SERVERS_JSON` | `[]` | Agent Runtime 外部 MCP Server registry；凭据仅通过 `authTokenRef`/`envRefs`/`headerRefs` 引用环境变量 |
+| `A2A_REMOTE_AGENTS_JSON` | 空 | 可被 `delegate_to_remote_agent` 调用的远端 A2A Agent 登记表；凭据仅通过 `authTokenRef` 引用环境变量。见下文「远端 A2A Agent」 |
 
 ### MCP 启动与可见性（一期）
 
@@ -308,6 +309,30 @@ Server（例如可能崩溃循环的 stdio 子进程）在该条目里显式写
 已知盲区：Server 运行中断开或 stdio 子进程崩溃后，出厂插件保留上一代工具直到重连成功或预算耗尽，
 这段时间 `/ready` 仍报 `connected` 而调用失败（HTTP 为 `fetch failed`，stdio 为 `Not connected`）；
 只暴露零个工具的 Server 会被报成 `unavailable`。
+
+### 远端 A2A Agent（出站委派）
+
+设计见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。`A2A_REMOTE_AGENTS_JSON`
+是 JSON 数组，每项：
+
+| 键 | 必填 | 说明 |
+|---|---|---|
+| `id` | ✅ | `[A-Za-z0-9_-]{1,32}`，AgentVersion 的 `delegation.remoteAgents` 引用它 |
+| `cardUrl` | ✅ | 远端 Agent Card 的绝对地址；**生产必须 https**。卡片声明的端点必须与它同源，否则拒绝调用 |
+| `authTokenRef` | ✅ | 存放 Bearer 凭据的**环境变量名**；该变量必须非空 |
+| `name` / `description` |  | 进系统提示给模型看 |
+| `timeoutMs` |  | 单次委派总时限，默认 600000，范围 1000–3600000 |
+| `enabled` |  | `false` 时跳过（仍参与 id 去重） |
+
+- 进程启动时解析，任何不合法（未知键、重复 id、变量未设置、生产用 http）都**拒绝启动**；修改后重启
+  `agent` 与 `agent-worker`，不支持热加载。
+- 远端**不参与** `/ready`：按需调用，一台远端宕机不让 Agent 下线；失败以工具错误
+  （`A2A_REMOTE_UNAVAILABLE` / `A2A_REMOTE_TIMEOUT` / `A2A_REMOTE_FAILED` / `A2A_REMOTE_NEEDS_INPUT`）返回给模型。
+- 出站请求单次 30 s 超时、响应体上限 1 MiB、不跟随重定向，凭据只发往 `cardUrl` 同源。
+- 工具风险为 `external_high`，平台风险表默认 `high → require_approval`；只有改平台风险表
+  （`config/agent/tool-risk.json`）才能免审批，AgentVersion 只能再收紧。
+- 远端可以是本部署自己的 A2A 面：在「A2A Access」签发凭据，`cardUrl` 填
+  `<A2A_PUBLIC_BASE_URL>/a2a/agents/<agent_id>/.well-known/agent-card.json`。
 
 ### Execution policy profile
 

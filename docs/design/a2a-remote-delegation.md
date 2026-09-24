@@ -88,7 +88,7 @@ ADR 0010 保留自建服务端的三条理由（跨进程续传、多租户审�
   快照、不进数据库。仓库没有静态加密设施，把 Bearer 凭据写进 MySQL 等于明文落库。
 - 进程启动时解析，**非法即拒绝启动**（fail-closed）：重复 id、id 格式错、`cardUrl` 不是
   绝对 URL、`authTokenRef` 指向的变量不存在或为空、`timeoutMs` 越界。
-- 生产配置校验拒绝 `http:`（`production-config` 检查）；开发 Compose 允许 `http:` 以便
+- 生产环境拒绝 `http:`（`agent/config.ts` 启动时解析即拒）；开发 Compose 允许 `http:` 以便
   指向本部署的 `agent` 服务做回环验证。
 - 不参与 `/ready`：远端是按需调用，不是常驻依赖；一个远端宕机不应让整个 Agent 下线。
   调用失败以工具错误返回。
@@ -142,8 +142,12 @@ AgentVersion 里**不接受**地址、凭据、超时（与 `mcpServers` 的 `MC
 
 | 层 | 职责 |
 |---|---|
-| `agent/src/infrastructure/a2a-client/` | 清单解析、SDK 客户端封装（fetchImpl、超时、大小上限、同源检查） |
-| `agent/src/runtime/providers/` | `delegate_to_remote_agent` 插件 |
+| `agent/src/runtime/providers/a2a-remote-registry.ts` | 清单解析（`agent/config.ts` 启动时调用，生产拒绝 `http:`） |
+| `agent/src/runtime/providers/a2a-remote-client.ts` | SDK 客户端封装（fetchImpl、超时、大小上限、同源检查） |
+| `agent/src/runtime/providers/delegate-to-remote-agent.ts` | `delegate_to_remote_agent` 插件 |
+
+> 客户端放在 `runtime/providers/` 而不是 `infrastructure/`：工具插件在 runtime 层，而 runtime 不得反向依赖
+> infrastructure（`tool-names.ts` 文件头）。它与同层的 `exec-rpc.ts` 同一性质——出站 RPC 客户端。
 | `agent/src/application/agent-config-validator.ts` | `delegation.remoteAgents` 校验 |
 | `api-server/` / `frontend/` | 本轮无改动 |
 

@@ -145,8 +145,8 @@ export function buildRunServices(input: {
   spawnPort: SpawnServiceLike;
   parentRunId: string;
   tenant: { orgId: string; userId: string };
-  /** 本 Run 的 AgentVersion 的 `delegation.agents`；空 = 不挂委派服务。 */
-  delegationAgents?: readonly string[];
+  /** 本 Run 的 AgentVersion 的 `delegation`；名单为空的那一类不挂服务。 */
+  delegation?: { agents: readonly string[]; remoteAgents: readonly string[] };
 }): {
   subagents: {
     queue: DurableSubagentQueue;
@@ -155,6 +155,7 @@ export function buildRunServices(input: {
     parentRunId: string;
   };
   delegation?: RunDelegationServices;
+  remoteDelegation?: { agents: readonly string[]; runId: string };
 } {
   const queue = new SpawnServiceSubagentQueue(input.spawnPort, input.parentRunId);
   const store = new SpawnServiceSubagentStore(
@@ -163,7 +164,8 @@ export function buildRunServices(input: {
     input.tenant,
     queue,
   );
-  const agents = Object.freeze([...(input.delegationAgents ?? [])]);
+  const agents = Object.freeze([...(input.delegation?.agents ?? [])]);
+  const remoteAgents = Object.freeze([...(input.delegation?.remoteAgents ?? [])]);
   return {
     subagents: {
       queue,
@@ -173,6 +175,9 @@ export function buildRunServices(input: {
     },
     ...(agents.length > 0
       ? { delegation: buildDelegationServices(input.spawnPort, input.parentRunId, input.tenant, agents) }
+      : {}),
+    ...(remoteAgents.length > 0
+      ? { remoteDelegation: { agents: remoteAgents, runId: input.parentRunId } }
       : {}),
   };
 }

@@ -23,8 +23,7 @@ import {
   RISK_RANK,
 } from '../../runtime/policy/decision.js';
 import {
-  ASK_USER_TOOL_NAME,
-  SANDBOX_TOOL_NAMES,
+  ENTERPRISE_DEFAULT_TOOLS,
   isRetiredToolName,
 } from './constants.js';
 
@@ -169,11 +168,11 @@ function assertObject(value: unknown, field: string) {
 function assertKnownToolName(key: string, field: string): void {
   if (key.endsWith('*')) return;
   if (key.startsWith('mcp__') || key.includes('::')) return;
-  if (SANDBOX_TOOL_NAMES.includes(key) || key === ASK_USER_TOOL_NAME) return;
+  if (ENTERPRISE_DEFAULT_TOOLS.includes(key)) return;
   if (isRetiredToolName(key)) return;
   throw new ToolRiskPolicyError(
     `${field}: "${key}" is not a known tool name. The single source is ` +
-      `src/runtime/policy/tool-names.ts (SANDBOX_TOOL_NAMES). A key that names no ` +
+      `src/runtime/policy/tool-names.ts (ENTERPRISE_DEFAULT_TOOLS). A key that names no ` +
       `registered tool is dead config: the classifier is fail-closed, so the tool it ` +
       `meant to cover would be denied at runtime with nobody reporting it.`,
     { code: 'TOOL_RISK_POLICY_UNKNOWN_TOOL' },

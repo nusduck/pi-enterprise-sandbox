@@ -183,6 +183,13 @@
       name: '../providers/delegate-to-agent.js'
       config: {}
 
+# delegate_to_remote_agent：调用运维登记的远端 A2A Agent（docs/design/a2a-remote-delegation.md）。
+# 清单只来自 A2A_REMOTE_AGENTS_JSON，风险分类 external_high（默认需要审批）。
+- insert:
+    - id: delegate-to-remote-agent
+      name: '../providers/delegate-to-remote-agent.js'
+      config: {}
+
 # 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。
 - id: subagent-spawn-in-process
   disabled: true

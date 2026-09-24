@@ -47,7 +47,7 @@ function run<T>(port: ReturnType<typeof fakeSpawnPort>, agents: string[], fn: ()
     spawnPort: port,
     parentRunId: 'parent-1',
     tenant: TENANT,
-    delegationAgents: agents,
+    delegation: { agents, remoteAgents: [] },
   });
   return runWithRunServices(services, () =>
     runWithToolExecutionContext({ callId: 'call-7', toolName: 'delegate_to_agent', args: {} }, fn),
@@ -156,7 +156,7 @@ describe('buildRunServices delegation wiring', () => {
       spawnPort: port,
       parentRunId: 'p',
       tenant: TENANT,
-      delegationAgents: ['a'],
+      delegation: { agents: ['a'], remoteAgents: [] },
     });
     assert.deepEqual([...(some.delegation?.agents ?? [])], ['a']);
   });
@@ -183,8 +183,9 @@ describe('Delegation system prompt section', () => {
     ]);
     const prompt = await withDelegationSection({
       lead: 'You are the lead.',
-      agents: ['data-analyst', 'retired', 'ghost'],
+      delegation: { agents: ['data-analyst', 'retired', 'ghost'], remoteAgents: [] },
       orgId: 'org-1',
+      remoteRegistry: [],
       ...world,
     });
     assert.equal(
@@ -199,11 +200,11 @@ describe('Delegation system prompt section', () => {
   it('leaves the persona untouched when nothing is delegable', async () => {
     const world = catalogWorld([]);
     assert.equal(
-      await withDelegationSection({ lead: 'lead', agents: ['ghost'], orgId: 'org-1', ...world }),
+      await withDelegationSection({ lead: 'lead', delegation: { agents: ['ghost'], remoteAgents: ['gone'] }, orgId: 'org-1', remoteRegistry: [], ...world }),
       'lead',
     );
     assert.equal(
-      await withDelegationSection({ lead: 'lead', agents: [], orgId: 'org-1', ...world }),
+      await withDelegationSection({ lead: 'lead', delegation: { agents: [], remoteAgents: [] }, orgId: 'org-1', ...world }),
       'lead',
     );
     assert.equal(formatDelegationSection([]), '');

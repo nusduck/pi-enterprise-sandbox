@@ -200,6 +200,7 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 | `skill` | 出厂 `dsh-tool-skill` |
 | `subagent` | 出厂 `dsh-tool-subagent`（one-shot） |
 | `delegate_to_agent` | 自建 `delegate-to-agent`：把任务交给同 org 的**另一个** Agent（见下文「子 Run」） |
+| `delegate_to_remote_agent` | 自建 `delegate-to-remote-agent`：经官方 `@a2a-js/sdk/client` 调用运维登记的远端 A2A Agent（见下文「远端 A2A 委派」） |
 | `ask_user_question` | 出厂 `dsh-tool-ask-user` |
 | `mcp__<server>__<tool>` | 出厂 `dsh-mcp-client`，**一台服务器一个插件实例** |
 
@@ -305,6 +306,21 @@ WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.ts`�
 - 名单中当下 active 的目标（名字 + `description`）以「Delegation」段追加在租户 persona
   之后（`application/delegation-prompt.ts`），企业条款仍在最后。
 - 父子工作区不共享；传文件走产物提交 + 跨会话导入。
+
+#### 远端 A2A 委派
+
+设计见 [`design/a2a-remote-delegation.md`](design/a2a-remote-delegation.md)。本仓库的 A2A **服务端**是自建的
+（ADR 0010），**客户端**用官方 `@a2a-js/sdk/client`（`legacyCompat` 打开，v1.0 与 v0.3 远端都能调）。
+
+- 远端清单只来自 `A2A_REMOTE_AGENTS_JSON`（启动时解析，不合法拒绝启动）；AgentVersion 的
+  `delegation.remoteAgents` 授权本 Agent 可调哪些 id，缺省不可调。两者都满足才发。
+- `delegate_to_remote_agent` 分类为 `external_high`（`tool-names.ts` 的 `EXTERNAL_HOST_TOOL_NAMES`），
+  平台默认需要审批；审批通过后才发出出站请求。
+- 发送时 `returnImmediately`，未终态则 `GetTask` 轮询（2 s 起退避到 15 s）直到终态或 `timeoutMs`；
+  超时或父 Run 取消时尽力 `CancelTask`。`messageId` 由 `(runId, callId)` 派生，重试时远端可去重。
+- 所有出站经 `boundedFetch`：只发往 `cardUrl` 同源、不跟随重定向、单请求 30 s、响应 1 MiB 上限。
+- 结果只取文本（≤16 000 字符）与产物的名称/链接，不下载字节；日志不记 prompt 与凭据。
+- 不新增表：参数、结果与审批都在工具账本里。
 
 `LEGACY_REQUIRED_EXTENSION_NAMES`（三个，不含 `user-interaction`）仅用于兼容
 `user-interaction` 拆分之前的配置：给出这三个即隐含启用 `user-interaction`，

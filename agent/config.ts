@@ -5,6 +5,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadToolRiskPolicy } from './src/infrastructure/dsh/tool-risk-policy.js';
+import { parseRemoteAgentRegistry } from './src/runtime/providers/a2a-remote-registry.js';
 import { resolveSkillRoots } from './src/skills/manager.js';
 import { primarySkillRoot, DEFAULT_SKILL_ROOTS } from './src/skills/paths.js';
 import {
@@ -454,6 +455,14 @@ export const config = {
   POLICY_PROFILE: resolvePolicyProfile(),
   /** External MCP servers owned by Agent Runtime/MCP Gateway, never Sandbox. */
   MCP_SERVERS: resolveMcpServers(),
+  /**
+   * Remote A2A agents this deployment may call (A2A_REMOTE_AGENTS_JSON). Parsed
+   * here so a malformed registry — or plain http in production — stops the
+   * process at startup instead of surfacing as a failing tool call.
+   */
+  A2A_REMOTE_AGENTS: parseRemoteAgentRegistry(process.env, {
+    production: resolveDeploymentEnv() === 'production',
+  }),
   /**
    * Platform tool risk table. Approval decisions derive from risk, so this is
    * the knob for "which tools need approval". AgentVersion config may tighten

@@ -32,6 +32,16 @@ export interface RunServices {
    * `delegate_to_agent` 以 `DELEGATION_NOT_CONFIGURED` 拒绝——不回退到任何默认名单。
    */
   readonly delegation?: RunDelegationServices;
+  /**
+   * 远端 A2A 委派（docs/design/a2a-remote-delegation.md）。缺省 = 本 Agent 不可调用远端。
+   * 清单与客户端是进程级的（插件持有），这里只给本 Run 的白名单与 runId。
+   */
+  readonly remoteDelegation?: {
+    /** `configJson.delegation.remoteAgents`。 */
+    readonly agents: readonly string[];
+    /** 派生出站 messageId 用（与 callId 一起），同一次调用重试时远端可去重。 */
+    readonly runId: string;
+  };
 }
 
 export interface DelegatedChildStatus {

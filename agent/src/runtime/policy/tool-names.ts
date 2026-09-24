@@ -50,9 +50,19 @@ export const SANDBOX_TOOL_NAMES = Object.freeze([
 /** 问人。`dsh-tool-ask-user` 注册的名字，与出厂一致。 */
 export const ASK_USER_TOOL_NAME = 'ask_user_question';
 
+/**
+ * 自建、但副作用落在**外部系统**的工具：风险分类为 `external_high`（平台默认需要审批），
+ * 不是 `local_low`。与 MCP 工具同一档——它们都把会话内容发到本部署之外。
+ */
+export const EXTERNAL_HOST_TOOL_NAMES = Object.freeze([
+  // 自建：调用运维登记的远端 A2A Agent（docs/design/a2a-remote-delegation.md D4）。
+  'delegate_to_remote_agent',
+]);
+
 export const ENTERPRISE_DEFAULT_TOOLS = Object.freeze([
   ...SANDBOX_TOOL_NAMES,
   ASK_USER_TOOL_NAME,
+  ...EXTERNAL_HOST_TOOL_NAMES,
 ]);
 
 /**
@@ -102,7 +112,7 @@ export const RETIRED_TOOL_REASON_CODE = 'TOOL_RETIRED';
 
 /** 把一个可能是旧名的工具名投影成当前名；`null` = 该能力已退役。 */
 export function resolveToolNameAlias(toolName: string): string | null {
-  if (SANDBOX_TOOL_NAMES.includes(toolName) || toolName === ASK_USER_TOOL_NAME) return toolName;
+  if (ENTERPRISE_DEFAULT_TOOLS.includes(toolName)) return toolName;
   if (Object.prototype.hasOwnProperty.call(LEGACY_TOOL_NAME_ALIASES, toolName)) {
     return LEGACY_TOOL_NAME_ALIASES[toolName] ?? null;
   }
