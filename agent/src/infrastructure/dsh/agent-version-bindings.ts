@@ -12,6 +12,7 @@
 
 import { DshRuntimeFactoryError } from './errors.js';
 import { resolveToolNameAlias } from './constants.js';
+import { parseDelegationConfig } from '../../domain/agent/delegation-config.js';
 import {
   loadMcpConfigFromAgentVersion,
   mcpToolName,
@@ -445,6 +446,17 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     'modelPolicy.temperature',
   );
 
+  // Who this agent may delegate to (docs/design/agent-delegation.md D2).
+  // Malformed is fail-closed: a half-read allowlist must never run.
+  const delegationParsed = parseDelegationConfig(configJson.delegation);
+  if (!delegationParsed.config) {
+    const first = delegationParsed.errors[0];
+    throw new DshRuntimeFactoryError(
+      `AgentVersion.${first?.path ?? 'delegation'}: ${first?.message ?? 'invalid'}`,
+      { code: 'DSH_DELEGATION_INVALID' },
+    );
+  }
+
   return Object.freeze({
     agentVersionId,
     configJson,
@@ -478,6 +490,7 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     authorization: buildAgentVersionAuthorization(configJson),
     toolPolicy: Object.freeze({ ...toolPolicy }),
     sandboxPolicy: Object.freeze({ ...sandboxPolicy }),
+    delegation: delegationParsed.config,
   });
 }
 

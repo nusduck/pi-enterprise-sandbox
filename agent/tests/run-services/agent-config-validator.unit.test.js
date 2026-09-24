@@ -190,3 +190,46 @@ describe('AgentConfigValidator accepted configurations', () => {
     );
   });
 });
+
+describe('AgentConfigValidator delegation (agent-delegation.md D2)', () => {
+  it('accepts a delegation allowlist and round-trips it', () => {
+    const subject = validator();
+    const result = subject.validate({
+      schemaVersion: 1,
+      delegation: { agents: [' data-analyst ', '代码审查助手'] },
+    });
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.normalizedConfig.delegation, { agents: ['data-analyst', '代码审查助手'] });
+    assert.deepEqual(result.effectiveSummary.delegation, { agents: ['data-analyst', '代码审查助手'] });
+    const again = subject.validate(result.normalizedConfig);
+    assert.deepEqual(again.normalizedConfig, result.normalizedConfig);
+  });
+
+  it('omits an empty allowlist instead of saving a no-op key', () => {
+    const result = validator().validate({ schemaVersion: 1, delegation: { agents: [] } });
+    assert.equal(result.valid, true);
+    assert.equal('delegation' in result.normalizedConfig, false);
+    assert.deepEqual(result.effectiveSummary.delegation, { agents: [] });
+  });
+
+  it('reports each malformed entry at its own path', () => {
+    const result = validator().validate({
+      schemaVersion: 1,
+      delegation: { agents: ['ok', '', 7, 'ok'], remote: [] },
+    });
+    assert.equal(result.valid, false);
+    assert.equal(result.normalizedConfig, undefined);
+    const byPath = Object.fromEntries(result.errors.map((e) => [e.path, e.code]));
+    assert.equal(byPath['delegation.agents[1]'], 'DELEGATION_AGENT_INVALID');
+    assert.equal(byPath['delegation.agents[2]'], 'DELEGATION_AGENT_INVALID');
+    assert.equal(byPath['delegation.agents[3]'], 'DELEGATION_AGENT_DUPLICATE');
+    assert.equal(byPath['delegation.remote'], 'CONFIG_UNKNOWN_FIELD');
+  });
+
+  it('rejects a non-object delegation and advertises the field as supported', () => {
+    const subject = validator();
+    const result = subject.validate({ schemaVersion: 1, delegation: ['data-analyst'] });
+    assert.deepEqual(result.errors.map((e) => [e.path, e.code]), [['delegation', 'CONFIG_TYPE']]);
+    assert.equal(subject.options().fieldSupport.delegation.supported, true);
+  });
+});

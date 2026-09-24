@@ -19,6 +19,8 @@ export type SubagentChild = {
 export type SpawnSubagentFields = {
   task: string;
   label: string | null;
+  /** Target agent of `delegate_to_agent`; null for a same-agent sub-agent. */
+  agent: string | null;
   childRunId: string | null;
   errorCode: string | null;
 };
@@ -91,8 +93,9 @@ export function toolErrorCode(result: unknown): string | null {
 export function isSpawnSubagentToolName(name: string | null | undefined): boolean {
   const n = String(name || '').trim();
   // 出厂 `dsh-tool-subagent` 注册的是 `subagent`（ADR 0009 D4，one-shot 形态）。
-  // 旧名留着只为历史会话。
-  return n === 'subagent' || n === 'spawn_subagent';
+  // 旧名留着只为历史会话。`delegate_to_agent` 是同一种子 Run，只是换了 Agent
+  // （docs/design/agent-delegation.md）。
+  return n === 'subagent' || n === 'spawn_subagent' || n === 'delegate_to_agent';
 }
 
 export function isCheckSubagentToolName(name: string | null | undefined): boolean {
@@ -117,12 +120,16 @@ export function parseSpawnSubagentFields(
     ? result.details
     : {};
   return {
-    task: trimmedString(args.task) ?? '',
+    // `task`/`label` are the legacy spawn_subagent names; the current
+    // `subagent` and `delegate_to_agent` tools take `prompt`/`description`.
+    task: trimmedString(args.task) ?? trimmedString(args.prompt) ?? '',
     // The label can come from the args or be echoed by the durable service.
     label:
       trimmedString(args.label) ??
+      trimmedString(args.description) ??
       trimmedString(payload.label) ??
       trimmedString(details.label),
+    agent: trimmedString(args.agent) ?? trimmedString(payload.agent),
     childRunId:
       trimmedString(payload.childRunId) ?? trimmedString(details.childRunId),
     errorCode: toolErrorCode(result),

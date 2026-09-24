@@ -38,6 +38,7 @@ import {
 } from '../infrastructure/mysql/repositories/agent-catalog-repository.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
+import { parseDelegationConfig } from '../domain/agent/delegation-config.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -227,6 +228,38 @@ export class AgentCatalogService {
   }
 
   /**
+   * `delegation.agents` 里的每个名字必须是本 org 已有的 Agent（agent-delegation.md D2）。
+   * 按 (org, name) 查，别的 org 的同名 Agent 查不到，与不存在同一个码。
+   * 目标之后被停用或删除由 spawn 在运行时再判一次，这里只挡写错的名字。
+   */
+  async #unknownDelegationTargets(
+    repos: Loose,
+    orgId: string,
+    configJson: Record<string, unknown>,
+  ): Promise<Array<{ path: string, code: string, message: string }>> {
+    const parsed = parseDelegationConfig(configJson.delegation);
+    const out = [];
+    for (const [index, name] of (parsed.config?.agents ?? []).entries()) {
+      const definition = await repos.catalog.getDefinitionByOrgAndName(orgId, name);
+      if (!definition) {
+        out.push({
+          path: `delegation.agents[${index}]`,
+          code: 'DELEGATION_AGENT_UNKNOWN',
+          message: `No agent named "${name}" exists in this organization`,
+        });
+      }
+    }
+    return out;
+  }
+
+  async #assertDelegationTargets(repos: Loose, orgId: string, configJson: Record<string, unknown>) {
+    const [first] = await this.#unknownDelegationTargets(repos, orgId, configJson);
+    if (first) {
+      throw new ValidationError(`${first.path}: ${first.message}`, { code: first.code });
+    }
+  }
+
+  /**
    * 配置面的能力投影（admin）。只描述「这个部署支持什么、上限在哪」，
    * 不返回连接地址、密钥引用、宿主物理路径或别的用户的技能。
    */
@@ -258,8 +291,9 @@ export class AgentCatalogService {
     if (input.config == null || typeof input.config !== 'object' || Array.isArray(input.config)) {
       throw new ValidationError('config must be an object');
     }
+    let result: AgentConfigValidation;
     try {
-      return this.configValidator.validate(input.config);
+      result = this.configValidator.validate(input.config);
     } catch (err) {
       // 结构性问题（非 JSON 可序列化等）是 400；字段级语义结果走 200 + valid=false。
       throw new ValidationError(
@@ -267,6 +301,16 @@ export class AgentCatalogService {
         { code: 'AGENT_CONFIG_INVALID' },
       );
     }
+    if (!result.valid) return result;
+    const unknown = await this.#unknownDelegationTargets(
+      repos,
+      owner.orgId,
+      result.normalizedConfig ?? {},
+    );
+    if (unknown.length === 0) return result;
+    // valid:false 必然不带 normalizedConfig（api.md 配置契约）。
+    const { normalizedConfig: _dropped, ...rest } = result;
+    return { ...rest, valid: false, errors: [...result.errors, ...unknown] };
   }
 
   /**
@@ -331,6 +375,7 @@ export class AgentCatalogService {
     return this.tx.run(async (trx: Loose) => {
       const repos = this.createRepositories(trx);
       const owner = await this.#resolveOwner(auth, repos);
+      await this.#assertDelegationTargets(repos, owner.orgId, configJson);
       const agentId = this.generateId();
       const agentVersionId = this.generateId();
       let definition;
@@ -396,6 +441,7 @@ export class AgentCatalogService {
           const repos = this.createRepositories(trx);
           const owner = await this.#resolveOwner(auth, repos);
           let definition = await this.#requireOwnedAgent(repos, owner, agentId);
+          await this.#assertDelegationTargets(repos, owner.orgId, configJson);
           // 只有会改活跃指针的保存才做这项检查：保存一个不激活的版本不与
           // 别人的激活结果竞争，不该因为指针变了就失败。
           if (activate) {

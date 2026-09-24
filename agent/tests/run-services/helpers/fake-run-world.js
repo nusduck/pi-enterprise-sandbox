@@ -306,6 +306,9 @@ export function createFakeRunWorld(opts = {}) {
         forUpdate() {
           return api;
         },
+        forShare() {
+          return api;
+        },
         max(expr) {
           type = 'max';
           maxCol = expr;

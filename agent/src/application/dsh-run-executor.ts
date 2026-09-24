@@ -103,6 +103,7 @@ import {
 } from './dsh-run-resume.js';
 import { GovernanceApprovalStore } from './governance-approval-store.js';
 import { buildRunServices } from './durable-subagent-port.js';
+import { withDelegationSection } from './delegation-prompt.js';
 import { buildRunPolicyResolver, buildRunRiskResolver } from './tool-risk-resolver.js';
 import { createInteractionRequester } from './interaction-requester.js';
 import { createApprovedReplayClaim } from './approved-replay-claim.js';
@@ -684,7 +685,7 @@ export class DshRunExecutor {
         agentVersion,
         // 企业条款由 `assembleSystemPrompt` 追加在它之后且不可被覆盖，所以这里
         // 传的是"租户自定义的那一段"，不是最终提示词。
-        systemPrompt: boundVersion.systemPrompt,
+        systemPrompt: await withDelegationSection({ lead: boundVersion.systemPrompt, agents: boundVersion.delegation.agents, orgId: scope.orgId, transactionManager: this.tx, createRepositories: this.createRepositories }),
         agentSession: session,
         sessionSnapshot,
         cwd,
@@ -716,6 +717,7 @@ export class DshRunExecutor {
                 spawnPort: this.subagentSpawnPort,
                 parentRunId: runId,
                 tenant: { orgId: eventContext.orgId, userId: eventContext.userId },
+                delegationAgents: boundVersion.delegation.agents,
               }),
             }
           : {}),

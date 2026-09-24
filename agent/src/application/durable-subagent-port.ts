@@ -21,6 +21,7 @@ import type {
   DurableSubagentQueue,
   DurableSubagentStore,
 } from '../runtime/providers/durable-subagent.js';
+import type { RunDelegationServices } from '../runtime/providers/run-services.js';
 
 /** `SubagentSpawnService` 里本适配器用到的那部分。 */
 interface SpawnServiceLike {
@@ -31,6 +32,7 @@ interface SpawnServiceLike {
     userId: string;
     task: string;
     label?: string | null;
+    targetAgentName?: string | null;
     maxDepth?: number;
   }): Promise<unknown>;
   getStatuses(input: {
@@ -143,6 +145,8 @@ export function buildRunServices(input: {
   spawnPort: SpawnServiceLike;
   parentRunId: string;
   tenant: { orgId: string; userId: string };
+  /** 本 Run 的 AgentVersion 的 `delegation.agents`；空 = 不挂委派服务。 */
+  delegationAgents?: readonly string[];
 }): {
   subagents: {
     queue: DurableSubagentQueue;
@@ -150,6 +154,7 @@ export function buildRunServices(input: {
     tenant: { orgId: string; userId: string };
     parentRunId: string;
   };
+  delegation?: RunDelegationServices;
 } {
   const queue = new SpawnServiceSubagentQueue(input.spawnPort, input.parentRunId);
   const store = new SpawnServiceSubagentStore(
@@ -158,12 +163,63 @@ export function buildRunServices(input: {
     input.tenant,
     queue,
   );
+  const agents = Object.freeze([...(input.delegationAgents ?? [])]);
   return {
     subagents: {
       queue,
       store,
       tenant: { ...input.tenant },
       parentRunId: input.parentRunId,
+    },
+    ...(agents.length > 0
+      ? { delegation: buildDelegationServices(input.spawnPort, input.parentRunId, input.tenant, agents) }
+      : {}),
+  };
+}
+
+/**
+ * 委派子 Run 的端口（docs/design/agent-delegation.md D3/D5）。
+ *
+ * 与 `subagent` 共用同一个 `SubagentSpawnService`：深度、并发、分层队列、级联取消
+ * 一律沿用。区别只有 `targetAgentName`——目标解析与校验在 spawn 事务里做，
+ * 这里不预先查目录，免得「这里查到、事务里已被停用」的窗口。
+ */
+function buildDelegationServices(
+  spawnPort: SpawnServiceLike,
+  parentRunId: string,
+  tenant: { orgId: string; userId: string },
+  agents: readonly string[],
+): RunDelegationServices {
+  return {
+    agents,
+    async spawn({ callId, agent, task, label }) {
+      const out = (await spawnPort.spawn({
+        toolCallId: callId,
+        parentRunId,
+        orgId: tenant.orgId,
+        userId: tenant.userId,
+        task,
+        label,
+        targetAgentName: agent,
+      })) as { runId?: string } | null;
+      const runId = String(out?.runId ?? '');
+      if (runId === '') throw new Error('delegation spawn returned no child run id');
+      return { runId };
+    },
+    async status(childRunId) {
+      const rows = await spawnPort.getStatuses({
+        parentRunId,
+        orgId: tenant.orgId,
+        userId: tenant.userId,
+        childRunIds: [childRunId],
+      });
+      const row = rows.find((r) => r.runId === childRunId);
+      if (!row) return null;
+      return {
+        status: row.status,
+        statusReason: row.statusReason ?? null,
+        ...(row.resultSummary !== undefined ? { resultSummary: row.resultSummary } : {}),
+      };
     },
   };
 }

@@ -68,7 +68,8 @@
     "skill": "low",
     "subagent": "low",
     "ask_user_question": "low",
-    "submit_artifact": "low"
+    "submit_artifact": "low",
+    "delegate_to_agent": "low"
   },
   "mcpServers": {}
 }

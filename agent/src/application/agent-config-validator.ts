@@ -16,6 +16,11 @@ import { selectableReasoningEfforts } from '../infrastructure/dsh/reasoning-effo
 import { ENTERPRISE_DEFAULT_TOOLS } from '../runtime/policy/tool-names.js';
 import { RISK_CLASSES } from '../infrastructure/dsh/tool-risk-policy.js';
 import { stableStringify } from './canonical-json.js';
+import {
+  DELEGATION_MAX_ENTRIES,
+  normalizedDelegation,
+  parseDelegationConfig,
+} from '../domain/agent/delegation-config.js';
 
 export const AGENT_CONFIG_SCHEMA_VERSION = 1 as const;
 
@@ -49,6 +54,7 @@ const TOP_LEVEL_V1_KEYS = Object.freeze([
   'modelPolicy',
   'toolPolicy',
   'mcpServers',
+  'delegation',
 ]);
 
 const LEGACY_TOP_LEVEL_KEYS = Object.freeze([
@@ -374,6 +380,11 @@ export class AgentConfigValidator {
       },
       toolPolicy: { supported: true, type: 'object' },
       mcpServers: { supported: true, type: 'array', explicitEnabledTools: true },
+      delegation: {
+        supported: true,
+        type: 'object',
+        fields: { agents: { supported: true, type: 'array', maxItems: DELEGATION_MAX_ENTRIES } },
+      },
       extensions: { supported: false, readOnly: true },
       skills: { supported: false, readOnly: true },
       sandboxPolicy: { supported: false, readOnly: true },
@@ -806,6 +817,11 @@ export class AgentConfigValidator {
       }
     }
 
+    // Shape only: whether each name exists in the org is checked by the
+    // catalog service, which owns the org scope (this validator has no I/O).
+    const delegation = parseDelegationConfig(config.delegation);
+    errors.push(...delegation.errors);
+
     for (const key of LEGACY_TOP_LEVEL_KEYS) {
       if (!Object.hasOwn(config, key)) continue;
       const value = config[key];
@@ -838,6 +854,7 @@ export class AgentConfigValidator {
         serverId: entry.serverId,
         enabledTools: Array.isArray(entry.enabledTools) ? [...entry.enabledTools] : [],
       })),
+      delegation: { agents: delegation.config ? [...delegation.config.agents] : [] },
       persona: {
         configured: typeof config.systemPrompt === 'string' && config.systemPrompt.length > 0,
         chars: typeof config.systemPrompt === 'string' ? config.systemPrompt.length : 0,
@@ -872,6 +889,10 @@ export class AgentConfigValidator {
       toolPolicy: normalizedToolPolicy,
       mcpServers: normalizedMcp,
     };
+    const normalizedDelegationConfig = delegation.config
+      ? normalizedDelegation(delegation.config)
+      : undefined;
+    if (normalizedDelegationConfig) normalized.delegation = normalizedDelegationConfig;
     return {
       valid: true,
       errors: [],
@@ -882,6 +903,7 @@ export class AgentConfigValidator {
         'modelPolicy',
         'toolPolicy',
         'mcpServers',
+        'delegation',
       ]) as Record<string, unknown>,
       effectiveSummary: summary,
       capabilityRevision: this.optionsDto.capabilityRevision,

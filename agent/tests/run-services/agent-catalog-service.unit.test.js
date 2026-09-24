@@ -469,3 +469,53 @@ describe('AgentCatalogService — 配置面与激活并发', () => {
     assert.equal(legacyClient.agent.active_version_id, legacyClient.version.agent_version_id);
   });
 });
+
+describe('delegation.agents 必须指向本 org 已有的 Agent（agent-delegation.md D2）', () => {
+  it('引用本 org 的 Agent 可以保存；引用不存在的名字被拒且不落库', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    await catalog.createAgent(ADMIN_AUTH, { name: 'data-analyst' });
+
+    const lead = await catalog.createAgent(ADMIN_AUTH, {
+      name: 'lead',
+      config: { schemaVersion: 1, delegation: { agents: ['data-analyst'] } },
+    });
+    assert.equal(lead.agent.name, 'lead');
+
+    const before = world.tables.tbl_agsvc_agent_versions.length;
+    await assert.rejects(
+      () => catalog.createVersion(ADMIN_AUTH, lead.agent.agent_id, {
+        config: { schemaVersion: 1, delegation: { agents: ['data-analyst', 'ghost'] } },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'DELEGATION_AGENT_UNKNOWN',
+    );
+    assert.equal(world.tables.tbl_agsvc_agent_versions.length, before);
+  });
+
+  it('别的 org 的同名 Agent 与不存在同一个结果', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    await provisionOwner(world, OTHER_ORG_AUTH);
+    const catalog = createCatalog(world);
+    await catalog.createAgent(OTHER_ORG_AUTH, { name: 'data-analyst' });
+
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, {
+        name: 'lead',
+        config: { schemaVersion: 1, delegation: { agents: ['data-analyst'] } },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'DELEGATION_AGENT_UNKNOWN',
+    );
+
+    const preview = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1, delegation: { agents: ['data-analyst'] } },
+    });
+    assert.equal(preview.valid, false);
+    assert.equal(preview.normalizedConfig, undefined);
+    assert.deepEqual(
+      preview.errors.map((e) => [e.path, e.code]),
+      [['delegation.agents[0]', 'DELEGATION_AGENT_UNKNOWN']],
+    );
+  });
+});

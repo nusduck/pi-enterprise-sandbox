@@ -107,6 +107,24 @@ describe('spawn_subagent card fields', () => {
   });
 });
 
+describe('delegate_to_agent card fields', () => {
+  it('is rendered as a sub-agent card and names the target agent', () => {
+    assert.equal(isSpawnSubagentToolName('delegate_to_agent'), true);
+    const fields = parseSpawnSubagentFields(
+      { agent: 'data-analyst', description: 'sales numbers', prompt: '  sum Q3 sales  ' },
+      envelope({ agent: 'data-analyst', childRunId: CHILD_A, status: 'SUCCEEDED' }),
+    );
+    assert.equal(fields.agent, 'data-analyst');
+    assert.equal(fields.label, 'sales numbers');
+    assert.equal(fields.task, 'sum Q3 sales');
+    assert.equal(fields.childRunId, CHILD_A);
+  });
+
+  it('leaves agent empty for a same-agent sub-agent', () => {
+    assert.equal(parseSpawnSubagentFields({ task: 'go' }, undefined).agent, null);
+  });
+});
+
 describe('check_subagent card fields', () => {
   it('lists children with status, label and result summary', () => {
     const fields = parseCheckSubagentFields(

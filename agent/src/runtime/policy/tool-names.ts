@@ -43,6 +43,8 @@ export const SANDBOX_TOOL_NAMES = Object.freeze([
   // 2026-08-31 实测发现它此前根本没有插件注册——旧引擎 Extension 删除后没补，
   // 能力静默缺失。补回来而不是按退役处理。
   'submit_artifact',
+  // 自建：同 org 异构委派（docs/design/agent-delegation.md D1）。
+  'delegate_to_agent',
 ]);
 
 /** 问人。`dsh-tool-ask-user` 注册的名字，与出厂一致。 */

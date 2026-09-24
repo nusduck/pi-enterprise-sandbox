@@ -27,6 +27,31 @@ export interface RunServices {
     readonly tenant?: { readonly orgId: string; readonly userId: string };
     readonly parentRunId?: string;
   };
+  /**
+   * 同 org 异构委派（docs/design/agent-delegation.md）。缺省 = 本 Agent 不可委派，
+   * `delegate_to_agent` 以 `DELEGATION_NOT_CONFIGURED` 拒绝——不回退到任何默认名单。
+   */
+  readonly delegation?: RunDelegationServices;
+}
+
+export interface DelegatedChildStatus {
+  readonly status: string;
+  readonly statusReason?: unknown;
+  readonly resultSummary?: string;
+}
+
+export interface RunDelegationServices {
+  /** 本 Run 的 AgentVersion 允许委派的 Agent `name`（`configJson.delegation.agents`）。 */
+  readonly agents: readonly string[];
+  /** 建（或按 callId 领回）委派子 Run。目标解析与校验在 spawn 事务里做。 */
+  spawn(input: {
+    readonly callId: string;
+    readonly agent: string;
+    readonly task: string;
+    readonly label: string;
+  }): Promise<{ readonly runId: string }>;
+  /** 子 Run 的当前状态；终态时带结果摘要。查不到返回 `null`。 */
+  status(childRunId: string): Promise<DelegatedChildStatus | null>;
 }
 
 const runServicesAls = new AsyncLocalStorage<RunServices>();

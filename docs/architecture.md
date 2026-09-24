@@ -199,6 +199,7 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 | `todo_write` | 出厂 `dsh-tool-todo` |
 | `skill` | 出厂 `dsh-tool-skill` |
 | `subagent` | 出厂 `dsh-tool-subagent`（one-shot） |
+| `delegate_to_agent` | 自建 `delegate-to-agent`：把任务交给同 org 的**另一个** Agent（见下文「子 Run」） |
 | `ask_user_question` | 出厂 `dsh-tool-ask-user` |
 | `mcp__<server>__<tool>` | 出厂 `dsh-mcp-client`，**一台服务器一个插件实例** |
 
@@ -221,6 +222,7 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 | 用户提问（原 `user-interaction`） | 出厂 `ask_user_question` + application 的 `interaction-response-service` | 停泊 `WAITING_INPUT` + 现有应答 API |
 | Skill 变更（原 `skill-lifecycle`） | **不再有工具层**：`skill` 负责发现与调用，变更由模型直接写草稿根 | 闸门只剩人在 UI 上按的「启用」（`skills/enablement.ts`） |
 | 子 Agent（原 `subagent-spawn`） | 出厂 `subagent` + durable `ctx.subagents` | 队列/结果按 Run 经 ALS 交给 `SubagentSpawnService` |
+| Agent 间委派 | 自建 `delegate_to_agent` + 按 Run 的 `RunServices.delegation` | 同一个 `SubagentSpawnService`，子 Run 绑定目标 Agent 的活跃版本 |
 | todo（原 `task-state` 的一半） | 出厂 `tool-todo` | 清单在 arguments 与 `todo/write` 事件里，不在 result 里 |
 | memory（原 `task-state` 的另一半） | **本阶段不做**（ADR 0009 D10） | 旧名映射成退役，理由码 `TOOL_RETIRED` |
 
@@ -259,7 +261,8 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 
 - **子 Run 有自己的 Conversation 与 AgentSession**。父 Run 在整个生命周期内持有其
   AgentSession 的执行 fence 与 Redis 锁，共用会话的子 Run 永远拿不到锁——它会一直
-  排队等一个正在等它的父 Run。AgentVersion 仍然继承父 Run 的版本。
+  排队等一个正在等它的父 Run。出厂 `subagent` 派出的子 Run 继承父 Run 的 Agent 与版本；
+  `delegate_to_agent` 派出的子 Run 绑定**目标 Agent 的活跃版本**（见下文「Agent 间委派」）。
 - **一次 tool call 只产生一个子 Run**。`toolCallId` 就是幂等键，重试认领已建
   的子 Run。
 - **深度与并发在事务内复查**。父行加锁后再数存活兄弟，两个并发 spawn 不会同时读到
@@ -285,6 +288,23 @@ WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.ts`�
 子 Run 的 Conversation 带 `parent_run_id`（migration `20260822000003`），
 `listForOwner` 默认过滤掉它们，但 `getById` 不过滤——列表里看不到，按 id 仍然读得
 到 transcript。
+
+#### Agent 间委派
+
+设计见 [`design/agent-delegation.md`](design/agent-delegation.md)。AgentVersion 的
+`configJson.delegation.agents` 列出本 Agent 可以把任务交给哪些同 org 的 Agent（按 `name`），
+**缺省不可委派**。模型用 `delegate_to_agent({ agent, description, prompt })` 发起，前台等结果：
+
+- 白名单在两处判：工具体先判名单（不在名单 → `DELEGATION_AGENT_NOT_ALLOWED`，不建子 Run），
+  spawn 事务再按 `(org_id, name)` 加共享锁解析目标，要求 Agent 与其活跃版本都是 active；
+  不存在、别的 org、已停用一律 `DELEGATION_TARGET_UNAVAILABLE`。
+- 子 Run 就是普通子 Run：`source='subagent'`，同一套深度 / 并发上限、分层队列、级联取消与
+  trace 树；子会话的 `agent_id` 与子 Run 的 `agent_version_id` 取目标值。子 Run 的委派名单由
+  **它自己的**版本决定，不继承父的；环由深度上限截断。
+- 幂等键是 DSH 的 tool `callId`，同一次调用重试领回已建的子 Run。
+- 名单中当下 active 的目标（名字 + `description`）以「Delegation」段追加在租户 persona
+  之后（`application/delegation-prompt.ts`），企业条款仍在最后。
+- 父子工作区不共享；传文件走产物提交 + 跨会话导入。
 
 `LEGACY_REQUIRED_EXTENSION_NAMES`（三个，不含 `user-interaction`）仅用于兼容
 `user-interaction` 拆分之前的配置：给出这三个即隐含启用 `user-interaction`，

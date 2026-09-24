@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agent 间委派**：新工具 `delegate_to_agent` 让一个 Agent 把自包含任务交给同 org 的另一个 Agent，
+  子 Run 以目标 Agent 的活跃版本执行并把结果交回父 Run。由 AgentVersion 配置
+  `delegation.agents` 显式授权，缺省不可委派；复用子 Run 的深度 / 并发上限、分层队列与级联取消。
+  时间线的子 Agent 卡片显示委派目标。见 [design/agent-delegation.md](design/agent-delegation.md)。
+
 ### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
 
 - **产品与部署标识统一改为 `dsh`**：镜像 / 容器 `dsh-enterprise-*`，包名 `@dsh/contract`、`@dsh/exec`，VM 上的

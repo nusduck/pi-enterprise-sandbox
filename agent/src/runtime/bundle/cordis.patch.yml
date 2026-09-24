@@ -176,6 +176,13 @@
       name: '../providers/submit-artifact.js'
       config: {}
 
+# delegate_to_agent：把任务交给同 org 的另一个 Agent（docs/design/agent-delegation.md）。
+# 出厂 subagent 只能派出同一个 Agent 的分身，参数表写死在包里，所以自建。
+- insert:
+    - id: delegate-to-agent
+      name: '../providers/delegate-to-agent.js'
+      config: {}
+
 # 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。
 - id: subagent-spawn-in-process
   disabled: true

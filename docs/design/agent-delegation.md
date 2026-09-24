@@ -19,7 +19,7 @@ org 下的另一个 Agent（例如「通用助手」把 SQL 分析交给「数�
 
 子 Run 的全部 durable 机制已经存在，缺的只是**「子 Run 用哪个 Agent」这一个维度**：
 `SubagentSpawnService.spawn()` 把子 Run 钉死在父 Run 的 Agent 与版本上。本设计给 spawn 加一个
-经过授权校验的 `targetAgentId`，再加一个自建宿主工具 `delegate_to_agent` 作为模型入口。
+经过授权校验的 `targetAgentName`，再加一个自建宿主工具 `delegate_to_agent` 作为模型入口。
 
 ---
 
@@ -114,15 +114,18 @@ spawn 的 `maxDepth` 只来自出厂工具请求。本设计不修复该漂移�
 
 ### D3 子 Run 绑定目标 Agent 的活跃版本，在 spawn 事务内解析
 
-`SubagentSpawnService.spawn()` 新增可选 `targetAgentId`：
+`SubagentSpawnService.spawn()` 新增可选 `targetAgentName`：
 
 - 缺省：行为与现在**逐字节一致**（继承父 Run 的 Agent 与版本）——出厂 `subagent` 走这条。
-- 给出：在同一事务内读 `agent_definitions`（`LOCK IN SHARE MODE`），校验
-  `org_id` 一致、`status = active`、`active_version_id` 非空，否则抛
-  `SubagentLimitError('DELEGATION_TARGET_UNAVAILABLE')`。跨 org 与不存在不可区分。
+- 给出：在同一事务内按 `(org_id, name)` 读 `agent_definitions`（`LOCK IN SHARE MODE`），
+  校验 `status = active`、活跃版本存在且属于它且 `status = active`（与建会话选 Agent 的
+  `run-parent-provisioner.ts` 同一套规则），否则抛
+  `SubagentLimitError('DELEGATION_TARGET_UNAVAILABLE')`。按 org 查询，别的 org 的同名
+  Agent 天然查不到；不存在、跨 org、停用返回同一个码与同一句消息。
 - 子会话 `agent_id`、子 session / run 的 `agent_version_id`、触发消息的 `agentId`
   全部取目标值。
-- 幂等请求散列加入 `targetAgentId`：同一 toolCallId 换目标重放会被 idempotency 层判冲突。
+- 幂等请求散列加入 `targetAgentName`（仅在给出时）：同一 toolCallId 换目标重放会被
+  idempotency 层判冲突；未委派的 spawn 散列不变。
 
 版本在 spawn 时解析并钉进子 AgentSession，与 multi-agent-selection D1/D2 同一原则：
 admin 之后切换活跃版本不影响已经建好的子 Run。

@@ -173,6 +173,12 @@ const ADDITIONS: readonly PatchEntry[] = [
       '补回来而不是按退役处理：exec 侧 /internal/v1/artifacts/submit 一直都在。',
     insert: [{ id: 'submit-artifact', name: ownModule('submit-artifact'), config: {} }],
   },
+  {
+    comment:
+      'delegate_to_agent：把任务交给同 org 的另一个 Agent（docs/design/agent-delegation.md）。' + '\n' +
+      '出厂 subagent 只能派出同一个 Agent 的分身，参数表写死在包里，所以自建。',
+    insert: [{ id: 'delegate-to-agent', name: ownModule('delegate-to-agent'), config: {} }],
+  },
 ];
 
 // ── 明确关掉的出厂插件 ────────────────────────────────────────────────────

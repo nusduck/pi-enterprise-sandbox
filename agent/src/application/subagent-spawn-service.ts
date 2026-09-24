@@ -14,7 +14,10 @@
  *    session could never acquire either — it would sit in the queue until the
  *    parent finished waiting for it. Each child therefore gets a fresh
  *    conversation + AgentSession (and hence its own sandbox workspace), bound
- *    to the parent's AgentVersion so it runs the same agent configuration.
+ *    to the parent's AgentVersion so it runs the same agent configuration —
+ *    unless the caller names a target agent (delegation, see
+ *    `docs/design/agent-delegation.md`), in which case the child binds that
+ *    agent's active version, resolved inside the spawning transaction.
  * 2. **Exactly one child per tool call.** The DSH tool call id is the
  *    idempotency key, so a retried `spawn_subagent` adopts the child that was
  *    already created rather than forking a second one.
@@ -142,12 +145,13 @@ export class SubagentSpawnService {
    *   userId: string,
    *   task: string,
    *   label?: string | null,
+   *   targetAgentName?: string | null,
    *   maxDepth?: number,
    *   maxConcurrent?: number,
    * }} input
    * @returns {Promise<{ runId: string, replayed: boolean, queueWarning?: string | null }>}
    */
-  async spawn(input: { toolCallId: string, parentRunId: string, orgId: string, userId: string, task: string, label?: string | null, maxDepth?: number, maxConcurrent?: number, }) {
+  async spawn(input: { toolCallId: string, parentRunId: string, orgId: string, userId: string, task: string, label?: string | null, targetAgentName?: string | null, maxDepth?: number, maxConcurrent?: number, }) {
     const parentRunId = assertUlid(input?.parentRunId, 'parentRunId');
     const scope = requireScope(input);
     const toolCallId = String(input?.toolCallId ?? '').trim();
@@ -159,6 +163,12 @@ export class SubagentSpawnService {
       throw new ValidationError('spawn_subagent requires a non-empty task');
     }
     const label = input?.label == null ? null : String(input.label);
+    // Only a delegated spawn names a target; `null` keeps the parent's agent.
+    const targetAgentName =
+      input?.targetAgentName == null ? null : String(input.targetAgentName).trim();
+    if (targetAgentName === '') {
+      throw new ValidationError('targetAgentName must be a non-empty string when provided');
+    }
     // A per-version policy may only tighten the deployment defaults.
     const maxDepth = Math.min(
       this.maxDepth,
@@ -205,7 +215,15 @@ export class SubagentSpawnService {
         userId: scope.userId,
         idempotencyKey: spawnIdempotencyKey(parentRunId, toolCallId),
         operation: SPAWN_SUBAGENT_OPERATION,
-        requestHash: hashCanonical({ parentRunId, toolCallId, task, label }),
+        // The target joins the hash only when present, so an undelegated
+        // replay keeps the hash it had before delegation existed.
+        requestHash: hashCanonical({
+          parentRunId,
+          toolCallId,
+          task,
+          label,
+          ...(targetAgentName != null ? { targetAgentName } : {}),
+        }),
         expiresAt: new Date(this.now().getTime() + this.idempotencyTtlMs),
       });
       if (begun.outcome === 'replay') {
@@ -248,6 +266,10 @@ export class SubagentSpawnService {
         });
       }
 
+      const binding = targetAgentName == null
+        ? { agentId: parentConversation.agentId, agentVersionId: parent.agentVersionId }
+        : await resolveDelegationTarget(repos, scope.orgId, targetAgentName);
+
       // Fresh conversation + AgentSession: the child must not contend for the
       // parent's execution fence (see the module header).
       const conversationId = assertUlid(this.generateId(), 'conversationId');
@@ -263,7 +285,7 @@ export class SubagentSpawnService {
         conversationId,
         orgId: scope.orgId,
         userId: scope.userId,
-        agentId: parentConversation.agentId,
+        agentId: binding.agentId,
         // Lineage for the conversation list: a fan-out must not push N rows
         // into the owner's sidebar.
         parentRunId,
@@ -276,7 +298,7 @@ export class SubagentSpawnService {
         orgId: scope.orgId,
         userId: scope.userId,
         conversationId,
-        agentVersionId: parent.agentVersionId,
+        agentVersionId: binding.agentVersionId,
         sandboxSessionId,
         workspaceId,
         status: 'ACTIVE',
@@ -295,9 +317,9 @@ export class SubagentSpawnService {
           text: task,
           messages: [{ role: 'user', content: task }],
           // The executor reads these selectors off the triggering message; a
-          // child inherits the parent's agent and takes the version default
-          // model rather than pinning whatever the parent turn requested.
-          agentId: parentConversation.agentId,
+          // child runs the bound agent and takes the version default model
+          // rather than pinning whatever the parent turn requested.
+          agentId: binding.agentId,
           agentProfileId: null,
           modelId: null,
           subagent: { parentRunId, toolCallId, ...(label ? { label } : {}) },
@@ -310,7 +332,7 @@ export class SubagentSpawnService {
         userId: scope.userId,
         conversationId,
         agentSessionId,
-        agentVersionId: parent.agentVersionId,
+        agentVersionId: binding.agentVersionId,
         triggeringMessageId: messageId,
         source: SUBAGENT_RUN_SOURCE,
         parentRunId,
@@ -480,6 +502,48 @@ export class SubagentSpawnService {
       return out;
     });
   }
+}
+
+/**
+ * Resolve a delegation target to its active version, inside the spawning
+ * transaction. Same rules as selecting an agent for a new conversation
+ * (`run-parent-provisioner.ts`): the definition must be active and its active
+ * version must exist, belong to it and be active.
+ *
+ * Lookup is by (org, name), so another org's agent is simply not found; that,
+ * a missing agent and an inactive one all produce the same error — existence
+ * must not leak (AGENTS.md §2).
+ */
+async function resolveDelegationTarget(repos: Loose, orgId: string, name: string) {
+  const unavailable = () =>
+    new SubagentLimitError(
+      'DELEGATION_TARGET_UNAVAILABLE',
+      `agent "${name}" is not available for delegation`,
+    );
+  // Share lock: an admin deactivating the target or switching its version
+  // concurrently either commits before this read or waits for the spawn.
+  const definition = await repos.catalog.getDefinitionByOrgAndName(orgId, name, {
+    lockForShare: true,
+  });
+  if (
+    !definition ||
+    definition.orgId !== orgId ||
+    String(definition.status).toLowerCase() !== 'active' ||
+    !definition.activeVersionId
+  ) {
+    throw unavailable();
+  }
+  const version = await repos.catalog.getVersionById(
+    assertUlid(definition.activeVersionId, 'activeVersionId'),
+  );
+  if (
+    !version ||
+    version.agentId !== definition.agentId ||
+    String(version.status).toLowerCase() !== 'active'
+  ) {
+    throw unavailable();
+  }
+  return { agentId: definition.agentId, agentVersionId: version.agentVersionId };
 }
 
 export function spawnIdempotencyKey(parentRunId: string, toolCallId: string) {
