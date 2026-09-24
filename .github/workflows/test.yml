@@ -117,7 +117,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: agent/package-lock.json
+          cache-dependency-path: |
+            agent/package-lock.json
+            contract/package-lock.json
+
+      # agent 通过 file:../contract 引用 @dsh/contract，其 exports 指向 dist/，须先构建。
+      - name: Install and build local contract
+        run: |
+          npm ci --prefix contract
+          npm run build --prefix contract
 
       - name: Install Agent dependencies
         run: npm ci --prefix agent
@@ -258,6 +266,7 @@ jobs:
 
       - name: Build TypeScript services for smoke entrypoints
         run: |
+          npm run build --prefix contract
           npm run build --prefix exec
           npm run build --prefix agent
 
