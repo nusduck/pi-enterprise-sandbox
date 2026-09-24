@@ -138,8 +138,9 @@ jobs:
           find agent -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
             | xargs -0 -n1 node --check
 
+      # 源码已是 TypeScript，与 npm test 一样经 tsx 加载。
       - name: Import/listen + fake provider smoke
-        run: node --test agent/tests/listen-smoke.test.js agent/tests/fake-openai-provider.test.js
+        run: agent/node_modules/.bin/tsx --test agent/tests/listen-smoke.test.js agent/tests/fake-openai-provider.test.js
 
   frontend:
     name: Frontend (test + build)

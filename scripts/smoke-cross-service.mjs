@@ -29,7 +29,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFakeOpenAIProvider } from '../agent/tests/support/fake-openai-provider.js';
 import { startDbpmForUrls, stripUrlPassword } from '../agent/tests/support/fake-dbpm-env.js';
-import { assertFakeLlmAllowed } from '../agent/src/config/fake-llm-policy.js';
+import { assertFakeLlmAllowed } from '../agent/dist/src/config/fake-llm-policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -243,9 +243,9 @@ function normalizeSandboxMysqlUrl(value) {
 async function prepareDataPlane(mysqlUrl, redisUrl) {
   const [{ createMysqlKnex, destroyMysqlKnex }, { migrateLatest }, redisMod] =
     await Promise.all([
-      import('../agent/src/infrastructure/mysql/client.js'),
-      import('../agent/src/infrastructure/mysql/migrate.js'),
-      import('../agent/src/infrastructure/redis/client.js'),
+      import('../agent/dist/src/infrastructure/mysql/client.js'),
+      import('../agent/dist/src/infrastructure/mysql/migrate.js'),
+      import('../agent/dist/src/infrastructure/redis/client.js'),
     ]);
 
   const knex = createMysqlKnex(mysqlUrl);
