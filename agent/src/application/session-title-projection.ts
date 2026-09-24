@@ -13,18 +13,25 @@
  * - 只取 `source.kind === 'provider'`（模型生成）。DSH 的确定性回退（首句截断）与我们的
  *   `conversationTitleFromMessages` 等价，没必要写；写了反而让会话不再是占位，挡住随后
  *   才到的模型标题。
- * - 只覆盖占位标题（`isPlaceholderConversationTitle`）：建会话时显式给的标题、子 Agent
- *   会话的标签标题都不动。
+ * - 只覆盖**自动**标题：占位值（`isPlaceholderConversationTitle`），或首个 Run 由
+ *   `CreateRunService` 从首条提问派生的标题（与 `conversationTitleFromMessages` 相同）。
+ *   后者是常态——首个 Run 建立时就写了，模型标题几秒后才到（2026-09-25 真实链路发现）。
+ *   建会话时显式给的标题、子 Agent 会话的标签标题都不动。
  * - 只投影到**当前**绑定这个 AgentSession 的会话，按 owner scope 读写。
  *
  * 由会话存储在事件**提交之后**调用：投影失败不得回滚或打断会话持久化，只留日志。
  */
-import { isPlaceholderConversationTitle } from './conversation-title.js';
+import {
+  conversationTitleFromMessages,
+  isPlaceholderConversationTitle,
+} from './conversation-title.js';
 
 type Loose = any;
 
 /** 与会话列表展示一致的上限（conversation-service normalizeTitle）。 */
 const MAX_TITLE_CHARS = 500;
+/** 判定「首条提问派生的标题」时读的消息条数；首条用户消息总在最前面。 */
+const DERIVED_TITLE_SCAN_MESSAGES = 20;
 
 export interface SessionEventLike {
   readonly type?: unknown;
@@ -68,7 +75,13 @@ export function createSessionTitleProjector(deps: {
         });
         if (!conversation) return;
         if (conversation.currentAgentSessionId && conversation.currentAgentSessionId !== sessionId) return;
-        if (!isPlaceholderConversationTitle(conversation.title)) return;
+        if (conversation.title === title) return;
+        if (!isPlaceholderConversationTitle(conversation.title)) {
+          const messages = await repos.messages.listByConversation(conversation.conversationId, scope, {
+            limit: DERIVED_TITLE_SCAN_MESSAGES,
+          });
+          if (conversation.title !== conversationTitleFromMessages(messages)) return;
+        }
         await repos.conversations.updateMeta(conversation.conversationId, scope, { title });
       });
     } catch (err) {
