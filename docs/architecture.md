@@ -226,6 +226,7 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 | Agent 间委派 | 自建 `delegate_to_agent` + 按 Run 的 `RunServices.delegation` | 同一个 `SubagentSpawnService`，子 Run 绑定目标 Agent 的活跃版本 |
 | todo（原 `task-state` 的一半） | 出厂 `tool-todo` | 清单在 arguments 与 `todo/write` 事件里，不在 result 里 |
 | memory（原 `task-state` 的另一半） | **本阶段不做**（ADR 0009 D10） | 旧名映射成退役，理由码 `TOOL_RETIRED` |
+| 会话标题 | 出厂 `session-title` + `session-title-first-prompt-llm`（dsh-base 默认组合）+ application 的 `session-title-projection.ts` | 首条提问后模型生成标题，写成会话日志 `session/title` 事件；会话存储提交后把**模型生成**的标题投影到 `Conversation.title`，只覆盖占位标题（`New chat`/空），显式标题与子 Agent 标签不动；投影失败只留日志。确定性回退不投影，列表在占位时仍按首条提问显示 |
 
 #### 按 Run 的差异走两层，不走 preset
 

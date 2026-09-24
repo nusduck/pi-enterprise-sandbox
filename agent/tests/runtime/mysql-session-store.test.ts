@@ -323,3 +323,79 @@ test('MysqlSessionStore loadStored 对池错误脱敏', async () => {
     },
   );
 });
+
+/** 懒物化路径的最小假连接：没有已存在的 header 行，INSERT 全部成功。 */
+function lazyMaterializePool(opts: { failInsert?: boolean } = {}) {
+  const calls: string[] = [];
+  const conn = {
+    beginTransaction: async () => { calls.push('begin'); },
+    execute: async (sql: string) => {
+      if (String(sql).startsWith('SELECT')) return [[]];
+      if (opts.failInsert && String(sql).startsWith('INSERT')) throw new Error('insert failed');
+      return [{ affectedRows: 1 }];
+    },
+    commit: async () => { calls.push('commit'); },
+    rollback: async () => { calls.push('rollback'); },
+    release: () => { calls.push('release'); },
+  };
+  return {
+    calls,
+    pool: {
+      execute: async () => [[]],
+      getConnection: async () => conn,
+      end: async () => undefined,
+    },
+  };
+}
+
+const TITLE_EVENTS = [
+  { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+  { type: 'session/title', seq: 1, time: 2, data: { title: 'Q3 sales', source: { kind: 'provider' }, messageSeqs: [0] } },
+] as unknown as SessionEvent[];
+
+function titleHeader(): SessionHeader {
+  return {
+    version: SESSION_FORMAT_VERSION,
+    id: SessionId('01ARZ3NDEKTSV4RRFFQ69G5FAV'),
+    createdAt: 1_700_000_000_000,
+    cwd: '/tmp/test',
+  } as unknown as SessionHeader;
+}
+
+test('appendBatch 提交之后通知观察者（会话标题投影），带 owner 与本批事件', async () => {
+  const { pool, calls } = lazyMaterializePool();
+  const seen: Array<{ owner: unknown; sessionId: string; types: string[] }> = [];
+  const store = new MysqlSessionStore(pool as never, {
+    ownerForSession: () => ({ orgId: 'org-1', userId: 'user-1' }),
+    onEventsCommitted: (owner, sessionId, events) => {
+      calls.push('observer');
+      seen.push({ owner, sessionId, types: events.map((e) => e.type) });
+    },
+  });
+  await store.appendBatch(titleHeader(), TITLE_EVENTS, false);
+  assert.deepEqual(seen, [{
+    owner: { orgId: 'org-1', userId: 'user-1' },
+    sessionId: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    types: ['turn/start', 'session/title'],
+  }]);
+  assert.ok(calls.indexOf('observer') > calls.indexOf('commit'), 'observer runs only after commit');
+});
+
+test('appendBatch 回滚时不通知观察者；观察者抛错不影响已提交的持久化', async () => {
+  const failing = lazyMaterializePool({ failInsert: true });
+  let notified = 0;
+  const store = new MysqlSessionStore(failing.pool as never, {
+    ownerForSession: () => ({ orgId: 'org-1', userId: 'user-1' }),
+    onEventsCommitted: () => { notified += 1; },
+  });
+  await assert.rejects(() => store.appendBatch(titleHeader(), TITLE_EVENTS, false));
+  assert.equal(notified, 0);
+
+  const ok = lazyMaterializePool();
+  const throwing = new MysqlSessionStore(ok.pool as never, {
+    ownerForSession: () => ({ orgId: 'org-1', userId: 'user-1' }),
+    onEventsCommitted: () => { throw new Error('projection down'); },
+  });
+  await throwing.appendBatch(titleHeader(), TITLE_EVENTS, false);
+  assert.ok(ok.calls.includes('commit'));
+});

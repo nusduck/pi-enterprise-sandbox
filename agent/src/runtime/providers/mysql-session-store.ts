@@ -174,6 +174,13 @@ export interface MysqlSessionStoreConfig {
   readonly physicalRoots?: readonly string[] | undefined;
 }
 
+/** 会话事件提交之后的观察者：参数是 owner、DSH 会话 id（= agent_session_id）与本批事件。 */
+export type SessionEventsCommittedHook = (
+  owner: SessionStoreOwner,
+  sessionId: string,
+  events: readonly SessionEvent[],
+) => Promise<void> | void;
+
 export interface SessionStoreOwner {
   readonly orgId: string;
   readonly userId: string;
@@ -384,6 +391,7 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
   private readonly eventsTable: string;
   private readonly ownerForSession?: ((sessionId: string) => SessionStoreOwner) | undefined;
   private readonly currentOwner?: (() => SessionStoreOwner) | undefined;
+  private readonly onEventsCommitted?: SessionEventsCommittedHook | undefined;
   private ownedPool = true;
 
   constructor(
@@ -394,6 +402,8 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
       eventsTable?: string | undefined;
       ownerForSession?: ((sessionId: string) => SessionStoreOwner) | undefined;
       currentOwner?: (() => SessionStoreOwner) | undefined;
+      /** 事件提交之后的观察者（会话标题投影用）。它失败不影响持久化。 */
+      onEventsCommitted?: SessionEventsCommittedHook | undefined;
     } = {},
   ) {
     if (typeof (poolOrConfig as Pool).execute === 'function') {
@@ -424,6 +434,21 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     this.eventsTable = opts.eventsTable ?? 'tbl_agsvc_dsh_session_events';
     this.ownerForSession = opts.ownerForSession;
     this.currentOwner = opts.currentOwner;
+    this.onEventsCommitted = opts.onEventsCommitted;
+  }
+
+  /** 提交之后通知观察者；观察者的失败只留日志——事件已经持久，不能因为投影而报错。 */
+  private async notifyCommitted(
+    tenant: SessionStoreOwner,
+    sessionId: string,
+    events: readonly SessionEvent[],
+  ): Promise<void> {
+    if (!this.onEventsCommitted || events.length === 0) return;
+    try {
+      await this.onEventsCommitted(tenant, sessionId, events);
+    } catch (err: unknown) {
+      console.warn(`[session-store] events-committed observer failed: ${redactErr(err, this.physicalRoots).message}`);
+    }
   }
 
   private tenantFor(header: SessionHeader): SessionStoreOwner {
@@ -522,6 +547,7 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
     }
 
     const conn = await this.pool.getConnection();
+    let committedFor: SessionStoreOwner | null = null;
     try {
       await conn.beginTransaction();
       // 懒物化或校验 next-seq
@@ -544,6 +570,7 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
           );
         }
         await conn.commit();
+        committedFor = tenant;
         return;
       }
       if (!existing) {
@@ -570,6 +597,7 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
         [rev, JSON.stringify(meta), String(meta.id), tenant.orgId, tenant.userId],
       );
       await conn.commit();
+      committedFor = tenant;
     } catch (err: unknown) {
       try {
         await conn.rollback();
@@ -577,6 +605,7 @@ export class MysqlSessionStore implements PersistenceBackend<string> {
       throw redactErr(err, this.physicalRoots);
     } finally {
       conn.release();
+      if (committedFor) await this.notifyCommitted(committedFor, String(meta.id), events);
     }
   }
 

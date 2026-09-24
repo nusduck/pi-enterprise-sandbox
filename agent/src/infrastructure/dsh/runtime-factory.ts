@@ -305,6 +305,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
         physicalRoots: rpc.physicalRoots,
         requireMysql: true,
         password: opts.mysqlPassword,
+        onEventsCommitted: opts.onSessionEventsCommitted,
       });
       // AV-06：逻辑路径来自服务端已有的解析入口（container 传进来的
       // workspaceRoot/skillRoot，或本 Run 解析出的 cwd），**不是**写死的默认值，
