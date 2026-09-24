@@ -6,6 +6,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ConversationService } from '../../src/application/conversation-service.js';
+import { CreateRunService } from '../../src/application/create-run-service.js';
 import {
   createSessionTitleProjector,
   latestProviderTitle,
@@ -67,6 +68,30 @@ describe('createSessionTitleProjector', () => {
     assert.equal(c.row.title, 'New chat');
     await project(owner, sessionId, [fallbackTitle('Run the shell'), providerTitle('Run echo via bash')]);
     assert.equal(c.row.title, 'Run echo via bash');
+  });
+
+  it('replaces the first-prompt title the first Run derived (the real order: Run first, title later)', async () => {
+    const created = await new CreateRunService({
+      transactionManager: world.transactionManager,
+      createRepositories: world.createRepositories,
+      generateId: world.generateId,
+      now: NOW,
+      runQueue: world.runQueue,
+    }).execute({
+      messages: [{ role: 'user', content: '帮我比较一下 Python 和 Go 在写命令行工具时的优缺点' }],
+      auth: FIXED_AUTH,
+      traceId: '0af7651916cd43dd8448eb211c80319c',
+      idempotencyKey: 'title-run-1',
+    });
+    const runRow = world.tables.tbl_agsvc_runs.find((r) => r.run_id === created.runId);
+    const read = () => world.tables.tbl_agsvc_conversations.find((r) => r.conversation_id === runRow.conversation_id);
+    assert.equal(read().title, '帮我比较一下 Python 和 Go 在写命令行工具时的优缺点', 'CreateRunService derives the title');
+    await project(
+      { orgId: String(runRow.org_id), userId: String(runRow.user_id) },
+      String(runRow.agent_session_id),
+      [providerTitle('Python 与 Go 命令行对比')],
+    );
+    assert.equal(read().title, 'Python 与 Go 命令行对比');
   });
 
   it('never overwrites a title the caller chose', async () => {
