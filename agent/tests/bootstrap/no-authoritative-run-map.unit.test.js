@@ -211,6 +211,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'instance',
   },
   {
+    rel: 'runtime/providers/a2a-remote-client.ts',
+    match: /readonly\s+#cards\s*=\s*new\s+Map/,
+    purpose:
+      'Process-local agent card cache per registered remote A2A agent (5 min TTL); holds no Run facts, the remote card is authoritative',
+    scope: 'instance',
+  },
+  {
     rel: 'runtime/policy/pre-execute.ts',
     match: /readonly\s+records\s*=\s*new\s+Map/,
     purpose:
@@ -470,9 +477,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // → BullMQ Queue **句柄**的索引（容器一份、装配函数里一份局部、构造器
     // 复位一次），随容器拆卸一起消失。路由权威仍是 MySQL 的 `subagent_depth`，
     // 这些 Map 里没有任何 Run 事实。
+    // 2026-09-25: 34 → 35。`runtime/providers/a2a-remote-client.ts` 的 `#cards`：
+    // 按远端 id 缓存 A2A Agent Card（5 分钟），没有任何 Run 事实。它此前写成内联
+    // 对象类型的泛型，扫描正则认不出（`<[^;\n(){}]*>` 不允许 `{ ; }`），于是漏登记。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      34,
+      35,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
