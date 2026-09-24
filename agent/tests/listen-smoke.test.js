@@ -37,7 +37,9 @@ describe('agent import/listen smoke', () => {
 
   it('listens and serves GET /health', async () => {
     const port = 19000 + Math.floor(Math.random() * 1000);
-    const child = spawn(process.execPath, ['server.js'], {
+    // 跑构建产物而不是源码：agent 迁移期同时有 .js 与 .ts，裸 node 解析不了
+    // `.ts`。这条冒烟要验的正是"生产入口能起来"，生产跑的就是 dist/。
+    const child = spawn(process.execPath, ['dist/server.js'], {
       cwd: AGENT_ROOT,
       env: {
         ...process.env,
@@ -53,7 +55,7 @@ describe('agent import/listen smoke', () => {
     try {
       const body = await waitForHealth(port);
       assert.equal(body.status, 'ok');
-      assert.equal(body.service, 'pi-enterprise-agent');
+      assert.equal(body.service, 'dsh-enterprise-agent');
     } finally {
       child.kill('SIGTERM');
       await Promise.race([once(child, 'exit'), new Promise((r) => setTimeout(r, 3000))]);

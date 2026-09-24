@@ -32,11 +32,11 @@ function approval(approvalId, runId, status, createdAt) {
 describe('ApprovalRepository owner list', () => {
   it('filters status, orders newest first, and excludes a foreign user in the same org', async () => {
     const state = createFakeState();
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       { run_id: RUN, org_id: ORG, user_id: USER, conversation_id: '01K0G2PAV8FPMVC9QHJG7JPN51' },
       { run_id: FOREIGN_RUN, org_id: ORG, user_id: FOREIGN, conversation_id: '01K0G2PAV8FPMVC9QHJG7JPN5E' },
     ];
-    state.tables.approvals = [
+    state.tables.tbl_agsvc_approvals = [
       approval(PENDING, RUN, 'PENDING', '2026-07-18 06:00:00.000'),
       approval(APPROVED, RUN, 'APPROVED', '2026-07-18 07:00:00.000'),
       approval('01K0G2PAV8FPMVC9QHJG7JPN58', FOREIGN_RUN, 'PENDING', '2026-07-18 08:00:00.000'),
@@ -55,8 +55,8 @@ describe('ApprovalRepository owner list', () => {
 
   it('rejects invalid status and unbounded limits', async () => {
     const state = createFakeState();
-    state.tables.runs = [];
-    state.tables.approvals = [];
+    state.tables.tbl_agsvc_runs = [];
+    state.tables.tbl_agsvc_approvals = [];
     const repo = new ApprovalRepository(createFakeKnex(state));
     await assert.rejects(
       repo.listForOwner({ orgId: ORG, userId: USER }, { status: 'unknown' }),

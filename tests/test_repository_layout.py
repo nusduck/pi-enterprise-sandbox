@@ -18,7 +18,6 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
         "tmp-workspaces",
         "artifacts",
         "control",
-        "pi-agent-home",
         # Per-developer local tooling state (gitignored, never part of the repo).
         ".claude",
     }
@@ -30,27 +29,46 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
 # hotspot on purpose means splitting it or raising its budget here, with the
 # reason in the commit message — never silently.
 HOTSPOT_LINE_BUDGETS = {
-    "agent/src/application/execute-run-service.js": 1_484,
-    "agent/src/application/fenced-tool-governance-recorder.js": 1_666,
-    "agent/src/application/pi-run-executor.js": 1_626,
-    "agent/src/bootstrap/container.js": 1_235,
-    "agent/src/bootstrap/create-http-server.js": 1_439,
-    "agent/src/infrastructure/mcp/pi-mcp-adapter-factory.js": 1_269,
+    # W2-D 曾为 @ts-expect-error 横幅抬到 1_493；Wave 6 换成 JSDoc 形状后收回
+    # 1_482；转 TS 又收回 16 行；2026-09-19 抽出 serial-timeout-loop.ts 收到 1_413。
+    "agent/src/application/execute-run-service.ts": 1_413,
+    # W2-D 曾抬到 1_672；去掉 expect-error 后收回 1_663；转 TS 又收回 9 行
+    # （提升上去的 JSDoc @param 块比加上的类型声明更长）。仍是全仓最长的
+    # 文件，阶段 D 收尾时应当拆。
+    # 2026-09-06 拆出 durable-policy-replay.ts（DurablePolicyConflictError +
+    # assertCompatiblePolicyReplay，不碰仓储/事务/围栏的纯判定），
+    # 1_654 -> 1_558，预算收紧。
+    "agent/src/application/fenced-tool-governance-recorder.ts": 1_557,
+    # 转 TS 时拆出 dsh-run-executor-deps.ts（依赖面类型 + 三个不读 this 的
+    # 纯判定），1_597 -> 1_526，预算收紧。改名 dsh-run-executor.ts。
+    # 2026-09-06 又拆出 approved-replay-claim.ts（已批准调用的续跑查找与
+    # 一次性消费 CAS），1_526 -> 1_505，预算继续收紧。
+    "agent/src/application/dsh-run-executor.ts": 1_505,
+    # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
+    # 2026-09-16 拆出 container-run-queue.ts（分层 Run 队列的装配、路由与拆卸，
+    # ADR 0012），1_065 -> 1_058，预算继续收紧。
+    # 2026-09-17 AgentCatalogService 注入带 live mcpDiscovery 的
+    # AgentConfigValidator（移植 dsh-rebuild 4ebfe335），否则配置目录回落到
+    # MCP_SERVERS_JSON 的「已配置零工具」投影；1_058 -> 1_066。
+    "agent/src/bootstrap/container.ts": 1_066,
+    # W2-D 曾抬到 1_443；Wave 6 收回。转 TS 时拆出 presentation/http/health-routes.ts
+    # （/health + /ready），1_439 -> 1_399，预算收紧。
+    "agent/src/bootstrap/create-http-server.ts": 1_399,
     # +6 (1_131 -> 1_137): packJsonWithIntegrity now raises a stable
     # ARGUMENT_TOO_LARGE code instead of a bare message, so callers can tell
     # "too big to store" apart from a redaction-truncated replay conflict.
-    "agent/src/infrastructure/mysql/repositories/tool-execution-repository.js": 1_137,
-    "agent/src/infrastructure/mysql/repositories/trace-span-repository.js": 1_046,
-    "agent/src/infrastructure/pi/pi-runtime-factory.js": 650,
-    "agent/src/infrastructure/sandbox/internal-files-read-http.js": 1_009,
-    "sandbox/app/persistence/repositories/tool_execution_claim_validator.py": 1_111,
-    "sandbox/config.py": 1_491,
-    "sandbox/services/process_manager.py": 1_773,
+    # 转 TS 后收回 27 行。
+    "agent/src/infrastructure/mysql/repositories/tool-execution-repository.ts": 1_110,
+    # W2-D 曾为 inline 收窄抬到 1_057；Wave 6 抽 asRecord 后收回 1_041；转 TS
+    # 时拆出 trace-span-projections.ts（不碰 knex 的纯投影/归一化），
+    # 1_041 -> 774，已回到默认上限之下，不再需要预算。
     # frontend/src joined this ratchet on 2026-08-26 (full-repo standards
     # review): AGENTS.md §3 applies to every production file, but only
     # agent/ and sandbox/ were pinned, so these three grew past 1000 lines
     # unnoticed. Pinned at their current length — split, do not raise.
-    "frontend/src/features/chat/ChatContext.tsx": 1_456,
+    # 2026-09-06 拆出 conversationProjection.ts（会话列表的两个纯投影），
+    # 1_456 -> 1_454，预算收紧。
+    "frontend/src/features/chat/ChatContext.tsx": 1_454,
     "frontend/src/features/chat/entityBridge.ts": 1_176,
     "frontend/src/shared/state/runReducer.ts": 1_492,
     "frontend/src/widgets/runtime-steps/InlineRuntimeSteps.tsx": 1_011,
@@ -60,13 +78,27 @@ HOTSPOT_LINE_BUDGETS = {
 def _production_sources() -> list[Path]:
     sources = [
         *ROOT.joinpath("agent", "src").rglob("*.js"),
-        *ROOT.joinpath("sandbox").rglob("*.py"),
+        # 阶段 C 起 agent/src 同时有 .js 和 .ts。**两种都要扫**：只扫 .js 的话，
+        # 一个文件转成 TS 就会静悄悄退出这条棘轮——http-handler 正是这样在转换里
+        # 从 993 长到 1009 而没人发现。
+        *ROOT.joinpath("agent", "src").rglob("*.ts"),
         *ROOT.joinpath("frontend", "src").rglob("*.ts"),
         *ROOT.joinpath("frontend", "src").rglob("*.tsx"),
         *ROOT.joinpath("api-server", "src").rglob("*.js"),
+        *ROOT.joinpath("api-server", "src").rglob("*.ts"),
+
+        # DSH 重建的新 TS 包（ADR 0007 / 0008）。刻意**不给任何 hotspot
+        # 预算**：新代码从第一天就守 1000 行上限，不把既有债务复制过去。
+        # `sandbox/**.py`（Python 执行面）与 `agent/runtime/src/**.ts`（阶段 F 之前
+        # 的独立 `@dsh/runtime` 包）两条 glob 已随目录一起删除，留着只会让人以为
+        # 还有东西在扫——组合层现在在 `agent/src/runtime/`，由上面 agent/src 那条覆盖。
+        *ROOT.joinpath("contract", "src").rglob("*.ts"),
+        *ROOT.joinpath("exec", "src").rglob("*.ts"),
     ]
     sources.extend(ROOT.joinpath("agent").glob("*.js"))
     sources.extend(ROOT.joinpath("api-server").glob("*.js"))
+    sources.extend(ROOT.joinpath("api-server").glob("*.ts"))
+
     return sorted(
         path
         for path in sources
@@ -126,7 +158,10 @@ def test_project_markdown_lives_under_docs_except_readmes() -> None:
         if (
             # AGENTS.md is read from the repository root by convention — the
             # agent working spec has to sit where an agent looks for it.
-            path.name in {"README.md", "AGENTS.md"}
+            # CLAUDE.md sits beside it for the same reason: Claude Code reads
+            # CLAUDE.md and not AGENTS.md, so the root file is a one-line
+            # `@AGENTS.md` import, never a second copy of the spec.
+            path.name in {"README.md", "AGENTS.md", "CLAUDE.md"}
             or relative.parts[0] in {"docs", "skills"}
             or any(part in LOCAL_GENERATED_DIRECTORIES for part in relative.parts)
         ):

@@ -30,8 +30,11 @@ import {
   destroyRunQueue,
 } from '../../src/infrastructure/redis/run-queue.js';
 import { runLeaseKey } from '../../src/infrastructure/redis/constants.js';
+import { startDbpmForUrls, stripUrlPassword } from '../support/fake-dbpm-env.js';
 
 const execFileAsync = promisify(execFile);
+/** 被测 Worker 与生产一样经 DBPM 取密；before() 里起本机假 DBPM。 */
+let dbpm = null;
 const FIXTURE = fileURLToPath(
   new URL('../fixtures/agent-worker-side-effect-process.js', import.meta.url),
 );
@@ -43,7 +46,7 @@ const TEST_REDIS_CONTAINER = String(
 ).trim();
 const explicitlyEnabled =
   process.env.RUN_AGENT_WORKER_RESTART_GATE === '1';
-const safeContainer = /^pi-release-gate-redis-[a-z0-9-]+$/.test(
+const safeContainer = /^dsh-release-gate-redis-[a-z0-9-]+$/.test(
   TEST_REDIS_CONTAINER,
 );
 
@@ -56,7 +59,11 @@ function databaseNameFromUrl(value) {
 }
 
 const databaseName = databaseNameFromUrl(TEST_MYSQL_URL);
-const safeDatabase = /^pi_gate_[a-z0-9_]+$/.test(databaseName);
+const safeDatabase = /^dsh_gate_[a-z0-9_]+$/.test(databaseName);
+// The Worker verifies its database against the release manifest before it
+// consumes jobs (ADR 0011 D6), so the fixture's side-effect table lives in a
+// sibling schema instead of adding an unknown table to the verified one.
+const SIDE_EFFECT_SCHEMA = `${databaseName}_side`;
 const runLive =
   explicitlyEnabled &&
   safeContainer &&
@@ -100,6 +107,27 @@ const UNSAFE_IDS = Object.freeze({
   workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN66',
   toolCallId: `${TOOL_CALL_ID}-unsafe`,
 });
+// 分层拓扑（ADR 0012）专用：父 Run 在深度 0，子 Run 在深度 1、走 `${QUEUE}-d1`。
+const PARENT_IDS = Object.freeze({
+  conversationId: '01K0G2PAV8FPMVC9QHJG7JPN71',
+  sessionId: '01K0G2PAV8FPMVC9QHJG7JPN72',
+  runId: '01K0G2PAV8FPMVC9QHJG7JPN73',
+  messageId: '01K0G2PAV8FPMVC9QHJG7JPN77',
+  sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPN75',
+  workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN76',
+  toolCallId: `${TOOL_CALL_ID}-parent`,
+});
+const CHILD_IDS = Object.freeze({
+  conversationId: '01K0G2PAV8FPMVC9QHJG7JPN81',
+  sessionId: '01K0G2PAV8FPMVC9QHJG7JPN82',
+  runId: '01K0G2PAV8FPMVC9QHJG7JPN83',
+  messageId: '01K0G2PAV8FPMVC9QHJG7JPN87',
+  sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPN85',
+  workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN86',
+  toolCallId: `${TOOL_CALL_ID}-child-d1`,
+});
+const QUEUE_D1 = `${QUEUE}-d1`;
+const QUEUE_D2 = `${QUEUE}-d2`;
 
 async function docker(...args) {
   return execFileAsync('docker', args, {
@@ -110,23 +138,28 @@ async function docker(...args) {
 
 function createWorkerHarness(workerLabel, opts = {}) {
   const ids = opts.ids ?? SAFE_IDS;
-  const child = spawn(process.execPath, [FIXTURE], {
+  // The fixture imports TypeScript sources; a bare `node` child has no tsx loader.
+  const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), FIXTURE], {
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     env: {
       ...process.env,
       NODE_ENV: 'test',
       DEPLOYMENT_ENV: 'test',
-      AGENT_DATABASE_URL: TEST_MYSQL_URL,
-      AGENT_REDIS_URL: TEST_REDIS_URL,
+      AGENT_DATABASE_URL: stripUrlPassword(TEST_MYSQL_URL),
+      AGENT_REDIS_URL: stripUrlPassword(TEST_REDIS_URL),
+      TEST_FIXTURE_DATABASE_URL: TEST_MYSQL_URL,
+      ...dbpm.env,
       AGENT_RUNS_QUEUE_NAME: QUEUE,
-      AGENT_MIGRATE_ON_START: 'false',
-      AGENT_WORKER_CONCURRENCY: '1',
+      // 分层之后这是总预算（ADR 0012）：默认最大深度 2 需要至少 3 个槽。
+      // 取 3 → 根层 1 个、d1/d2 各 1 个，保持原 gate「根任务单槽」的形状。
+      AGENT_WORKER_CONCURRENCY: '3',
       AGENT_RECOVERY_SCAN_LIMIT: '10',
       AGENT_RECOVERY_INTERVAL_MS: String(RECOVERY_INTERVAL_MS),
       AGENT_OUTBOX_IDLE_MS: '100',
       AGENT_RUN_LEASE_TTL_MS: String(LEASE_TTL_MS),
       AGENT_RUN_LEASE_RENEW_INTERVAL_MS: '500',
       TEST_WORKER_LABEL: workerLabel,
+      TEST_SIDE_EFFECT_SCHEMA: SIDE_EFFECT_SCHEMA,
       TEST_SIDE_EFFECT_TABLE: SIDE_EFFECT_TABLE,
       TEST_TOOL_CALL_ID: ids.toolCallId,
       TEST_RUN_ID: ids.runId,
@@ -253,7 +286,7 @@ async function waitForRunStatus(
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
-    last = await knex('runs').where({ run_id: runId }).first();
+    last = await knex('tbl_agsvc_runs').where({ run_id: runId }).first();
     if (String(last?.status || '') === expected) return last;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -283,7 +316,7 @@ async function seedQueuedRun(knex, ids, opts = {}) {
       status: 'active',
     });
 
-    await knex('agent_definitions').insert({
+    await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
       name: 'release-gate-agent',
@@ -294,13 +327,12 @@ async function seedQueuedRun(knex, ids, opts = {}) {
       created_at: knex.fn.now(3),
       updated_at: knex.fn.now(3),
     });
-    await knex('agent_versions').insert({
+    await knex('tbl_agsvc_agent_versions').insert({
       agent_version_id: VER,
       agent_id: AGENT,
       version_no: 1,
       config_json: JSON.stringify({ modelPolicy: {} }),
       config_hash: 'a'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: USER,
       created_at: knex.fn.now(3),
@@ -313,6 +345,7 @@ async function seedQueuedRun(knex, ids, opts = {}) {
     orgId: ORG,
     userId: USER,
     agentId: AGENT,
+    ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
     title: 'Worker restart gate',
     status: 'active',
   });
@@ -351,32 +384,38 @@ async function seedQueuedRun(knex, ids, opts = {}) {
     agentVersionId: VER,
     triggeringMessageId: ids.messageId,
     source: 'release-gate',
-    status: 'QUEUED',
-    queueName: QUEUE,
+    ...(opts.parentRunId
+      ? { parentRunId: opts.parentRunId, subagentDepth: opts.subagentDepth }
+      : {}),
+    status: opts.status ?? 'QUEUED',
+    queueName: opts.queueName ?? QUEUE,
     traceId: TRACE,
+    ...(opts.status === 'SUCCEEDED' ? { completedAt: new Date() } : {}),
   });
 }
 
 async function readSideEffect(knex, toolCallId) {
-  return knex(SIDE_EFFECT_TABLE)
+  return knex
+    .withSchema(SIDE_EFFECT_SCHEMA)
+    .table(SIDE_EFFECT_TABLE)
     .where({ tool_call_id: toolCallId })
     .first();
 }
 
 async function assertSafeRecoveryFacts(knex, ids) {
-  const retryingEvents = await knex('run_events').where({
+  const retryingEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.retrying',
   });
   assert.equal(retryingEvents.length, 1, 'exactly one run.retrying event');
 
-  const retryingOutbox = await knex('domain_outbox').where({
+  const retryingOutbox = await knex('tbl_agsvc_domain_outbox').where({
     aggregate_id: ids.runId,
     event_type: 'run.retrying',
   });
   assert.equal(retryingOutbox.length, 1, 'exactly one run.retrying outbox row');
 
-  const failedEvents = await knex('run_events').where({
+  const failedEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.failed',
   });
@@ -390,19 +429,19 @@ async function assertSafeRecoveryFacts(knex, ids) {
 }
 
 async function assertManualRecoveryFacts(knex, ids) {
-  const retryingEvents = await knex('run_events').where({
+  const retryingEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.retrying',
   });
   assert.equal(retryingEvents.length, 0, 'unsafe recovery must not retry');
 
-  const failedEvents = await knex('run_events').where({
+  const failedEvents = await knex('tbl_agsvc_run_events').where({
     run_id: ids.runId,
     event_type: 'run.failed',
   });
   assert.equal(failedEvents.length, 0, 'manual boundary is not terminal FAILED');
 
-  const tools = await knex('tool_executions').where({ run_id: ids.runId });
+  const tools = await knex('tbl_agsvc_tool_executions').where({ run_id: ids.runId });
   assert.equal(tools.length, 1);
   assert.ok(['RUNNING', 'UNKNOWN'].includes(String(tools[0].status)));
 
@@ -421,11 +460,11 @@ describe('Agent Worker restart release-gate safety', () => {
     }
     assert.ok(
       safeContainer,
-      'TEST_REDIS_CONTAINER must match pi-release-gate-redis-*',
+      'TEST_REDIS_CONTAINER must match dsh-release-gate-redis-*',
     );
     assert.ok(
       safeDatabase,
-      'TEST_MYSQL_URL database must match pi_gate_*',
+      'TEST_MYSQL_URL database must match dsh_gate_*',
     );
     assert.ok(TEST_REDIS_URL, 'TEST_REDIS_URL is required');
   });
@@ -434,6 +473,7 @@ describe('Agent Worker restart release-gate safety', () => {
 describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
   let knex = null;
   let queueHandles = null;
+  let layerQueueHandles = [];
   const workers = [];
 
   before(async () => {
@@ -445,14 +485,15 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     );
     const [name, image, running] = inspected.stdout.trim().split('|');
     assert.equal(name, `/${TEST_REDIS_CONTAINER}`);
-    assert.equal(image, 'redis:7.2');
+    assert.equal(image, 'redis:5.0.14');
     assert.equal(running, 'true');
 
+    dbpm = await startDbpmForUrls({ mysqlUrl: TEST_MYSQL_URL, redisUrl: TEST_REDIS_URL });
     knex = createMysqlKnex(TEST_MYSQL_URL, { pool: { min: 0, max: 10 } });
-    await knex.schema.dropTableIfExists(SIDE_EFFECT_TABLE);
+    await knex.schema.withSchema(SIDE_EFFECT_SCHEMA).dropTableIfExists(SIDE_EFFECT_TABLE);
     await migrateRollbackAll(knex);
     await migrateLatest(knex);
-    await knex.schema.createTable(SIDE_EFFECT_TABLE, (table) => {
+    await knex.schema.withSchema(SIDE_EFFECT_SCHEMA).createTable(SIDE_EFFECT_TABLE, (table) => {
       table.string('tool_call_id', 128).primary();
       table.specificType('run_id', 'CHAR(26)').notNullable();
       table.integer('invocation_count').notNullable();
@@ -465,6 +506,13 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     queueHandles = createRunQueue(TEST_REDIS_URL, { queueName: QUEUE });
     await queueHandles.queue.waitUntilReady();
     await queueHandles.queue.obliterate({ force: true });
+    layerQueueHandles = [QUEUE_D1, QUEUE_D2].map((queueName) =>
+      createRunQueue(TEST_REDIS_URL, { queueName }),
+    );
+    for (const handles of layerQueueHandles) {
+      await handles.queue.waitUntilReady();
+      await handles.queue.obliterate({ force: true });
+    }
     await seedQueuedRun(knex, SAFE_IDS);
   });
 
@@ -472,6 +520,10 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     const cleanupErrors = [];
     for (const worker of workers) {
       await worker.terminate('SIGKILL').catch((error) => cleanupErrors.push(error));
+    }
+    if (dbpm) {
+      await dbpm.close().catch((error) => cleanupErrors.push(error));
+      dbpm = null;
     }
     if (queueHandles) {
       await queueHandles.queue
@@ -481,8 +533,15 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
         cleanupErrors.push(error),
       );
     }
+    for (const handles of layerQueueHandles) {
+      await handles.queue
+        .obliterate({ force: true })
+        .catch((error) => cleanupErrors.push(error));
+      await destroyRunQueue(handles).catch((error) => cleanupErrors.push(error));
+    }
     if (knex) {
       await knex.schema
+        .withSchema(SIDE_EFFECT_SCHEMA)
         .dropTableIfExists(SIDE_EFFECT_TABLE)
         .catch((error) => cleanupErrors.push(error));
       await migrateRollbackAll(knex).catch((error) => cleanupErrors.push(error));
@@ -514,7 +573,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     const killed = await workerA.terminate('SIGKILL');
     assert.equal(killed.signal, 'SIGKILL');
 
-    const afterKill = await knex('runs').where({ run_id: RUN }).first();
+    const afterKill = await knex('tbl_agsvc_runs').where({ run_id: RUN }).first();
     assert.equal(afterKill.status, 'RUNNING');
     assert.equal(await readSideEffect(knex, SAFE_IDS.toolCallId), undefined);
     assert.ok(
@@ -529,7 +588,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     workers.push(workerB);
     await workerB.waitFor((message) => message.type === 'ready');
 
-    const beforeLeaseExpiry = await knex('runs').where({ run_id: RUN }).first();
+    const beforeLeaseExpiry = await knex('tbl_agsvc_runs').where({ run_id: RUN }).first();
     assert.equal(
       beforeLeaseExpiry.status,
       'RUNNING',
@@ -598,7 +657,7 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
     );
     assert.match(String(reconciliation.reason), /manual recovery required/i);
 
-    const recovered = await knex('runs')
+    const recovered = await knex('tbl_agsvc_runs')
       .where({ run_id: UNSAFE_IDS.runId })
       .first();
     assert.equal(recovered.status, 'RUNNING');
@@ -612,6 +671,93 @@ describeLive('Agent Worker SIGKILL checkpoint-aware recovery', () => {
       false,
     );
     await assertManualRecoveryFacts(knex, UNSAFE_IDS);
+    await workerB.terminate('SIGTERM');
+  });
+
+  it('replays a depth-1 child Run on its own reserved layer after SIGKILL', async () => {
+    // 父 Run 已结束：这条 gate 验的是子 Run 所在层的接管与重放，父任务前台等待
+    // 的槽位饥饿由 subagent-slot-starvation.integration.test.js 覆盖。
+    await seedQueuedRun(knex, PARENT_IDS, { seedTenant: false, status: 'SUCCEEDED' });
+    await seedQueuedRun(knex, CHILD_IDS, {
+      seedTenant: false,
+      parentRunId: PARENT_IDS.runId,
+      subagentDepth: 1,
+      queueName: QUEUE_D1,
+    });
+    const [d1Handles] = layerQueueHandles;
+    const childRun = CHILD_IDS.runId;
+
+    // 种子里没有投递作业：只能由 Worker 启动时的恢复扫描经唯一的投递适配器
+    // 按权威深度重投。它必须落在 d1，而不是根队列。
+    const workerA = createWorkerHarness('layer-worker-a', {
+      ids: CHILD_IDS,
+      executorMode: 'hang-before-side-effect',
+    });
+    workers.push(workerA);
+    const ready = await workerA.waitFor((message) => message.type === 'ready');
+    assert.deepEqual(ready.queueNames, [QUEUE, QUEUE_D1, QUEUE_D2]);
+    const activeA = await workerA.waitFor(
+      (message) => message.type === 'active' && message.jobId === childRun,
+    );
+    assert.equal(activeA.queueName, QUEUE_D1);
+    await workerA.waitFor(
+      (message) => message.type === 'executor-entered' && message.runId === childRun,
+    );
+    assert.equal(await queueHandles.queue.getJob(childRun), undefined);
+    assert.ok(await d1Handles.queue.getJob(childRun), 'child job lives in the d1 queue');
+
+    const running = await waitForRunStatus(knex, childRun, 'RUNNING');
+    assert.equal(Number(running.attempt), 1);
+    assert.equal(Number(running.subagent_depth), 1);
+    assert.equal(running.queue_name, QUEUE_D1);
+    assert.ok(await queueHandles.connection.get(runLeaseKey(childRun)));
+
+    const killed = await workerA.terminate('SIGKILL');
+    assert.equal(killed.signal, 'SIGKILL');
+    assert.equal(await readSideEffect(knex, CHILD_IDS.toolCallId), undefined);
+
+    const workerB = createWorkerHarness('layer-worker-b', {
+      ids: CHILD_IDS,
+      executorMode: 'succeed',
+    });
+    workers.push(workerB);
+    await workerB.waitFor((message) => message.type === 'ready');
+
+    const stalled = await workerB.waitFor(
+      (message) => message.type === 'stalled' && message.jobId === childRun,
+      85_000,
+    );
+    assert.equal(stalled.queueName, QUEUE_D1);
+    const completed = await workerB.waitFor(
+      (message) => message.type === 'completed' && message.jobId === childRun,
+      15_000,
+    );
+    assert.equal(completed.queueName, QUEUE_D1);
+    assert.ok(completed.attemptsStarted >= 2);
+    assert.ok(completed.stalledCounter >= 1);
+    assert.equal(completed.result.status, 'SUCCEEDED');
+    assert.equal(
+      workerB.messages.some(
+        (message) =>
+          message.jobId === childRun &&
+          ['active', 'completed'].includes(message.type) &&
+          message.queueName !== QUEUE_D1,
+      ),
+      false,
+      'no other layer may pick up the child Run',
+    );
+
+    const succeeded = await waitForRunStatus(knex, childRun, 'SUCCEEDED', 15_000);
+    assert.equal(succeeded.queue_name, QUEUE_D1);
+    const retrying = await knex('tbl_agsvc_run_events').where({
+      run_id: childRun,
+      event_type: 'run.retrying',
+    });
+    assert.equal(retrying.length, 1, 'exactly one run.retrying event');
+    const sideEffect = await readSideEffect(knex, CHILD_IDS.toolCallId);
+    assert.ok(sideEffect);
+    assert.equal(Number(sideEffect.invocation_count), 1);
+    assert.equal(sideEffect.first_worker, 'layer-worker-b');
     await workerB.terminate('SIGTERM');
   });
 });

@@ -934,9 +934,8 @@ export function InlineRuntimeSteps({ runId }: { runId: string }) {
 
       {!collapsed ? (
         <div className="runtime-steps" role="list" aria-label="Runtime steps">
-          {items.map((item, idx) => {
+          {items.map((item) => {
             const selectedRow = isSelected(item);
-            const isLast = idx === items.length - 1;
 
             if (item.kind === 'tool') {
               return (

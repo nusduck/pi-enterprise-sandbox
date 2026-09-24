@@ -9,38 +9,99 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const capabilitiesSrc = readFileSync(join(__dirname, '../src/routes/capabilities.js'), 'utf8');
-const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
-const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.js'), 'utf8');
+const capabilitiesSrc = readFileSync(join(__dirname, '../src/routes/capabilities.ts'), 'utf8');
+const serverSrc = readFileSync(join(__dirname, '../server.ts'), 'utf8');
+const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.ts'), 'utf8');
 
 const originalFetch = globalThis.fetch;
 process.env.AUTH_ENABLED = 'false';
 process.env.AGENT_BASE_URL = 'http://agent.test';
 
-const { getAgentExtensionDiagnostics } = await import(
+const { getAgentExtensionDiagnostics, mutateAgentSkill, uploadAgentSkillDraft } = await import(
   `../src/services/agent-client.js?test=${Date.now()}`
 );
 
 describe('capability diagnostics identity forwarding', () => {
   it('handlers accept req and resolve trusted auth before agent call', () => {
-    assert.match(capabilitiesSrc, /export async function handleExtensionDiagnostics\(parsedUrl, res, req\)/);
-    assert.match(capabilitiesSrc, /export async function handleCapabilityRegistry\(kind, parsedUrl, res, req\)/);
+    assert.match(capabilitiesSrc, /export async function handleExtensionDiagnostics\(/);
+    assert.match(capabilitiesSrc, /export async function handleCapabilityRegistry\(/);
     assert.match(capabilitiesSrc, /resolveTrustedAuth\(req\)/);
     assert.match(capabilitiesSrc, /getAgentExtensionDiagnostics\(profileId, \{ auth, traceId \}\)/);
+    assert.match(capabilitiesSrc, /handleSkillMutation/);
+    assert.match(capabilitiesSrc, /mutateAgentSkill\(name, action, \{ auth, traceId \}\)/);
+    assert.match(capabilitiesSrc, /handleSkillDraftUpload/);
+    assert.match(capabilitiesSrc, /uploadAgentSkillDraft\(req, filename, \{ auth, traceId \}\)/);
   });
 
   it('server passes req into capability and diagnostics handlers', () => {
     assert.match(serverSrc, /handleExtensionDiagnostics\(parsedUrl, res, req\)/);
-    assert.match(serverSrc, /handleCapabilityRegistry\(capability\[1\], parsedUrl, res, req\)/);
+    assert.match(serverSrc, /handleCapabilityRegistry\(capability\[1\]!?, parsedUrl, res, req\)/);
+    assert.match(serverSrc, /handleSkillMutation/);
+    assert.match(serverSrc, /handleSkillDraftUpload\(parsedUrl, res, req\)/);
+  });
+
+
+  it('forwards trusted acting headers to Agent Skill mutation', async () => {
+    let captured = null;
+    globalThis.fetch = async (input, init) => {
+      captured = { url: String(input), headers: init?.headers || {}, method: init?.method };
+      return new Response(JSON.stringify({ name: 'draft-one', enabled: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    try {
+      await mutateAgentSkill('draft-one', 'enable', {
+        auth: {
+          actingUserId: 'user_a',
+          actingOrganizationId: 'org_a',
+        },
+      });
+      assert.equal(captured.url, 'http://agent.test/internal/skills/draft-one/enable');
+      assert.equal(captured.method, 'POST');
+      assert.equal(captured.headers['X-Acting-User-Id'], 'user_a');
+      assert.equal(captured.headers['X-Acting-Organization-Id'], 'org_a');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('forwards trusted acting headers and X-Filename to Agent Skill draft upload', async () => {
+    let captured = null;
+    globalThis.fetch = async (input, init) => {
+      captured = { url: String(input), headers: init?.headers || {}, method: init?.method };
+      return new Response(JSON.stringify({ ok: true, name: 'draft-pkg' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    try {
+      await uploadAgentSkillDraft(Buffer.from('zipbytes'), 'my-skill.skill', {
+        auth: {
+          actingUserId: 'user_b',
+          actingOrganizationId: 'org_b',
+        },
+        traceId: 'trace-draft-1',
+      });
+      assert.equal(captured.url, 'http://agent.test/internal/skills/drafts');
+      assert.equal(captured.method, 'POST');
+      assert.equal(captured.headers['X-Acting-User-Id'], 'user_b');
+      assert.equal(captured.headers['X-Acting-Organization-Id'], 'org_b');
+      assert.equal(captured.headers['X-Filename'], 'my-skill.skill');
+      assert.equal(captured.headers['X-Trace-Id'], 'trace-draft-1');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('agent-client diagnostics uses requestHeaders for acting identity', () => {
     assert.match(
       agentClientSrc,
-      /export async function getAgentExtensionDiagnostics\([\s\S]*?\{ auth = null, traceId = null \} = \{\}\)/,
+      /export async function getAgentExtensionDiagnostics\([\s\S]*?\{ auth = null, traceId = null \}/,
     );
     assert.match(agentClientSrc, /headers: requestHeaders\(\{ auth, traceId \}\)/);
   });
+
 
   it('forwards trusted acting headers to Agent diagnostics', async () => {
     let captured = null;

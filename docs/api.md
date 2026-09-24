@@ -1,18 +1,18 @@
 # API Reference
 
-Pi Enterprise Sandbox 四服务 API 分层：
+DSH Enterprise Sandbox API 分层：
 
 | 层 | 组件 | 说明 |
 |----|------|------|
 | **Public** | Frontend Nginx | `/api/*` 反向代理到 API Server |
 | **API Server (BFF)** | Node.js 22 (port 4000) | Run API/SSE relay、健康探针、文件上传/下载代理 |
-| **Agent** | Node.js 22 (port 4100) | 内部 Run API + pi-coding-agent SDK（浏览器不直连） |
-| **Sandbox** | FastAPI (container 8081，无宿主映射) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）；文件/执行/进程/数据集/产物（Docker 内网） |
+| **Agent** | Node.js 22 (port 4100) | 内部 Run API + DeepSeek Harness（浏览器不直连） |
+| **Sandbox（执行面）** | Node.js/TypeScript (container 8081，无宿主映射) | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；文件/执行/搜索/进程/数据集/产物（Docker 内网） |
 
 无 Python Agent Runtime、无双 Runtime 开关。Agent **支持零 Skill 启动**；共享 `skills/` 挂载与 package skills 由 Agent Profile 策略 + session capability registry 控制。
 
 > **Sandbox 端口 8081 仅 Docker 内网可访问；compose 里该服务没有 `ports:` 段，dev 与生产都不发布宿主端口**。Agent 调用正式执行能力使用 HMAC-authenticated `/internal/v1/*`；浏览器不能直连 Sandbox，也不能提供 Sandbox service credential。BFF `/api/*` 是唯一浏览器 API 边界。
-> MCP 由 Agent Host 的 MCP Connection Manager 直连企业 MCP Gateway/Server，不经过 Sandbox，也不向浏览器暴露凭据。
+> Agent 侧 MCP 由启动期 `@deepseek-ai/dsh-mcp-client` 直连企业 MCP Gateway/Server 并执行 `tools/list`，不经过 exec，也不向浏览器暴露凭据。对外的 Streamable HTTP MCP facade 是 exec 镜像的第二入口（compose: `sandbox-mcp`），只走 `/internal/mcp/v1/*` 窄桥。
 
 ---
 
@@ -123,7 +123,9 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 `GET /api/runs/{id}` 还返回 `started_at`、`completed_at`（兼容字段
 `finished_at`）、`error`、`last_event_id` 与可用时的 `model_id` / `usage`；时间字段统一为 ISO 8601。Run 列表同样可包含模型与 token usage 的轻量投影，来源是 durable 事件，不是进程内计数器。
 
-`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。启用的 MCP Server 会在 Agent 进程启动时执行一次 `tools/list`；连接成功的工具以 `mcp__{serverId}__{toolName}` 出现在 `tools` / `registry.mcp_tools`，配置变更须重启 Agent 才会生效。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
+`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。MCP 工具以 `mcp__{serverName}__{toolName}` 出现在 `tools` / `registry.mcp_tools`。
+
+**2026-08-31（ADR 0009 D9）起，这份就绪度是 DSH 工具注册表的投影**，不再是自建 adapter 的探测快照：一台 MCP 服务器 = overlay 里一个 `@deepseek-ai/dsh-mcp-client` 实例，它注册到 `ctx.tools` 上的东西就是模型看得见的东西，所以 `/ready` 与模型工具面不可能不一致。连接、退避重连与 `notifications/tools/list_changed` 重新同步由该插件负责；**配置变更（`MCP_SERVERS_JSON`）须重启 Agent** 才会生效（boot 时按环境叠进插件树，不必重跑 `npm run gen:patch`）。工具名超长或含非法字符时出厂包会规范化并追加 12 位十六进制哈希，风险表因此必须有 `mcp__<server>__*` 前缀条目——漏配会落到 `high`（要审批），不会落到放行。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
 
 | 字段 | 说明 |
 |------|------|
@@ -134,7 +136,17 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `GET /api/capabilities/{skills,mcp,tools,models}` 仍从 diagnostics 投影列表；字段可附加 `status` / `dynamic`。
 
-`skills` 是**按调用者投影**的：Agent 用 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析出与该用户下一次 Run 相同的 skill 根（系统层 + 该用户自己的 `<orgId>/<userId>` 目录），每项以 `source` 标明层级——`shared-skill-root`（内置只读）或 `user-skill-root`（该用户已安装）。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
+`skills` 是**按调用者投影**的：Agent 用服务端写入的 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析内部 owner，列出系统层、该 owner 的已发布层和草稿层。`source` 分别为 `shared-skill-root`、`user-skill-root`、`draft-skill-root`；浏览器传入的同名 header 不会被透传。
+
+**2026-08-31（ADR 0009 D7）起，用户侧 Skill 有三个根**：系统根（只读，永远进 prompt）、已启用根（逐包只读，进 prompt）、**草稿根 `/home/sandbox/skill-draft`**（每用户一个，模型可写，**不进发现也不进 prompt**）。模型用 `write` / `bash` 在草稿根里造包——`skill_install` / `skill_create` / `skill_edit` / `skill_uninstall` 这四个工具**已整体取消**。闸门只剩一处：人在 UI 上按「启用」，那一刻平台校验结构、**把字节复制成一份只读的已发布版本**、记内容摘要与启用态（`user_skill_enablements`，owner-scoped）。因为是两份字节，模型之后改草稿动不了已启用的包，所以不需要每 Run 重算摘要。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
+
+**2026-09-14（design §3.3 S1）起，启用账本是用户层发现的唯一依据**：已发布字节按摘要分版本存放（`<name>/.v/<digest>/<name>/` + 侧车 `<name>/.v/<digest>.json`），摘要按复制后的字节计算。Run 开始时 Worker 按账本逐条核对版本目录与侧车，得到本 Run 的清单；模型看到的 Skill 路径是 exec 的挂载路径 `/home/sandbox/skill-user/<name>`。清单随每个内部请求进入签名覆盖的请求体（GET 为规范化 query），exec 只挂载清单点名的版本：缺版本或侧车不符返回 `SKILL_PACKAGE_UNAVAILABLE`，存储不可读返回 `SKILL_STORE_UNAVAILABLE`，不再当成「没有 Skill」。
+
+启用/停用入口是 `POST /api/capabilities/skills/{name}/enable|disable`。BFF 只做代理与身份投影；Agent 在一个 MySQL 事务里锁住该 owner 的 membership 行，校验并发布版本、写或删账本行，再回收旧版本。**停用只删账本行，不删字节**：仍在运行、清单里点着该版本的 Run 继续可用；不再被账本引用且超过 `SKILL_VERSION_GC_GRACE_MS`（默认 24 小时）的版本在同名包下次启停时回收。
+
+草稿在**启用之后不会消失**——启用是复制字节，草稿留在原地当可编辑的源，停用只撤销启用。所以 `skill_drafts` 里会一直有它；这类条目带 `published: true` 与 `status: 'published'`，与还等着人按「Enable」的 `published: false` / `status: 'draft'` 区分。UI 的 Drafts 区只列后者，否则同一个名字会在页面上出现两次。要重新发布一份改过的草稿，先在 My Skills 里 Disable，草稿会回到 Drafts。
+
+草稿包上传入口是 `POST /api/capabilities/skills/drafts`。支持通过 UI 或客户端直传 `.zip` 与 `.skill` 归档包（请求头带 `X-Filename`，流式二进制 body，单包上限 50MB）。BFF 受信鉴权后透传 Agent；Agent 校验包结构与 `SKILL.md`，解压落入当前用户的草稿根目录 `/home/sandbox/skill-draft/<org>/<user>/<skill-name>/`，状态保持为未启用（`enabled: false, status: 'draft'`）。草稿不进模型发现、不进 prompt，等待用户在 UI 上点击「Enable」正式启用。
 
 `GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
 
@@ -164,8 +176,9 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 ### 完整路由表
 
-浏览器唯一的 API 边界。以下是 `api-server/server.js` 当前分发的全部路由；
+浏览器唯一的 API 边界。以下是 `api-server/server.ts` 当前分发的全部路由；
 未列出的路径返回 404。
+
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -177,7 +190,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
 | `GET` | `/api/conversations/{id}/events` | Conversation 维度 SSE |
 | `POST` | `/api/conversations/{id}/runs` | 在指定 Conversation 下创建 Run |
-| `POST` | `/api/conversations/{id}/follow-ups` | 追问 |
+| `POST` | `/api/conversations/{id}/follow-ups` | 追问；当前 Run 未结束时新 Run 保持 `QUEUED`，结束后按提交顺序自动执行 |
 | `GET` `POST` | `/api/conversations/{id}/datasets` | 列出 / 上传 Dataset |
 | `POST` | `/api/conversations/{id}/artifact-imports` | 跨会话导入已有 Artifact |
 | `GET` `POST` | `/api/runs` | 列出 / 创建 Run |
@@ -194,15 +207,23 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
 | `GET` | `/api/artifacts` | Artifact 列表 |
 | `GET` | `/api/datasets` | Dataset 列表 |
-| `GET` | `/api/processes` | 长进程列表 |
-| `GET` | `/api/processes/{id}` | 进程详情 |
-| `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读） |
-| `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制 |
+| `GET` | `/api/processes` | 长进程列表；必传 `session_id`，可按 `run_id` / `status` 筛选 |
+| `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
+| `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读）；必传 `session_id` |
+| `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制；JSON body 必传 `session_id` |
+| `GET` | `/api/agents` | org 内可选的智能体（Agent 目录） |
+| `POST` | `/api/agents` | 新建智能体，自带 v1 并指向它（**admin**） |
+| `GET` `POST` | `/api/agents/{id}/versions` | 版本线 / 建新版本（**admin**） |
+| `POST` | `/api/agents/{id}/active-version` | 切活跃版本，也是回滚（**admin**） |
+| `GET` | `/api/agents/config/options` | 配置 schema、字段支持情况、平台约束与 capability revision（**admin**） |
+| `POST` | `/api/agents/config/validate` | 只解析不落库的配置校验（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
 | `POST` | `/api/cron-jobs/{id}/run` | 立即触发一次 |
 | `GET` | `/api/capabilities/{skills,mcp,tools,models}` | 从 diagnostics 投影的能力清单 |
+| `POST` | `/api/capabilities/skills/drafts` | 上传 Skill 草稿包（.zip / .skill）；解压至用户草稿根，保持未启用 |
+| `POST` | `/api/capabilities/skills/{name}/enable\|disable` | 启用草稿 / 停用用户 Skill；owner-scoped |
 | `GET` | `/api/extensions/diagnostics` | Extension / Profile / allowlist 状态 |
 | `GET` | `/api/a2a/config` | A2A 配置（**admin**） |
 | `POST` | `/api/a2a/credentials` | 签发 A2A 凭据（**admin**） |
@@ -215,23 +236,131 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 `/api/a2a/*` 要求 `actingRole === 'admin'`，否则 403 `ADMIN_REQUIRED`。
 
+#### Agent 目录（多 Agent 选择）
+
+一个 org 下可以并列存在多个智能体，普通用户在**建会话**时选其中一个。
+
+- **两张表的语义不同**：`agent_definitions` 的一行 = 一个可选的智能体；
+  `agent_versions` 的一行 = 该智能体的一次不可变配置快照。「多一个可选的智能体」
+  是新增一行 definition（自带 v1），不是往已有智能体下加 version——
+  `active_version_id` 是单值的，加 version 只会产生历史。
+- **写目录要求 `actingRole === 'admin'`**，否则 403 `ADMIN_REQUIRED`；
+  `GET /api/agents` 对 org 内所有成员开放。角色解析不出来时一律拒绝。
+- **改配置 = 建新版本**，永不原地改写。`POST .../versions` 默认 `activate: true`；
+  传 `activate: false` 只建不切。回滚就是把 `active_version_id` 指回旧版本。
+- **切活跃版本只影响新建的会话**：正在跑的 Run 与已存在的 AgentSession
+  继续使用它们钉住的版本。
+- **写入即校验**：`config` 在建版本时就跑一遍 AgentVersion 绑定规则，非法配置
+  （`toolPolicy` 不是对象、model 内嵌 `apiKey` 等）当场 400，不会落库后在 Run 期爆炸。
+- **跨租户一律 404**：用别的 org 的 `agent_id` 或不属于该 Agent 的
+  `agent_version_id` 调用，与"不存在"返回同一个响应，不泄漏存在性。
+
+**`config` 里哪些字段真的生效**（2026-09-04 逐字段核过一遍；不生效的字段写进去
+不报错但**没有任何执行路径**，别指望它约束行为）：
+
+| 字段 | 生效？ | 落在哪 |
+|------|-------|--------|
+| `systemPrompt` | ✅ | 作为租户自定义段进入发给模型的 system prompt，排在 harness 身份之后、企业条款之前；企业条款始终追加在它后面且**不可被租户覆盖** |
+| `modelPolicy`（含内嵌 `model`） | ✅ | `modelResolver` 解析出本次 Run 的具体模型；内嵌完整 model 时 `input.model` 不能改身份 |
+| `modelPolicy.maxOutputTokens` | ✅ | 作为 `AgentOptions.maxTokens` 出现在**主对话请求**上；标题/压缩等辅助请求不受影响 |
+| `modelPolicy.thinkingLevel` | ✅ | 作为 agent scope 的 `ModelSelection.reasoningEffort` 出现在主对话请求上。取值必须是当前适配器接受的 effort ID（`deepseek-official`：`off|low|high|max`），否则保存时 400、起 Run 时 fail-closed |
+| `toolPolicy` | ✅ | 逐调用闸门（`tools/pre-execute`）与风险表 |
+| `toolPolicy.tools` | ✅ | 显式 `allow` / `require_approval` / `deny`；deny 在真实工具管线拦在工具体之前 |
+| `toolPolicy.riskLevels` / `classRiskLevels` / `riskApproval` | ✅ | 平台层与版本层**各自解析后取更严**；租户只能收紧，不能放松 |
+| `mcpServers` | ✅（授权面） | 引用哪台 server、`enabledTools` 授权哪些工具。**连接配置仍只来自 `MCP_SERVERS_JSON`**：版本里不接收地址、密钥引用、超时。省略或 `[]` = 不授权任何 MCP 工具 |
+| `delegation.remoteAgents` | ✅ | `delegate_to_remote_agent` 的白名单：`A2A_REMOTE_AGENTS_JSON` 里的远端 `id` 数组（≤20，去重）。保存时要求已登记（否则 `DELEGATION_REMOTE_AGENT_UNKNOWN`）；**不接收**地址、凭据、超时。`platformConstraints.remoteAgents` 只返回 `id`/`name`/`description`。见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md) |
+| `delegation.agents` | ✅ | `delegate_to_agent` 的白名单：同 org 的 Agent `name` 数组（≤20，去重）。保存时要求每个名字在本 org 存在（否则 `DELEGATION_AGENT_UNKNOWN`，别的 org 的同名 Agent 视为不存在）；运行时再判目标是否 active。省略或 `[]` = 不可委派。见 [design/agent-delegation.md](design/agent-delegation.md) |
+| `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
+| `skills` | ❌ | 运行时的 skill 只来自**调用者自己的 skill 目录**；这里的值仅用于 A2A agent card 展示 |
+| `extensions` | ❌ | 旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
+| `sandboxPolicy` | ❌ | **保留字段，没有执行路径**。沙箱模式、网络模式、可写根都由 exec 的部署级配置决定，不按 Agent 分（ADR 0002 起就是如此） |
+| `a2a` / `contextPolicy` | ❌ | 无读取方 |
+
+##### 配置契约（`schemaVersion: 1`）与配置面接口
+
+新写入的配置带 `schemaVersion: 1`；没有该字段的历史记录按 legacy 读取，**不原地迁移**，
+历史 JSON 与 `config_hash` 永不改写。
+
+- `GET /api/agents/config/options` 返回 `{ schemaVersion, fieldSupport, platformConstraints,
+  capabilityRevision }`。`platformConstraints` 只描述能力：模型目录及其可选 effort、工具名、
+  MCP server/工具清单与 `mcpReadiness`，以及大小上限。**不返回**连接地址、密钥引用、
+  宿主物理路径或别的用户的技能。
+- `POST /api/agents/config/validate` 接收 `{ config, agent_id? }`，返回
+  `{ valid, errors, warnings, normalizedConfig?, effectiveSummary, capabilityRevision }`。
+  它只解析：不跑工具、不调模型、不建会话、不装 MCP。`agent_id` 按同一条跨租户 404 规则校验。
+- **状态码语义**：body 结构错误（不是对象、`config` 缺失）是 400；**字段级校验结果是
+  合法请求的正常结果，返回 200 + `valid:false`**，`errors` 每条形如
+  `{ path, code, message }`，`path` 精确到 `modelPolicy.thinkingLevel`、
+  `mcpServers[0].enabledTools[1]`，UI 据此把错误标到具体控件上。
+- `valid:true` 必然带 `normalizedConfig`，`valid:false` 必然不带。创建/发布版本时服务端
+  **重新校验**，不信任浏览器回传的 `normalizedConfig` / `valid` / `capabilityRevision`。
+- `mcpReadiness.status` 区分三种事实：`ready`（清单已知）、`not_configured`（部署没有声明
+  任何 server）、`unknown`（还问不到）。`unknown` 时引用 MCP 一律拒绝
+  （`MCP_CATALOG_UNAVAILABLE`），**不能把"读不到"渲染成"空清单"**。
+- legacy 记录升级到 v1 时，`modelPolicy` 里的旧模型引用必须能映射到当前模型目录，
+  否则 `LEGACY_MODEL_UNMAPPABLE` 阻止升级；非空的 `skills` / `extensions` / `sandboxPolicy`
+  / `a2a` 与未识别键返回 `LEGACY_FIELD_REQUIRES_MIGRATION`，要求管理员显式处理，
+  **不会在表单/JSON 往返中被静默丢掉**。`effectiveSummary.migration.blockedPaths` 列出待处理项。
+
+##### 激活的乐观并发
+
+`POST .../versions`（`activate` 为真时）与 `POST .../active-version` 接受可选的
+`expected_active_version_id`：
+
+- **不传** = 跳过检查（旧客户端兼容窗口），行为与上线前一致。
+- 传 `null` = 断言"我读到的是还没有活跃版本"，与不传**不是**一回事。
+- 与当前指针不一致时返回 409 `ACTIVE_VERSION_CONFLICT`，响应带 `active_version_id`
+  （当前真实指针），供 UI 展示差异后再提交，而不是盲目重试覆盖别人的激活结果。
+- `activate: false` 的保存**不做**这项检查：它不与别人的激活竞争。
+
+版本号仍由 MySQL 事务决定。
+
+选择 Agent 的入口有三个，都只接受 `agent_id`（ULID），不接受 `agent_version_id`：
+
+| 入口 | 何时生效 |
+|------|---------|
+| `POST /api/runs` / `/api/conversations/{id}/runs` | `conversation_id` 为空时——首轮消息就是"建会话" |
+| `POST /api/conversations` | 显式建会话 |
+| `POST /api/sessions/ensure` | 不带 `conversation_id` 时 |
+
+**一个会话绑定一个 Agent，绑定在建会话时完成，此后不可变**：换 Agent 要新建会话。
+已存在的会话即使不传 `agent_id`，后续 Run 也继续用它绑定的那个 Agent，不会回落到
+租户默认。不传 `agent_id` 建新会话时的行为与多 Agent 上线前完全一致（租户默认 Agent）。
+`GET /api/conversations{,/id}` 的响应带 `agent_id`，即该会话绑定的智能体。
+
+进程接口的事实与控制权在 exec 的 `exec_jobs`，不在 Agent。BFF 先让 Agent
+按当前浏览器身份授权 `session_id` 并取得其 `workspace_id`，再用 owner-scoped
+exec 公共适配器查询或控制；返回给浏览器时仍投影原 `session_id`。不存在或
+跨租户访问统一返回 404。`logs` 返回 `next_offset`、`completed`、`truncated`、
+`log_total`；进程详情含 `process_id`、`run_id`、`status`、`command` 和时间字段。
+`kill` 是 `signal` 的兼容别名，默认同样发送 `SIGTERM`；需要终止升级语义使用
+`cancel`，需要指定信号则在 body 传 `signal`。Agent 不提供
+`/internal/processes*` 路由。
+
 admin 只有一个来源：`SANDBOX_AUTH_ADMIN_USERNAMES`（逗号分隔，大小写不敏感）。
 注册接口忽略客户端提交的 `role` / `organization_id`；名单内的用户名注册即为
 admin，已存在的账号在下次 login 或 `/auth/me` 时提升，移出名单则降级。
 `BFF_DEV_ACTING_ROLE` 只影响 `AUTH_ENABLED=false` 的开发身份，不会提升真实用户。
 
+认证数据与 token 的唯一权威是 Agent：BFF 的四条 `/api/auth/*` 适配器调用
+Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不保存密码、
+不签发或验证浏览器 JWT，也没有 `/auth/*` 路由。
+
 ### BFF 健康检查
 
 - `GET /health/live`：仅检查 BFF 进程，正常返回 200。
-- `GET /health/ready`：检查 Agent 与 Sandbox，任一不可用返回 503。
+- `GET /health/ready`：并行访问 Agent `GET /ready` 与 Sandbox `GET /ready`（不是它们的 liveness
+  `/health`），两者都返回 2xx 且 body `status: "ready"` 才返回 200，否则 503。
+  下游状态只投影为 `ready` / `not_ready`（答了但未就绪）/ `unreachable`（超时或网络错误）；
+  本端点免鉴权，不转发下游 body（MCP Server 名、错误文本）。
 
 ```json
-// Response (HTTP 200；依赖不可达时 503 且 status 为 "degraded"，不含密钥)
+// Response (HTTP 200；任一依赖未就绪时 503 且 status 为 "degraded"，不含密钥)
 {
   "status": "ok",
   "version": "4.0.0",
-  "agent": { "status": "ok" },
-  "sandbox": { "status": "ok" }
+  "agent": { "status": "ready" },
+  "sandbox": { "status": "ready" }
 }
 ```
 
@@ -246,7 +375,8 @@ admin，已存在的账号在下次 login 或 `/auth/me` 时提升，移出名�
 | `POST /api/conversations/{id}/artifact-imports` | 将当前用户已有 Artifact 导入目标会话 workspace；不创建新 Artifact |
 
 - Artifact 下载代理到 `GET /sessions/{id}/artifacts/{aid}/download`
-- 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`
+- 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`；
+  三条代理都先把 `session_id` 换成 `workspace_id` 再跳转（见下节公共面的 `{id}` 说明）
 - 上传支持 `Idempotency-Key` 与 `X-Trace-Id` 请求头；BFF 流式落盘后转发，不整包进堆内存
 - 超限返回 **413**，业务码见下方 Attachment 约定
 
@@ -265,19 +395,25 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 `/api/*` BFF 路由或 Agent internal contract，不能把 `X-API-Key`
 当作终端用户身份。
 
+> **这些路径里的 `{id}` 一律是 `workspace_id`，不是浏览器持有的
+> `sandbox_session_id`**——exec 的 `requireOwnedSession()` 拿它派生物理工作区路径。
+> BFF 在每次跳转前经 Agent `GET /internal/sessions/{sid}` 换一次，
+> `files` / `datasets` / `artifacts` / `processes` 四组代理同一条规则；换不出来一律
+> **503 `SESSION_WORKSPACE_UNAVAILABLE`**，不退化成拿 session id 顶替。
+
 ### 通用约定
 
 - 所有请求/响应为 JSON
 - 错误返回 `{ "detail": "message" }`
 - `X-Trace-Id` header 回显 + 关联审计日志
-- 兼容适配器认证: 仅受控 BFF/测试环境可使用 `X-API-Key`；正式 Agent
+- 兼容适配器认证: exec 公共会话面校验 `X-API-Key`（常量时间比较，不匹配 401），调用方只有 BFF 与 agent；正式 Agent
   internal plane 使用短期 HMAC claim（scope、owner、run/session、body
   digest），不接受一个永不过期的全局 token 作为执行授权
-- Public 端点豁免认证: `/health`, `/ready`, `/metrics`, `/docs`, `/openapi`, `/redoc`, `/auth/*`
-- **可选用户归属**（`SANDBOX_AUTH_ENABLED=true`）:
+- exec 的 public 探针豁免认证：`/health`, `/ready`, `/metrics`；浏览器认证只存在于 BFF `/api/auth/*`
+- **可选用户归属**（BFF `AUTH_ENABLED=true`；`SANDBOX_AUTH_ENABLED` 仅保留为 BFF 的旧配置别名）:
   - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 清理会话。
-  - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 验证后转发可信用户上下文。
-  - 兼容 BFF→Sandbox adapters: 服务 `X-API-Key` + 用户 JWT；或服务 key + `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`
+  - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 经 Agent `/internal/auth/me` 验证后写入可信 `X-Acting-*` 上下文。
+  - BFF→exec compatibility adapters 只发送服务 `X-API-Key` + 已验证的 `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`；exec 不接收浏览器 JWT。
   - 正式 Agent→Sandbox execution: `/internal/v1/*` HMAC claim（scope + owner + run/session + body digest + replay jti）；不接受浏览器 JWT 或裸 service key 作为执行授权
   - **服务 Token alone 不是终端用户**：不能替代 BFF/Agent 注入的 actor；跨用户/跨组织资源统一 fail-closed
   - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）
@@ -294,32 +430,65 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | 方法 | 路径 | 对应工具 |
 |------|------|----------|
 | `POST` | `/internal/v1/sessions/ensure` | Session 绑定 |
-| `POST` | `/internal/v1/files/read` | `read` |
-| `POST` | `/internal/v1/files/ls` | `ls` |
-| `POST` | `/internal/v1/files/find` | `find` |
-| `POST` | `/internal/v1/files/grep` | `grep` |
-| `POST` | `/internal/v1/files/write` | `write` |
-| `POST` | `/internal/v1/files/edit` | `edit` |
-| `POST` | `/internal/v1/skills/read` | Skill 读取（只读根） |
-| `POST` | `/internal/v1/executions/bash` | `bash` |
-| `POST` | `/internal/v1/executions/python` | `python` |
-| `POST` | `/internal/v1/processes/start` | `process_start` |
-| `POST` | `/internal/v1/processes/status` | `process_status` |
-| `POST` | `/internal/v1/processes/read` | `process_read` |
-| `POST` | `/internal/v1/processes/kill` | `process_kill` |
+| `POST` | `/internal/v1/fs/resolve\|stat\|lstat\|list` | `read` / `read_image` / `glob` 的远程 FS provider |
+| `POST` | `/internal/v1/fs/read-text\|read-bytes\|write-text\|edit-text` | `read` / `read_image` / `write` / `edit` |
+| `GET` | `/internal/v1/fs/stream-text` | 大文本流式读取 |
+| `POST` | `/internal/v1/fs/find\|grep` | `glob` / `grep` |
+| `POST` | `/internal/v1/shell/run\|start` | 前台 / 后台 `bash` |
+| `POST` | `/internal/v1/jobs/status\|read\|kill\|signal\|stdin` | exec 作业查询与控制 |
 | `POST` | `/internal/v1/artifacts/submit` | `submit_artifact` |
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
 
-这 13 个 sandbox-bridge 工具（`read` `ls` `find` `grep` `write` `edit` `bash`
-`python` `process_start` `process_status` `process_read` `process_kill`
-`submit_artifact`）是模型能看到的全部 Sandbox 工具面，由
-`agent/src/extensions/sandbox-bridge/constants.js` 的 `SANDBOX_TOOL_NAMES` 固定，
-并有守卫测试断言其中不含任何 SQL/DSN 工具。
+令牌的 `htm` / `htu` / `scope` / `tool_name` 四项都**逐字绑定**这张表（2026-09-04 起）：
 
-`ls` / `find` / `grep` 是 SDK 同名本地工具的沙箱替代品：那三个因为会读 Agent
-容器的文件系统而被永久排除（`LOCAL_FILESYSTEM_TOOL_NAMES`），此处的版本走
-internal plane、只读、有预算、可与 `read` 并行。
+- `htm` 必须与实际方法相等。以前 contract 把它钉死为 `'POST'`，而
+  `GET /internal/v1/fs/stream-text` 也要签，于是校验侧写了一条「htm 是 POST 但
+  方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。现在
+  `htm` 允许 `'GET'`，例外删除。
+- `scope` / `tool_name` 按路由族校验，表在 `@dsh/contract` 的
+  `internalBindingForHtu()`，签发与校验两侧共用：`fs/*` → `sandbox.fs` / `fs`，
+  `shell/*` → `sandbox.shell` / `shell`，`jobs/*` → `sandbox.jobs` / `jobs`，
+  `artifacts/submit` → `sandbox.artifacts.submit` / `artifact.submit`，
+  `artifacts/download` → `sandbox.artifacts.download` / `artifact.download`，
+  `sessions/ensure` → `sandbox.sessions.ensure` / `session.ensure`。
+  以前这两项谁都不看，`ExecRpcClient` 对所有 RPC 都写死 `fs` / `internal:fs`——
+  一枚「文件」令牌可以拿去起进程。**未登记的内部路径一律拒**，新端点不会默认免检。
+
+#### `shell/run` 与 `shell/start` 的请求体
+
+两侧共用 `@dsh/contract` 的 `parseShellRunPayload()` / `parseShellStartPayload()`；
+**越界或类型非法在执行前拒绝**（`ENVELOPE_INVALID` → 400），不静默退回默认值。
+2026-09-16 之前路由只挑 `command` 与 `timeoutMs`，其余字段丢掉仍返回 200——
+「指定了子目录却在工作区根执行」不会报错，只会写错文件。
+
+| 字段 | run | start | 规则 |
+|---|---|---|---|
+| `command` | 必填 | 必填 | 字符串 |
+| `workdir` | 可选 | 可选 | 沙箱**逻辑**路径，只认 `/home/sandbox/workspace[/…]` 与 `/tmp[/…]`；必须已规范化（无 `..`、无空段）。缺省为工作区根 |
+| `stdin` | 可选 | 可选 | spawn 时一次性写入并关闭 fd 0。`""` 表示「有输入、内容为空」，与缺省的「无输入」不同 |
+| `env` | 可选 | 可选 | 合法变量名 → 字符串；最多 64 条。再经执行面 safe-env 过滤，宿主服务凭据不会透传 |
+| `stdoutMaxBytes` | 可选 | 可选 | **字节**，上限 `SANDBOX_MAX_OUTPUT_CHARS × 4`。截断按字符边界，不会切出半个字符，并置 `truncated` |
+| `timeoutMs` | 可选 | **拒绝** | 有限正整数，上限 `SANDBOX_EXECUTION_TIMEOUT_SECONDS × 1000`。后台作业按异步进程契约运行，没有前台预算，带了这个字段直接 400 |
+| `id` / `runId` | — | 可选 | 作业账本标识 |
+
+取消与截止：
+
+- Agent 侧 `ExecRpcClient.post()` 的传输截止 = 执行预算 + 15 秒有界回传余量
+  （不再是与 payload 无关的固定 15 秒），并与调用方的 `AbortSignal` 融合；
+- exec 的监听器把「客户端提前断开」转成请求的 `AbortSignal`，路由再把它接到
+  执行面，bwrap 进程树随之终止——取消不再只是让客户端不等了；
+- `signal` **不进** payload。以前 Agent 发 `signal: true`，一个既表达不了取消、
+  也没人读的布尔值。
+
+模型默认工具面由 `agent/src/runtime/policy/tool-names.ts` 的
+`ENTERPRISE_DEFAULT_TOOLS` 唯一定义：`read` / `write` / `edit` / `read_image`、
+`glob` / `grep`、`bash`、`job_list` / `job_output` / `job_kill`、`todo_write`、
+`skill`、`subagent`、`submit_artifact`、`ask_user_question`。其中只有需要工作区
+字节或进程的工具走上述 exec provider；MCP 工具在启动时另行发现并仍受策略层控制。
+
+本地 FS / Shell / Jobs provider 不进入生产装配；Agent 只组装远程 provider，
+因此模型不能读取或启动 Agent 容器内的文件与进程。
 
 ---
 
@@ -329,12 +498,10 @@ internal plane、只读、有预算、可与 `read` 并行。
 `/approvals` 与 `/conversations` **均已删除**。执行只存在于 `/internal/v1/*`；
 审批与 Conversation 的唯一权威是 Agent MySQL，经 BFF `/api/*` 访问。
 
-当前 Sandbox 进程实际挂载的非 internal 路由只有：
+当前 exec（compose 服务名 `sandbox`）实际挂载的非 internal 路由只有：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/auth/register` `/auth/login` | 兼容认证 |
-| `GET` | `/auth/me` | 当前用户 |
 | `DELETE` | `/sessions/{session_id}` | 按保留策略清理该 Session 的私有存储 |
 | — | `/sessions/{id}/files/*` | 见下方 Files |
 | `GET` `POST` | `/sessions/{id}/datasets` | 列出 / 创建 Dataset |
@@ -474,12 +641,22 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `GET` | `/sessions/{id}/artifacts` | 列举本工作区的产物 |
 | `POST` | `/sessions/{id}/artifacts/register` | 注册产物（旧端点） |
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
 | `POST` | `/sessions/{id}/artifacts/imports` | 将 owner-scoped Artifact 导入本 Session workspace（BFF 上游兼容端点） |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
 
-Sandbox 侧**没有**产物列表路由；列表由 Agent MySQL 提供，经 BFF `GET /api/artifacts` 访问。
+> **公共面这几条路由里的 `{id}` 是 `workspace_id`，不是 `sandbox_session_id`。**
+> exec 的 `requireOwnedSession()` 拿它派生物理工作区路径，产物的归属判定也按
+> `workspace_id`。浏览器只认 sandbox session id，所以 BFF 在每次 Sandbox 跳转前
+> 都会先经 Agent 的 `GET /internal/sessions/{sid}` 换成 `workspace_id`；换不出来
+> 一律 **503 `SESSION_WORKSPACE_UNAVAILABLE`**，不退化成拿 session id 顶替
+> （那会静默落到一个不存在的工作区：列表恒空、导入写进错的目录）。
+>
+> 记录里的 `session_id` 列**不是**列表键：内部面的 `submit_artifact` 往里写
+> sandbox session id，MCP facade 写的是 workspace id（facade 够不到 session 概念）。
+> 两个写入方唯一一致的键是 `workspace_id`，所以列表与下载都按它判。
 
 > **核心设计（P7）**：系统**不会自动扫描** workspace。`write` / `edit` / `bash` 只改私有工作区，**不会**注册 artifact，也**不会**触发 `file_ready`。只有通过 `submit_artifact`（或等价 `POST .../artifacts/submit`）显式提交的文件才会出现在 artifact 列表并可供用户下载。
 
@@ -527,9 +704,9 @@ metadata，也不触发 `artifact.ready/file_ready`。目标会话如需正式�
 
 ### MCP (Model Context Protocol)
 
-Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Server，并在进程启动时对每个 `enabled=true` 的 `MCP_SERVERS_JSON` 条目执行 `tools/list`。发现的工具直接注册为 `mcp__{serverId}__{toolName}`，并默认走 approval；配置不支持热加载。任一启用 Server 不可连接时，Agent `GET /ready` 返回 503，避免将故障静默降级为没有 MCP 工具。
+Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Server，并在进程启动时对每个 `enabled=true` 的 `MCP_SERVERS_JSON` 条目执行 `tools/list`。发现的工具直接注册为 `mcp__{serverId}__{toolName}`，并默认走 approval；配置不支持热加载。任一启用 Server 不可连接时，Agent `GET /ready` 返回 503，该 Server 以 `status: "unavailable"`、`tool_count: 0` 留在 `mcp.servers` 里，避免将故障静默降级为没有 MCP 工具。`/ready` 每次按当前工具注册表重算，Server 恢复或重连预算耗尽后无需重启即反映。
 
-另外，Sandbox 模块提供独立部署的 `sandbox-mcp` Streamable HTTP 服务（`/mcp`），用于不经过 Agent 的受限 Python、文件和 Artifact 工作流。它不是 Sandbox API 的公开路由，且 MCP 进程不挂载任何 Sandbox 存储卷；详细部署与认证边界见 [`sandbox-mcp.md`](./sandbox-mcp.md)。
+另外，执行面镜像提供**第二个入口** `sandbox-mcp`（Streamable HTTP，`/mcp`），用于不经过 Agent 的受限 Python、文件和 Artifact 工作流。它是独立进程、独立凭据，只能经 `/internal/mcp/v1/*` 窄桥访问执行面，够不到 HMAC 内部面；不挂载任何工作区卷。详细部署与认证边界见 [`sandbox-mcp.md`](./sandbox-mcp.md)。
 
 ---
 
@@ -537,43 +714,34 @@ Agent Runtime 的 MCP Connection Manager 仍直接连接外部 MCP Gateway/Serve
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/health` | **Liveness** — 进程存活。只要服务能应答即 **200**（不因依赖失败而 503） |
-| `GET` | `/ready` | **Readiness** — 依赖就绪（工作区可写 + 数据库可 `SELECT 1`）。未就绪返回 **503** |
-| `GET` | `/metrics` | Prometheus 指标 (文本格式) |
+执行面（exec，8081）：
 
-两者均为 public 路由（无需 `X-API-Key` / JWT）。响应**不**包含密钥、连接串、绝对路径或环境变量 dump。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health`、`/health/live` | **Liveness** — 进程能应答即 **200**，不查依赖 |
+| `GET` | `/ready`、`/health/ready` | **Readiness** — 数据库、四个数据根与启动期 Bubblewrap 预检都通过才 **200**，否则 **503** |
+
+均为 public 路由（无需 `X-API-Key` / HMAC）。响应**不**包含密钥、连接串、路径或错误文本。
 
 ```json
-// GET /health — Response (200)  进程存活
-// GET /ready  — Response (200)  依赖就绪；未就绪时 HTTP 503 且 status="not_ready"
+// GET /health — 200
+{ "status": "ok" }
+
+// GET /ready — 200 就绪；未就绪时 503 且 status="not_ready"
 {
-  "status": "ok",
-  "version": "0.1.0",
-  "sessions_active": 3,
-  "executions_total": 42,
-  "workspace_available": true,
-  "disk_free_mb": 15200.5,
-  "runtimes": { "python": true, "bash": true, "node": true },
-  "internal_plane_status": "ready"
+  "status": "ready",
+  "shutting_down": false,
+  "database": "ok",
+  "storage": { "workspaces": "ok", "tmp": "ok", "artifacts": "ok", "control": "ok" },
+  "isolation": "ok"
 }
 ```
 
-| 字段 | `/health` | `/ready` |
-|------|-----------|----------|
-| `status` | 始终 `"ok"`（能应答即存活） | `"ok"` 或 `"not_ready"` |
-| HTTP | 200 | 200 就绪 / **503** 未就绪 |
-| `workspace_available` | 尽力探测；失败不影响 liveness 状态码 | 工作区根目录存在且可写 |
-| 数据库 | 不检查 | 必须 `SELECT 1` 成功 |
-| `internal_plane_status` | `disabled` 或 `not_checked` | `disabled`、`ready` 或 `not_ready` |
+| 字段 | 取值 | 说明 |
+|------|------|------|
+| `database` | `ok` / `unavailable` / `not_configured` | 每次请求 `SELECT 1`，2s 超时；`not_configured` 只出现在非生产内存模式，不算失败 |
+| `storage.<名>` | `ok` / `unavailable` | `SANDBOX_WORKSPACES_ROOT`、`SANDBOX_TEMP_ROOT`、`SANDBOX_ARTIFACTS_ROOT`、`SANDBOX_CONTROL_ROOT` 是可读写目录，各 2s 超时 |
+| `isolation` | `ok` / `unchecked` / `unavailable` | 启动期真跑一次 bwrap 探针的结果，请求时不重跑；预检失败时进程本身拒绝启动 |
+| `shutting_down` | `true` 时只返回 `status` 与该字段 | 收到 SIGTERM 后立即 503 |
 
-#### Prometheus Metrics
-
-| Metric | Type | Labels | 说明 |
-|--------|------|--------|------|
-| `sandbox_execution_total` | Counter | `session_id`, `status` | 执行总数 |
-| `sandbox_execution_failed_total` | Counter | — | 失败执行数 |
-| `sandbox_execution_timeout_total` | Counter | — | 超时执行数 |
-| `sandbox_execution_duration_seconds` | Gauge | — | 执行耗时 |
-| `sandbox_active_sessions` | Gauge | — | 活跃会话数 |
-| `sandbox_workspace_bytes` | Gauge | — | 工作区磁盘使用量 |
-| `sandbox_rate_limited_total` | Counter | `caller_id` | 速率限制触发数 |
+执行面没有 `/metrics` 端点（旧 Python 执行面的 Prometheus 指标已随其删除）。

@@ -1,8 +1,12 @@
 # 独立部署的 Sandbox MCP
 
-`sandbox-mcp` 是与 `sandbox` 同仓库、同镜像但不同进程的 Streamable HTTP
-MCP 服务。它不依赖 Agent Runtime，也不挂载 workspace、tmp 或 Artifact
-目录；所有有状态操作都只经 Sandbox 的私有 `/internal/mcp/v1/*` 桥接完成。
+`sandbox-mcp` 是与 `sandbox` 同仓库、同一份 `exec/Dockerfile`，但**独立 slim 镜像**
+（`--target facade`，默认 `enterprise-sandbox-mcp:latest`）与独立进程的 Streamable HTTP
+MCP 服务（实现在 `exec/src/mcp/`，入口 `dist/mcp-main.js`）。镜像只含该入口的 import 图
+（`mcp/`、`http/node-listener.js` 与 contract 的 DBPM 取密模块）和对应生产依赖，不带模型工具链、
+Bubblewrap、Python、执行面代码或数据库驱动，以 `up_docker`（1000:1000）运行。它不依赖 Agent
+Runtime，也不挂载 workspace、tmp 或 Artifact 目录；所有有状态操作都只经
+exec 的私有 `/internal/mcp/v1/*` 桥接完成。
 
 ```mermaid
 flowchart LR
@@ -24,6 +28,13 @@ flowchart LR
 | `sandbox_file_read` | 读取文本文件（可传 offset/limit） |
 | `sandbox_file_list` | 有深度上限的文件列表 |
 | `sandbox_artifact_submit` | 对已生成文件做不可变快照并返回临时下载 URL |
+
+两个执行工具与 Agent 的 shell 工具**同一套**限额：exec 端的 `SANDBOX_MAX_PROCESS_COUNT` /
+`SANDBOX_MAX_OPEN_FILES` / `SANDBOX_MAX_CPU_TIME_SECONDS` / `SANDBOX_MAX_FILE_SIZE_MB`
+（命名空间内 `ulimit`）、子进程磁盘配额准入与采样，以及请求断开即终止命令
+（见 [deployment.md](deployment.md#per-execution-resource-limits)）。配额超额时结果为
+`failed`（exit 126，原因在 stderr）；`timeout_seconds` 超过 `SANDBOX_EXECUTION_TIMEOUT_SECONDS`
+时桥接回 400。
 
 每个调用可传 `context_id`。`sandbox-mcp` 把它映射为 Redis 中的
 `(sandbox_session_id, workspace_id)`，首次使用会在短锁下创建工作区；同一
@@ -99,13 +110,17 @@ Authorization: Bearer <SANDBOX_MCP_TOKEN>
 `SANDBOX_MCP_PUBLIC_BASE_URL`；Artifact URL 才会对外可下载。MCP 的 DNS
 rebinding 保护只接受 loopback、服务名，以及这个配置的公共 host。
 
-必须分别设置以下高熵值，严禁复用 `SANDBOX_API_TOKEN`、Agent HMAC key 或
-Sandbox replay Redis 密码：
+必须分别设置以下高熵值，严禁复用 `SANDBOX_API_TOKEN` 或 Agent HMAC key：
 
 - `SANDBOX_MCP_TOKEN`：MCP 客户端到 `sandbox-mcp`
 - `SANDBOX_MCP_INTERNAL_TOKEN`：`sandbox-mcp` 到 Sandbox 私有桥
 - `SANDBOX_MCP_DOWNLOAD_SECRET`：Artifact 下载 URL 签名
 
+容器里**只有**这三项凭据：`sandbox-mcp` 不挂 `env_file`，Compose 只把 `environment`
+里显式列出的变量交给它（`${VAR}` 插值仍从 `.env` 取值）。新增 facade 配置要在
+`docker-compose.yml` 的 `sandbox-mcp.environment` 里逐项透传，不要恢复 `env_file`——
+2026-09-16 之前它把整份 `.env`（内部面 HMAC keyring、模型 API key、业务库口令等）
+带进了这个唯一对外暴露的进程。`tests/test_dbpm_compose_config.py` 守着这条。
+
 `SANDBOX_MCP_REDIS_URL` 使用服务 Redis 的专用 key 前缀
-`sandbox:mcp:v1`，不得指向仅供 HMAC 重放保护的
-`sandbox-replay-redis`。
+`sandbox:mcp:v1`，与 Agent 的队列 / lease / stream key 空间分开。

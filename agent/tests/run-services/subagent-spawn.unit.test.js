@@ -57,7 +57,7 @@ async function createParentRun(world, idempotencyKey = 'parent-1') {
     traceId: TRACE,
     idempotencyKey,
   });
-  const row = world.tables.runs.find((r) => r.run_id === created.runId);
+  const row = world.tables.tbl_agsvc_runs.find((r) => r.run_id === created.runId);
   return {
     runId: created.runId,
     orgId: String(row.org_id),
@@ -70,7 +70,7 @@ async function createParentRun(world, idempotencyKey = 'parent-1') {
 
 /** @param {ReturnType<typeof createFakeRunWorld>} world */
 function childRows(world, parentRunId) {
-  return world.tables.runs.filter((r) => r.parent_run_id === parentRunId);
+  return world.tables.tbl_agsvc_runs.filter((r) => r.parent_run_id === parentRunId);
 }
 
 describe('SubagentSpawnService.spawn', () => {
@@ -135,7 +135,7 @@ describe('SubagentSpawnService.spawn', () => {
     assert.equal(child.user_id, parent.userId);
     assert.equal(child.agent_version_id, parent.agentVersionId);
 
-    const session = world.tables.agent_sessions.find(
+    const session = world.tables.tbl_agsvc_agent_sessions.find(
       (s) => s.agent_session_id === child.agent_session_id,
     );
     assert.equal(session.status, 'ACTIVE');
@@ -143,7 +143,7 @@ describe('SubagentSpawnService.spawn', () => {
     assert.notEqual(session.workspace_id, null);
 
     // The task is the child's triggering user message.
-    const message = world.tables.messages.find(
+    const message = world.tables.tbl_agsvc_messages.find(
       (m) => m.message_id === child.triggering_message_id,
     );
     assert.equal(message.role, 'user');
@@ -196,7 +196,7 @@ describe('SubagentSpawnService.spawn', () => {
     );
 
     // Terminal children do not hold a slot.
-    world.tables.runs.find((r) => r.run_id === a.runId).status =
+    world.tables.tbl_agsvc_runs.find((r) => r.run_id === a.runId).status =
       RUN_STATUS.SUCCEEDED;
     const third = await service.spawn({ ...base, toolCallId: 'c4', task: 'c' });
     assert.ok(isUlid(third.runId));
@@ -288,7 +288,7 @@ describe('SubagentSpawnService.getStatuses', () => {
     });
 
     // The finished child wrote an assistant transcript row, like any Run.
-    const doneRow = world.tables.runs.find((r) => r.run_id === done.runId);
+    const doneRow = world.tables.tbl_agsvc_runs.find((r) => r.run_id === done.runId);
     doneRow.status = RUN_STATUS.SUCCEEDED;
     await world.transactionManager.run(async (trx) => {
       const repos = world.createRepositories(trx);

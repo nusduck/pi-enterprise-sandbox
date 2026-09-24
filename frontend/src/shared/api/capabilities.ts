@@ -89,6 +89,38 @@ export async function listSkills(): Promise<SoftListResult<SkillItem>> {
   return { items, available: true };
 }
 
+export async function setSkillEnabled(name: string, enabled: boolean): Promise<void> {
+  const action = enabled ? 'enable' : 'disable';
+  const resp = await fetch(
+    `${BASE}/capabilities/skills/${encodeURIComponent(name)}/${action}`,
+    { method: 'POST', headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({})) as { error?: unknown };
+    throw new Error(String(payload.error || `Skill ${action} failed: ${resp.status}`));
+  }
+}
+
+export async function uploadSkillDraft(
+  file: File | Blob,
+  filename?: string,
+): Promise<{ ok: boolean; name: string; description?: string; summary?: string }> {
+  const name = filename || (file as File).name || 'skill.zip';
+  const headers = authHeaders();
+  headers['Content-Type'] = 'application/octet-stream';
+  headers['X-Filename'] = encodeURIComponent(name);
+  const resp = await fetch(`${BASE}/capabilities/skills/drafts`, {
+    method: 'POST',
+    headers,
+    body: file,
+  });
+  if (!resp.ok) {
+    const payload = (await resp.json().catch(() => ({}))) as { error?: unknown };
+    throw new Error(String(payload.error || `Skill draft upload failed: ${resp.status}`));
+  }
+  return resp.json() as Promise<{ ok: boolean; name: string; description?: string; summary?: string }>;
+}
+
 /**
  * GET /api/capabilities/mcp
  */

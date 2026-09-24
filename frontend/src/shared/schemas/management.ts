@@ -77,6 +77,11 @@ export const SkillItemSchema = z
     status: z.string().optional().nullable(),
     dynamic: z.boolean().optional(),
     registry_id: z.string().optional().nullable(),
+    /**
+     * 仅 `skill_drafts` 上出现：这份草稿已经有一个同名的已启用副本。
+     * 启用是复制字节、草稿不删，所以列表里必须能区分"待启用"和"已发布"。
+     */
+    published: z.boolean().optional(),
   })
   .passthrough();
 
@@ -105,6 +110,9 @@ export const McpServerSchema = z
     last_refreshed_at: z.string().optional().nullable(),
     dynamic: z.boolean().optional(),
     registry_id: z.string().optional().nullable(),
+    /** Bare names discovered from the currently reachable server. */
+    tools: z.array(z.unknown()).optional(),
+    tool_names: z.array(z.string()).optional(),
   })
   .passthrough();
 
@@ -165,6 +173,9 @@ export const ModelItemSchema = z
     max_output_tokens: z.number().optional().nullable(),
     supports_tool_call: z.boolean().optional(),
     supports_reasoning: z.boolean().optional(),
+    supports_temperature: z.boolean().optional(),
+    temperature_min: z.number().optional().nullable(),
+    temperature_max: z.number().optional().nullable(),
     input_modalities: z.array(z.string()).optional(),
     output_modalities: z.array(z.string()).optional(),
     thinking_levels: z.array(z.string()).optional(),

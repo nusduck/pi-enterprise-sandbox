@@ -63,6 +63,8 @@ export async function createRun(body: {
   conversation_id?: string | null;
   session_id?: string | null;
   model_id?: string | null;
+  /** 只在首轮（conversation_id 为空）有意义：这一轮同时是"建会话"。 */
+  agent_id?: string | null;
   messages?: unknown[];
 }): Promise<CreateRunResponse> {
   try {

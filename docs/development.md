@@ -4,9 +4,9 @@
 
 ### 前置要求
 
-- **Python 3.11**（次版本固定；`runtime-versions.json` / `.python-version`；`requires-python = ">=3.11,<3.12"`）
-- **Node.js 22**（主版本固定；`runtime-versions.json` / `.node-version`；`engines.node = ">=22.19.0 <23"`，与 Pi SDK `0.80.3` 一致）
-- **Pi SDK** `@earendil-works/pi-coding-agent` / `@earendil-works/pi-ai` **精确** `0.80.3`（仅 `agent/`；禁止 `^`/`~`）
+- **Node.js 22**（主版本固定；`runtime-versions.json` / `.node-version`；`engines.node = ">=22.19.0 <23"`）
+- **DeepSeek Harness** `@deepseek-ai/dsh-*` **逐包精确** `0.1.1-rc.2`（禁止 `^`/`~`，也不依赖 dist-tag）
+- **Python 3.11**（只用于跑 `tests/` 的仓库卫生检查，以及沙箱镜像里给**模型执行代码**用的解释器；服务代码没有 Python）
 - **Docker** / Docker Compose
 - **Git**
 
@@ -20,13 +20,16 @@
 # 0. 环境模板（勿提交真实 .env）
 cp .env.example .env
 # 编辑 .env：至少填入 LLMIO_BASE_URL / LLMIO_API_KEY；可选 SANDBOX_API_TOKEN
-# 多用户归属（默认关闭）: SANDBOX_AUTH_ENABLED=true + AUTH_ENABLED=true + SANDBOX_JWT_SECRET
+# 多用户归属（默认关闭）: AUTH_ENABLED=true + SANDBOX_JWT_SECRET
+# SANDBOX_AUTH_ENABLED 仅是 BFF 的旧别名；JWT 凭据由 Agent 管理，exec 不读取。
 # 关闭鉴权即回退 open 单用户模式；ownership 列与 bootstrap 回填结果保留
 
-# 1. Python（Sandbox + pytest）
+# 1. Python（只为跑 tests/ 的仓库卫生检查，不是执行面服务）
 uv sync --extra test
 
-# 2. Node BFF + Agent + Frontend（Node 22）
+# 2. Node（Node 22）
+npm ci --prefix contract
+npm ci --prefix exec
 npm ci --prefix api-server
 npm ci --prefix agent
 npm ci --prefix frontend
@@ -40,15 +43,21 @@ npm ci --prefix frontend
 uv run pytest tests/ -q --tb=short
 # 仅版本钉：uv run pytest tests/test_runtime_versions.py -q
 
-# Node BFF（含 import/listen smoke）
-node --test api-server/tests/*.test.js
-# 或：npm test --prefix api-server
+# Node BFF（含测试、构建与类型检查）
+npm test --prefix api-server
+npm --prefix api-server run typecheck
 
-# Node Agent（含 sdk-compat、fake OpenAI、listen smoke）
-node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
-# SDK 精确版本：npm ls --prefix agent @earendil-works/pi-coding-agent
-# 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0001-pi-coding-agent-sdk.md
+
+# Node Agent（测试会先 build；类型检查不在 npm test 里）
+npm test --prefix agent
+npm --prefix agent run typecheck
+# SDK 精确版本：npm ls --prefix agent @deepseek-ai/dsh-base
+# 升级流程：docs/runbooks/sdk-upgrade.md · ADR：docs/adr/0007-agent-runtime-rebuild-on-dsh.md
 # SSOT：runtime-versions.json
+
+# 执行面 + 契约（TypeScript）
+npm test --prefix exec && npx tsc --noEmit -p exec/tsconfig.json
+npm test --prefix contract && npx tsc --noEmit -p contract/tsconfig.json
 
 # Frontend
 npm test --prefix frontend
@@ -58,7 +67,7 @@ npm run build --prefix frontend
 test -f .env || cp .env.example .env
 docker compose config -q
 
-# 无真实 LLM key 的四服务协议 smoke（deterministic fake OpenAI；生产禁用）
+# 无真实 LLM key 的跨服务协议 smoke（deterministic fake OpenAI；生产禁用）
 node scripts/smoke-cross-service.mjs
 ```
 
@@ -71,7 +80,6 @@ smoke/gate 临时目录。
 ```text
 .runtime/
   sandbox/{workspaces,tmp,artifacts,control}
-  agent/pi-agent-home
   smoke/
   release-gates/
   pytest-cache/
@@ -79,16 +87,49 @@ smoke/gate 临时目录。
 ```
 
 `.runtime/` 由 Git 和 Docker build context 共同忽略。容器内路径仍为
-`/var/sandbox/*` 与 `/app/pi-agent-home`，因此这一整理不改变运行协议。
-旧目录只为无损升级继续保持忽略；确认数据已迁移后可由维护者手动清理。
+`/var/sandbox/*`。
+
+### 运行（推荐：OrbStack K8s）
+
+本地运行以 OrbStack 自带的单节点 K8s 为主，拓扑与目标环境一致：应用层（agent、agent-worker、api-server、
+frontend、sandbox-mcp）跑在 K8s 里，MySQL / Redis / dbpm-fake 与 exec（目标环境是 VM）仍由 Compose 提供。
+Compose 文件保留：release gate、集成测试与 `schema-apply.sh` 都依赖它，下文的纯 Compose 方式也继续可用。
+
+```bash
+orb config set k8s.enable true && orb stop && orb start   # 一次性；会重启 OrbStack 里的全部容器
+docker compose build                                       # 镜像不挂载源码，改了代码先重建
+scripts/dev/k8s/up.sh dev                                  # 起应用层；再次执行即按新镜像 / 新配置滚动
+# 浏览器 http://127.0.0.1:3000；BFF 127.0.0.1:4000、Agent 127.0.0.1:4100、MCP facade 127.0.0.1:8082
+scripts/dev/k8s/down.sh dev                                # 删命名空间并把应用层交还给 Compose
+```
+
+- `up.sh dev` 会先 `docker compose stop` 掉 Compose 里的 agent / agent-worker / api-server / frontend / sandbox-mcp：
+  同一个队列与库不能有两组消费者。
+- 各服务的环境变量取自 `docker compose config`（`.env` + Compose 默认值），与 Compose 方式同一份配置；
+  改了 `.env` 重新执行 `up.sh dev`。
+- 端口经 LoadBalancer 映射到宿主 `127.0.0.1`（`k8s.expose_services=false` 时不对局域网开放），端口号取 Compose 的发布端口。
+- 已启用 Skill 直接挂 Compose 的命名卷 `agent_user_skills`（OrbStack 的 K8s 节点就是 Docker 所在的 VM），
+  草稿挂 `.runtime/sandbox/skill-draft`，两种运行方式数据互通。
+- 应用镜像都是固定 `:latest` + `imagePullPolicy: Never`，重建同名镜像不会改 Pod 模板；再次执行 `up.sh` 时
+  对 agent / agent-worker / api-server / frontend / sandbox-mcp 全部 `rollout restart`，新增用本地镜像的
+  Deployment 要加进脚本的 `APP_DEPLOYMENTS`（`tests/test_k8s_dev_manifests.py` 守着）。
+- 集群外依赖经 EndpointSlice 按容器 IP 接入；Compose 容器重建后 IP 会变，重新执行 `up.sh dev`。
+- 宿主到 ClusterIP 不通（路由走局域网网关），调试单个服务用 `kubectl -n dsh-dev port-forward` 或 `kubectl -n dsh-dev logs`。
+
+清单里有两处在目标环境同样要注意：镜像以 `up_docker`（1000:1000）运行且 `USER` 写数字，`runAsNonRoot`
+才能校验（写名字会被拒绝建容器）；frontend 听 8080；Pod 要关 `enableServiceLinks`，否则名为 `sandbox-mcp` / `sandbox` / `agent` 的 Service
+会注入 `SANDBOX_MCP_PORT=tcp://…` 等变量，覆盖应用同名配置（facade 读到 NaN 端口拒启）。
 
 ### 运行（本地四进程）
 
+> **本地裸跑执行面只在 Linux 上有意义**：Bubblewrap 需要非特权 user namespace，
+> macOS 没有。macOS 上请用 Docker（下方），或只跑不涉及执行的那几层。
+
 ```bash
-# Terminal 1: Sandbox
-# Inbound allowlist defaults to loopback + private ranges; see SANDBOX_ALLOWED_CLIENT_CIDRS.
-# SANDBOX_BIND_HOST only sets the listen address (0.0.0.0 ≠ allow any client).
-uv run uvicorn sandbox.main:app --host 127.0.0.1 --port 8081 --reload
+# Terminal 1: 执行面（exec）
+# 内部面来源白名单必须显式给：空值会拒绝全部 /internal/v1 请求（见 deployment.md）。
+npm run build --prefix contract && npm run build --prefix exec
+EXEC_INTERNAL_ALLOW_CIDR=127.0.0.1/32 node exec/dist/main.js
 
 # Terminal 2: Agent（需要 Sandbox + LLM 配置）
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
@@ -108,8 +149,10 @@ npm run dev --prefix frontend
 # 完整栈
 docker compose up --build
 
-# 仅 Sandbox（用于 Agent / BFF 本地开发）
+# 仅执行面（用于 Agent / BFF 本地开发）
 docker compose up --build sandbox -d
+# 需要对外 MCP 面时再加一个（同一 Dockerfile 的 slim facade 镜像；改了 exec/ 两个都要 build）
+docker compose up --build sandbox sandbox-mcp -d
 # 然后本地运行 Agent + BFF：
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
 SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
@@ -118,14 +161,19 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 
 ## 开发流程
 
-### 新增 API 端点 (Sandbox)
+### 新增 API 端点（执行面 exec）
 
-1. 在 `sandbox/routers/` 创建或更新 router
-2. 在 `sandbox/services/` 添加业务逻辑
-3. 在 `sandbox/main.py` 注册 router
-4. 如需新模型，在 `sandbox/models.py` 添加 Pydantic schema
-5. 编写测试 `tests/`
-6. 更新 API 文档 `docs/api.md`
+1. 在 `exec/src/http/` 建或改路由文件：
+   - `internal-*.ts` → Agent 用的 HMAC 内部面
+   - `public/*.ts` → BFF 用的会话作用域面（**契约对 BFF 不变**）
+   - `internal-mcp.ts` → 对外 MCP facade 的窄桥（独立 bearer）
+2. 业务逻辑放对应的领域目录（`fs/` `shell/` `search/` `artifact/` `dataset/` …），
+   **不要写在路由里**
+3. 在 `exec/src/http/app.ts`（唯一组合入口）挂载
+4. 写测试到 `exec/test/`——**断言语义，不要断言形状**：
+   写完先问一句"空实现能不能让这条用例通过？"能就重写。
+   这条规矩的由来见 [`design/waves/gap-audit.md`](design/waves/gap-audit.md)
+5. 更新 API 文档 `docs/api.md`
 
 ### 新增技能（零 Skill 仍可启动）
 
@@ -143,72 +191,34 @@ prompt 的记忆。
 2. 添加 `SKILL.md`（YAML frontmatter：`name` + `description` 必填）
 3. 添加脚本到 `skills/your-skill-name/scripts/`
 4. `skills/` 默认只读挂载到 Agent / Sandbox skill 根
-5. Agent 通过 Pi ResourceLoader 发现 Skill，再应用可选的 `AgentVersion.skills` allowlist；工作区始终从空目录起步，Skill 不复制进 workspace
+5. Agent 扫描系统层与调用者自己的用户层 Skill 根，再应用可选的 `AgentVersion.skills` allowlist；工作区始终从空目录起步，Skill 不复制进 workspace
 6. 重新构建服务或创建新 session 以刷新系统层 registry
 
-**方式 B — 用户对话安装**
+**方式 B — 用户草稿与启用**
 
-Skill 分两层：
-
-| 层 | 路径 | 可见范围 | 可写 |
-|----|------|----------|------|
-| 系统 | `/home/sandbox/skill`（仓库 `./skills`） | 所有人 | 否 |
-| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 仅该用户 | 是 |
-
-每个 Run 只扫描 `[系统层, 自己的用户目录]`，系统层优先。用户目录在 named volume
-上，所以装过的 skill **跨对话、跨容器重建都在**，但**不跨用户** —— 别人（哪怕同组织）
-的 agent 上下文里看不到，Sandbox 执行时也只 bind 调用者本人的目录。
-
-Skill 生命周期在所有部署环境中使用同一套行为，不读取开发/生产模式开关。安全性来自
-用户目录隔离、当前回合附件绑定、归档校验，以及所有变更工具的审批。
+用户 Skill 分成 owner-scoped 草稿与发布副本。模型用普通 `write` / `bash` 在
+`/home/sandbox/skill-draft` 创建或修改包；草稿不进发现与 prompt。用户随后在
+Settings → Capabilities → Skills 点击 Enable，Agent 在锁住 owner 的事务里校验包、按摘要发布到
+`/home/sandbox/skill-user/<orgId>/<userId>/<package>/.v/<digest>/<package>`（侧车 `.v/<digest>.json`），
+写入 `user_skill_enablements`。Worker 按账本核对后把清单随内部请求交给 exec，exec 只把清单点名的
+版本逐个 `ro_bind` 到 `/home/sandbox/skill-user/<package>`，模型看到的也是这个路径。Disable 只删账本行，
+字节过 `SKILL_VERSION_GC_GRACE_MS`（默认 24 小时）后回收；草稿保留。
 
 ```bash
 # .env
 SKILLS_ROOT=/home/sandbox/skill
 SKILLS_USER_ROOT=/home/sandbox/skill-user
+# 仅 exec 读取；缺失时草稿写面 fail-closed。Compose 已显式设置。
+SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft
 # 可选审计文件
 # SKILLS_AUDIT_LOG=/tmp/skill-audit.jsonl
 ```
 
-注册的工具（`skill-lifecycle` 扩展，per-Run 绑定调用者身份）：
-
-| 工具 | 作用 |
-|------|------|
-| `skill_list` | 列出两层可见 package（含 tier / description / 是否可编辑） |
-| `skill_install` | 安装单个 package：当前回合上传的 `.zip`（`source="attachment"`，默认），或模型自己在沙盒里搭好并打包的 `.zip` / `.skill`（`source="sandbox"`，传 `path` 与 `source_digest`） |
-| `skill_create` | 把与用户确认后的说明和文本文件原子生成成一个 package |
-| `skill_uninstall` | 删除自己装的 package（系统层不可删） |
-| `skill_edit` | 修改已安装用户 package 里的一个或多个文件；不能用来新建 package。`files: [{path, content}]` 一次提交一组改动（同一个 package，最多 32 个文件，全成或全败），旧的单文件 `path` + `content` 形参仍然接受 |
-
-上传流程复用聊天附件：前端把 ZIP 作为 Dataset 上传到当前 Sandbox session，Run 中保留
-结构化 `attachment_id`。Agent 只把当前回合的 attachment id 交给 `skill_install`；审批通过后，
-Worker 使用 owner-scoped Sandbox client 下载内容，在 Agent 用户 Skill 卷内的临时目录安全解压、
-校验唯一 `SKILL.md`、原子替换并自动 reload。URL 不是工具参数。
-
-`source="sandbox"` 是给「模型自己写一个 Skill」用的：模型用普通 `write` / `bash` 在
-workspace 或 `/tmp` 里搭包、跑通、打成 ZIP，然后把**归档路径**交给 `skill_install`。
-路径先过 `sandbox-bridge` 的 `normalizeLogicalPath`（Skill 根被显式拒绝——只读挂载不能
-既是安装源又是安装目标），再由 Sandbox 的 `parse_sandbox_path` 二次限定在该 session 的
-workspace/temp 根内。取回字节走已有的 owner-scoped `GET /sessions/{id}/files/download`，
-之后与上传路径**汇流到同一个** `installSkillArchive`：同样的解压、校验、原子替换。
-换句话说，这条路增加的是「够得着一个归档」的方式，不是第二条写入 Skill 根的路径。
-
-`source="sandbox"` 另外**必须**带 `source_digest`（归档的 sha256，64 位小写十六进制）。
-原因是两条来源锚定字节的方式不同：attachment 由用户本回合上传的 attachment id 锚定，
-而沙盒路径只是一个位置——`skill_install` 是 high risk，参数先入账本、审批通过后**重放**执行，
-而这期间 workspace 一直可写。没有 digest，用户批准的归档与最终安装的归档可以不是同一份。
-下载完成后按字节重算 sha256，不等即拒绝安装并同时给出两个摘要，不会"安装当前那一份"。
-模型自己提供摘要并不削弱这一点：想装别的包它本来就可以直接提议，审批要挡的正是那个；
-digest 挡住的是**批准之后掉包**。
-
-`skill_create` 是“和 Agent 交互生成”的安装入口：Agent 收集并确认需求后，在一次高风险
-工具调用中提交 `name`、`description`、`instructions` 与可选文件；用户批准后才落盘。
-
 #### Bundled Skill dependencies
 
-The Sandbox Docker image owns the runtime for bundled office Skills. Keep
-dependency installation in `sandbox/Dockerfile` and
-`sandbox/requirements.txt`; do not add first-run `npx`, `npm install`, or
+The exec Docker image owns the runtime for bundled office Skills. Keep
+dependency installation in `exec/Dockerfile` and
+`exec/requirements.txt`; do not add first-run `npx`, `npm install`, or
 `pip install` steps to a Skill that must work under production's disabled
 execution network. BaoYu's two TypeScript converters use the image-provided
 `/usr/local/bin/baoyu-format-markdown` and
@@ -222,10 +232,10 @@ production Bubblewrap child intentionally does not expose Debian's full
 When changing one of these Skills, rebuild `sandbox` before testing it. A
 normal execution still sees the read-only `/home/sandbox/skill` bind mount for
 instructions and source inspection, while the wrapper runs the corresponding
-build-time copy under `/usr/local/lib/pi-skill-runtime`.
+build-time copy under `/usr/local/lib/dsh-skill-runtime`.
 
-所有变更工具（install/create/edit/uninstall）默认 high risk。ZIP 解压拒绝 traversal、链接、
-特殊文件、重复路径、加密条目和 zip bomb；通用 `write` / `edit` / `bash` 不能写 Skill 根。
+旧的 `skill_install/create/edit/uninstall` 工具已经退役。安全闸门只在启用：拒绝路径穿越、
+符号链接、特殊文件、系统 Skill 同名遮蔽、超出文件数或体积上限；已发布副本只读。
 
 ### 配置工具风险等级与审批
 
@@ -286,17 +296,11 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 上下文压缩（compaction）
 
-自动压缩由 Pi SDK 负责，默认开启：上下文 token 超过
+自动压缩由 DSH `dsh-compaction` 负责，默认开启：上下文 token 超过
 `contextWindow - reserveTokens` 时触发。默认 `reserveTokens=16384`、
 `keepRecentTokens=20000`。每次压缩会产生一条 `session.compacted` 事件。
 
-按 AgentVersion 覆盖：
-
-```jsonc
-{ "contextPolicy": { "autoCompact": true, "reserveTokens": 16384, "keepRecentTokens": 20000 } }
-```
-
-`autoCompact: false` 关闭自动压缩（上下文溢出时会直接失败，而不是压缩后重试）。
+当前运行时使用 DSH 的默认压缩策略；AgentVersion 不提供单独的压缩覆盖字段。
 
 ### 修改前端
 
@@ -307,30 +311,30 @@ AgentVersion 侧（同一份语义，只能收紧）：
 
 ### 修改 API Server（BFF）
 
-1. `api-server/server.js` — HTTP 入口与路由分派
-2. `api-server/src/routes/runs.js` — Run 创建、控制与序列化 SSE relay
-3. `api-server/src/services/agent-client.js` — BFF → Agent HTTP 客户端
-4. `api-server/src/config.js` — `AGENT_BASE_URL` / 内部令牌等
-5. 语法检查: `node --check api-server/server.js`
+1. `api-server/server.ts` — HTTP 入口与路由分派（容器跑 `dist/server.js`）
+2. `api-server/src/routes/runs.ts` — Run 创建、控制与序列化 SSE relay
+3. `api-server/src/services/agent-client.ts` — BFF → Agent HTTP 客户端
+4. `api-server/src/config.ts` — `AGENT_BASE_URL` / 内部令牌等
+5. 类型检查: `npm --prefix api-server run typecheck`
 6. 单元测试: `npm test --prefix api-server`
 
 ### 修改 Agent 服务
 
-1. `agent/server.js` / `agent/worker.js` — HTTP 与 Worker 入口（仅装配 `src/bootstrap/*`）
+1. `agent/server.ts` / `agent/worker.ts` — HTTP 与 Worker 入口（仅装配 `src/bootstrap/*`；容器跑 `dist/`）
 2. `agent/src/bootstrap/` — ServiceContainer、HTTP factory、BullMQ worker（MySQL Create/Get/Cancel/Execute）
-3. `agent/src/application/` — Run / Session recovery / Event SSE / A2A services
-4. `agent/src/infrastructure/pi/` — Pi Runtime Factory + Session Adapter
-5. `agent/src/extensions/` — 注册表内置必需 Extension（含 sandbox、审批、审计和交互）及用户级 `skill-lifecycle`
-6. `agent/src/infrastructure/mcp/` — `pi-mcp-adapter`（禁止自研 MCP Client 主路径）
-7. `agent/src/infrastructure/sandbox/sandbox-client.js` — Sandbox 内部 HMAC HTTP（`/internal/v1/*` 执行/文件/artifact submit；**不** dual-write Run）
-8. 语法检查: `node --check agent/server.js && node --check agent/worker.js`
+3. `agent/src/application/` — Run / Session recovery / Event SSE / A2A services（不认识 cordis）
+4. `agent/src/runtime/` — DSH 组合层：plugins 清单、remote providers、policy 挂载点、SSE 投影
+5. `agent/src/infrastructure/dsh/` — 与组合层的接线（`runtime-factory`）
+6. `agent/src/runtime/plugins/mcp-entries.ts` — `MCP_SERVERS_JSON` 到出厂 `dsh-mcp-client` 插件条目；boot 时按环境叠进插件树，改配置只需重启 Agent
+7. `agent/src/infrastructure/sandbox/sandbox-client.ts` — 公共面 client（数据集下载、Skill 归档）；工具路径走 runtime remote provider，**不** dual-write Run
+8. 类型检查: `npm --prefix agent run typecheck`
 9. 单元测试: `npm test --prefix agent`
 
-> 历史的进程内 Run manager、Python Agent runtime、双写 Session runtime 和自研 MCP connection manager 均已删除；Agent 的生产实现仅位于 `agent/src/`。
+> 历史的进程内 Run manager、Python Agent runtime、旧引擎的 Extension 包、双写 Session runtime 和自研 MCP connection manager 均已删除；Agent 的生产实现仅位于 `agent/src/`。新增 plugin 只改 `src/runtime/plugins/manifest.ts`，然后 `npm run gen:patch`。
 
 ### 数据库操作
 
-正式拓扑为 **MySQL 8**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`）。启动时 persistence 在单事务中应用不可变 migration，并在 `schema_migrations` 记录 version/checksum。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
+开发/CI 基线为 **MySQL 5.7**（`AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL`），对齐 UPDRDB 的 UPSQL 内核；生产 overlay 目前仍是 MySQL 8。5.7 用独立数据卷 `mysql57_dev_data`，不要复用 8.0 的 `mysql_dev_data`（官方不支持降级，会启动崩溃）。应用 DSN **不带口令**：Agent / Worker / exec 启动时向 DBPM 取口令（ADR 0011 D10），开发 Compose 默认由 `dbpm-fake` 提供；宿主机直接起服务进程时同样要给 `DBPM_URL`（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。**服务启动时不迁移**（ADR 0011 D6，开发与生产同一流程）：空库先执行 `scripts/dev/schema-apply.sh`——在 `dsh_schema_shadow` 上跑迁移导出分段 SQL 发布包到 `.runtime/schema-release`，再用 mysql 客户端逐段执行（首个错误即停），最后按 `contract/schema/schema-manifest.json` 只读核对；在此之前 agent / agent-worker / sandbox 会因 `SCHEMA_DRIFT` 重启等待。改了迁移必须重新生成清单：`SCHEMA_SHADOW_DATABASE_URL=… npm run schema:manifest --prefix agent`（影子库必须为空），否则 `schema-manifest.integration` 测试会红。`schema:sql` / `schema:replay` / `schema:verify` 是开发/DBA 工具，用带口令的完整 DSN（口令可用 `SCHEMA_*_PASSWORD` 单独传入）。不升级或回填研发阶段的旧数据库；需要清空旧状态时遵循 [Development reset runbook](runbooks/development-reset.md)。
 
 正式服务的事实状态在 Agent-owned MySQL 中。Sandbox 不再包含 SQLite
 `database`/repository 兼容层，也不拥有 Run/Conversation；调试 durable 状态
@@ -354,9 +358,11 @@ docker compose up -d mysql
 
 ### Redis 操作（Agent-only 协调）
 
-正式协调拓扑为 **Redis 7**（`redis:7.2`；`AGENT_REDIS_URL` / `REDIS_URL`；可选 `TEST_REDIS_URL`）。Agent 依赖 Redis health；BFF 不持有 Redis 权威配置。Sandbox 另起 **sandbox-replay-redis**（独立密码/volume，DB0）仅作 internal HMAC jti 防重放，**不得**复用 Agent Redis 凭据。
+正式协调拓扑为 **Redis 5.0.14**（`redis:5.0.14`，与 UPRedis 同版本；`maxmemory-policy noeviction`；`AGENT_REDIS_URL` / `REDIS_URL`；可选 `TEST_REDIS_URL`）。BullMQ 在 6.0.6 以下自动改用不依赖 `LPOS` 的脚本，启动日志里「recommended minimum 6.2.0」的提示是预期的。队列 key 前缀 `AGENT_RUN_QUEUE_PREFIX` 默认 `{bull}`，必须带 hash tag。Agent 依赖 Redis health；BFF 不持有 Redis 权威配置。`REDIS_PASSWORD` 只配置 Redis 服务端，Agent / sandbox-mcp 的连接口令由 DBPM 下发，URL 不带口令。exec **不连 Redis**：曾经的 `sandbox-replay-redis`（internal HMAC jti 防重放）已于 2026-09-16 随 ADR 0008 D8 退役，相关变量没有读取方，一并删除。
 
-- 默认 AOF + `redis_dev_data` volume：容器重建后协调数据仍在。
+- 默认 AOF + `redis5_dev_data` volume：容器重建后协调数据仍在。旧的 `redis_dev_data` 是 7.2 写出的，5.0.14 读不了，保留不挂载；本地 `.env` 若还写着旧卷名要改掉或在命令行覆盖。`sandbox_replay_redis*` 卷随 replay 实例退役，可直接删除。
+- 本地复现 UPRedis Proxy 路由限制：叠加 `scripts/dev/docker-compose.upredis-sim.yml`（可与 UPDRDB 双 Proxy 模拟同时叠加）。
+- 队列放行测试：`TEST_UPREDIS_URL=redis://127.0.0.1:<port>/0 TEST_UPREDIS_PASSWORD=… [TEST_UPREDIS_EXPECT_ROUTING=1] npx tsx --test tests/redis/upredis-queue.integration.test.js`（在 `agent/` 下）。
 - **清空 Redis**（`FLUSHALL` 或删 volume）只丢失 queue/lease/stream 等运行态，**不**删除 MySQL 事实。
 - Redis 暂停或清空后：Outbox publisher 从 MySQL `domain_outbox` 重试；事件历史从 `run_events` 重放。
 
@@ -366,7 +372,7 @@ docker compose up -d redis
 
 # 清空协调状态但保留 MySQL（⚠️ 运行态 job/lease 丢失）
 docker compose exec redis redis-cli -a redis_dev_only FLUSHALL
-# 或：docker compose stop redis && docker volume rm <project>_redis_dev_data
+# 或：docker compose stop redis && docker volume rm <project>_redis5_dev_data
 ```
 
 生产启动前必须设置强 `REDIS_PASSWORD`；prod overlay 在缺失时 fail-fast。
@@ -379,16 +385,12 @@ docker compose exec redis redis-cli -a redis_dev_only FLUSHALL
 # Python — 快速全部（CI 同款）
 uv run pytest tests/ -q --tb=short
 
-# 详细 / 定向
-uv run pytest -v
-uv run pytest tests/test_integration.py -v
+# 定向仓库卫生检查
+uv run pytest tests/test_repository_layout.py -q
 
-# 覆盖率（可选；非 CI 强制门禁）
-uv run pytest --cov=sandbox --cov-report=term-missing
-uv run pytest --cov=sandbox --cov-report=html
-
-# Node API Server（node:test，含 sdk-compat）
-node --test api-server/tests/*.test.js
+# Node 服务
+npm test --prefix contract
+npm test --prefix exec
 npm test --prefix agent
 npm test --prefix api-server
 
@@ -397,63 +399,97 @@ npm test --prefix frontend
 npm run build --prefix frontend
 ```
 
+需要真实 Redis 5.0.14 / MySQL 5.7 的放行测试与 release gate 在 Docker 里跑，不在宿主机起进程（宿主 Node 版本与原生模块不一定匹配，macOS 尤其如此）：
+
+```bash
+docker compose up -d mysql          # 开发栈 MySQL 需已 healthy
+scripts/dev/release-gates.sh
+```
+
+脚本按当前工作树构建 `scripts/dev/release-gate-runner.Dockerfile`（Node 22 + docker CLI，依赖与源码在镜像内，不挂宿主目录），在开发栈网络里运行，任一项失败即非零退出；自带专用 Redis 容器 `dsh-release-gate-redis-dev` 与测试库 `dsh_gate_dev` / `dsh_gate_dev_side`，结束后删除。依次覆盖：UPRedis 队列放行测试（直连、经路由模拟代理）、Redis 重启、BullMQ Worker 重启、Agent Worker 重启（含深度 1 子 Run 在自己那一层被 SIGKILL 后接管重放，ADR 0012）。Agent Worker gate 的副作用表放在 `_side` 兄弟库，因为被测 Worker 启动时按发布清单核对自己的库。`agent-worker-dsh-restart` 需要独立 sandbox，单独用下面的脚本跑。
+
+```bash
+scripts/dev/release-gate-dsh-restart.sh   # 前提：开发栈 mysql / dbpm-fake 已 healthy，agent 与 sandbox 镜像为当前代码
+```
+
+它重建专用库 `dsh_gate_dsh` 并按发布 DDL 建表（测试本身不迁移、不回滚——独立 sandbox 启动时核对清单），用 `docker compose run` 起连该库的专用 sandbox `dsh-release-gate-sandbox-dsh` 与专用 Redis，在运行器里以生产 Worker 组合 + 真实 DSH 运行时 + 假模型跑四个中断场景：模型调用中 SIGKILL、`ask_user_question` 停泊后 Worker 重启、工具派发边界 SIGKILL、命令执行中重启 sandbox（工具记 `UNKNOWN`、不自动重跑）。专用 sandbox 挂独立数据根 `.runtime/release-gate-dsh/`，不碰开发工作区；结束后删除专用容器、库与数据根。
+
+多副本与 K8s 编排行为另有一套演练（sim 模式，与开发栈的库、Redis、数据根互不影响）：
+
+```bash
+scripts/dev/k8s/up.sh sim                                  # 前提：镜像为当前代码
+/opt/homebrew/opt/node@22/bin/node scripts/dev/k8s/scenarios.mjs [场景...]
+scripts/dev/k8s/down.sh sim
+```
+
+`up.sh sim` 在命名空间 `dsh-sim` 里起 agent ×2、agent-worker ×2、api-server ×2、frontend、sandbox-mcp 与可控假模型 `fake-llm`；MySQL / dbpm-fake 借开发栈，另起专用 Redis 与专用 exec 容器（代替 VM），库为 `dsh_k8s_sim`、数据根为 `.runtime/k8s-sim/`，skill-user / skill-draft 用宿主目录 hostPath 模拟共享存储，并缩短租约 / 锁 / 恢复间隔。场景见 `scenarios.mjs` 头部：同时消费只执行一次、每副本并发上限、SIGKILL 接管、冻结后旧 fence 不派发、跨副本取消、滚动重启排空、Redis 中断时的探针、共享 Skill 跨 Pod 发布（跨 owner、新版本、侧车不一致排除、停用）、同会话 follow-up 排队。另有只在点名时跑的 Worker 有界关停场景 `drain-clean`、`drain-deadline`、`drain-subrun`、`drain-redis-outage`、`drain-mysql-outage`（默认 150s 排空 / 180s 宽限，每个 1–5 分钟），核对退出码与时刻、排空期间是否仍领取新 Run、租约接管、工具副作用与最终账本。宿主没有 Node 22 时，驱动放在带 kubectl 与 docker CLI 的 `node:22-slim` 容器里跑（`--network host`、挂 `~/.kube` 与 docker socket、仓库挂到同一绝对路径）。这是本地演练，结果不代替目标环境验收；驱动经 `kubectl port-forward` 访问。
+
 ### 测试结构
+
+Python `tests/` 现在只做**仓库卫生**（Python 执行面的契约测试已随 `sandbox/` 删除，
+等价用例在 `exec/test/`）：
 
 | 位置 | 测试内容 |
 |------|----------|
-| `tests/test_sandbox_mysql_import.py` | MySQL-only 启动、删除模块与公开路由回归 |
-| `tests/test_formal_session_runtime.py` | 正式 Session/Workspace 运行时契约 |
-| `tests/test_formal_execution_runtime.py` | 正式 Python/命令执行运行时契约 |
-| `tests/test_file_manager.py` | 文件读写/列表/预览/二进制 |
-| `tests/test_formal_artifact_runtime.py` | Artifact 显式提交、恢复与归属 |
-| `tests/test_policy_checker.py` | 风险等级分类 |
-| `tests/test_path_validation.py` | 路径逃逸防护 |
-| `tests/test_internal_plane_lifecycle_batch_b.py` | 内部控制面生命周期 |
-| `tests/test_sandbox_mysql_unit.py` | MySQL DSN/SQL 约束与拒绝路径 |
-| `tests/test_sandbox_mysql_integration.py` | 真实 MySQL integration gate（需测试 DSN） |
-| `tests/test_mysql_topology_config.py` | MySQL 拓扑/compose/config 静态校验 |
-| `tests/test_redis_topology_config.py` | Redis 拓扑/compose/env 静态校验（PR-03） |
+| `tests/test_repository_layout.py` | 千行棘轮、文档只能放 `docs/` |
+| `tests/test_runtime_versions.py` | 版本钉 + `@earendil-works/*` 不得出现在直接依赖 |
+| `tests/test_node_entrypoints_use_dist.py` | agent / exec 入口走 `dist/` |
+| `tests/test_compose_port_publish_security.py` | compose 不把内部面发布到宿主 |
+| `tests/test_container_startup.py` | Docker entrypoint、compose 配置 |
+| `tests/test_redis_topology_config.py` | Redis 拓扑/compose/env 静态校验 |
 | `tests/test_builtin_skills.py` | 零 Skill 发行基线 |
-| `tests/test_auth.py` / `test_internal_auth*.py` | 公开路由、API key/JWT 与内部 HMAC |
-| `tests/test_python_agent_removed.py` | 确认 Python Agent Runtime 已删除 |
-| `tests/test_container_startup.py` | Docker entrypoint, compose 配置 |
+| `tests/test_skill_runtime_dependencies.py` | exec 镜像里的模型工具链 |
+| `tests/test_sse_contract.py` | `sse_events.json` 契约 |
+| `tests/test_backup_restore_scripts.py` | 备份/恢复脚本 |
+| `tests/test_a2a_edge_proxy.py` / `test_cross_service_smoke_config.py` | 边缘与 smoke 配置 |
 | `api-server/tests/*.test.js` | BFF agent-client / chat relay / listen smoke |
-| `agent/tests/*.test.js` | Run API、fake OpenAI、listen smoke、SDK compat |
-| `frontend/test/*.test.js` | SSE 解析、state、security/a11y |
-| `scripts/smoke-cross-service.mjs` | 无真实 LLM key 的 BFF↔Agent↔Sandbox smoke |
+| `agent/tests/**/*.test.js` 与 `tests/runtime/*.test.ts` | Run API、策略、组合层 boot、listen smoke |
+| `exec/test/*.test.ts` | 隔离、文件、搜索、产物、数据集、内部面、公共面、MCP |
+| `contract/test/*.test.ts` | RPC 信封、HMAC、错误码 |
+| `frontend/test/` | SSE 解析、state、security/a11y |
+| `scripts/smoke-cross-service.mjs` | 无真实 LLM key 的 BFF↔Agent↔Exec smoke |
 
 ### 编写测试
 
-```python
-from fastapi.testclient import TestClient
-from sandbox.main import app
+执行面用 `node:test` + `tsx`。**断言语义，不要断言形状**：
 
-client = TestClient(app)
+```ts
+// 好：空实现过不去
+const res = await app.request(`/sessions/${id}/files/grep`, {
+  method: 'POST', headers: json, body: JSON.stringify({ query: 'NEEDLE', path: '.' }),
+});
+const body = await res.json();
+assert.equal(body.matches.length, 2);
+assert.deepEqual(body.matches.map((m) => m.text.trim()).sort(), [...]);
 
-def test_my_endpoint():
-    # Public Sandbox session creation was removed. Exercise a formal internal
-    # contract with an injected fake repository/runtime instead.
-    response = client.get("/health")
-    assert response.status_code == 200
+// 坏：`{matches: []}` 也能通过
+assert.ok(Array.isArray(body.matches));
 ```
+
+需要控制面根（产物/数据集）的用例，把它指到测试的 scratch 目录下——生产默认的
+`/var/sandbox/*` 在 macOS 上不可写：
+
+```ts
+const svc = new ArtifactService(makeWorkspaceFs, undefined, {
+  roots: { artifactsRoot: path.join(base, 'art'), controlRoot: path.join(base, 'ctl') },
+});
+```
+
+**别把已建好的 `WorkspaceFileSystem` 实例传进服务**（`() => fs`）：那样复用同一个
+实例，永远测不到重复构造，用例就是假绿。用 `makeWorkspaceFs` 本身。
 
 ## 代码质量
 
-### Linting
+### Linting / Type Checking
 
-推荐 `ruff`：
-
-```bash
-pip install ruff
-ruff check sandbox/ tests/
-ruff format --check sandbox/ tests/
-```
-
-### Type Checking
+服务代码是 TypeScript。Python `tests/` 只做仓库卫生，没有对应的服务源码树可
+`mypy` / `ruff`。
 
 ```bash
-pip install mypy
-mypy sandbox/ --ignore-missing-imports
+npx tsc --noEmit -p exec/tsconfig.json
+npx tsc --noEmit -p contract/tsconfig.json
+npm --prefix agent run typecheck
+npx tsc --noEmit -p frontend/tsconfig.json
 ```
 
 ### 安全扫描
@@ -493,10 +529,10 @@ git push -u origin feat/your-feature
 docker compose logs -f sandbox
 
 # 交互式 shell
-docker exec -it pi-enterprise-sandbox /bin/bash
+docker exec -it dsh-enterprise-sandbox /bin/bash
 
 # 查看 MySQL 表（compose 网络内 mysql 服务）
-docker exec -it pi-enterprise-mysql \
+docker exec -it dsh-enterprise-mysql \
   mysql -usandbox -psandbox_dev_only sandbox -e "SHOW TABLES;"
 ```
 
@@ -526,13 +562,14 @@ cd frontend && npm run build && ls dist/
 | 问题 | 解决方案 |
 |------|----------|
 | `port already in use` | 修改 `FRONTEND_PORT`、`API_PORT`、`AGENT_PORT`，或 `SANDBOX_MCP_HOST_PORT`（Sandbox 本身不映射宿主端口） |
-| MySQL 连接失败 / `Can't connect` | 确认 `mysql` 服务 healthy；检查 `AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL` 与 `MYSQL_*` 一致；勿在日志中打印完整 DSN |
-| Redis 连接失败 / `NOAUTH` | 确认 `redis` 服务 healthy 与 `REDIS_PASSWORD`；检查 `AGENT_REDIS_URL` / `REDIS_URL` 与密码一致；勿在日志中打印完整 URL |
+| MySQL 连接失败 / `Can't connect` | 确认 `mysql` 服务 healthy；检查 `AGENT_DATABASE_URL` / `SANDBOX_DATABASE_URL` 的用户名与 `MYSQL_USER` 一致（DSN 不带口令）；`ER_ACCESS_DENIED_ERROR` 多为 `dbpm-fake` 条目口令与 `MYSQL_PASSWORD` 不一致；勿在日志中打印完整 DSN |
+| Redis 连接失败 / `NOAUTH` | 确认 `redis` 服务 healthy；DBPM 下发的 Redis 口令须等于 `REDIS_PASSWORD`；URL 不带口令；勿在日志中打印完整 URL |
+| 启动报 `DBPM_URL is required` / `must not embed a password` / `DBPM credential fetch failed` | 取密护栏生效：配置 `DBPM_URL` 与条目名；去掉连接串里的口令（宿主 `.env` 里旧的带口令 `AGENT_DATABASE_URL` 不会经 Compose 进容器，但宿主机直接起进程会读到）；确认 `dbpm-fake` healthy |
 | `Connection refused` 访问 Sandbox | 先确认 liveness: `docker compose exec sandbox curl -fsS localhost:8081/health`，再确认 readiness: `docker compose exec sandbox curl -fsS localhost:8081/ready` |
 | `/ready` 返回 503 | 检查 `SANDBOX_WORKSPACES_ROOT` 可写与 MySQL（`SANDBOX_DATABASE_URL`）可达；日志仅有 warning，不含连接串 |
 | SSE 流中断 | 检查 API Server 和 Sandbox 日志；确认客户端 abort 后执行已取消 |
 
-## 安全治理（SDK Extension + Sandbox 双重强制）
+## 安全治理（Agent DSH policy + Exec 双重强制）
 
 开发时默认开启人审：
 
@@ -541,8 +578,8 @@ cd frontend && npm run build && ls dist/
 APPROVAL_MODE=ask
 ```
 
-- **Agent 层**：`agent/src/extensions` 固定装配 sandbox、审批、审计和交互能力；用户级 `skill-lifecycle` 的所有变更工具也进入同一 MySQL durable approval ledger。普通 Workspace 工具默认不审批。
-- **Sandbox 层**：`policy_checker` 与 `/internal/v1/*` execution handlers 独立执行路径、owner、HMAC claim 和 hard-deny；普通 workspace bash/python/node 不进入审批。
+- **Agent 层**：`agent/src/runtime/policy/` 在 DSH 工具管线挂载风险表、参数守卫、审批、审计与 Run 收敛保护；外部副作用审批写入 MySQL durable ledger。
+- **Exec 层**：TypeScript `/internal/v1/*` handlers 独立校验 owner、HMAC claim、路径、hard-deny 与 Bubblewrap 隔离；普通 workspace bash/python/node 不进入审批。
 - **审批模式**：`ask`（默认）创建 durable approval 并暂停；`deny` 明确拒绝
   `approval_required` 且不创建审批；`auto_approve` 仅用于明确受控的研发旁路并写
   bypass 审计，生产配置拒绝该模式。旧 `APPROVAL_ENABLED=true|false` 分别映射到
@@ -550,8 +587,8 @@ APPROVAL_MODE=ask
 - **定向测试**：
 
 ```bash
-cd agent && node --test tests/pi/enterprise-policy-layers.unit.test.js tests/pi/enterprise-policy-fail-closed.unit.test.js
-uv run pytest tests/test_policy_checker.py tests/test_approval.py tests/test_policy_approval.py -q
+npm test --prefix agent -- tests/runtime/policy.test.ts tests/runtime/governance-approval-store.test.ts
+npm test --prefix exec -- test/internal-v1-security.test.ts test/shell-policy.test.ts
 ```
 
 详见 [architecture.md](./architecture.md)「双重强制」一节。

@@ -121,6 +121,24 @@ function tagExactTranscriptTurns(
  * timestamp while later rows stream in; liveness fields (thinking status, the
  * interrupted banner) come from the last row, which is the one still moving.
  */
+function mergeThinking(
+  serverMessage: ChatMessage,
+  tagged: ChatMessage,
+): Pick<ChatMessage, 'thinking' | 'thinkingStatus'> {
+  const thinking = tagged.thinking || serverMessage.thinking;
+  if (!thinking) {
+    return {
+      thinking: tagged.thinking,
+      thinkingStatus: tagged.thinkingStatus ?? serverMessage.thinkingStatus,
+    };
+  }
+  const liveStreaming = Boolean(tagged.thinking) && tagged.thinkingStatus === 'streaming';
+  return {
+    thinking,
+    thinkingStatus: liveStreaming ? 'streaming' : 'complete',
+  };
+}
+
 function mergeAssistantTurns(messages: ChatMessage[]): ChatMessage[] {
   const merged: ChatMessage[] = [];
   for (const message of messages) {
@@ -314,6 +332,7 @@ export function projectConversationMessages(options: {
             content: serverMessage.content,
             sequenceNo: serverMessage.sequenceNo,
             createdAt: serverMessage.createdAt || tagged.createdAt,
+            ...mergeThinking(serverMessage, tagged),
           };
         } else {
           // The live projection adds transient tool/stream detail, but a
@@ -323,6 +342,7 @@ export function projectConversationMessages(options: {
             ...tagged,
             sequenceNo: serverMessage.sequenceNo,
             createdAt: serverMessage.createdAt || tagged.createdAt,
+            ...mergeThinking(serverMessage, tagged),
           };
         }
         continue;

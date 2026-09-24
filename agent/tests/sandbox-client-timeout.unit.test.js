@@ -88,7 +88,7 @@ test('sandbox client does not cut a streaming body once headers arrive', async (
   }
 });
 
-test('checkHealth probe carries a deadline', async () => {
+test('checkReady probe carries a deadline', async () => {
   const originalFetch = globalThis.fetch;
   /** @type {AbortSignal | undefined} */
   let seenSignal;
@@ -100,10 +100,10 @@ test('checkHealth probe carries a deadline', async () => {
     });
   };
   try {
-    await createSandboxClient().checkHealth();
+    await createSandboxClient().checkReady();
     assert.ok(
       seenSignal instanceof AbortSignal,
-      '/health probe must pass an AbortSignal',
+      '/ready probe must pass an AbortSignal',
     );
   } finally {
     globalThis.fetch = originalFetch;

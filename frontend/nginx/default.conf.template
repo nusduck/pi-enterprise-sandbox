@@ -1,0 +1,34 @@
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Align with product limits: 50MB file + multipart overhead (BFF 55MB).
+    # Nginx default is 1m, which rejects normal attachments with HTTP 413.
+    client_max_body_size 55m;
+    client_body_timeout 300s;
+
+    # API proxy to backend. The upstream comes from the API_UPSTREAM env var,
+    # rendered by the nginx image's envsubst hook at container start (filtered to
+    # that one variable) and checked by 05-validate-api-upstream.sh before and
+    # 25-verify-rendered-config.sh after rendering.
+    location /api/ {
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_buffering off;  # Required for SSE
+        proxy_cache off;
+        # Stream large multipart uploads to the BFF without full buffering.
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # SPA fallback
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -323,4 +323,41 @@ describe('conversation message projection', () => {
       ['first question', 'live answer', 'later question'],
     );
   });
+
+  it('keeps durable thinking when live replay omitted thinking.delta', () => {
+    let store = createEntityStore();
+    store = upsertRun(store, createRun({
+      id: 'run_think',
+      conversationId: 'conv_think',
+      createdAt: '2026-07-16T00:00:01Z',
+      status: 'succeeded',
+    }));
+
+    const projected = projectConversationMessages({
+      serverMessages: [
+        { role: 'user', content: [{ type: 'text', text: 'skills?' }], _runId: 'run_think' },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: '13 skills' }],
+          thinking: 'Check /home/sandbox/skill.',
+          thinkingStatus: 'complete',
+          _runId: 'run_think',
+          _messageId: 'msg_asst',
+        },
+      ],
+      conversationId: 'conv_think',
+      store,
+      activeRunId: null,
+      projectRunMessages: () => [{
+        role: 'assistant',
+        content: [{ type: 'text', text: '13 skills' }],
+        _runId: 'run_think',
+        _messageId: 'msg_asst',
+      }],
+    });
+
+    const assistant = projected.find((message) => message.role === 'assistant');
+    assert.equal(assistant?.thinking, 'Check /home/sandbox/skill.');
+    assert.equal(assistant?.thinkingStatus, 'complete');
+  });
 });

@@ -29,10 +29,10 @@ frontend/
 │       ├── runs/            ← Run 列表与取消
 │       ├── approvals/       ← 待审批列表
 │       ├── schedules/       ← Cron 任务管理
-│       └── settings/        ← Capabilities 与 A2A 管理
+│       └── settings/        ← Capabilities、Agents 与 A2A 管理
 ├── test/                    ← node:test + tsx
 ├── index.html
-├── nginx.conf               ← /api/* 反代，SSE buffering off
+├── nginx/                   ← /api/* 反代模板（`API_UPSTREAM`，SSE buffering off）+ 启动前后校验脚本
 ├── vite.config.ts           ← dev proxy → localhost:4000
 ├── package.json
 ├── Dockerfile
@@ -67,6 +67,86 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 `pendingTool`、`pendingApproval` 或 `readyFiles`，只保存服务端历史快照、选择状态、上传草稿、布局、
 认证与 transport 控制。`activeRunId` 直接从 EntityStore 读取，不维护 React 镜像 state。
 
+### Capabilities / Skills 与 Drafts 上传
+
+`/settings/capabilities` 的 Skills 页按当前登录用户投影三层：Drafts、My Skills、System Skills。
+- **Drafts 上传**：在 Drafts 区域提供专属拖拽与点击上传卡片，支持用户直传 `.zip` 与 `.skill` 归档包（单包上限 50MB）。上传成功后包自动落入用户草稿根目录并即时在 Drafts 列表中以 `Draft` 状态卡片呈现。上传瞬间**不自动启用**。
+- **人机闸门**：草稿卡片提供高亮 **Enable** 按钮；点击后平台校验结构、按内容摘要发布一份只读版本至用户已启用根，并写入 MySQL 账本；My Skills 按账本列出核对通过的已启用用户 Skill 并提供 **Disable** 按钮；系统 Skill 为只读不可变更。
+- **启用后草稿不再重复列出**：启用是**复制字节**，草稿本身留在草稿根（停用只删账本行，已发布字节留给仍在运行的 Run，过宽限期回收）。Agent 因此给已发布过的草稿打 `published: true`，Drafts 区只列 `published !== true` 的那些——否则同一个包名会在页面上出现两次，而且草稿那张卡还带着一个按了也没有新效果的 Enable。My Skills 里对应的卡片显示 `from draft` 小标签；要重新发布改过的草稿，先 Disable，草稿会回到 Drafts。分层规则在 `pages/settings/skillHelpers.ts`（纯函数，可测）。
+- **三层卡片同构**：Drafts / My Skills / System Skills 共用 `SkillCards`，同一张 meta 表（Source / Enabled / Dynamic），操作按钮统一收在卡片底部的 `.mgmt-card-actions` 行里靠右对齐。卡片是 flex-column，直接把 `<button>` 放进去会被拉伸成整行宽的大色块，草稿卡因此和系统卡不是一个形状。
+- **Composer 拼图按钮移除**：取消了聊天输入框原本的拼图安装按钮，Skill 安装全面收敛至 Capabilities 页面。
+
+### 多 Agent 选择
+
+一个 org 下可以并列存在多个智能体，用户在**建会话**时选一个。
+
+- **选择器只在两个条件同时成立时渲染**：org 内多于一个智能体，且当前还没有
+  `conversationId`（即下一条消息会新建会话）。单智能体的 org 完全看不到它，
+  体验与多 Agent 上线前一致。位置在 Composer 的模型行（`widgets/composer/AgentPicker.tsx`），
+  用原生 `<select>`——选项是短名字，没有每项的价格/上下文窗口要排版。
+- **会话开始后选择器消失**，会话头部改为显示一个只读的 Agent chip
+  （`widgets/conversation-header/ConversationHeader.tsx`）。这是刻意的：一个会话
+  绑定一个智能体，绑定在建会话时完成、此后不可变，换智能体要**新建会话**。
+  留着一个中途可点的控件只会让用户以为能换。
+- **前端只记 `agentId`，不记 `agentVersionId`**。哪个版本活跃由服务端在建会话的
+  事务内解析；前端缓存 versionId 会在 admin 切版本的瞬间过期。
+- `features/chat/useAgentSelection.ts` 持有目录与选择，`shared/api/agents.ts` 是
+  `/api/agents` 的封装。目录拉不到时静默降级为空列表——单智能体的既有流程不能
+  因为一个新面板的失败而中断。
+- 同一次拆分把模型选择挪进了 `features/chat/useModelSelection.ts`：`ChatContext.tsx`
+  贴着结构棘轮的行数预算，新增能力要先按职责拆分而不是把它继续撑大。
+
+**`/settings/agents`（仅 admin）** — `pages/settings/AgentsPage.tsx`，与 A2A Access
+一样只在 `actingRole === 'admin'` 时出现在二级导航里。四块：org 内的智能体列表、
+新建、配置编辑、版本历史。
+
+- 页面反复说明的一件事是**保存 = 建新版本**：`agent_versions` 不可变，编辑配置
+  产生下一个版本，旧版本保留；切换活跃版本**只影响新建的会话**，正在跑的 Run 与
+  已存在的会话继续用它们钉住的版本。只写"保存"而不解释，用户会以为是原地修改，
+  然后困惑于"为什么改了配置老会话没变"。两个按钮因此分开：
+  *Save as new active version* 与 *Save without activating*。
+- 「回滚」不是一个单独功能，就是在版本历史里激活一个旧版本——无需数据修复。
+- 配置编辑器同时提供常用字段和 Advanced JSON：两者写入同一份草稿，结构化控件
+  只修改它负责的字段，未知字段、旧字段和旧格式仍留在 JSON 中。`modelPolicy`、
+  `toolPolicy` 与 `mcpServers` 的形状不合法时，结构化控件暂停，避免一次点击把
+  无法理解的配置覆盖掉；当前能力目录不可达时保留已知草稿值，并阻止依赖该目录
+  的发布。平台管理的 `skills`、`extensions`、`sandboxPolicy` 与 `a2a` 只显示
+  为继承状态，不提供保存后不会影响运行时的假开关。
+- 配置校验由 Agent 服务的 `config/options` 与 `config/validate` 提供：选项 DTO 使用
+  `schemaVersion`、`fieldSupport`、`platformConstraints`、`capabilityRevision`，
+  校验结果必须带 `valid`、字段级 `errors`/`warnings`；有效结果还带
+  `normalizedConfig` 与 `effectiveSummary`。警告只提示，不会被当作错误；服务端
+  归一化差异会在发布前展开显示。前端仍把写入即校验作为最终权威。
+- 前端为目录、版本请求和草稿校验做了请求代次保护；React StrictMode 的开发期重复
+  effect 不会把页面留在 Loading。切换 Agent 或刷新期间，晚到的响应不会覆盖当前
+  选择；未提交的草稿按 Agent 暂存。发布和激活携带当前活跃版本的期望值，遇到
+  `409` 并发冲突时刷新版本线、保留草稿并要求重新检查。
+- 「读不到」和「是空的」在界面上是两件事：MCP 目录 `unknown` 时明说不可用并挡住
+  依赖它的修改，不渲染成"零授权"。草稿里启用了、但当前目录已经没有的 MCP 工具仍
+  会渲染成一行并标注「not in the current directory」，否则那条
+  `mcpServers[i].enabledTools[j]` 的错误就没有可以落脚的控件。
+- Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
+  是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为 unsupported，
+  要求改掉后才能发布，不静默降级到别的档位。
+- legacy 配置升级到 `schemaVersion: 1` 时，无法映射的模型引用和非空的
+  `skills`/`extensions`/`sandboxPolicy`/`a2a` 会阻止发布并列出待处理字段：
+  表单与 JSON 往返都不会把它们悄悄删掉。
+- config 仍可直接编辑 JSON。解析规则在 `pages/settings/agentHelpers.ts`（纯函数，
+  可测）：空文本 = 空配置而不是错误；数组与标量被拒；比较的是**解析后的 JSON
+  语义**，对象键顺序不会诱导创建相同内容的新版本，数组顺序仍算配置变化。服务端
+  仍会把同一份 config 再校验一遍，前端这层解析只是让用户在按下按钮之前看到语法
+  与字段错误。
+
+### Settings 二级导航结构与 Grok 风格布局
+
+为优化系统功能架构，侧边栏一级主导航聚焦于核心工作流（Chat 与 Schedules）；侧边栏底部仅保留单一简洁的 **Settings** 入口与用户 Profile（当存在未决审批或运行中任务时统一展示聚合角标）。
+点击 Settings 进入 `/settings/*` 后，界面采用对标 **Grok Web** 的经典两栏式设置中心：
+- **左侧垂直分类导航（Settings Sidebar）**：常驻提供 `Capabilities`、`Approvals`（未决警告角标）、`Runs`（活跃角标）、`Agents`（管理员可见）与 `A2A Access`（管理员可见），顶部提供快捷返回聊天的「Chat」按钮。
+- **右侧配置面板（Settings Content）**：承载当前分类的内容。
+- **Runs 行内展开控制台**：在 `Runs` 表格中，点击单条记录的 `Logs` 或 `Trace` 直接在当前行下方平滑展开行内抽屉（`<tr className="mgmt-expand-row">`），提供终端日志查看、复制与分布式 Span 树检查，避免滚动到页面底部的体验断层。
+- **Workbench Details 精简化**：聊天主界面右侧 Details 抽屉对标 ChatGPT Canvas / Artifacts 模式，聚焦于「产物预览（Artifacts）」、「关联文件（Files）」与「执行概览（Overview）」，将研发向 Trace 链路跟踪全面收拢至 Runs 页面。
+旧路径 `/runs` 与 `/approvals` 自动重定向至对应 `/settings/*` 路径，保持外链与收藏兼容。
+
 ### 消息格式
 
 ```javascript
@@ -97,6 +177,8 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 sendMessage(text)
   ├── 添加 user 消息
   ├── POST /api/runs，取得服务端 canonical run_id
+  │     首轮（conversation_id 为空）同时带上所选的 agent_id——那一轮就是"建会话"
+
   ├── EntityBridge.beginRun(run_id) + 注册 per-run AbortController
   ├── React 更新 user message / transport UI
   ├── GET /api/runs/:run_id/events（支持 sequence 续传）
@@ -189,7 +271,9 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
   **默认折叠**——它在回合顶端，展开会把回答本身顶到屏幕外；折叠态的摘要行仍显示
   步骤数与耗时
 - Timeline、Context Inspector、Approval 与 Deliverables widgets 按实体 id 更新，不维护第二份 runtime state
-- 子代理 fan-out：`spawn_subagent` / `check_subagent` 工具卡片渲染为结构化任务视图（子 Run 状态聚合），而不是裸 wire JSON；`todo_write` / `memory_write`（task-state extension）同理
+- 子代理 fan-out：`subagent` 工具卡片渲染为结构化任务视图（子 Run 状态聚合），而不是裸 wire JSON；`todo_write` 同理。
+
+  **2026-08-31（ADR 0009 D4/D10）**：工具名换成 DSH 出厂的一套——`spawn_subagent` → `subagent`、`ask_user` → `ask_user_question`；旧名在前端仍被识别，**只为渲染历史会话**。`todo_write` 的清单在 **arguments** 与 `todo/write` 事件里，**不在 result 里**（出厂结果只有一句 `Updated todo list: …` 与 `{counts}`）——按 result 解析会让卡片静默退化成一行文本。`memory_write` / `memory_search` 本阶段不做（D10），新 Run 不会再产生它们，卡片保留只为历史会话。
 - Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染；下载链接仍经 URL allowlist 过滤
 
 ## 测试

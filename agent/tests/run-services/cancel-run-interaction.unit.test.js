@@ -27,7 +27,7 @@ const AUTH = {
 };
 
 function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     {
       org_id: ORG,
       name: 'Acme',
@@ -36,7 +36,7 @@ function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
       updated_at: NOW,
     },
   ];
-  state.tables.users = [
+  state.tables.tbl_agsvc_users = [
     {
       user_id: USER,
       external_subject: 'bff:user-ext-1',
@@ -47,7 +47,7 @@ function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_memberships = [
+  state.tables.tbl_agsvc_organization_memberships = [
     {
       org_id: ORG,
       user_id: USER,
@@ -57,7 +57,7 @@ function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_external_refs = [
+  state.tables.tbl_agsvc_organization_external_refs = [
     {
       provider: 'bff',
       external_subject: 'org-ext-1',
@@ -65,7 +65,7 @@ function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
       created_at: NOW,
     },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -91,7 +91,7 @@ function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -116,7 +116,7 @@ function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
       created_at: NOW,
     },
   ];
-  state.tables.run_interactions = [
+  state.tables.tbl_agsvc_run_interactions = [
     {
       interaction_id: INTERACTION,
       org_id: ORG,
@@ -144,9 +144,9 @@ function seed(state, interactionStatus = 'PENDING', toolStatus = 'RUNNING') {
       resolved_at: interactionStatus === 'RESOLVED' ? NOW : null,
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
-  state.tables.trace_spans = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
+  state.tables.tbl_agsvc_trace_spans = [];
 }
 
 describe('CancelRunService parked interaction transaction', () => {
@@ -207,14 +207,14 @@ describe('CancelRunService parked interaction transaction', () => {
 
     assert.equal(first.status, RUN_STATUS.CANCELLED);
     assert.equal(first.terminal, true);
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.CANCELLED);
-    assert.equal(state.tables.run_interactions[0].status, 'CANCELLED');
-    assert.equal(state.tables.tool_executions[0].status, 'CANCELLED');
-    assert.equal(state.tables.tool_executions[0].error_code, 'RUN_CANCELLED');
-    assert.ok(state.tables.run_interactions[0].cancelled_at);
-    assert.ok(state.tables.tool_executions[0].completed_at);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].error_code, 'RUN_CANCELLED');
+    assert.ok(state.tables.tbl_agsvc_run_interactions[0].cancelled_at);
+    assert.ok(state.tables.tbl_agsvc_tool_executions[0].completed_at);
     assert.deepEqual(
-      state.tables.run_events.map((row) => row.event_type),
+      state.tables.tbl_agsvc_run_events.map((row) => row.event_type),
       [
         'interaction.cancelled',
         'tool.execution.failed',
@@ -224,13 +224,13 @@ describe('CancelRunService parked interaction transaction', () => {
       ],
     );
     assert.deepEqual(
-      state.tables.domain_outbox.map((row) => row.event_type),
-      state.tables.run_events.map((row) => row.event_type),
+      state.tables.tbl_agsvc_domain_outbox.map((row) => row.event_type),
+      state.tables.tbl_agsvc_run_events.map((row) => row.event_type),
     );
     assert.equal(cancelSignals.length, 0);
 
-    const eventCount = state.tables.run_events.length;
-    const outboxCount = state.tables.domain_outbox.length;
+    const eventCount = state.tables.tbl_agsvc_run_events.length;
+    const outboxCount = state.tables.tbl_agsvc_domain_outbox.length;
     const repeated = await cancel.execute({
       runId: RUN,
       auth: AUTH,
@@ -238,9 +238,9 @@ describe('CancelRunService parked interaction transaction', () => {
     });
     assert.equal(repeated.status, RUN_STATUS.CANCELLED);
     assert.equal(repeated.cancelRequested, true);
-    assert.equal(state.tables.run_events.length, eventCount);
-    assert.equal(state.tables.domain_outbox.length, outboxCount);
-    assert.equal(state.tables.runs[0].cancel_reason, 'user requested');
+    assert.equal(state.tables.tbl_agsvc_run_events.length, eventCount);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox.length, outboxCount);
+    assert.equal(state.tables.tbl_agsvc_runs[0].cancel_reason, 'user requested');
     assert.equal(cancelSignals.length, 0);
   });
 
@@ -257,9 +257,9 @@ describe('CancelRunService parked interaction transaction', () => {
         }),
       ConflictError,
     );
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.CANCELLED);
-    assert.equal(state.tables.run_interactions[0].status, 'CANCELLED');
-    assert.equal(state.tables.tool_executions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'CANCELLED');
     assert.equal(enqueued.length, 0);
   });
 
@@ -279,8 +279,8 @@ describe('CancelRunService parked interaction transaction', () => {
       reason: 'cancel after answer',
     });
     assert.equal(cancelled.status, RUN_STATUS.CANCELLED);
-    assert.equal(state.tables.run_interactions[0].status, 'RESOLVED');
-    assert.equal(state.tables.tool_executions[0].status, 'SUCCEEDED');
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'RESOLVED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'SUCCEEDED');
 
     const jobsBeforeRecovery = enqueued.length;
     const recovery = new RunRecoveryService({
@@ -330,11 +330,11 @@ describe('CancelRunService parked interaction transaction', () => {
       () => cancel.execute({ runId: RUN, auth: AUTH, reason: 'stop' }),
       /outbox unavailable/,
     );
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.WAITING_INPUT);
-    assert.equal(state.tables.runs[0].cancel_requested_at, null);
-    assert.equal(state.tables.run_interactions[0].status, 'PENDING');
-    assert.equal(state.tables.tool_executions[0].status, 'RUNNING');
-    assert.equal(state.tables.run_events.length, 0);
-    assert.equal(state.tables.domain_outbox.length, 0);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.WAITING_INPUT);
+    assert.equal(state.tables.tbl_agsvc_runs[0].cancel_requested_at, null);
+    assert.equal(state.tables.tbl_agsvc_run_interactions[0].status, 'PENDING');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_run_events.length, 0);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox.length, 0);
   });
 });

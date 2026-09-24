@@ -63,7 +63,7 @@ describe('InteractionRepository', () => {
   beforeEach(() => {
     state = createFakeState();
     knex = createFakeKnex(state);
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       {
         run_id: RUN,
         org_id: ORG,
@@ -72,8 +72,8 @@ describe('InteractionRepository', () => {
         status: 'RUNNING',
       },
     ];
-    state.tables.tool_executions = [toolExecution(TOOL)];
-    state.tables.run_interactions = [];
+    state.tables.tbl_agsvc_tool_executions = [toolExecution(TOOL)];
+    state.tables.tbl_agsvc_run_interactions = [];
     repository = new InteractionRepository(knex, {
       now: () => new Date('2026-07-19T01:02:03.004Z'),
     });
@@ -95,10 +95,10 @@ describe('InteractionRepository', () => {
     assert.equal(retry.created, false);
     assert.equal(retry.interaction.interactionId, INTERACTION);
     assert.equal(retry.interaction.toolExecutionId, TOOL);
-    assert.equal(state.tables.run_interactions.length, 1);
+    assert.equal(state.tables.tbl_agsvc_run_interactions.length, 1);
     assert.ok(
       state.lockCalls.some(
-        (call) => call.table === 'runs' && call.mode === 'update',
+        (call) => call.table === 'tbl_agsvc_runs' && call.mode === 'update',
       ),
       'the owned Run is locked before interaction creation',
     );
@@ -120,7 +120,7 @@ describe('InteractionRepository', () => {
         ),
       ConflictError,
     );
-    assert.equal(state.tables.run_interactions.length, 1);
+    assert.equal(state.tables.tbl_agsvc_run_interactions.length, 1);
   });
 
   it('adopts a concurrent duplicate only when every durable binding matches', async () => {
@@ -131,7 +131,7 @@ describe('InteractionRepository', () => {
       ),
     ]);
 
-    assert.equal(state.tables.run_interactions.length, 1);
+    assert.equal(state.tables.tbl_agsvc_run_interactions.length, 1);
     assert.deepEqual(
       calls.map((result) => result.created).sort(),
       [false, true],
@@ -158,7 +158,7 @@ describe('InteractionRepository', () => {
         overrides.toolExecutionId === OTHER_TOOL ||
         overrides.agentSessionId === OTHER_SESSION
       ) {
-        state.tables.tool_executions.push(
+        state.tables.tbl_agsvc_tool_executions.push(
           toolExecution(
             OTHER_TOOL,
             overrides.agentSessionId === OTHER_SESSION
@@ -180,7 +180,7 @@ describe('InteractionRepository', () => {
         ),
       ]);
 
-      assert.equal(state.tables.run_interactions.length, 1);
+      assert.equal(state.tables.tbl_agsvc_run_interactions.length, 1);
       assert.equal(
         settled.filter((result) => result.status === 'fulfilled').length,
         1,
@@ -229,7 +229,7 @@ describe('InteractionRepository', () => {
 
   it('claims a legacy resolved NONE phase exactly once', async () => {
     await repository.getOrCreatePending(request());
-    Object.assign(state.tables.run_interactions[0], {
+    Object.assign(state.tables.tbl_agsvc_run_interactions[0], {
       status: 'RESOLVED',
       response_json: JSON.stringify('eu'),
       response_hash: 'a'.repeat(64),
@@ -266,8 +266,8 @@ describe('InteractionRepository', () => {
       /one of the requested options/,
     );
 
-    state.tables.run_interactions = [];
-    state.tables.runs[0].status = 'RUNNING';
+    state.tables.tbl_agsvc_run_interactions = [];
+    state.tables.tbl_agsvc_runs[0].status = 'RUNNING';
     await repository.getOrCreatePending(request({
       interactionType: 'confirm',
       requestJson: { title: 'Deploy?' },
@@ -285,7 +285,7 @@ describe('InteractionRepository', () => {
   });
 
   it('hashes and stores the complete untruncated response', async () => {
-    state.tables.runs[0].status = 'RUNNING';
+    state.tables.tbl_agsvc_runs[0].status = 'RUNNING';
     await repository.getOrCreatePending(request({
       interactionType: 'input',
       requestJson: { title: 'Provide context' },
@@ -331,6 +331,6 @@ describe('InteractionRepository', () => {
       /force rollback/,
     );
 
-    assert.deepEqual(state.tables.run_interactions, []);
+    assert.deepEqual(state.tables.tbl_agsvc_run_interactions, []);
   });
 });

@@ -22,12 +22,65 @@
 
 | Package | Role | Production source root | Thin entry |
 |---------|------|------------------------|------------|
-| `agent/` | Pi Agent HTTP + Worker | `agent/src/**` | `server.js`, `worker.js`, package-root `config.js` |
-| `api-server/` | BFF | `api-server/src/**` | `server.js` |
-| `sandbox/` | FastAPI execution plane | Python package `sandbox/` (installable) | `sandbox/main.py` (uvicorn) |
+| `agent/` | Agent HTTP + Worker（TS） | `agent/src/**` | `server.ts`, `worker.ts`, package-root `config.ts`；容器跑 `dist/` |
+| `api-server/` | BFF（TS） | `api-server/src/**` | `server.ts`；容器跑 `dist/server.js` |
+
+| `exec/` | 执行面 + MCP facade（TS） | `exec/src/**` | `src/main.ts`、`src/mcp-main.ts` |
 | `frontend/` | Vite React app | `frontend/src/**` (FSD-style) | `index.html` + Vite |
+| `contract/` | exec↔agent runtime 共享类型与 RPC 信封（TS） | `contract/src/**` | `src/index.ts` |
+
+DSH 组合层是 `agent/src/runtime/`，不是独立包、也不是第六个服务。它曾经短暂
+作为独立包 `agent/runtime/`，阶段 F 并进主树，与其余源码同一次
+`tsc` 编译。`contract/` 留在顶层，因为 exec 与 agent runtime 都用它。
 
 Do **not** reintroduce parallel production trees at the package root that mirror `src/` (e.g. `agent/application` next to `agent/src/application`).
+
+---
+
+## DSH 重建后的包（ADR 0007 / 0008）
+
+```text
+contract/          Agent 与执行面之间的共享契约。两侧同为 TS，所以不手写 DTO：
+  src/               直接复用 @deepseek-ai/dsh-fs / dsh-shell 的类型，本包只加
+    envelope.ts      RPC 信封（必带 workspaceId，多实例路由的预留键）
+    errors.ts        错误码 + 物理路径脱敏（脱敏参数**必填**，不给默认值）
+    hmac.ts          两侧共用的**唯一**一份签名实现。2026-09-04 起 agent 的
+                     `infrastructure/sandbox/internal-hmac.ts` 已删除（它与本文件
+                     是两套并存的实现），agent/exec 都从这里取；baseUrl 策略不属于
+                     签名，留在 agent 的 `sandbox/transport-base-url.ts`
+    endpoint-failover.ts  多端点建连纯策略（粘主、拉黑 180s、不回切、总预算）。
+                     只放无驱动依赖的部分；mysql2/Knex 接线留在各包基础设施层
+    dbpm.ts          启动时向 DBPM 取口令的 TCP 客户端（ADR 0011 D10）
+agent/src/runtime/ Agent 侧的 DSH 组合层（agent 私有，同一次 tsc）
+  bundle/            cordis.patch.yml —— 叠在 dsh-base 之上的组合层（生成物）
+  plugins/           类型化清单，`npm run gen:patch` 写出 YAML
+  providers/         ctx.fs / ctx.shell / ctx.jobs / sessionPersistence / skills / …
+  policy/            四个挂载点：pre-execute / guard / execute / post-execute
+  projection/        session/event → 平台 Run Event → SSE（契约逐字节不变）
+exec/              执行面 + MCP facade（取代 Python 版 sandbox/ 全部内容）
+  src/fs/            WorkspaceFileSystem extends LocalFileSystem + 围栏
+                     make-workspace-fs.ts 是**唯一**构造入口（每次新建 cordis
+                     Context：同一个 Context 注册两次 fs 服务会抛）
+  src/isolation/     Profile 数据模型 + 唯一的 render() + preflight 同源
+                     AGENT_PYTHON_VENV 同时决定只读挂载与子进程 PATH
+  src/shell/         命令执行与作业登记
+  src/search/        ls / find / grep（内部面与公共面共用同一个服务）
+  src/workspace/     工作区、配额、路径
+  src/artifact/      控制面快照（**不在工作区**：产物要对模型不可变）
+  src/dataset/       三段式流式上传：begin → writeChunk → finish
+  src/mcp/           对外 MCP facade（settings/context-store/bridge-client/server）
+  src/http/          internal（HMAC）· internal-mcp（窄桥）· public（对 BFF 契约不变）
+```
+
+**规则**
+
+- `contract/`、`exec/` 和 `agent/src/runtime/`**没有任何 hotspot 预算**：
+  `tests/test_repository_layout.py` 已把它们纳入，1000 行上限从第一天就生效。
+  **不要把既有债务复制过来。**
+- 相对 import 必须带 `.js` 后缀（NodeNext 解析），`"type": "module"`。
+- 每个文件顶部写清楚"这是什么、为什么这样设计"，中文。
+- `exec/src/types.ts` 与 `contract/` 的导出是跨任务共享面，**改签名要先提出来**，
+  不要各写一份（可写根、路径常量都踩过这个坑）。
 
 ---
 
@@ -35,33 +88,40 @@ Do **not** reintroduce parallel production trees at the package root that mirror
 
 ```text
 agent/
-  server.js              # re-exports + listen when main
-  worker.js              # worker process entry
-  config.js              # env / settings (package root for Docker WORKDIR)
-  Dockerfile
+  server.ts              # re-exports + listen when main
+  worker.ts              # worker process entry
+  config.ts              # env / settings (package root for Docker WORKDIR)
+  tsconfig.json          # 检查（strict 仍关着，已知待办）
+  tsconfig.build.json    # 出 dist/
+  tsconfig.runtime.json  # 只检查 src/runtime/** 且开 strict
+  Dockerfile             # CMD node dist/server.js
   package.json
   src/                   # sole production source root
     bootstrap/           # composition root, http-main, worker-main
-    application/         # use-cases / services
+    application/         # use-cases / services（不认识 cordis）
+    runtime/             # DSH 组合层：plugins / providers / policy / projection
     config/              # runtime policy data (fake-llm-policy)
     domain/              # pure domain
-    infrastructure/      # mysql, redis, pi, mcp, outbox, sandbox transports, model-registry, telemetry
-    extensions/          # first-party Pi extensions + registry (constants.js)
+    infrastructure/      # mysql, redis, dsh, mcp, outbox, sandbox public client
     presentation/        # a2a HTTP handlers
     lib/                 # shared pure helpers (text-redaction)
     skills/              # skill install/validate/paths
   tests/
     support/             # non-production harnesses and fakes
+    runtime/             # 组合层用例（含 boot 起真实插件树）
 ```
 
 **Rules**
 
-- New production modules land under `src/` only.
+- New production modules land under `src/` only. 入口是 `.ts`，容器跑 `dist/`。
+- `application/` 不 import cordis / `src/runtime/` / `@deepseek-ai/dsh-*`。
+- 新增 plugin 只改 `src/runtime/plugins/manifest.ts`，然后 `npm run gen:patch`。
 - Obsolete approval-waiter code is deleted; do not add a package-root `legacy/` tree.
 - `tests/support/` is the only home for gates and local fakes. Production code
   may import a runtime policy, but never a test harness. There is no
-  `agent/testing/` root — CI syntax-checks every `agent/**/*.js` outside
-  `node_modules`, with no carve-out.
+  `agent/testing/` root。
+- `src/` 下仅 `infrastructure/mysql/migrations/` 保留 `.js`（knex 按目录扫描
+  加载的纯 DDL）。不要把别的生产文件以 `.js` 加回来。
 
 ---
 
@@ -69,16 +129,19 @@ agent/
 
 ```text
 api-server/
-  server.js              # HTTP entry; imports from ./src/**
+  server.ts              # HTTP entry; imports from ./src/**
   Dockerfile
   package.json
+  tsconfig.json
+  tsconfig.build.json
   src/
-    config.js
+    config.ts
     application/
     http/
     routes/
     services/
   tests/
+
 ```
 
 **Rules**
@@ -88,37 +151,49 @@ api-server/
 
 ---
 
-## sandbox/
+## exec/
 
-Python package layout (setuptools `sandbox*`):
+TypeScript，两个入口共用一个包（也共用一个镜像）：
 
 ```text
-sandbox/
-  main.py                # FastAPI app entry (uvicorn sandbox.main:app)
-  config.py, auth.py, paths.py, models.py, telemetry.py, trace.py
-  artifact/              # Artifact domain: contracts, facade/runtime, infra, API
-  routers/               # HTTP routers (internal plane + files/datasets compat + health)
-  services/              # runtime services (process, files, formal_*)
-  isolation/             # bubblewrap / resource policy
-  security/              # internal auth, network policy
-  mcp/                   # sandbox-mcp Streamable HTTP facade (separately deployed)
-  utils/                 # resource_limits and other pure helpers
-  app/
-    domain/              # pure contracts / types
-    persistence/         # MySQL repositories for formal plane
-  Dockerfile
-  entrypoint.sh
+exec/
+  src/
+    main.ts              # 执行面入口（compose: sandbox）
+    mcp-main.ts          # MCP facade 入口（compose: sandbox-mcp）
+    types.ts             # WorkspaceContext 等跨模块类型
+    fs/                  # 围栏、路径策略、脱敏、可写根、make-workspace-fs
+    isolation/           # profile 数据模型、render()、preflight、bubblewrap 探测
+    shell/               # executor、job-registry、python 物化、safe-env
+    search/              # ls / find / grep 与它们的谓词、上限
+    workspace/           # 生命周期、配额账本、锁、单实例断言
+    artifact/            # control-plane-storage + service（快照不在工作区）
+    dataset/             # 三段式流式上传
+    attachment/          # 上传件与文件名净化
+    db/                  # 连接池 + exec_* 仓储
+    security/            # HMAC 校验、CIDR
+    http/
+      app.ts             # 唯一组合入口
+      router.ts          # 内部面（HMAC + CIDR）
+      internal-*.ts      # fs / shell / jobs / artifact / session
+      internal-mcp.ts    # MCP 窄桥（独立 bearer，**不**挂 HMAC 中间件）
+      public/            # 对 BFF 的会话作用域面
+    mcp/                 # facade：settings / context-store / bridge-client /
+                         #        service / server / tools / disposition / ulid
+  requirements.txt       # 镜像里给**模型执行代码**用的 Python 运行库
+  skill-runtime/         # 三个 shell 启动垫片（ADR 0008 D10）
+  test/
+  Dockerfile             # 服务 + 模型工具链
 ```
 
 **Rules**
 
-- Import as `from sandbox....` (package root on `PYTHONPATH` / installed editable).
-- Domain and persistence live under `sandbox/app/`; HTTP and process runtime stay at package-level `routers/` / `services/` (FastAPI conventional hybrid — not a second competing app tree).
-- Artifact is the explicit L1 domain exception: new Artifact code lives under
-  `sandbox/artifact/`; `main.py` mounts `sandbox.artifact.api` directly. Former
-  service/domain paths that still exist are compatibility imports; the former
-  `sandbox.routers.{artifacts,internal_artifacts}` shims have been removed.
-- Do not create a parallel `sandbox/src/` that duplicates these modules.
+- 生产代码只在 `src/` 下。
+- `WorkspaceFileSystem` **只能**经 `fs/make-workspace-fs.ts` 构造：它每次新建一个
+  cordis Context，因为同一个 Context 上注册两次 `fs` 服务会抛。
+- MCP 窄桥挂在 `http/app.ts` 而不是 `http/router.ts` 里——让"facade 够不到
+  `/internal/v1/*`"这条性质在代码结构上看得见，而不只是写在文档里。
+- 产物快照落控制面（`SANDBOX_ARTIFACTS_ROOT`），**不落工作区**；数据集相反，
+  它就是要给模型读的，落 `datasets/{id}/{name}`。
 
 ---
 
@@ -130,8 +205,21 @@ Unchanged: feature-sliced style under `frontend/src/` (`pages/`, `widgets/`, `fe
 
 ## Docker / compose
 
-- Agent / API: `WORKDIR /app`, `CMD ["node", "server.js"]` (or worker) — copy entire package so `src/` is present.
-- Sandbox: uvicorn targets `sandbox.main:app` with package on `PYTHONPATH`.
+- Agent: `WORKDIR /app/agent`，`CMD ["node", "dist/server.js"]`（worker 是
+  `dist/worker.js`）。镜像**不挂载源码**，改了 `agent/` 必须重建。
+- API: `WORKDIR /app`, `CMD ["node", "dist/server.js"]` — TypeScript 构建产物，镜像**不挂载源码**，改了 `api-server/` 必须重建。
+- Exec: `WORKDIR /app/exec`，`CMD ["node", "dist/main.js"]`；MCP facade 是同一份
+  `exec/Dockerfile` 的 slim `facade` 阶段（独立镜像 `enterprise-sandbox-mcp`，`node dist/mcp-main.js`）。
+  compose 服务名仍是 `sandbox` / `sandbox-mcp`。**改了 `exec/` 两者必须一起重建**，否则一个跑新代码一个跑旧的。
+
+## VM release（exec 裸装）
+
+- `deploy/vm/`：随 release 分发的部署资产——`dsh-exec.service`、`exec.env.example`、`exec-preflight.sh`
+  （ExecStartPre）、`install-release.sh`（init / install / activate / list）。release 内位于 `vm/`。
+- `scripts/vm/`：仓库侧工具——`build-exec-release.sh` + `release-builder.Dockerfile`（在目标架构 Linux 容器里
+  构建，产物写到 `.runtime/vm-release/`）、`write-release-manifest.mjs`、开发用 `systemd-sim.Dockerfile`。
+- release 目录布局：`release-manifest.json`、`SHA256SUMS`、`contract/{dist,schema,node_modules}`、
+  `exec/{dist,node_modules}`、`vm/`。不含源码与开发依赖。
 
 ---
 

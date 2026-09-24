@@ -23,6 +23,23 @@ describe('API schemas', () => {
     assert.equal(data[0].id, 'c1');
   });
 
+  it('keeps the server-bound Agent version and fixed model policy', () => {
+    const data = parseApi(
+      ConversationListSchema,
+      [{
+        id: 'c1',
+        agent_id: 'agent-1',
+        agent_version_id: 'version-2',
+        agent_version_no: 2,
+        model_policy: { fixed_model_id: 'deepseek-v4-pro' },
+      }],
+      'bound conversation',
+    );
+    assert.equal(data[0].agent_version_id, 'version-2');
+    assert.equal(data[0].agent_version_no, 2);
+    assert.equal(data[0].model_policy?.fixed_model_id, 'deepseek-v4-pro');
+  });
+
   it('parses ensure session', () => {
     const data = parseApi(
       EnsureSessionSchema,

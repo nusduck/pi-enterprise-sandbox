@@ -29,8 +29,18 @@ function formatExecutionEnvelope(obj: Record<string, unknown>): string | null {
   if (!hasExecKeys) return null;
 
   const exitCode = obj.exitCode ?? obj.exit_code;
-  const stdout = obj.stdout != null ? String(obj.stdout) : '';
-  const stderr = obj.stderr != null ? String(obj.stderr) : '';
+  const streamText = (value: unknown): string => {
+    if (typeof value === 'string') return value;
+    if (isPlainObject(value) && typeof value.text === 'string') return value.text;
+    if (value == null) return '';
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  };
+  const stdout = streamText(obj.stdout);
+  const stderr = streamText(obj.stderr);
   const lines: string[] = [];
   if (exitCode != null && exitCode !== '') {
     lines.push(`exit ${exitCode}`);
@@ -46,7 +56,7 @@ function formatExecutionEnvelope(obj: Record<string, unknown>): string | null {
 }
 
 /**
- * Unwrap Pi / platform tool result bags into display text.
+ * Unwrap DSH / platform tool result bags into display text.
  */
 export function formatToolResultDisplay(result: unknown): string {
   if (result == null) return '';
@@ -73,7 +83,7 @@ export function formatToolResultDisplay(result: unknown): string {
   const fromEnvelope = formatExecutionEnvelope(result);
   if (fromEnvelope != null) return fromEnvelope;
 
-  // Pi ToolResult: { content: [{ type: 'text', text: '...' }] }
+  // DSH ToolResult: { content: [{ type: 'text', text: '...' }] }
   const contentText = extractContentText(result);
   if (contentText) {
     const nested = tryParseJson(contentText);

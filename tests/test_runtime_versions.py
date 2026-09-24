@@ -22,7 +22,7 @@ PINS_PATH = REPO_ROOT / "runtime-versions.json"
 def pins() -> dict:
     assert PINS_PATH.is_file(), "runtime-versions.json must exist at repo root"
     data = json.loads(PINS_PATH.read_text(encoding="utf-8"))
-    assert "node" in data and "python" in data and "pi_sdk" in data
+    assert "node" in data and "python" in data and "dsh" in data
     return data
 
 
@@ -46,8 +46,8 @@ def test_pins_declare_fixed_baselines(pins: dict) -> None:
     assert pins["python"]["ci"] == "3.11"
     assert pins["python"]["docker_image"] == "python:3.11-slim"
     assert pins["python"]["requires"] == ">=3.11,<3.12"
-    assert pins["pi_sdk"]["pi_coding_agent"] == "0.80.3"
-    assert pins["pi_sdk"]["pi_ai"] == "0.80.3"
+    assert pins["dsh"]["packages"] == "0.1.1-rc.2"
+    assert pins["dsh"]["cordis"] == "4.0.1"
     assert pins["sandbox_tooling_node"]["nodesource_setup"] == "setup_22.x"
 
 
@@ -56,7 +56,7 @@ def test_version_files_match_pins(pins: dict) -> None:
     assert _read(".python-version").strip() == pins["python"]["file"]
 
 
-# ── package.json engines + Pi SDK exact pins ────────────────────────────────
+# ── package.json engines + SDK 依赖边界 ──────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -73,41 +73,50 @@ def test_package_engines_match_pins(pins: dict, rel: str) -> None:
     assert engines.get("node") == pins["node"]["engines"], rel
 
 
-def test_agent_sdk_exact_pins(pins: dict) -> None:
-    pkg = _read_json("agent/package.json")
-    deps = pkg.get("dependencies") or {}
-    coding = pins["pi_sdk"]["package_names"]["pi_coding_agent"]
-    ai = pins["pi_sdk"]["package_names"]["pi_ai"]
-    assert deps.get(coding) == pins["pi_sdk"]["pi_coding_agent"]
-    assert deps.get(ai) == pins["pi_sdk"]["pi_ai"]
-    # exact pin: no range operators
-    for name in (coding, ai):
-        spec = deps[name]
-        assert re.fullmatch(r"\d+\.\d+\.\d+", spec), f"{name} must be exact x.y.z, got {spec}"
-
-
-def test_api_server_does_not_depend_on_sdk(pins: dict) -> None:
-    pkg = _read_json("api-server/package.json")
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "agent/package.json",
+        "exec/package.json",
+        "contract/package.json",
+        "api-server/package.json",
+        "frontend/package.json",
+    ],
+)
+def test_no_legacy_engine_deps(rel: str) -> None:
+    """ADR 0007：旧引擎（``@earendil-works/*``）已整体退役，任何包都不得重新依赖。"""
+    pkg = _read_json(rel)
     deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
-    coding = pins["pi_sdk"]["package_names"]["pi_coding_agent"]
-    ai = pins["pi_sdk"]["package_names"]["pi_ai"]
-    assert coding not in deps
-    assert ai not in deps
+    hits = [k for k in deps if k.startswith("@earendil-works/")]
+    assert hits == [], (rel, hits)
 
 
-def test_frontend_does_not_depend_on_coding_agent_sdk(pins: dict) -> None:
-    pkg = _read_json("frontend/package.json")
+def test_runtime_is_agent_private(pins: dict) -> None:
+    """DSH 组合层只有 agent 一个消费者，所以它就住在 agent/src/runtime/。
+
+    阶段 F 之前它是个独立包（agent/runtime，file:./runtime），与 src/ 平级——
+    这正是「结构里的两棵源码树」那条问题。现在它是 agent 源码的一个子目录，
+    与其余源码同一次 tsc 编译。
+    """
+    deps = _read_json("agent/package.json").get("dependencies") or {}
+    assert (REPO_ROOT / "agent" / "src" / "runtime" / "boot.ts").is_file()
+    assert not (REPO_ROOT / "agent" / "runtime").exists()
+    assert not (REPO_ROOT / "runtime").exists()
+
+
+@pytest.mark.parametrize("rel", ["api-server/package.json", "frontend/package.json"])
+def test_bff_and_frontend_do_not_depend_on_agent_sdk(rel: str) -> None:
+    """AGENTS.md §1：BFF 与前端零 Agent SDK。"""
+    pkg = _read_json(rel)
     deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
-    coding = pins["pi_sdk"]["package_names"]["pi_coding_agent"]
-    assert coding not in deps
-    # Removed unused pi-web-ui (no imports in frontend/src); must stay absent.
-    assert "@earendil-works/pi-web-ui" not in deps
+    hits = [k for k in deps if k.startswith("@deepseek-ai/")]
+    assert hits == [], (rel, hits)
 
 
 def test_frontend_declares_types_node_explicitly(pins: dict) -> None:
     """vite.config.ts imports ``node:url``; types must not come from transitive deps.
 
-    After removing unused ``pi-web-ui``, builds failed without a direct ``@types/node``.
+    Builds once failed when ``@types/node`` only arrived transitively.
     Pin major must match the Node 22 service baseline (not host Node 26 types).
     """
     pkg = _read_json("frontend/package.json")
@@ -128,24 +137,11 @@ def test_frontend_declares_types_node_explicitly(pins: dict) -> None:
     assert entry.get("version") == expected
 
 
-def test_agent_lockfile_pins_match_package_json(pins: dict) -> None:
-    pkg = _read_json("agent/package.json")
+def test_agent_lockfile_has_no_earendil_root_deps(pins: dict) -> None:
     lock = _read_json("agent/package-lock.json")
     root_deps = (lock.get("packages") or {}).get("", {}).get("dependencies") or {}
-    coding = pins["pi_sdk"]["package_names"]["pi_coding_agent"]
-    ai = pins["pi_sdk"]["package_names"]["pi_ai"]
-    assert root_deps.get(coding) == pkg["dependencies"][coding]
-    assert root_deps.get(ai) == pkg["dependencies"][ai]
-    # installed package versions when present in lock
-    for name, key in (
-        (coding, f"node_modules/{coding}"),
-        (ai, f"node_modules/{ai}"),
-    ):
-        entry = (lock.get("packages") or {}).get(key)
-        if entry is not None:
-            assert entry.get("version") == pins["pi_sdk"][
-                "pi_coding_agent" if name == coding else "pi_ai"
-            ]
+    hits = [k for k in root_deps if k.startswith("@earendil-works/")]
+    assert hits == [], hits
 
 
 # ── Python requires-python ──────────────────────────────────────────────────
@@ -221,16 +217,40 @@ def test_node_service_dockerfiles_use_pinned_image(pins: dict, rel: str) -> None
     assert "npm ci" in text, rel
 
 
-def test_sandbox_dockerfile_python_and_tooling_node(pins: dict) -> None:
-    text = _read("sandbox/Dockerfile")
+def test_exec_dockerfile_uses_pinned_node(pins: dict) -> None:
+    text = _read("exec/Dockerfile")
     assert re.search(
-        rf"^FROM\s+{re.escape(pins['python']['docker_image'])}\b",
+        rf"^FROM\s+{re.escape(pins['node']['docker_image'])}\b",
         text,
         re.M,
     )
-    setup = pins["sandbox_tooling_node"]["nodesource_setup"]
-    assert setup in text
-    assert "setup_20.x" not in text
+    assert "npm ci" in text
+
+
+def test_exec_dockerfile_uses_pinned_node(pins: dict) -> None:
+    """The exec image is Node-based; every FROM must use the pinned major."""
+    text = _read("exec/Dockerfile")
+    froms = re.findall(r"^FROM\s+(\S+)", text, re.M)
+    assert froms, "exec/Dockerfile has no FROM"
+    for image in froms:
+        # Multi-stage COPY --from targets a stage name, not an image.
+        if not image.startswith("node:"):
+            continue
+        assert image == pins["node"]["docker_image"], image
+
+
+def test_exec_image_installs_the_pinned_python_minor(pins: dict) -> None:
+    """Agent-executed code runs `python3`; it must be the pinned minor.
+
+    The image is node:22-slim (Debian bookworm), whose `python3` is 3.11 —
+    the same minor the SSOT pins. This asserts the *intent* is recorded, so a
+    base-image bump that changes the Python minor is a visible decision rather
+    than a silent one.
+    """
+    text = _read("exec/Dockerfile")
+    assert "\n    python3 \\" in text
+    assert pins["python"]["major_minor"] == "3.11"
+    assert "bookworm" in text or "node:22-slim" in text
 
 
 # ── GitHub Actions ──────────────────────────────────────────────────────────

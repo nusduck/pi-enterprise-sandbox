@@ -1,7 +1,7 @@
 /**
  * Parse `spawn_subagent` / `check_subagent` tool payloads into display fields.
  *
- * Both tools return a Pi tool-result envelope whose text part is a JSON
+ * Both tools return a DSH tool-result envelope whose text part is a JSON
  * document (`toolOk(toolResultJson(...))` on the Agent side), so the raw card
  * would otherwise show the model's wire format to the user. A fan-out is the
  * one thing in a run where "what are my children doing" is the whole question,
@@ -19,6 +19,8 @@ export type SubagentChild = {
 export type SpawnSubagentFields = {
   task: string;
   label: string | null;
+  /** Target agent of `delegate_to_agent`; null for a same-agent sub-agent. */
+  agent: string | null;
   childRunId: string | null;
   errorCode: string | null;
 };
@@ -43,7 +45,7 @@ function trimmedString(value: unknown): string | null {
 }
 
 /**
- * Pull the JSON document out of a Pi tool-result envelope.
+ * Pull the JSON document out of a DSH tool-result envelope.
  * Accepts the envelope, a bare JSON string, or an already-parsed object.
  */
 export function parseToolResultJson(result: unknown): Record<string, unknown> | null {
@@ -89,7 +91,11 @@ export function toolErrorCode(result: unknown): string | null {
 }
 
 export function isSpawnSubagentToolName(name: string | null | undefined): boolean {
-  return String(name || '').trim() === 'spawn_subagent';
+  const n = String(name || '').trim();
+  // 出厂 `dsh-tool-subagent` 注册的是 `subagent`（ADR 0009 D4，one-shot 形态）。
+  // 旧名留着只为历史会话。`delegate_to_agent` 是同一种子 Run，只是换了 Agent
+  // （docs/design/agent-delegation.md）。
+  return n === 'subagent' || n === 'spawn_subagent' || n === 'delegate_to_agent';
 }
 
 export function isCheckSubagentToolName(name: string | null | undefined): boolean {
@@ -114,12 +120,16 @@ export function parseSpawnSubagentFields(
     ? result.details
     : {};
   return {
-    task: trimmedString(args.task) ?? '',
+    // `task`/`label` are the legacy spawn_subagent names; the current
+    // `subagent` and `delegate_to_agent` tools take `prompt`/`description`.
+    task: trimmedString(args.task) ?? trimmedString(args.prompt) ?? '',
     // The label can come from the args or be echoed by the durable service.
     label:
       trimmedString(args.label) ??
+      trimmedString(args.description) ??
       trimmedString(payload.label) ??
       trimmedString(details.label),
+    agent: trimmedString(args.agent) ?? trimmedString(payload.agent),
     childRunId:
       trimmedString(payload.childRunId) ?? trimmedString(details.childRunId),
     errorCode: toolErrorCode(result),

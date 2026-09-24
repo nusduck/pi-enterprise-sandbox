@@ -10,6 +10,7 @@ import {
   createBoundedDatasetUploadBody,
   datasetOwnershipHeaders,
   handleDatasetUpload,
+  handleListDatasets,
 } from '../src/routes/datasets.js';
 import { sandboxProxyHeaders } from '../src/routes/files.js';
 import { config } from '../src/config.js';
@@ -155,7 +156,11 @@ describe('handleDatasetUpload direct proxy', () => {
       const parts = [];
       for await (const part of init.body) parts.push(Buffer.from(part));
       captured = { url: String(url), init, body: Buffer.concat(parts).toString() };
-      return new Response(JSON.stringify({ dataset_id: 'dataset_01', status: 'ready' }), {
+      return new Response(JSON.stringify({
+        dataset_id: 'dataset_01',
+        sandbox_session_id: '01WORK000000000000000000000',
+        status: 'ready',
+      }), {
         status: 201,
         headers: { 'Content-Type': 'application/json', 'X-Trace-Id': 'sandbox-trace' },
       });
@@ -167,6 +172,7 @@ describe('handleDatasetUpload direct proxy', () => {
         'content-length': '6',
         'idempotency-key': 'idem-dataset-01',
         'x-trace-id': 'browser-trace',
+        'x-filename': 'sales.csv',
       },
       complete: true,
       aborted: false,
@@ -182,17 +188,57 @@ describe('handleDatasetUpload direct proxy', () => {
       assert.equal(captured.body, 'abcdef');
       assert.equal(
         captured.url,
-        `${config.SANDBOX_BASE_URL}/sessions/session_01/datasets`,
+        `${config.SANDBOX_BASE_URL}/sessions/01WORK000000000000000000000/datasets`,
       );
       assert.equal(captured.init.headers['Idempotency-Key'], 'idem-dataset-01');
       assert.equal(captured.init.headers['X-Conversation-Id'], 'conversation_01');
+      assert.equal(captured.init.headers['X-Filename'], 'sales.csv');
       assert.equal(
         captured.init.headers['X-Acting-User-Id'],
         '01USER000000000000000000000',
       );
       assert.equal(captured.init.headers.Authorization, undefined);
       assert.equal(res.status, 201);
-      assert.equal(JSON.parse(res.body).conversation_id, 'conversation_01');
+      const body = JSON.parse(res.body);
+      assert.equal(body.conversation_id, 'conversation_01');
+      assert.equal(body.sandbox_session_id, 'session_01');
+    } finally {
+      globalThis.fetch = originalFetch;
+      config.AUTH_ENABLED = originalAuth;
+    }
+  });
+
+  it('uses the Agent-resolved workspace for list and reprojects the public session id', async () => {
+    const originalFetch = globalThis.fetch;
+    const originalAuth = config.AUTH_ENABLED;
+    let capturedUrl = null;
+    globalThis.fetch = async (url) => {
+      const value = String(url);
+      if (value.includes('/internal/sessions/')) return agentSessionResponse();
+      capturedUrl = value;
+      return new Response(JSON.stringify({
+        datasets: [{
+          dataset_id: 'dataset_01',
+          sandbox_session_id: '01WORK000000000000000000000',
+        }],
+        total: 1,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    config.AUTH_ENABLED = false;
+    const res = new MockResponse();
+    try {
+      await handleListDatasets(
+        new URL('http://bff/api/datasets?session_id=session_01'),
+        res,
+        { headers: {} },
+      );
+      assert.equal(
+        capturedUrl,
+        `${config.SANDBOX_BASE_URL}/sessions/01WORK000000000000000000000/datasets`,
+      );
+      const body = JSON.parse(res.body);
+      assert.equal(body.datasets[0].sandbox_session_id, 'session_01');
+      assert.equal(body.datasets[0].session_id, 'session_01');
     } finally {
       globalThis.fetch = originalFetch;
       config.AUTH_ENABLED = originalAuth;
@@ -324,4 +370,3 @@ describe('artifactDownloadDisposition', () => {
     );
   });
 });
-

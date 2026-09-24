@@ -28,7 +28,7 @@ const TEST_REDIS_CONTAINER = String(
 ).trim();
 const explicitlyEnabled =
   process.env.RUN_BULLMQ_WORKER_RESTART_GATE === '1';
-const safeContainer = /^pi-release-gate-redis-[a-z0-9-]+$/.test(
+const safeContainer = /^dsh-release-gate-redis-[a-z0-9-]+$/.test(
   TEST_REDIS_CONTAINER,
 );
 const runLive = explicitlyEnabled && safeContainer && Boolean(TEST_REDIS_URL);
@@ -38,7 +38,7 @@ const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const TRACE = 'e'.repeat(32);
 const QUEUE = 'release-gate-worker-restart';
-const PREFIX = 'release-gate-bullmq-20260719';
+const PREFIX = '{release-gate-bullmq-20260719}';
 
 async function docker(...args) {
   return execFileAsync('docker', args, {
@@ -48,7 +48,8 @@ async function docker(...args) {
 }
 
 function createWorkerHarness(mode) {
-  const child = spawn(process.execPath, [FIXTURE], {
+  // The fixture imports TypeScript sources; a bare `node` child has no tsx loader.
+  const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), FIXTURE], {
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     env: {
       ...process.env,
@@ -184,7 +185,7 @@ describe('BullMQ Worker restart gate safety', () => {
     }
     assert.ok(
       safeContainer,
-      'TEST_REDIS_CONTAINER must match pi-release-gate-redis-*',
+      'TEST_REDIS_CONTAINER must match dsh-release-gate-redis-*',
     );
     assert.ok(TEST_REDIS_URL, 'TEST_REDIS_URL is required');
   });
@@ -203,7 +204,7 @@ describeLive('BullMQ Worker process restart and stalled Job recovery', () => {
     );
     const [name, image, running] = inspected.stdout.trim().split('|');
     assert.equal(name, `/${TEST_REDIS_CONTAINER}`);
-    assert.equal(image, 'redis:7.2');
+    assert.equal(image, 'redis:5.0.14');
     assert.equal(running, 'true');
 
     queueHandles = createRunQueue(TEST_REDIS_URL, {

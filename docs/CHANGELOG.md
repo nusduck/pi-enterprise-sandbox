@@ -7,7 +7,544 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agent 间委派**：新工具 `delegate_to_agent` 让一个 Agent 把自包含任务交给同 org 的另一个 Agent，
+  子 Run 以目标 Agent 的活跃版本执行并把结果交回父 Run。由 AgentVersion 配置
+  `delegation.agents` 显式授权，缺省不可委派；复用子 Run 的深度 / 并发上限、分层队列与级联取消。
+  时间线的子 Agent 卡片显示委派目标。见 [design/agent-delegation.md](design/agent-delegation.md)。
+- **远端 A2A 委派**：新工具 `delegate_to_remote_agent` 经官方 `@a2a-js/sdk/client` 调用运维在
+  `A2A_REMOTE_AGENTS_JSON` 里登记的远端 A2A Agent（含本部署自己的 A2A 面），默认需要审批。
+  由 AgentVersion 配置 `delegation.remoteAgents` 授权，缺省不可调用；出站只发往卡片同源、有超时与响应上限。
+  见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。
+
 ### Fixed
+
+- **审批通过后的续跑不再留下永远 `RUNNING` 的工具执行行**：模型以新 callId 重发被批准的调用时，执行结果
+  此前落在按新 callId 另起的一行上，被批准的那一行停在 `RUNNING`、没有结果。现在执行的账本记回被批准的
+  那一行，一次被批准的执行只有一行。
+- **会话列表显示模型生成的标题**：DSH 在首条提问后会用模型生成会话标题，但此前没有任何代码读取，
+  每个会话白花一次模型调用、标题停在占位值，列表只能显示首条提问的截断。现在模型标题会写回会话
+  （只替换自动标题——占位值或首条提问截断；显式传入的标题不受影响），每轮结束后刷新列表即可看到。
+
+### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
+
+- **产品与部署标识统一改为 `dsh`**：镜像 / 容器 `dsh-enterprise-*`，包名 `@dsh/contract`、`@dsh/exec`，VM 上的
+  `dsh-exec` 用户与 unit、`/opt|/etc|/var/lib/dsh-exec`，工具链路径 `dsh-python` / `dsh-chromium` /
+  `dsh-skill-runtime`，共享 Skill 根 `/mnt/dsh-skill`，本地 K8s 命名空间 `dsh-dev` / `dsh-sim`。
+  浏览器会话 Cookie 改为 `dsh_enterprise_session`（升级后需重新登录一次），JWT issuer / audience 默认值、
+  A2A 扩展 URI 同步改名。已有部署的升级步骤见 [deployment.md](deployment.md#从-pi-命名升级2026-09-23)。
+- **库字段去掉 pi 命名**（迁移 `20260923000002_dsh_naming.js`）：`agent_sessions.session_version`、
+  `messages.session_entry_id` / `session_entry_kind`；journal 标记改为 `session_journal_header|entry`，快照格式
+  改为 `session_jsonl_v3`，UI 消息里的 `piEntryId` 改为 `sessionEntryId`。header 哨兵值为保住 journal digest 不改。
+  新旧代码与新旧库互不兼容，须停写后执行增量发布包。
+- **删除 `pi_sdk_version`**（`agent_versions` 与 `agent_session_snapshots` 两列、Agent 版本 API 的
+  `pi_sdk_version` 字段、`run.agent_version` 事件里的 `piSdkVersion`）：写入与校验用同一个常量，校验永远成立。
+- **删除旧引擎遗留代码**：`createPiRuntimeFactory` / `createPiSessionAdapter` / `PiSessionJournalRepository`
+  等兼容别名，`AGENT_PI_DEFAULT_CWD` 兜底，给旧引擎用的 thinking-level 线路映射（`toThinkingLevelMap`、
+  `supportedThinkingLevels`、`thinking_wire_map`），`runtime-versions.json` 的 `pi_sdk` 段，以及一批无调用方的导出。
+  错误码 `PI_*` 改为 `DSH_*` / `SESSION_JSONL_*` / `SESSION_SNAPSHOT_*`。
+
+### Changed（破坏性：库表命名按 UPspec 落标）
+
+- **共享 MySQL 的表、索引与字段约束按公司《数据库设计规范》落标**（[ADR 0013](adr/0013-upspec-table-naming.md)，
+  迁移 `20260923000001_upspec_naming.js`）：40 张表改名为 `tbl_agsvc_<业务名>`；139 个索引改名为
+  `ind_agsvc_<表缩写>_(a|i)<n>`（≤18 字节）；8 个 `varchar(16)` 枚举列改 `char(16)`；121 个 NOT NULL 列补默认值。
+  主键、身份/租户/引用、凭据与完整性列有意不设默认值（漏写仍由数据库拒绝）。
+  新旧代码与新旧库互不兼容：已有库须停写 → 执行增量发布包 → `schema:verify` → 部署新镜像，不能滚动发布。
+  新增仓库卫生检查 `tests/test_schema_upspec_naming.py` 按 schema 清单守住规则。
+
+### Changed（破坏性：容器用户与前端端口）
+
+- **K8s 内的镜像统一以 `up_docker`（1000:1000）运行**（目标环境要求）：agent / agent-worker、api-server 由同 uid 的
+  `node` 改名，sandbox-mcp 由 uid 10001 改为 1000，frontend 由 root 主进程改为非 root。`USER` 写数字，Pod 可直接开
+  `runAsNonRoot`。执行面镜像与 VM 上的 exec 不变（10001 / `pi-exec`）。
+- **frontend 容器改听 8080**：非 root 绑不了 80。Compose 映射改为 `3000:8080`，边缘 nginx 的 `proxy_pass` 改为
+  `frontend:8080`；自建的部署清单要同步 containerPort、探针与 Service targetPort。
+
+### Fixed（并发）
+
+- **Run 执行期间发的追问会排队，等前一个 Run 结束后按提交顺序自动执行**（plan §12）：此前追问进 Worker 后
+  拿不到 session 锁，立即以 `FAILED / session lock busy` 结束，前端的「排队追问」因此总是失败。现在 Worker 执行
+  前先检查同会话是否有正在执行或更早排队的 Run，有就把作业延后 2 秒再看，Run 保持 `QUEUED`。
+
+- **新组织第一次被并发建会话 / 建 Run 时不再返回 409**：租户默认 Agent 在首次使用时惰性创建，并发请求撞
+  唯一键后在同一事务里重读，REPEATABLE READ 快照看不到对方刚提交的行，于是把冲突抛给调用方（8 个并发里 7 个 409）。
+  重读改为加锁读（`LOCK IN SHARE MODE`），读到最新已提交版本。
+
+### Fixed（K8s 部署评审 2026-09-19，K1–K5）
+
+- **BFF `/health/ready` 与 Agent `/ready` 改看下游的 `/ready`**：此前访问的是 Agent / 执行面的 `/health`
+  （只表示进程活着），执行面存储或数据库故障、进入关停时上游仍报就绪。现在要求下游 2xx 且 `status: ready`；
+  BFF 响应里 `agent.status` / `sandbox.status` 由 `ok` 改为 `ready` / `not_ready` / `unreachable`，且不再转发下游
+  body。两路检查改为并行。
+- **Agent `/ready` 不再把连不上的 MCP Server 当成「没配置」**：就绪投影改为「启用清单 × 当前工具注册表」，
+  没有工具注册的启用 Server 以 `unavailable` 列出并使 `/ready` 503；每次请求重读注册表，Server 恢复无需重启。
+  AgentVersion 校验在部分 Server 不可用时仍按已知清单校验其他 Server 的引用。
+- **`scripts/dev/k8s/up.sh` 重新执行时也滚动 frontend**：此前重建前端镜像后 Pod 不会更新。
+- **Worker 关停有界**：新增 `AGENT_WORKER_DRAIN_TIMEOUT_MS`（默认 150s），**从收到信号起算**：立即关消费者（停止
+  取新任务）并同时停依赖守卫 / cron / outbox，两者都受这一期限约束（outbox 在 MySQL 挂起时的无限等待也被覆盖），
+  之后清理另有 15s 上限；关停中守卫不再 resume 消费者。到期仍有 Run 在跑即直接退出，交给既有崩溃恢复（工具仍在
+  执行的 Run 不自动重放，需人工核对后取消）。
+- **Run 执行期间 MySQL 故障不再让 Worker 进程崩溃**：cancel 轮询的 tick 读库失败时成为未处理的 Promise rejection，
+  Node 直接退出，所有在执行的 Run 被中止（K4 sim 演练发现）。循环现在接住 tick 错误、记日志并按间隔继续。
+- **MCP 重连默认不设次数上限**：出厂 `dsh-mcp-client` 连续 10 次失败（约 2 分钟）后放弃且不再重连，配合「任一启用
+  MCP 不可用即 /ready 503」会让 Agent 永久未就绪、只能人工重启。本仓库生成的条目默认 `reconnect.maxAttempts`
+  不设上限（间隔仍封顶 30s）；`MCP_SERVERS_JSON` 条目可用 `reconnect` 覆盖，非法值拒绝启动。本地 K8s 清单 Worker 终止宽限 60s → 180s，生产 Compose `stop_grace_period: 180s`。
+- **本地 K8s 清单给 Agent HTTP 加 startupProbe（180s 预算）**，所有探针显式 `timeoutSeconds` 并覆盖应用内依赖检查预算。
+
+### Fixed（探针）
+
+- **Agent HTTP `/ready` 真正探测 MySQL 与 Redis**：此前只看客户端对象是否已建，依赖中断时仍报就绪，
+  编排不会摘流量。现在与 Worker 探针同一判定（`SELECT 1` / `PING`，各 2s 超时），失败返回 503。
+
+### Fixed（工具账本与执行面中断）
+
+- **工具在派发到执行面之前就记为 RUNNING，并绑定请求指纹与 fence**：DSH 下此前整个执行期间账本停在
+  `PROPOSED`、`request_hash` / `execution_fence_token` 为空（Pi 时代的调用顺序假设）。现在绑定失败
+  （例如 fence 已被别的 Worker 接管）时**不派发**，不再「记账失败也照样执行」。
+- **执行面在请求可能已送达后断开时，工具记为 `UNKNOWN`（`TOOL_OUTCOME_UNKNOWN`）**：此前一律记 `FAILED`，
+  模型只看到 `fetch failed`，可能把已经部分执行的命令再跑一遍。现在模型收到「操作可能已生效、重试前先检查」
+  的明确提示；只覆盖有副作用的操作（shell、写 / 编辑文件、提交产物），连不上执行面、主动取消与只读操作仍记失败。
+  前端既有的 UNKNOWN 展示（结果未确认、勿自动重试）随之生效。
+
+### Changed（破坏性：Worker 容量语义）
+
+- **Run 队列按子任务深度分层，每层保留消费槽**（审查 R3，[ADR 0012](adr/0012-depth-layered-run-queues.md)）：
+  父 Run 发起子 Run 后前台等待、不让出 BullMQ 槽位；父子共用一个队列时，N 个
+  父 Run 占满 N 个槽之后子 Run 永远排不上，父 Run 又在等子 Run——整条队列停住。
+  提高并发不解决（任何有限 N 都有同样的饱和条件）。现在深度 0 是 `agent-runs`、
+  深度 n 是 `agent-runs-d{n}`，每个允许的深度一个队列、一个消费者、至少一个
+  保留槽；投递路由只看 MySQL 里的权威 `subagent_depth`。
+  - **`AGENT_WORKER_CONCURRENCY` 的含义变了**：它现在是**总预算**，按「每个
+    深度 ≥ 1 的层保留 1 个槽、其余给深度 0」切分。默认 `4` + `maxDepth=2` →
+    **2 / 1 / 1**，根任务的同时执行量从 4 降到 2。提到 `6` 恢复的是根任务槽数 4，
+    吞吐是否相同以压测为准。
+    预算 < `maxDepth + 1` 时**拒绝启动**。
+  - **升级不需要排空**（深度 0 沿用旧队列名）；**缩深 / 回滚必须先收敛**——
+    Worker 在恢复扫描与消费者启动之前检查「本配置不服务的深度」在 Redis 队列与
+    MySQL `runs` 账本（非终态 Run）里是否还有存量，有就拒绝启动并点名；**读不到
+    也拒启**。换回分层前的旧镜像没有这道闸门，须按 deployment.md 在外部确认分层
+    队列为空。
+  - 就绪判定收紧：任何一个必需层的消费者不在跑，`/ready` 即不就绪；依赖守卫的
+    暂停 / 恢复对全部层生效。
+
+### Fixed
+
+- **共享 Skill 草稿目录对 Agent / Sandbox 双方可写**：草稿树由 uid 1000（Agent）与
+  uid 10001（Sandbox）共同写入；上传解包不再用 0755/0644 把另一侧锁在外面。
+  Compose 增加一次性 `skill-draft-init`，把宿主 bind 源先调成 0777，避免 Compose
+  创建出 root 所有的 0755 目录后第一次上传就 EACCES。
+- **配置目录能显示 live MCP 工具名**：`readMcpReadiness()` 投影是蛇形字段
+  （`server_id` / `tools` / `connection_status`），诊断面此前只认驼峰，静默回落到
+  「已配置、零工具」。现在两种形状都读；`AgentCatalogService` 也改用带 live
+  `mcpDiscovery` 的校验器，不再只靠 `MCP_SERVERS_JSON` 的无工具元数据。
+- **沙箱资源限额与子进程磁盘配额真的接线了**（审查 R1）：`SANDBOX_MAX_PROCESS_COUNT`
+  / `SANDBOX_MAX_OPEN_FILES` / `SANDBOX_MAX_CPU_TIME_SECONDS` / `SANDBOX_MAX_FILE_SIZE_MB`
+  / `SANDBOX_EXECUTION_TIMEOUT_SECONDS` / `SANDBOX_MAX_OUTPUT_CHARS` 此前在 `exec/src`
+  里没有任何消费者——声明了 20 个进程上限，最终 profile 里那一项恒为 0（不限制）。
+  现在逐条落到命名空间内部的 `ulimit` 包装器；配置越界直接拒绝启动。
+  `evaluateChildQuota` / `ChildWorkspaceQuotaWatch` / `assertProductionQuotaBackend`
+  同样从「只存在于定义链里」变成 spawn 前准入 + 执行中采样 + 生产启动闸门。
+  控制面配额账本的默认额度不再写死 1024 MB，改取 `SANDBOX_WORKSPACE_QUOTA_MB`。
+  新增 `SANDBOX_MAX_ADDRESS_SPACE_MB`（默认关）；`SANDBOX_MAX_MEMORY_MB` 明确为
+  容器兜底声明，不再被当作逐任务额度。
+- **超过 15 秒的前台命令不再「客户端放弃、沙箱继续跑」**（审查 R2）：`ExecRpcClient`
+  的传输截止改为「执行预算 + 15 秒有界回传余量」，并与调用方的 `AbortSignal` 融合；
+  exec 的监听器把客户端提前断开转成请求的 `AbortSignal`，路由接到执行面，
+  bwrap 进程树随之终止。`signal` 不再被序列化成一个没人读的布尔值。
+- **`workdir` / `stdin` / `env` / `stdoutMaxBytes` 不再被跨服务静默丢弃**（审查 R4）：
+  两侧共用 `@pi/contract` 的 shell payload 解析器，越界路径与非法字段在执行前
+  拒绝（400），合法字段一路传到 bwrap 的 `--chdir` 与子进程环境。
+  `stdoutMaxBytes` 按**字节**解释，截断落在字符边界上。
+- **子任务轮询不再积累 abort 监听器、也不再定频打数据库**（审查 R5）：每一轮等待
+  退出时摘监听器（`{ once: true }` 只在 abort 真的发生时才摘，正常轮询不会）；
+  轮询从 50 ms 定频改为 200 ms 起、最多 2 s 的有界退避，取消立刻唤醒。
+- **后台命令的输出不再在 Agent 侧无限累积**（审查 R6）：`RemoteShellProcess` 未被
+  读取的缓冲有上限（保留尾部，截断置 `lossy`）。
+- **外部 MCP 的命令执行不再绕过资源限额与配额**（修复后复核 F1）：R1/R2 的修复只接到
+  了 Agent 走的 `/internal/v1/shell/run`，MCP 窄桥的 `shell/execute` 与 `python/execute`
+  仍然是裸执行器——没有 nproc/NOFILE/CPU/FSIZE rlimit、没有子进程配额准入与采样、
+  请求断开也停不掉命令。现在两个入口共用 `exec/src/shell/guarded-execution.ts`；
+  超额时 MCP 返回 `failed`（exit 126，原因在 stderr），`timeout_seconds` 超过
+  `SANDBOX_EXECUTION_TIMEOUT_SECONDS` 回 400。
+- **Worker 缩深闸门不再把「读不到」当成「已排空」，也不再漏掉等待审批的子 Run**
+  （修复后复核 F2 / F3）：Redis 读失败曾按 0 放行，之后无人重做检查；只查 Redis 时，
+  停在 `WAITING_APPROVAL` / `WAITING_INPUT` 的超深子 Run 队列里没有作业，缩深后恢复
+  入队会被越界拒绝。闸门现在同时查 MySQL 账本、读失败即拒启，并前移到任何副作用之前。
+- **对外 MCP facade 不再拿到整份 `.env`**（安全）：开发 Compose 的 `sandbox-mcp` 挂着
+  `env_file: .env`，只逐项清空了几个口令，于是内部面 HMAC keyring、`LLMIO_API_KEY`、
+  `EXA_MCP_TOKEN`、`A2A_ARTIFACT_DOWNLOAD_SECRET`、业务库口令等都进了这个唯一对外暴露的
+  容器，违背「facade 只持有窄桥 token」。现在不挂 `env_file`，只透传显式列出的变量
+  （新增透传 `SANDBOX_MCP_MAX_COMMAND_LENGTH`）。**升级注意**：若曾靠 `.env` 给 facade
+  传未列出的 `SANDBOX_MCP_*` 变量（如 `SANDBOX_MCP_REDIS_PREFIX`），需在 Compose 里显式加上。
+- **`SANDBOX_MAX_MEMORY_MB` 的文档不再暗示它是生效的内存上限**：它只进启动日志；
+  生产硬限额是 `SANDBOX_MEM_LIMIT`，开发 Compose 没有容器内存限制。
+
+### Changed
+
+- **模型目录改为 `deepseek-flash`（默认）与 `qwen3.8-27b`**：LLMIO 网关实测
+  `deepseek-v4-pro` / `deepseek-v4-flash-vision-exp` 返回 500
+  `balancer pop err: no provide items or all items are disabled`，选中即整轮失败。
+  目录、DSH `llm-deepseek` 路由、`MODEL_ID` 默认值与 seed 同步只保留网关 `/models`
+  里能 200 的这两个 id。`deepseek-v4-flash` 在网关上仍能通，但 wire 名已是
+  `deepseek-flash`，本仓跟网关 id。`deepseek-flash` 是多模态（`text`+`image`）；
+  `qwen3.8-27b` 只接受文本。
+- **BFF 不再从 `env_file` 继承 MySQL/Redis 口令 DSN**：`api-server` 与 Agent 一样
+  把 `AGENT_DATABASE_URL` / `AGENT_REDIS_URL` / `MYSQL_PASSWORD` / `REDIS_PASSWORD`
+  等置空。BFF 源码本来就不读这些变量。
+- **`skills/README.md` 对齐 ADR 0009 D7**：三层根 + 人工启用；不再描述已退役的
+  `skill_install/create/edit/uninstall`。
+
+### Changed（入口形态）
+
+- **边缘 nginx 支持 HTTP / TLS 双模式，生产会话 Cookie 不再带 `Secure`**：新增 `TLS_ENABLED`
+  （默认 `true`，保持既有 TLS 行为）。`false` 时边缘 nginx 只监听 80 明文，不生成证书、不做 301 跳转、
+  **不声明 HSTS**（对没有加密端口的站点声明 HSTS 会把浏览器锁死在打不开的地址上）。取值不是
+  `true` / `false` 时容器拒绝启动，渲染后还会跑一次 `nginx -t`。两套 server 模板共用
+  `nginx/templates/locations.conf`，SSE 免缓冲、55MB 上传上限等代理语义不随模式漂移；
+  `X-Forwarded-Port` 由写死的 `443` 改为 `$server_port`。原 `nginx/conf.d/sandbox.conf` 拆成
+  `nginx/templates/{locations,sandbox-http,sandbox-tls}.conf`，由 entrypoint 按模式渲染进 `conf.d`。
+  **破坏性**：BFF 的 `pi_enterprise_session` Cookie 不再在 `DEPLOYMENT_ENV=production` 下附加
+  `Secure`（内网 HTTP 入口下浏览器不会回传 `Secure` Cookie，登录会直接失效）；`HttpOnly` 与
+  `SameSite=Lax` 保留。**若把入口改回 HTTPS，必须同时恢复 `Secure`**。
+
+### Removed
+
+- **退役 replay Redis 与同族无消费方变量**：`sandbox-replay-redis` 服务（开发 Compose、生产 overlay、
+  CI cross-service smoke）、它的数据卷与独立口令，连同 `SANDBOX_INTERNAL_PLANE_ENABLED`、
+  `SANDBOX_INTERNAL_REDIS_URL`、`SANDBOX_INTERNAL_REDIS_PASSWORD`、`SANDBOX_INTERNAL_MAX_CONCURRENCY`、
+  `SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS` 一并删除。ADR 0008 D8 去掉 jti 防重放后，这五个变量在
+  `exec/src` 与 `agent/src` 中都**没有任何读取方**——其中 `SANDBOX_INTERNAL_PLANE_ENABLED` 还被文档和
+  生产校验写成「生产必须 true 的 fail-closed 开关」，实际不接任何闸门，属于假的安全感。内部面
+  （`/internal/v1/*`）的真实闸门未变：HMAC keyring（缺 keyring / active kid 时 exec 拒绝启动）加
+  `EXEC_INTERNAL_ALLOW_CIDR` 来源白名单。`verify_compose_prod_config.py` 相应改为要求 keyring 与
+  active kid 非空，并在这些退役变量重新出现时拒绝渲染结果。**升级时**：从 `.env` 与编排配置里删掉上述
+  变量，停掉并删除 `sandbox-replay-redis` 容器与 `sandbox_replay_redis5_*` 卷（其中只有过期的 jti key，
+  无数据需要保留）。
+
+### Changed
+
+- **破坏性：exec 内部面来源白名单空值改为拒绝全部**：`EXEC_INTERNAL_ALLOW_CIDR` 为空（或取不到对端地址）时，
+  `/internal/v1/*` 一律 403 `AUTH_FAILED`，启动日志告警；非法 CIDR 条目让 exec 拒绝启动；放行全部必须显式写
+  `0.0.0.0/0,::/0`。此前空值直接放行，而开发 / 生产 Compose 从未传入这个变量（传的是 TS exec 不读取的 Python 时代变量
+  `SANDBOX_ALLOWED_CLIENT_CIDRS` / `SANDBOX_TRUSTED_PROXY_CIDRS`），内部面实际只靠 HMAC。现在开发 Compose 默认
+  `127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`，**生产 overlay 必填**，`verify_compose_prod_config.py`
+  拒绝缺失与 `/0`。**升级时自建部署需要设置该变量**，否则 Agent / Worker 调不通执行面。同时：IPv4-mapped IPv6 对端
+  （`::ffff:10.0.0.1`）按 IPv4 匹配；含点分段等畸形 IPv6 不再被当成十六进制段解析；`createExecAppFromEnv(env)` 改从
+  传入的 `env` 读白名单（此前读 `process.env`）。
+
+- **破坏性：用户 Skill 以启用账本为发现依据，已发布字节按摘要分版本，exec 按清单挂载**（design §3.3 S1）：
+  启用时 Agent 在一个 MySQL 事务里锁住 owner 的 membership 行，把草稿复制到暂存目录并**按暂存字节**算摘要，
+  发布到 `<owner>/<name>/.v/<digest>/<name>/`（侧车 `.v/<digest>.json`），再写 `user_skill_enablements`。
+  **停用只删账本行，不删字节**；不再被账本引用且超过新配置 `SKILL_VERSION_GC_GRACE_MS`（默认 24 小时）的旧版本
+  在同名包下次启停时回收。Worker 在 Run 开始时按账本逐条核对版本，模型看到的 Skill 路径改为 exec 的挂载路径
+  `/home/sandbox/skill-user/<name>`（此前是 Agent 本地 `<base>/<org>/<user>/<name>`，`read` 资源文件被
+  `FS_SANDBOX_DENIED`）。清单随每个内部请求进入签名覆盖的请求体，exec 不再扫目录，只挂清单点名且侧车一致的版本；
+  缺版本或侧车不符返回新错误码 `SKILL_PACKAGE_UNAVAILABLE`，存储不可读返回 `SKILL_STORE_UNAVAILABLE`（此前一律当作
+  「没有 Skill」）。能力页 My Skills 同样按账本列出。2026-09-14 之前平铺发布的已启用包不再被识别，需要重新启用。
+- **内部面 GET 请求的签名覆盖规范化 query**：`GET /internal/v1/fs/stream-text` 的 `body_sha256` 此前是空串摘要，
+  query 里的信封与读取目标不受签名覆盖，同一枚令牌可以换目标读取。现在签发与验签共用 `canonicalQueryBytes`，
+  同名参数重复直接 401。Agent 与 exec 必须同时升级。
+
+- **破坏性：BullMQ 队列 key 改用带 hash tag 的前缀 `{bull}`，Redis 基线降到 5.0.14**：
+  新增 `AGENT_RUN_QUEUE_PREFIX`（空值 = `{bull}`），HTTP 投递与 Worker 消费共用；不含非空 hash tag
+  （如旧的默认 `bull`）在建 Queue/Worker 前拒绝启动。原因是 UPRedis Proxy 按 key 路由，BullMQ 的多 key
+  脚本必须落在同一节点。旧 `bull:agent-runs:*` 里的作业不会被新消费者看到，升级前按
+  [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain，由 Worker 启动恢复扫描按
+  MySQL 账本重投。开发 / 生产 overlay 的 `redis` 与 `sandbox-replay-redis` 改为 `redis:5.0.14` 并显式
+  `maxmemory-policy noeviction`；5.0 读不了 7.x 数据文件，数据卷改名为 `redis5_dev_data` /
+  `sandbox_replay_redis5_dev_data`（生产 `redis5_data` / `sandbox_replay_redis5_data`），旧卷保留不挂载，
+  本地 `.env` 里的旧卷名需要改掉。CI 服务 Redis 同步 5.0.14。新增开发用 UPRedis 路由模拟代理
+  （`scripts/dev/docker-compose.upredis-sim.yml`）与队列放行测试 `agent/tests/redis/upredis-queue.integration.test.js`。
+
+- **破坏性：任何服务启动时都不再迁移，schema 改为执行导出的发布包 + 启动只读核对**：
+  开发与生产 Compose 都删除了 `agent-migrate` 服务与 `AGENT_MIGRATE_ON_START`。新增
+  `npm run schema:sql|schema:replay|schema:verify|schema:manifest --prefix agent`：在空影子库上
+  跑 Knex migrations，导出按迁移分段的 SQL 发布包（每段最后一句才写 `knex_migrations`，首个错误即停），
+  可在另一个库重放核对。`contract/schema/schema-manifest.json` 是从真实迁移生成的 schema 清单
+  （表/列/索引/外键/四个 append-only 触发器/迁移记录），agent、agent-worker、sandbox 启动时按它核对，
+  任何差异以 `SCHEMA_DRIFT` 拒绝启动（Agent 在连 Redis 前、Worker 在消费前、exec 在孤儿回收前）。
+  开发空库先 `docker compose up -d mysql` 再 `scripts/dev/schema-apply.sh`；改了迁移要重新生成清单。
+  `scripts/restore.sh` 恢复后只核对不迁移；生产配置校验改为拒绝重新出现迁移服务。见
+  [统一 design](design/updrdb-dbpm-deployment.md) §6。
+- **破坏性：应用口令只从 DBPM 取，连接串带口令会拒绝启动**：agent、agent-worker、
+  sandbox（exec）、sandbox-mcp 启动时各自向 DBPM 取所需口令（UPDRDB / 服务 Redis），
+  只取一次、只放内存。`AGENT_DATABASE_URL`、`AGENT_REDIS_URL`、`SANDBOX_DATABASE_URL`、
+  `SANDBOX_MCP_REDIS_URL` 必须**不带口令**；`DBPM_URL` 缺失、DSN 用户名与 DBPM 条目不一致、
+  两台 DBPM 都取不到时进程直接退出，没有环境变量口令回退。开发 Compose 新增默认启用的
+  `dbpm-fake`（真协议假服务端，只挂内部网络），并改用 `AGENT_COMPOSE_*` /
+  `SANDBOX_MCP_COMPOSE_REDIS_URL` 插值，宿主 `.env` 里旧的带口令连接串不会被带进容器；
+  宿主机直接起服务进程时需要自己提供 `DBPM_URL`。生产 overlay 禁用 `dbpm-fake`，
+  `DBPM_URL` 等条目必填。`agent-migrate` 作为 DBA 工具改读 `AGENT_MIGRATE_DATABASE_URL`。
+  replay Redis 目前无代码消费方，不取密。另附 `scripts/dev/docker-compose.updrdb-sim.yml`
+  在本地用两个转发容器演练双 Proxy 故障切换。见 [统一 design](design/updrdb-dbpm-deployment.md) §7。
+- **MySQL 建连支持 UPDRDB 两个 Proxy 的故障切换**：新增可选配置 `UPDRDB_ENDPOINTS`
+  （恰好两个 `host:port`）。Agent Knex、Agent DSH 会话存储、exec 三处取连接时粘住当前
+  主用、网络故障拉黑 180s 换另一个、拉黑过期不主动回切；单次握手 3s、一次取连接总预算
+  10s，两个都不可达时有界失败而不是挂到 Knex 默认的 60s。认证失败等非网络错误不换端点。
+  **已发出的 SQL 不重试**。会话 UTC 初始化从「连接事件里发出、失败销毁」改为交付连接前
+  等待完成，失败即丢弃连接。不设置时行为与此前相同（DSN 单端点）。见
+  [统一 design](design/updrdb-dbpm-deployment.md) §4。
+- **抢占改用「条件 UPDATE + token 回读」，开发/CI 基线降到 MySQL 5.7**：Outbox 与
+  Cron 的批量抢占不再使用 `SELECT … FOR UPDATE SKIP LOCKED`（UPDRDB 的 UPSQL 5.7
+  内核没有这个语法），改为一条带 eligibility 条件的 `UPDATE` 打上批次 token、再按
+  token 在同一事务内回读。语义变化是**并发调度器从「跳过被锁的行」变成「等待行锁」**，
+  由短事务、既有索引和 `innodb_lock_wait_timeout` 约束影响；对外的投递语义、幂等键、
+  发布 CAS、misfire/并发策略均不变。`cron_jobs` 新增可空 `claim_token` 列，它只是
+  事务内批次标记，claimDue 提交前逐行清空并校验无残留，因此没有新增租约回收器。
+  每条 MySQL 物理连接在交付前执行 `SET SESSION time_zone = '+00:00'`，初始化失败
+  的连接直接丢弃（此前只有驱动侧 `timezone=Z`，服务端会话时区仍是 `SYSTEM`）。
+  Compose 的开发数据库切到 `mysql:5.7` 与**新数据卷** `mysql57_dev_data`；旧的
+  `mysql_dev_data` 不可复用（官方不支持 8.0→5.7 降级），已于 2026-09-14 决定作废。
+  本地 `.env` 若显式设过 `MYSQL_DATA_VOLUME` 必须同步改名。见
+  [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md) 与
+  [统一 design](design/updrdb-dbpm-deployment.md) §5。
+
+### Changed
+
+- **sandbox-mcp 改用独立 slim 镜像**（design §2.1，S2）：`exec/Dockerfile` 新增 `facade` 阶段，Compose `sandbox-mcp` 以
+  `target: facade` 构建为 `enterprise-sandbox-mcp:latest`（新变量 `SANDBOX_MCP_IMAGE`），不再复用 2.84GB 的执行面镜像。
+  slim 镜像约 302MB，只含 `mcp-main.js` 的 import 图与所需生产依赖：没有模型工具链、Bubblewrap、Python、curl、执行面代码、
+  `mysql2` 与 `@deepseek-ai/dsh-*`，发布文件对 uid 10001 只读。为此把 facade 的 Redis 取密从 `startup-credentials.ts` 拆到
+  `mcp/startup-credentials.ts`——此前 facade 入口经它间接加载了 `db/client.ts` 与 `mysql2`；新增 `mcp-import-boundary` 测试核对
+  import 图与 Dockerfile 复制清单一致。sandbox-mcp 的 healthcheck 改为 node（镜像无 curl）。**改了 `exec/` 需要同时 build
+  `sandbox` 与 `sandbox-mcp`**，自定义过 `SANDBOX_IMAGE` 给 facade 用的部署需改为 `SANDBOX_MCP_IMAGE`。
+- **frontend nginx 的 `/api/` 上游改由 `API_UPSTREAM` 渲染**（design §2.2，S2）：`frontend/nginx.conf` 改为
+  `frontend/nginx/default.conf.template`，由官方 nginx 镜像的 envsubst 钩子在启动时渲染，过滤器只放行 `API_UPSTREAM`。
+  镜像默认值与开发 Compose 均为 `http://api-server:4000`，现有部署无需改动。值只接受 `http://host[:port]`，带路径、query、
+  空白、换行、`;`、`$`、`https://` 或端口越界时容器在 nginx 启动前退出；渲染文件缺失、残留占位符或上游不符（例如 `conf.d` 不可写）
+  同样拒启，而不是带着空配置或官方欢迎页启动。镜像不再保留官方 `conf.d/default.conf`。
+
+### Fixed
+
+- **沙箱内可读系统字体配置与 RHEL 系 CA 证书**：Bubblewrap 的 `/etc` 白名单此前不含 `/etc/fonts`，沙箱内 soffice / tesseract 报
+  `Fontconfig error: Cannot load default config file`；openEuler / 麒麟的 `/etc/ssl/certs` 链到 `/etc/pki`，沙箱内 CA 证书全部不可读，
+  放开网络后 HTTPS 校验会失败。现只读挂入 `/etc/fonts` 与 `/etc/pki/tls/certs`、`/etc/pki/tls/cert.pem`、`/etc/pki/tls/openssl.cnf`、
+  `/etc/pki/ca-trust/extracted`（不存在即跳过）；**不整体挂 `/etc/pki`**，`tls/private`、`nssdb`、`rpm-gpg` 仍不可见。
+- **执行面镜像内 soffice 在沙箱里启动即崩溃**：Debian 打包的 LibreOffice 把配置注册表放在 `/etc/libreoffice/registry`，
+  `/usr/lib/libreoffice/share/registry` 是指向它的符号链接；沙箱没有挂这条路径，soffice 抛 `uno::RuntimeException` 后 abort（exit 134），
+  docx / xlsx / pptx 转 PDF 全部失败。现只读挂入 `/etc/libreoffice/registry` 与 `/etc/libreoffice/psprint.conf`（VM 上的 TDF 官方包自带注册表，
+  不存在即跳过），不整体挂 `/etc/libreoffice`。
+- **执行面 `GET /ready` 真正做就绪判定**（design §9.2，S2c）：此前 `/ready`、`/health/ready` 与 `/health` 是同一个恒返回
+  `{"status":"ok"}` 的处理器，部署文档所说的预检并不存在。现在 `/ready` 在数据库 `SELECT 1` 失败或超时、workspaces / tmp /
+  artifacts / control 任一根不可读写、启动期 Bubblewrap 预检未通过，或进程已进入关停时返回 503，响应只含各项 ok / unavailable。
+  **启动顺序新增一步**：schema 核对之后、孤儿回收之前建出四个数据根并真跑一次 bwrap 探针，失败即拒绝启动（此前 bwrap 不可用只在
+  第一次执行时暴露）。`/health`、`/health/live` 仍只表示进程存活；Agent 与 BFF 的依赖检查打的是 `/health`，不受影响。
+
+### Added
+
+- **VM 模型工具链安装脚本**（design §9.1，S2f-2）：release 新增 `vm/toolchain/install-toolchain.sh` 与制品清单
+  `toolchain-sources.json`，以及脚本读取的 `toolchain/`（`requirements.txt`、三个 wrapper、两套 BaoYu 脚本与锁文件）。面向 dnf 系
+  （openEuler / 麒麟）：dnf 装隔离原语、办公 / OCR / 字体与浏览器运行库；Node 22.23.2、uv、ripgrep、fd、pandoc、LibreOffice、Chromium
+  按清单钉版本与 SHA256，**先核对再使用**，默认只用离线缓存（`--allow-download` 才下载）。openEuler 24.03 官方源缺的 ripgrep / fd / pandoc /
+  LibreOffice / Chromium 使用上游官方包（LibreOffice 先验 GPG 签名、Chromium 为 Playwright 分发的 Chrome for Testing）。全部装到 Bubblewrap
+  可见的 `/usr/local` 与 `/opt/pi-python/venv`（官方 LibreOffice RPM 解包后搬离 `/opt`），`baoyu-chromium` 改写为 VM 路径。新增开发用
+  `scripts/vm/openeuler-systemd-sim.Dockerfile` 与 `tests/test_vm_toolchain_assets.py`。openEuler 24.03 容器中，当前 unit 下 exec 启动就绪，
+  Bubblewrap 内文档 / 转换 / OCR / 检索 / BaoYu / Chromium（CDP）工具 smoke 通过；目标 VM 与 x86_64 未验证。
+
+- **Agent Worker 依赖不可用时暂停取任务**（design §9.2）：新增依赖守卫，每 `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS`
+  （默认 5000，非法值拒绝启动）用与 `/ready` 相同的 ping 探测 MySQL / Redis；连续 2 次失败调用 `worker.pause(true)` 停止从 BullMQ
+  取新任务（不等待、不打断在跑任务），连续 2 次成功后 `resume()`，只恢复自己造成的暂停。暂停期间 `/ready` 返回 503、`consumer: paused`。
+  由于 `pause(true)` 不打断在途的阻塞取任务，处理器执行前再检查暂停状态，暂停中取到的作业放回 delayed（不计失败），恢复后执行。
+  此前依赖故障时 Worker 仍会继续取任务，只靠 lease / fence 兜底。
+
+- **VM exec release 与 systemd 部署资产**（design §9，S2）：`scripts/vm/build-exec-release.sh --arch amd64|arm64` 在目标架构的
+  Linux 容器里构建不可变 release 包（`release-manifest.json` 记录提交、架构、构建用 Node 与 glibc、schema 清单哈希、原生模块；
+  `SHA256SUMS` 覆盖全部文件；有未提交改动时拒绝构建）。`deploy/vm/` 随包分发：`pi-exec.service`（非 root、ExecStartPre 预检、
+  `KillMode=mixed` 清理 bwrap 子进程、`ProtectSystem=strict` 等加固，逐项实测与 bwrap 兼容）、只列 exec 实际读取变量的
+  `exec.env.example`、`exec-preflight.sh`（Node 位置与版本、release 完整且只读、必需配置、数据根 0700 等）与
+  `install-release.sh`（init / install / activate / list，校验哈希，同 id 不可重装，从不自动重启）。部署步骤见 `deployment.md`
+  「VM exec release」。VM 上的系统工具链安装与完整工具 smoke 不在本次范围。
+
+- **Agent Worker 探针 listener**（design §9.2，S2）：Worker 新增只含 `GET /health`（事件循环活性，不查依赖）与
+  `GET /ready`（启动完成、BullMQ 消费者在跑、未关停，且 MySQL `SELECT 1` / Redis `PING` 在 2s 内成功）的内部 listener，
+  端口 `AGENT_WORKER_PROBE_PORT`（默认 `4101`，非法值拒绝启动），其余路径 404。listener 先于容器启动，SIGTERM 时先摘除就绪
+  再停消费。开发 Compose 的 `agent-worker` 增加基于 `/health` 的 healthcheck，端口只 `expose` 不发布。
+- **sandbox-mcp 新增 `GET /ready`**（design §9.2，S2）：服务 Redis `PING` 与执行面 `GET /ready` 都在 2s 内成功才 200，
+  否则 503，只回各项 ok/unavailable。探针不带窄桥 token。`/health` 仍只表示进程存活。
+
+- **一个 org 可以有多个可选的智能体**：新增 Agent 目录写入面（`POST /api/agents`
+  建智能体、`POST /api/agents/{id}/versions` 改配置、`POST /api/agents/{id}/active-version`
+  切活跃版本 / 回滚，均要求 admin），并把 `agent_id` 接到建会话的三个入口
+  （`POST /api/runs` 首轮、`POST /api/conversations`、`POST /api/sessions/ensure`）。
+  前端在**新会话**且 org 内多于一个智能体时出现 Agent 选择器，会话头部显示当前
+  会话绑定的智能体。一个会话绑定一个智能体，绑定在建会话时完成、此后不可变——
+  换智能体要新建会话。org 只有一个智能体时 UI 与行为与本次改动前完全一致。
+  改配置是建新版本而非原地改写，切换活跃版本只影响**新建**的会话；正在跑的 Run
+  与已存在的会话继续用它们钉住的版本。非法配置在建版本时即被拒。
+
+- **AgentVersion 配置真正接到运行时**：管理员在版本里配的东西现在**实际生效**，
+  不再是写进去不报错却没有执行路径。`toolPolicy` 的显式 `deny` 拦在真实工具体之前；
+  `mcpServers` 的引用成为执行授权（未引用的 server/tool 一律拒绝，空引用 = 零 MCP 权限）；
+  风险策略平台层与版本层各自解析后取更严，租户只能收紧；`systemPrompt` 作为字面量
+  persona 注入（`{{...}}`、代码块、中文原样送达），企业条款恰好一份、不可覆盖；
+  `modelPolicy.maxOutputTokens` 与 `thinkingLevel` 出现在真实主对话请求上，辅助请求
+  各自策略不变；prompt 里的路径用服务端解析的逻辑根，不泄漏宿主物理根。
+- **新增只解析、不落库的配置面**：`GET /api/agents/config/options`（能力 schema 与
+  平台约束）与 `POST /api/agents/config/validate`（字段级校验，200+`valid:false`），
+  均为 admin。管理页拆出结构化编辑器与校验面板：表单与 JSON 共用一份草稿、字段级错误
+  可定位、能力目录不可达与"空清单"区分开、不支持字段不提供假开关。
+- **激活加乐观并发**：发布/激活可带 `expected_active_version_id`，与当前指针不一致返回
+  409 并回传当前指针，防止两位管理员互相覆盖。不传该字段保持旧客户端兼容。
+
+### Changed
+
+- **全面清理 Pi SDK 遗留命名与测试残留**：将 `agent/src/application/` 下的 6 个 `pi-run-*` 模块重命名为 `dsh-run-*`，核心执行器规范为 `DshRunExecutor`；`pi-session-journal-repository.ts` 重命名为 `session-journal-repository.ts`；测试目录 `agent/tests/pi/` 统一迁移规范为 `agent/tests/executor/`；清理废弃的 `agent/tests/sdk-compat/` 目录；彻底移除历史 `Pi*` 兼容别名导出，全仓内部调用统一切换至 DSH 执行器与预算。
+- **BFF 服务从 JS 全面迁移至 TypeScript**：`api-server` 源码完成 TypeScript 化，统一编译至 `dist/server.js`。
+- **`/internal/auth/me` 不再每次调用都补建 org/user**：它挂在 BFF 每请求的 `resolveTrustedAuth()` 上，不做记忆等于每个请求 3~4 次 MySQL 往返。改成每进程每 credential 记一次；register / login 仍强制重新对账。
+- **沙箱环境隔离由 `spawnLaunch` 代码强制**：`envMode: 'inherited'` 不发 `--clearenv`，"沙箱不继承宿主 env" 这条不变量因此只剩调用方一处在守。`spawnLaunch` 的选项类型排除 `env` 并在运行时剥掉，沙箱内环境只能来自 `OUTER_PROCESS_ENV` + 已校验的 `EnvPlan`。
+- **启用后的 Skill 草稿不再重复列在 Drafts**：启用是复制字节、草稿不删，所以 `skill_drafts` 里会一直有它。Agent 给这类条目打 `published: true` / `status: 'published'`，UI 的 Drafts 区只列待启用的。三层 Skill 卡片统一结构，操作按钮收进卡片底部的动作行，不再被拉成整行宽的色块。
+### Fixed
+
+- **用户启用的 Skill 终于对模型可见**：`createDshRunExecutorFactory` 逐项转发依赖时漏掉了
+  `skillRootsForRun`，每个 Run 都退回进程级默认的系统根，UI 上「启用」成功的用户 Skill 在
+  `skill` 工具里一律报 `unknown or no longer available`（exec 侧挂载正常）。补上转发并加回归测试。
+- **exec 的文件系统错误码不再被抹成 `INTERNAL_ERROR`**：exec / agent 与 contract 各装一份
+  `@deepseek-ai/dsh-fs`，`toWireError` 对调用方抛出的 `FsError` 做 `instanceof` 为假，
+  `FS_NOT_FOUND`、`FS_SANDBOX_DENIED` 等一律以 `INTERNAL_ERROR` 返回给模型（sandbox 日志
+  `exec fs-error … INTERNAL_ERROR`）。改为按 dsh-fs 声明的错误码做结构判断，任意 `code` 不透传。
+- **模型推理档位对齐真实适配器**：模型目录的 `thinking_levels` 曾沿用已退役的 pi-ai
+  枚举（含 `medium`），而当前 `deepseek-official` 适配器只接受 `off|low|high|max`。
+  改为按路由适配器投影可选 effort，保存不支持的档位时报错、起 Run 时 fail-closed，
+  不再静默降级到别的档位。
+
+- **`/api/files/download` 与 `/api/files/upload` 走错了工作区**：exec 公共面
+  `/sessions/{id}/files/*` 里的 `{id}` 是 `workspace_id`，这两条代理却直接把浏览器
+  的 `sandbox_session_id` 塞进 URL（两者是各自独立的 ULID）。结果是下载恒 404、
+  上传静默写进一个按 session id 派生出来的幽灵工作区，Agent 的工具永远看不见那个
+  文件。两条路径改为与 artifacts / datasets / processes 一样，先经 Agent 换成
+  `workspace_id`；换不出来 fail-closed 返回 503 `SESSION_WORKSPACE_UNAVAILABLE`，
+  不再拿 session id 顶替。四处重复的换算收口成
+  `run-access-service.requireSessionWorkspaceId()`。
+
+- **删掉的生产代码不再继续进镜像**：`.dockerignore` 的 `dist/` / `node_modules/`
+  不带 `**/`，而 Docker 只把它们当作上下文根下的那一个目录——每个包各自的
+  `agent/dist`、`exec/dist` 照样被 `COPY agent ./agent` 整个塞进镜像，而
+  `npm run build` 的 tsc 只覆盖自己编译出的文件、不清理别人留下的。结果是当天
+  刚删掉的 `internal-hmac.js`（980 行）与 `memory.js` 仍躺在**运行中的** agent
+  镜像的 dist 里。模式改成 `**/dist/` / `**/node_modules/` 后重建，两个文件消失。
+  新增 `tests/test_dockerignore_excludes_host_build_output.py` 守住这条。
+- **内部面的令牌现在真的绑定方法与能力**：`htm` 以前在 contract 里钉死 `'POST'`，
+  而 `GET /internal/v1/fs/stream-text` 也要签，于是 exec 侧写了一条「htm 是 POST
+  但方法是 GET 就放行」的例外——任何一枚 POST 令牌都能拿去打 GET 端点。现在
+  `htm` 允许 `'GET'`，例外删除，方法逐字相等。`scope` / `tool_name` 从来没人校验
+  （`ExecRpcClient` 对所有 RPC 都写死 `fs` / `internal:fs`，一枚「文件」令牌可以
+  拿去起进程），现在按路由族校验，绑定表 `internalBindingForHtu()` 放在
+  `@pi/contract`，签发与校验共用一张表；**未登记的内部路径一律拒**，新端点不会
+  默认免检。
+- **产物与数据集的配额账本落库，并且共用同一本账**：`workspace_quota_reservations`
+  只有 DDL、没有迁移，两个服务各自在构造函数里默认装配一个 `InMemoryQuotaStore`
+  ——既重启即忘（配额计数归零 = 多放行），又互相看不见（同一个工作区的产物与
+  数据集各算各的，1024MB 的额度实际能被用掉两份）。现在建表、生产装配用
+  `MySqlQuotaStore`，两个服务共用一个 `WorkspaceQuotaLedger`。
+- **exec 内部面的 IP 判定不再采信 `X-Forwarded-For`**：CIDR 白名单的唯一输入以前
+  是 `X-Forwarded-For` / `X-Real-IP`（谁都能伪造），两个都取不到还兜底成
+  `127.0.0.1`——等于给任何拿不到对端地址的路径发通行证。现在对端地址由监听器从
+  TCP socket 注入（同名头先剥后写），取不到即空串：白名单为空时照常放行，配了
+  白名单就一律拒。
+- **`memory_write` / `memory_search` 的实现随工具一起退役**：ADR 0009 D10 已把这
+  两个工具标成 `TOOL_RETIRED`，但 `runtime/providers/memory.ts` 与它的单测还在，
+  并且仍从 `runtime/index.ts` 对外导出。已删除。
+- **exec 重启后不再留下永远 `running` 的僵尸作业行（§32 G7）**：
+  `MySqlJobRegistry.recoverOrphans()` 的注释从第一天就写着「启动期调用（用户路由
+  挂载之前）」，但**从来没有任何调用点**——只有一条单测在调。exec 每重启一次，
+  上一轮 `running`/`stopping` 的行就永远留在那个状态；开发栈上实测到 6 条僵尸行
+  （最老的两天前），而容器里一个对应进程都没有。这不只是脏数据：
+  `countActiveForOwner` 把 `running`/`stopping` 都算进每 owner 的并发上限（默认 20），
+  僵尸行攒够就再也起不了新作业，随重启次数单调恶化。现在 `exec/src/main.ts` 在
+  `listen` 之前 `await` 回收（顺序是硬要求：回收扫描不带租户过滤，不能和用户请求
+  并发），回收失败即拒绝启动。
+- **内部 HMAC 只剩一份实现**：`agent/src/infrastructure/sandbox/internal-hmac.ts`（980 行）
+  与 `contract/src/hmac.ts`（816 行）长期并存，两个生产模块还在用前者。收口到
+  `@pi/contract/hmac.js` 之前先补齐了 contract 少的两条校验，**没有靠放宽来"统一"**：
+  keyring 的值必须是可枚举的字符串**数据属性**（getter 可以在校验与取用之间返回
+  不同字节，也会在校验期间跑任意代码），`scope` 数组不得携带额外自有属性
+  （`['x']` 上挂个 `.extra` 仍然 `length === 1`，但它已不是那个被约束住的一元 scope）。
+  补齐后，agent 那套 599 行严格性套件（含跨语言 golden fixture）对着 contract 实现
+  21/21 通过，该套件已随实现移到 `contract/test/hmac-strict.test.ts`。
+  `normalizeBaseUrl` 与签名无关，抽到 `agent/src/infrastructure/sandbox/transport-base-url.ts`。
+- **exec 公共会话面现在真的校验 `SANDBOX_API_TOKEN`**：compose、`.env.example`
+  与 `deployment.md` 三处都要求这枚服务令牌，BFF 与 agent 也一直在发
+  `X-API-Key`——但 exec 换成 TS 之后公共面从来没有校验过它，`/sessions/*` 只看
+  `X-Acting-*` 两个头存不存在。现在按常量时间比较，不匹配 401；`ExecAppDeps`
+  的 `publicApiToken` 是**必填**字段（`null` 表示显式关闭，仅单测/本地直连），
+  `createExecAppFromEnv` 缺这枚令牌直接拒绝启动。健康探针不受影响。
+- **后台作业不再无限空转，流式读取不再永久挂起**：`RemoteShellProcess.monitor`
+  过去以固定 200ms 轮询、把所有错误都当成"网络抖动，下一轮继续"，于是 exec 说
+  "这个作业不存在"时它会 5 次/秒地永远问下去，`done` 永不 resolve。现在
+  `WORKSPACE_NOT_FOUND` 立刻结算，其余错误指数退避（200ms→2s）并有 60s 的失败
+  截止。`ExecRpcClient.getStream` 的超时定时器过去在拿到响应头时就被清掉，之后
+  逐 chunk 读流完全没有截止——现在每块另有一个空闲超时，传输中途挂起会 abort
+  连接并抛错，而不是把 Worker 协程永久挂住。
+- **exec 的作业登记表不再只增不减**：`MySqlJobRegistry.lives` 里每个条目挂着一个
+  子进程句柄和一个最大 500KB 的环形缓冲，结算路径的 `finally` 只写了一句"活句柄
+  用完即丢"的注释，实际什么都没丢——长跑的 exec 每执行一条命令就多占一份。现在
+  结算时打上时间戳，由 `pruneSettled()` 在保留窗口（默认 5 分钟）之后回收，并有
+  512 条的硬上限；仍在运行的作业永不回收，窗口内的已结算作业仍能读到缓冲的尾部输出。
+- **产物与数据集的元数据现在真的落库，重启不再整片消失**：`exec_artifacts` /
+  `exec_datasets` 的仓储类和 DDL 常量早就写好了，却既没有迁移、也没有在
+  `createExecAppFromEnv` 里接上——`ArtifactService` / `DatasetService` 一直跑在
+  构造函数默认的 `InMemory*Store` 上。六套单测全绿，但 sandbox 容器一重启，
+  `GET /api/artifacts` 就返回空列表、已有产物的下载全部 404。现在两张表随
+  `20260904000001_exec_artifacts_datasets` 迁移建出，两个 Store 与 `MySqlJobStore`
+  共用同一个池和同一次 fail-closed 判定（production 缺库直接拒绝启动）。
+  新增 `tests/test_exec_schema_migrations.py`：exec 生产装配里接的每一个
+  `MySql*Store`，它的表都必须有 agent 侧迁移，堵住"定义了表却没落地"这条路。
+- **AgentVersion 里配的 `systemPrompt` 现在真的会送到模型**：`DshRunExecutor` 过去
+  只把整个 `agentVersion` 对象交给运行时工厂，而工厂读的是 `input.systemPrompt`，
+  于是它永远是 `undefined`——Agent 选对了、版本也钉对了，配置的人格一个字也到不了
+  模型。现在经 `bindAgentVersionConfig()` 取出后传入。企业条款仍由
+  `assembleSystemPrompt` 追加在租户提示词之后，且不可被租户覆盖。
+- **绑定在非默认智能体上的会话，后续 Run 不再报 "Conversation is bound to a
+  different agent"**：不带 `agent_id` 的 follow-up 过去会先解析成租户默认智能体，
+  再与会话已绑定的那个比对而失败。现在没有显式选择时由**会话自己**决定智能体
+  （A2A 建出来的会话在浏览器里追问即属此列）。
+- **修复 Run 完成时 Agent 消息截断回退问题**：
+  - 修复 `agent/src/lib/event-redaction.ts` 中 `redactPayload` 遍历属性时 `text_truncated` 标志位被原对象 `false` 覆盖的问题，并将 `text`/`thinking` 正文字段的脱敏长度上限提升至 `DEFAULT_MAX_RESULT_CHARS` (2048)；
+  - 加固前端 `frontend/src/shared/state/runReducer.ts` 与 `platformEventNormalize.ts`：当消息内部标记截断或已有的流式缓冲区长度大于带省略号的预览时，严禁覆盖前端实时累积的正文，彻底解决运行完成时气泡回退截断为 512 字符的现象。
+- **BFF smoke 脚本前置构建**：`api-server/package.json` 的 `smoke` 脚本前置追加 `npm run build`，并在 `tests/listen-smoke.test.js` 中直接断言 `dist/server.js`，移除对已删除 `server.js` 的失效回退，确保干净检出可用。
+- **DshRunExecutor 构造器 sessionLockManager.acquire 校验强化**：恢复构造函数中对 `sessionLockManager.acquire` 方法存在性的严格校验，防止空对象绕过前置检查并在后续执行时抛出 TypeError。
+- **保留自建 A2A 服务端协议面并撤销 ADR 0007 D8（ADR 0010）**：经架构实测评估（工单 `docs/design/a2a-sdk-server.md`），`@a2a-js/sdk/server` 的 `ExecutionEventBus` 与终态 `resubscribe` 报错行为无法支持多进程异步架构（`server.js` + `worker.js`）与断线重连补发。正式保留自建的 13 个 A2A 协议与应用模块，继续使用 `@a2a-js/sdk` 编码 SSE 帧，并建立反向完整性测试棘轮（`a2a-custom-protocol-integrity.unit.test.ts`）。
+- **用户 Skill 改为草稿 → 人工启用 → 只读发布**：Capabilities 页可启用/停用 owner-scoped Skill；Agent 同步发布副本与 MySQL 启用账本，exec 只把当前 owner 的已发布包逐个只读挂载。旧 `skill_install/create/edit/uninstall` 工具退役。
+- **CI 纳入 `contract/` 与 `exec/`**：两包都执行独立 typecheck 与测试；Python 仓库卫生环境显式声明零 setuptools package，`uv sync` 不再因平铺目录自动发现失败。
+- **长进程事实权威迁到 exec**：DSH 后台 `bash` 预留并透传唯一 process id，exec 在 `exec_jobs` 登记和控制；BFF 先由 Agent 授权 Sandbox Session 并解析 Workspace，再直接查询 exec。Agent 的旧 `/internal/processes*` 生产路径已删除。
+- **DSH 会话走原生 MySQL persistence**：`ctx.sessionPersistence` 接到 `dsh_sessions` / `dsh_session_events`；同一会话后续 Run 调用 `agents.resume`，不再每次 `create`。出厂 JSONL 后端保持关闭。配置读 `AGENT_DATABASE_URL`；mysql2 JSON 列按字符串读取，避免 resume 时把已解析对象再次 `JSON.parse`。Worker 进程被 SIGKILL 后，新 Worker 仍能 resume 并把上一轮用户口令送回模型上下文。
+
+- **Agent 引擎从 Pi 换成 DeepSeek Harness（`@deepseek-ai/dsh-*` `0.1.1-rc.2`）**：`@earendil-works/pi-coding-agent` 不再是直接依赖。工具走 DSH 的 `ctx.fs` / `ctx.shell` / `ctx.jobs` 远程 provider（HMAC RPC 到 exec），企业策略挂在 DSH 四个既有挂载点上，不再装 Pi Extension 包。SSE 契约按 `tests/fixtures/sse_events.json` 保持逐字节不变，BFF / 前端零改动。
+- **执行面从 Python FastAPI 换成 TypeScript `exec/`**：compose 服务名仍叫 `sandbox` / `sandbox-mcp`（同一镜像两个入口），对 BFF 的会话面契约不变。搜索、产物（控制面快照）、数据集（三段式流式）按语义实现，不是占位。
+- **`agent/` 源码从 JS 迁到 TypeScript**，DSH 组合层并进 `agent/src/runtime/`。容器跑 `dist/server.js` / `dist/worker.js`。`strict` 仍关着，是已知待办。
+
+### Removed
+
+- **Python `sandbox/` 服务源码**（执行面 + MCP facade）。模型在沙箱里跑代码用的 Python 解释器还在，装在 exec 镜像里（`exec/requirements.txt`）。
+- **`/app/pi-agent-home` 与 `AGENT_PI_AGENT_DIR` / `PI_CODING_AGENT_DIR`**：Pi 资源根随引擎一起失效，配置与镜像目录一并删掉。
+
+### Fixed
+
+- **产物列表/下载按 workspace 判定，MCP facade 提交的产物不再消失**：`exec_artifacts.session_id` 取决于是谁写的——内部面的 `submit_artifact` 写 sandbox session id，MCP facade 写 workspace id。公共面用它当列表键与下载门禁，于是总有一半写入方的产物在 UI 上凭空消失。列表与下载改按 `workspace_id`（两个写入方唯一一致的键），BFF 的 `GET /api/artifacts` 与 artifact 下载也先把 sandbox session id 换成 `workspace_id` 再跳 Sandbox，换不出来 503 fail-closed。
+- **导入不再凭空创建工作区**：`importToWorkspace` 里那条 `mkdir -p` 会让任何形状合法的 id 把工作区造出来，也掩盖了"路径参数传错"这类 bug。改成工作区根不存在即 404。
+- **`ask_user_question` 停泊判定改成结构化**：此前靠在工具结果里搜 `user interaction pending` 这句话来决定要不要写账本终态，任何回显了这串字的失败结果都会被误判，那条工具就永远停在 RUNNING。改成由 executor 在铸 PENDING 的同一刻登记 toolCallId，策略层按 id 询问（`InstallPolicyOptions.isInteractionPending`）。
+- **续跑提示词里的用户回答做转义与截断**：原文里的引号/换行会把提示撕成两半，超长回答会在每轮提示里再复制一遍。
+- **定时任务历史刷新**：Schedules 页刷新任务列表后同步重拉当前选中任务的 execution history，避免旧的 `QUEUED`/`RUNNING` 投影停留在页面；选中项被别处删掉时详情面板自动关闭。拉列表与拉历史拆成两个 effect——把历史塞进 `refresh` 会让它的身份随选中项变化，于是"选中一条"就整表重拉一遍。
+- **`ask_user_question` 选项无法点选（409 CONFLICT）**：停泊时故意抛 `user interaction pending` 防止 DSH 伪造答案，但 `tools/execute` 环绕把它记成 FAILED。人点选项时 CAS 要求工具仍是 RUNNING，于是 409。停泊抛错现在不再关账本。
+- **助手气泡有时把 reasoning 当正文**：`message.completed` 把 `reasoning` 块和 `text` 拼在一起；短 CoT 不超过截断阈值时会盖住已流式的中文回复。正文只取 `text` 块，reasoning 仍走 Thought Process。
+
+- **前台 durable 子 Agent 不再被单 Worker 并发自阻塞**：DSH 直接 content block prompt
+  现在正确转换为 durable task；Compose/Worker 默认并发提升为 4，父 Run 等待子 Run
+  时仍有可用槽位，避免子 Run 永远停在队列中。
+- **系统 Skill 在 DSH 中不再误报 unknown**：运行时为每个 Agent 安装本地只读 Skill provider，并在 setup 完成后发布能力；不再让远程 workspace FS 覆盖 Agent 容器内的 `/home/sandbox/skill*` 挂载。
+- **MCP 工具在 Docker 部署里对模型不可见**：`MCP_SERVERS_JSON` 原先在 `npm run gen:patch` 时写进提交的 YAML，镜像构建环境是空数组，compose `.env` 里的 Exa 等服务器永远装不进插件树。现在 boot 时按进程环境叠 `dsh-mcp-client`，改配置只需重启 Agent。
+- **多轮对话气泡重复上轮文本、刷新后助手回复消失**：DSH 的 `turn/end` 被当成 `message_end`，并且每一轮把整份 session log（含历史）再投影一遍。现在只映射 `assistant/chunk` / `assistant/message`，并且只在直播订阅没推事件时 dump **本轮新增** 的 log。
+- **`read /home/sandbox/skill/...` 被拒 path escape**：bash 能 ls 系统 skill，FS 围栏却不认这个逻辑前缀，resolve 还拿可写根做 containment。系统 skill 与已启用包现在是只读根。
+- **`submit_artifact` 成功但前端看不到产物**：submit 把 workspaceId 当成 sessionId 落账，UI 按 sandbox_session_id 列表；工具结果又是 DSH `{value}` 包装，账本抽不出 `artifact.ready`。现在带上 sandbox session id、自铸 ULID，并认识 DSH 结果形状。
+
+- **Python exec 迁移后登录全 404**：BFF 仍把 `/api/auth/register|login|me` 转发到已删除的 exec `/auth/*`。认证凭据本来就在 Agent-owned MySQL `auth_credentials`；现在签发、校验、管理员角色收口全部由 Agent `/internal/auth/*` 承担，BFF 继续只管理 HttpOnly Cookie，并删除两侧指向 exec 的死认证客户端。生产缺少或使用弱 `SANDBOX_JWT_SECRET` 时 Agent fail-closed。
+- **跨服务 smoke 不再启动已删除的 Python 服务**：CI 脚本从 `uvicorn sandbox.main` 和不存在的 `agent/server.js`/`worker.js` 切到已构建的 exec/Agent `dist` 入口，cross-service job 显式安装并构建 contract、exec、agent。
+- Exec 镜像不再用尾部 `|| true` 吞掉 `apt-get install` 失败；隔离原语或模型工具链缺失时构建立即 fail-closed。
+- **审批停泊不再留下永久 RUNNING 的并行工具账本**：同一轮其它在飞 ToolExecution 收敛为 `UNKNOWN`，错误码为 `RUN_PARKED_PARALLEL_TOOL_UNKNOWN`。
+- **同一 DSH 会话后续 Run 不再发生 journal header 冲突或多根**：runtime 重建保留恢复出的 header，空 checkpoint manifest 接到 journal 的真实 leaf。
+- **MySQL 进程/产物/数据集列表不再因 `LIMIT ?` 返回 500**：分页值先做整数上限校验，再作为 SQL 常量插入；用户数据仍使用参数绑定。
 
 - **Skill 入口脚本允许嵌套在 `scripts/` 子目录下**: 守卫要求脚本路径匹配 `/scripts/<单个文件>$`，于是仓库自带的首方包**当场就跑不了**——`xlsx/scripts/office/pack.py`、`skill-creator/scripts/` 之外的 `eval-viewer/generate_review.py` 都被 `SKILL_SCRIPT_COMMAND_DENIED` 拒绝，而这是唯一被放行的执行入口。现在 `scripts/` 下任意深度都接受；同时补上 `..` 拒绝——旧的扁平正则顺带挡住了 `…/scripts/../hidden.py` 这类「读起来像 scripts/」的路径，放开嵌套后必须显式挡。
 
@@ -16,6 +553,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **删掉从未进入模型的 `PLATFORM_SYSTEM_PROMPT_LAYER` / `composeSystemPrompt`**: 注释写着「平台安全层总会 append、env 关不掉」，运行时却走 `resolveEnterpriseSystemPrompt`，这两个符号只在单测里互相调用。路径边界、审批、artifact 交付、密钥不进回复已经在企业契约和代码护栏里；再接线只会把写死的 `submit_artifact` 清单带回基座。`AGENT_SYSTEM_PROMPT` 仍然只做人设 lead。
 
 ### Changed
+
+- **Wave 6 checkJs 收口**: `agent/tsconfig.json` 不再 `exclude` 存活 JS；去掉 44 个 Wave 6 占位 `@ts-nocheck` 横幅，checkJs 仍为 0。布局棘轮收回 W2-D 为 `@ts-expect-error` 抬过的四条预算（`execute-run-service` / `fenced-tool-governance-recorder` / `create-http-server` / `trace-span-repository`），`internal-files-read-http.js` 已低于 1000 行退出 hotspot。
+- **Compose 构建上下文改为仓库根**: `agent` / `exec` 镜像需要 `file:../runtime` 与 `file:../contract`，因此 `docker-compose.yml` 的 build context 从包目录改为 `.`，Dockerfile 分别为 `agent/Dockerfile` 与 `exec/Dockerfile`。Agent 增加精确钉 `jiti@2.6.1` 以加载 `pi-mcp-adapter` 的 TypeScript 源。Exec 健康检查改为 Node `fetch`（`node:22-slim` 没有 curl），并去掉已删除的 Python `seccomp-bubblewrap.json`。
 
 - **System prompt 补上 Doing work 工作纪律**: 基座仍是 Pi 风格的短契约，但补了「本轮把请求做完并验证、不擅自缩放范围、进度写在用户可见回复、密钥不进回复、有交付工具就走交付工具」。todo / memory / `ask_user` / `spawn_subagent` / `submit_artifact` / `bash` 的用法加强写在各自 `promptGuidelines` 上，只有绑了这些工具的 run 才看得到——基座故意不点名，避免重复「没启某个 extension 却读到它的工具名」那类漂移。
 
@@ -69,7 +609,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A2A 官方流式调用现在会收到终态事件**: `message/stream` 与 `tasks/resubscribe` 在 `submitted` / `working` 之后就断流——没有 `status-update(final=true)`，也没有 Agent 最终正文；而 `tasks/get` 同时报 `completed` 并能读到完整回复。只依赖流式事件的官方客户端因此永远等不到终态，只能额外轮询 `tasks/get`。根因不在 SSE 传输层，而在事件词表对不上：A2A 投影器的 `RUN_STATUS_EVENT_TYPES` 列的是 `run.succeeded` / `run.status` / `run.terminal`，**这三个名字全仓没有任何一处发出过**；Run 服务实际写进账本的是 `plan.md` §事件词表里那一套——`applyRunTransitionInTxn` 默认 `run.status.changed`，成功终态是 `run.completed`。于是终态事件在投影时被整条丢掉，流跑到 Run 终态后静默返回。现有单测没能挡住，因为它们自己也用 `run.succeeded` 造数据。修复三处：投影器认下真实词表（`run.status.changed` / `run.completed`）；`run.status.changed` 这类**名字不含目标状态**的事件只认账本 payload 里的 `status`，绝不回落到「当前 Run 行状态」——那是分页时读到的，可能已经终态，会投出过早的 `final: true`；治理面写的 `{ context, data }` 形状 payload 也纳入状态提取。**同一根因还吞掉了 Agent 的最终正文**：`message.completed` 由 observability 投影器写成 `{ context, data }` 形状，`role` / `message` / `messageId` 都在 `data` 下面一层，而投影只看 `event.*` 与 `event.payload.*`——于是**没有任何一条 message.completed 投影得出来**，官方客户端从流里拿不到回复文本。这一条是重建容器后拿真实 Run 的事件日志回放才暴露的（单测 fixture 恰好用的是扁平形状）。现在两种形状都读，`user` / `toolResult` 回合仍然不投影为 agent 消息。另外，流在 Run 终态收尾时如果一个 `final: true` 帧都没发过，现在会按权威 Run 状态补发一帧终态 `status-update`（A2A 0.3 §3.1.2 要求任务生命周期流以 final 帧收尾），并且只有在事件页确实排空后才相信「Run 行已终态」这个信号——一整页事件可能还压着后续的终态事件。回归测试 `agent/tests/a2a/a2a-terminal-event-vocabulary.unit.test.js` 用真实词表复现，并加了一条棘轮：`src/application` 里任何 `eventType: 'run.*'` 字面量若不在投影器词表内即失败。
 
-- **Sandbox 出站调用全部有超时了**: AGENTS.md §2 要求「所有出站调用有超时」，但两侧 Sandbox 公共面客户端都漏了。Agent 侧 `sandbox-client.js` 的 `sbFetch` 默认 `timeoutMs = null`，公开面**没有一个方法**传超时——会话删除时的工作区 GC（`conversation-service`）、运维进程面的 logs/read/stdin/signal/cancel（`process-access-service`）、文件与 artifact 读取，全都能被一个挂起的 Sandbox 无限期钉住；`checkHealth()` 连 AbortSignal 都没有。BFF 侧同样：`routes/files.js` 三处字节代理（文件下载、artifact 下载、上传）与 `routes/datasets.js` 两处（上传、列表）都是裸 `fetch`，而同仓 `agent-client.js` 早有 `AbortSignal.timeout` 先例，config 注释也只豁免 SSE 流。现在两侧都有默认 deadline：控制面 30s（BFF 用既有的 `SANDBOX_REQUEST_TIMEOUT_MS`），字节流只约束「到响应头」这一段，拿到 header 后清掉定时器，大文件不会被拦腰截断；上传因为要先把 body 送上去，单独给一个宽松但有界的 10 分钟上限。BFF 超时映射为 504 `SANDBOX_TIMEOUT`，浏览器自己断开仍走调用方原本的错误，不会被误报成 Sandbox 超时。未新增环境变量。
+- **Sandbox 出站调用全部有超时了**: AGENTS.md §2 要求「所有出站调用有超时」，但两侧 Sandbox 公共面客户端都漏了。Agent 侧 `sandbox-client.js` 的 `sbFetch` 默认 `timeoutMs = null`，公开面**没有一个方法**传超时——会话删除时的工作区 GC（`conversation-service`）、当时仍在 Agent 的运维进程面（现已迁到 BFF→exec）、文件与 artifact 读取，全都能被一个挂起的 Sandbox 无限期钉住；`checkHealth()` 连 AbortSignal 都没有。BFF 侧同样：`routes/files.js` 三处字节代理（文件下载、artifact 下载、上传）与 `routes/datasets.js` 两处（上传、列表）都是裸 `fetch`，而同仓 `agent-client.js` 早有 `AbortSignal.timeout` 先例，config 注释也只豁免 SSE 流。现在两侧都有默认 deadline：控制面 30s（BFF 用既有的 `SANDBOX_REQUEST_TIMEOUT_MS`），字节流只约束「到响应头」这一段，拿到 header 后清掉定时器，大文件不会被拦腰截断；上传因为要先把 body 送上去，单独给一个宽松但有界的 10 分钟上限。BFF 超时映射为 504 `SANDBOX_TIMEOUT`，浏览器自己断开仍走调用方原本的错误，不会被误报成 Sandbox 超时。未新增环境变量。
 
 - **流式 Run 不再被 trace 投影的乐观锁判失败**: 带 thinking/message delta 的长回答（数百到数千条事件）在工具和模型都成功后仍可能 `FAILED: trace span optimistic upsert did not converge`。根因是 append 事务在 InnoDB REPEATABLE READ 下用非锁定 `SELECT` 读 Run 根 span，再对 `attributes_json` + `updated_at` 做 CAS；`GET /runs/{id}/trace` 的 `materializeRunFacts` 不持有 `runs` 行锁，提交更新后 append 的 16 次重试仍读到同一份快照，几毫秒内耗尽。表现就是 8 月 23 日真实用户场景和 Run `01M0YZ6C0HZAQX1GGZ8CHAA9K5`：工具完成、回答写完，终态却是失败。事务内改为 `SELECT … FOR UPDATE`（锁定读看到最新行并串行化该 span 的写者）。投影 CAS 若仍 livelock，append **提交事件、不回滚**——事件是账本，trace 可由 `GET /trace` 重建；其它投影错误仍然随事务失败。
 
@@ -183,6 +723,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Bubblewrap 环境变量不再泄漏到进程参数**：显式允许的业务 DB 环境仍传入沙箱子进程，但正式 spawn 改为使用受控继承环境，不再把值拼进 `--setenv` argv；外层 bwrap 仍只接收最小环境，未恢复完整宿主环境继承。
+- **Artifact 导入按目标 workspace 写入**：BFF 现在先由 Agent 解析目标 Sandbox Session 的 `workspace_id`，再调用 exec 导入；对外仍返回目标 session 标识，避免文件写入一个模型实际不可见的路径。
+- **普通用户初始化与能力页回归**：补齐首登 provisioning/刷新竞态、Settings 二级导航、`.zip/.skill` Draft 上传，以及省略 `run_id` 的 Artifact 列表投影兼容。
 - **首个管理员无法创建**：注册忽略客户端提供的 role/organization_id（正确），而 `BFF_DEV_ACTING_ROLE` 只在关闭鉴权时生效，导致任何真实部署上 `/api/a2a/config` 等管理员面不可达。新增 `SANDBOX_AUTH_ADMIN_USERNAMES`：名单内用户名注册即晋升 admin。
 - **进程控制、取消与上传错误路径**：QA 发现的六处缺陷修复（admin bootstrap、process control、cancel 与 upload 错误处理）。
 - **Agent `/internal/*` 平面在 token 未配置时无鉴权**：这些路由直接信任 `X-Acting-*` 头，能触达端口即能冒充任意用户。现在空 token 直接关闭内部平面；无鉴权运行必须显式设置 `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL=true`，生产配置校验拒绝该选项，启动日志明示当前模式；token 比较改为常量时间。

@@ -21,13 +21,14 @@ import {
   createGuardedRedisClass,
   destroyRedisClient,
 } from '../../src/infrastructure/redis/client.js';
+import { readSource } from '../support/read-source.js';
 
 const guardSrcPath = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../src/infrastructure/redis/redis-connection-error-guard.js',
 );
 function readGuardSrc() {
-  return fs.readFileSync(guardSrcPath, 'utf8');
+  return readSource(guardSrcPath);
 }
 
 describe('sanitizeRedisLogText / classifyRedisConnectionError', () => {

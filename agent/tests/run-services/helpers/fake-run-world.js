@@ -69,21 +69,21 @@ function cmp(left, op, right) {
 export function createFakeRunWorld(opts = {}) {
   /** @type {Record<string, Record<string, unknown>[]>} */
   const tables = {
-    organizations: [],
-    users: [],
-    organization_memberships: [],
-    organization_external_refs: [],
-    conversation_external_refs: [],
-    agent_definitions: [],
-    agent_versions: [],
-    conversations: [],
-    agent_sessions: [],
-    messages: [],
-    runs: [],
-    run_events: [],
-    tool_executions: [],
-    idempotency_records: [],
-    domain_outbox: [],
+    tbl_agsvc_organizations: [],
+    tbl_agsvc_users: [],
+    tbl_agsvc_organization_memberships: [],
+    tbl_agsvc_organization_external_refs: [],
+    tbl_agsvc_conversation_external_refs: [],
+    tbl_agsvc_agent_definitions: [],
+    tbl_agsvc_agent_versions: [],
+    tbl_agsvc_conversations: [],
+    tbl_agsvc_agent_sessions: [],
+    tbl_agsvc_messages: [],
+    tbl_agsvc_runs: [],
+    tbl_agsvc_run_events: [],
+    tbl_agsvc_tool_executions: [],
+    tbl_agsvc_idempotency_records: [],
+    tbl_agsvc_domain_outbox: [],
   };
 
   let lastInsertId = 0;
@@ -117,27 +117,27 @@ export function createFakeRunWorld(opts = {}) {
         throw err;
       }
     };
-    if (tableName === 'organizations') {
+    if (tableName === 'tbl_agsvc_organizations') {
       conflict((r) => r.org_id === row.org_id);
     }
-    if (tableName === 'users') {
+    if (tableName === 'tbl_agsvc_users') {
       conflict(
         (r) =>
           r.user_id === row.user_id ||
           r.external_subject === row.external_subject,
       );
     }
-    if (tableName === 'organization_memberships') {
+    if (tableName === 'tbl_agsvc_organization_memberships') {
       conflict((r) => r.org_id === row.org_id && r.user_id === row.user_id);
     }
-    if (tableName === 'organization_external_refs') {
+    if (tableName === 'tbl_agsvc_organization_external_refs') {
       conflict(
         (r) =>
           r.provider === row.provider &&
           r.external_subject === row.external_subject,
       );
     }
-    if (tableName === 'conversation_external_refs') {
+    if (tableName === 'tbl_agsvc_conversation_external_refs') {
       conflict(
         (r) =>
           r.org_id === row.org_id &&
@@ -146,23 +146,23 @@ export function createFakeRunWorld(opts = {}) {
           r.external_subject === row.external_subject,
       );
     }
-    if (tableName === 'agent_definitions') {
+    if (tableName === 'tbl_agsvc_agent_definitions') {
       conflict((r) => r.agent_id === row.agent_id);
     }
-    if (tableName === 'agent_versions') {
+    if (tableName === 'tbl_agsvc_agent_versions') {
       conflict(
         (r) =>
           r.agent_version_id === row.agent_version_id ||
           (r.agent_id === row.agent_id && r.version_no === row.version_no),
       );
     }
-    if (tableName === 'conversations') {
+    if (tableName === 'tbl_agsvc_conversations') {
       conflict((r) => r.conversation_id === row.conversation_id);
     }
-    if (tableName === 'agent_sessions') {
+    if (tableName === 'tbl_agsvc_agent_sessions') {
       conflict((r) => r.agent_session_id === row.agent_session_id);
     }
-    if (tableName === 'messages') {
+    if (tableName === 'tbl_agsvc_messages') {
       conflict(
         (r) =>
           r.message_id === row.message_id ||
@@ -170,17 +170,17 @@ export function createFakeRunWorld(opts = {}) {
             r.sequence_no === row.sequence_no),
       );
     }
-    if (tableName === 'runs') {
+    if (tableName === 'tbl_agsvc_runs') {
       conflict((r) => r.run_id === row.run_id);
     }
-    if (tableName === 'run_events') {
+    if (tableName === 'tbl_agsvc_run_events') {
       conflict(
         (r) =>
           r.event_id === row.event_id ||
           (r.run_id === row.run_id && r.sequence_no === row.sequence_no),
       );
     }
-    if (tableName === 'idempotency_records') {
+    if (tableName === 'tbl_agsvc_idempotency_records') {
       conflict(
         (r) =>
           r.org_id === row.org_id &&
@@ -189,7 +189,7 @@ export function createFakeRunWorld(opts = {}) {
           r.operation === row.operation,
       );
     }
-    if (tableName === 'domain_outbox') {
+    if (tableName === 'tbl_agsvc_domain_outbox') {
       conflict((r) => r.outbox_id === row.outbox_id);
     }
   }
@@ -304,6 +304,9 @@ export function createFakeRunWorld(opts = {}) {
           return api;
         },
         forUpdate() {
+          return api;
+        },
+        forShare() {
           return api;
         },
         max(expr) {
@@ -426,11 +429,11 @@ export function createFakeRunWorld(opts = {}) {
       const s = String(sql);
 
       // Sequence allocation for run events
-      if (/UPDATE\s+runs\s+SET\s+next_event_sequence/i.test(s)) {
+      if (/UPDATE\s+tbl_agsvc_runs\s+SET\s+next_event_sequence/i.test(s)) {
         const runId = bindings[1];
         const orgId = bindings[2];
         const userId = bindings[3];
-        const row = (baseTables.runs || []).find(
+        const row = (baseTables.tbl_agsvc_runs || []).find(
           (r) =>
             r.run_id === runId && r.org_id === orgId && r.user_id === userId,
         );
@@ -511,7 +514,7 @@ export function createFakeRunWorld(opts = {}) {
       runEvents: new RunEventRepository(db),
       toolExecutions: {
         async listByRun(runId, scope) {
-          const ownedRun = tables.runs.find(
+          const ownedRun = tables.tbl_agsvc_runs.find(
             (row) =>
               row.run_id === runId &&
               row.org_id === scope.orgId &&
@@ -520,7 +523,7 @@ export function createFakeRunWorld(opts = {}) {
           if (!ownedRun) {
             throw new Error('Run not found for tool execution scope');
           }
-          return tables.tool_executions
+          return tables.tbl_agsvc_tool_executions
             .filter((row) => row.run_id === runId)
             .map((row) => ({
               toolExecutionId: row.tool_execution_id,

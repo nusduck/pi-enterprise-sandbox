@@ -16,15 +16,16 @@ import {
 } from '../src/services/agent-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const clientSrc = readFileSync(join(__dirname, '../src/services/sandbox-client.js'), 'utf8');
-const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.js'), 'utf8');
-const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.js'), 'utf8');
-const serverSrc = readFileSync(join(__dirname, '../server.js'), 'utf8');
-const convSrc = readFileSync(join(__dirname, '../src/routes/conversations.js'), 'utf8');
+const clientSrc = readFileSync(join(__dirname, '../src/services/sandbox-client.ts'), 'utf8');
+const agentClientSrc = readFileSync(join(__dirname, '../src/services/agent-client.ts'), 'utf8');
+const runsSrc = readFileSync(join(__dirname, '../src/routes/runs.ts'), 'utf8');
+const serverSrc = readFileSync(join(__dirname, '../server.ts'), 'utf8');
+const convSrc = readFileSync(join(__dirname, '../src/routes/conversations.ts'), 'utf8');
 const timelineSrc = readFileSync(
-  join(__dirname, '../src/application/conversation-timeline-service.js'),
+  join(__dirname, '../src/application/conversation-timeline-service.ts'),
   'utf8',
 );
+
 const pkg = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8'));
 
 describe('thin BFF agent relay', () => {
@@ -53,18 +54,18 @@ describe('thin BFF agent relay', () => {
     }
   });
 
-  it('does not depend on pi-coding-agent', () => {
-    const deps = pkg.dependencies || {};
-    assert.equal(
-      deps['@earendil-works/pi-coding-agent'],
-      undefined,
-      'api-server must not depend on SDK after cutover',
+  it('does not depend on the Agent SDK', () => {
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    assert.deepEqual(
+      Object.keys(deps).filter((name) => name.startsWith('@deepseek-ai/')),
+      [],
+      'api-server is a thin BFF and must not depend on the Agent SDK',
     );
-    assert.doesNotMatch(runsSrc, /createAgentSession|@earendil-works\/pi-coding-agent/);
+    assert.doesNotMatch(runsSrc, /@deepseek-ai\//);
   });
 
   it('agent-client exposes create / events / cancel', () => {
-    for (const name of ['createAgentRun', 'openAgentRunEvents', 'cancelAgentRun', 'getAgentRunTrace', 'checkAgentHealth']) {
+    for (const name of ['createAgentRun', 'openAgentRunEvents', 'cancelAgentRun', 'getAgentRunTrace', 'checkAgentReady']) {
       assert.match(agentClientSrc, new RegExp(`export async function ${name}\\(`));
     }
   });

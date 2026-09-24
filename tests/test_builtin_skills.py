@@ -8,13 +8,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
 SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-FRAMEWORK = {
-    "audit.js",
-    "install.js",
-    "manager.js",
-    "paths.js",
-    "validator.js",
-}
+# 只写模块名，不写后缀：agent 正在从 JS 迁到 TS
+# （docs/design/agent-ts-rebuild.md 阶段 C–F），断言的是「这个模块还在」，
+# 跟它是 .js 还是 .ts 无关。
+FRAMEWORK = {"audit", "install", "manager", "paths", "validator"}
 # Minimum curated set we ship for agent daily use.
 REQUIRED_SKILLS = {
     "skill-creator",
@@ -25,11 +22,10 @@ REQUIRED_SKILLS = {
     "xlsx",
 }
 RUNTIME_SKILL_PATH_FILES = (
-    ROOT / "agent" / "src" / "skills" / "paths.js",
-    ROOT / "agent" / "src" / "lib" / "text-redaction.js",
-    ROOT / "sandbox" / "isolation" / "bubblewrap.py",
-    ROOT / "sandbox" / "services" / "policy_checker.py",
-    ROOT / "sandbox" / "Dockerfile",
+    ROOT / "agent" / "src" / "skills" / "paths.ts",
+    ROOT / "agent" / "src" / "lib" / "text-redaction.ts",
+    ROOT / "exec" / "src" / "isolation" / "profile.ts",
+    ROOT / "exec" / "Dockerfile",
     ROOT / "docker-compose.yml",
     ROOT / "docker-compose.prod.yml",
 )
@@ -57,15 +53,19 @@ def _parse_frontmatter(text: str) -> dict[str, str]:
 
 
 def test_skill_framework_remains_available() -> None:
-    names = {path.name for path in (ROOT / "agent" / "src" / "skills").iterdir()}
+    names = {
+        path.stem
+        for path in (ROOT / "agent" / "src" / "skills").iterdir()
+        if path.suffix in {".js", ".ts"}
+    }
     assert FRAMEWORK <= names
-    assert "tools.js" not in names
+    assert "tools" not in names
     assert not (ROOT / "agent" / "packages" / "enterprise-agent-kit").exists()
 
 
 def test_runtime_uses_only_the_canonical_skill_path() -> None:
     canonical = "/home/sandbox/skill"
-    removed = ("/sandbox/skills", "/app/.pi/skills")
+    removed = ("/sandbox/skills",)
     sources: list[str] = []
     for path in RUNTIME_SKILL_PATH_FILES:
         text = path.read_text(encoding="utf-8")

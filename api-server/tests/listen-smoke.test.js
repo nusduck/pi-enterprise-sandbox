@@ -9,6 +9,8 @@ import { once } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import fs from 'node:fs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BFF_ROOT = path.resolve(__dirname, '..');
 
@@ -40,7 +42,13 @@ describe('api-server import/listen smoke', () => {
 
   it('listens and serves GET /health/ready', async () => {
     const port = 20000 + Math.floor(Math.random() * 1000);
-    const child = spawn(process.execPath, ['server.js'], {
+    const serverEntry = 'dist/server.js';
+    assert.ok(
+      fs.existsSync(path.join(BFF_ROOT, serverEntry)),
+      'dist/server.js must exist; run npm run build first',
+    );
+    const child = spawn(process.execPath, [serverEntry], {
+
       cwd: BFF_ROOT,
       env: {
         ...process.env,

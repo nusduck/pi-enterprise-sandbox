@@ -29,10 +29,10 @@ const AUTH = {
 };
 
 function seed(state, status = 'WAITING_INPUT') {
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     { org_id: ORG, name: 'Acme', status: 'active', created_at: NOW, updated_at: NOW },
   ];
-  state.tables.users = [
+  state.tables.tbl_agsvc_users = [
     {
       user_id: USER,
       external_subject: 'bff:user-ext-1',
@@ -43,16 +43,16 @@ function seed(state, status = 'WAITING_INPUT') {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_memberships = [
+  state.tables.tbl_agsvc_organization_memberships = [
     { org_id: ORG, user_id: USER, role: 'member', status: 'active', created_at: NOW },
   ];
-  state.tables.organization_external_refs = [
+  state.tables.tbl_agsvc_organization_external_refs = [
     { provider: 'bff', external_subject: 'org-ext-1', org_id: ORG, created_at: NOW },
   ];
   state.tables.user_external_refs = [
     { provider: 'bff', external_subject: 'user-ext-1', user_id: USER, created_at: NOW },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESSION,
       org_id: ORG,
@@ -62,7 +62,7 @@ function seed(state, status = 'WAITING_INPUT') {
       sandbox_session_id: SANDBOX_SESSION,
       workspace_id: WORKSPACE,
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: RUN,
       execution_fence_token: 1,
       recovery_reason_code: null,
@@ -71,7 +71,7 @@ function seed(state, status = 'WAITING_INPUT') {
       closed_at: null,
     },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -96,7 +96,7 @@ function seed(state, status = 'WAITING_INPUT') {
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -118,7 +118,7 @@ function seed(state, status = 'WAITING_INPUT') {
       created_at: NOW,
     },
   ];
-  state.tables.run_interactions = [
+  state.tables.tbl_agsvc_run_interactions = [
     {
       interaction_id: INTERACTION,
       org_id: ORG,
@@ -185,7 +185,7 @@ describe('GetRunService pending_input projection (G6)', () => {
   });
 
   it('omits pending_input when Run is not waiting', async () => {
-    state.tables.runs[0].status = 'RUNNING';
+    state.tables.tbl_agsvc_runs[0].status = 'RUNNING';
     const run = await service.execute({ runId: RUN, auth: AUTH });
     assert.equal(run.pendingInput, undefined);
     const body = presentGetRunResponse(run);

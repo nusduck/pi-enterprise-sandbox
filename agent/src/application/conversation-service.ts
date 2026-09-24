@@ -1,0 +1,629 @@
+/**
+ * Owner-scoped Conversation CRUD backed exclusively by Agent MySQL.
+ *
+ * Delete is implemented as archival because conversations are referenced by
+ * durable sessions, messages, and runs that must remain available for audit.
+ */
+
+import {
+  OwnerScopedNotFoundError,
+  ParentProvisioningRaceError,
+  ValidationError,
+} from './errors.js';
+import { RunParentProvisioner } from './parent/run-parent-provisioner.js';
+import { ExternalIdentityResolver,
+  type ExternalAuth,
+} from './parent/external-identity-resolver.js';
+import { assertUlid, isUlid } from '../domain/shared/ulid.js';
+import {
+  conversationTitleFromMessages,
+  isPlaceholderConversationTitle,
+} from './conversation-title.js';
+import {
+  extractAssistantTextForUi,
+  extractAssistantThinkingForUi,
+} from '../lib/event-redaction.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
+const MAX_CREATE_ATTEMPTS = 3;
+
+function sanitizeError(error) {
+  const message = error instanceof Error ? error.message : String(error || 'Unknown error');
+  return message.replace(/[\x00-\x1F\x7F]/g, ' ').slice(0, 1000) || 'Unknown error';
+}
+
+function normalizeTitle(value) {
+  if (value != null && typeof value !== 'string') {
+    throw new ValidationError('title must be a string');
+  }
+  const title = value == null ? 'New chat' : String(value).trim();
+  const normalized = title || 'New chat';
+  if (normalized.length > 500) {
+    throw new ValidationError('title exceeds max length 500');
+  }
+  return normalized;
+}
+
+/**
+ * 建会话时选中的 Agent。空值 = 用租户默认 Agent（向后兼容：不传 `agent_id`
+ * 的调用方行为与多 Agent 上线前完全一致）。
+ *
+ * 只在这里判形状；**归属判定属于 provisioner 的事务内**——在事务外先查一次
+ * 会留下 TOCTOU 窗口，而且会多出一处 org 判定的状态源。
+ */
+function normalizeSelectedAgentId(value) {
+  if (value == null || value === '') return null;
+  if (!isUlid(value)) {
+    throw new ValidationError('agent_id must be a ULID');
+  }
+  return assertUlid(value, 'agentId');
+}
+
+function isArchived(row) {
+  return row?.archivedAt != null || String(row?.status || '').toLowerCase() === 'archived';
+}
+
+/**
+ * Extract display text from messages.content_json for browser transcript.
+ * Skips dsh_journal_* system rows; surfaces user turns and assistant text.
+ */
+export function presentTranscriptMessage(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  const role = String(msg.role || '').toLowerCase();
+  if (role !== 'user' && role !== 'assistant') return null;
+  const messageType = String(msg.messageType || '').toLowerCase();
+  if (messageType.startsWith('dsh_journal')) return null;
+
+  const content = msg.contentJson ?? {};
+  let text = '';
+  if (typeof content === 'string') {
+    text = content;
+  } else if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') {
+      text = content.text;
+    } else if (Array.isArray(content.messages)) {
+      // Legacy create-run rows only have the full prompt context. The current
+      // turn is its last user item, not the first historic item.
+      const current = [...content.messages]
+        .reverse()
+        .find((m) => m && typeof m === 'object' &&
+          (m.role === 'user' || m.role == null));
+      if (current) {
+        if (typeof current.content === 'string') text = current.content;
+        else if (Array.isArray(current.content)) {
+          text = extractAssistantTextForUi(current);
+        }
+      }
+    } else if (Array.isArray(content.content)) {
+      text = extractAssistantTextForUi(content);
+    }
+  }
+  // Empty assistant placeholders (tool-only turns) still surface as empty bubbles
+  // only when we have no text; skip pure empty assistant rows without content.
+  if (role === 'assistant' && !String(text || '').trim()) return null;
+
+  const sequenceNo = msg.sequenceNo;
+  const thinking =
+    content && typeof content === 'object' && typeof content.thinking === 'string'
+      ? content.thinking
+      : '';
+  return {
+    // Keep the durable message identity and ordering fields intact.  The
+    // browser transcript is a projection of the append-only messages table,
+    // not a new source of ordering truth.  Input rows are always camelCase
+    // (mapMessage); the response deliberately emits both `id` and
+    // `message_id` because BFF/browser consumers read either one.
+    id: msg.messageId || null,
+    message_id: msg.messageId || null,
+    run_id: msg.runId || null,
+    role,
+    content: [{ type: 'text', text: String(text || '') }],
+    sequence_no: sequenceNo != null && Number.isFinite(Number(sequenceNo))
+      ? Number(sequenceNo)
+      : null,
+    created_at: msg.createdAt || null,
+    ...(thinking.trim() ? { thinking } : {}),
+  };
+}
+
+function thinkingByJournalEntryId(messages: Record<string, any>[] = []) {
+  const map = new Map<string, string>();
+  for (const msg of messages) {
+    const content = msg?.contentJson;
+    if (!content || content.kind !== 'session_journal_entry') continue;
+    const entry = content.entry;
+    const id = typeof entry?.id === 'string' ? entry.id : '';
+    if (!id) continue;
+    const thinking = extractAssistantThinkingForUi(entry.message);
+    if (thinking) map.set(id, thinking);
+  }
+  return map;
+}
+
+/**
+ * Present a conversation row for browser/BFF consumption.
+ *
+ * `session` is the current AgentSession when known. Browsers need
+ * sandbox_session_id for dataset/artifact list/upload; leaving it null
+ * forces every `/api/conversations/:id/datasets` call to 400/404.
+ *
+ * @param row
+ * @param [messages]
+ * @param [session]
+ */
+export function presentConversation(row: Record<string, any>, messages: Record<string, any>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null } | null = null) {
+  const journalThinking = thinkingByJournalEntryId(messages);
+  const transcript = Array.isArray(messages)
+    ? messages.map((msg) => {
+      const presented = presentTranscriptMessage(msg);
+      if (!presented || presented.role !== 'assistant' || presented.thinking) {
+        return presented;
+      }
+      const sessionEntryId = msg?.contentJson?.sessionEntryId;
+      const thinking = typeof sessionEntryId === 'string' ? journalThinking.get(sessionEntryId) : '';
+      return thinking ? { ...presented, thinking } : presented;
+    }).filter(Boolean)
+    : [];
+  const agentSessionId =
+    session?.agentSessionId ?? row.currentAgentSessionId ?? null;
+  const sandboxSessionId =
+    session?.sandboxSessionId ??
+    row.sandboxSessionId ??
+    row.sandbox_session_id ??
+    null;
+  const workspaceId =
+    session?.workspaceId ?? row.workspaceId ?? row.workspace_id ?? null;
+  return {
+    id: row.conversationId,
+    title: row.title || 'New chat',
+    // 会话绑定的 Agent（D2：建会话时钉死，此后不可变）。前端用它在会话头部
+    // 显示当前 Agent，让"换 Agent 要新建会话"这条约束在 UI 上说得通。
+    agent_id: row.agentId ?? null,
+    sandbox_session_id: sandboxSessionId,
+    agent_session_id: agentSessionId,
+    workspace_id: workspaceId,
+    messages: transcript,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+    status: row.status,
+  };
+}
+
+export class ConversationService {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  db: Loose;
+  generateId: Loose;
+  now: Loose;
+  sessionProvisioner: Loose;
+  createSandboxClient: Loose;
+  logger: Loose;
+
+  /**
+   * @param {{
+ *   transactionManager: { run: Function },
+ *   createRepositories: (db: any) => any,
+ *   db: any,
+ *   generateId: () => string,
+ *   now?: () => Date,
+ *   sessionProvisioner?: { ensure: Function } | null,
+ *   createSandboxClient?: (opts: { auth?: object }) => { removeSessionWorkspace: Function } | null,
+ *   logger?: { error: Function },
+ * }} deps
+   */
+  constructor(deps: { transactionManager: { run: Function }, createRepositories: (db: any) => any, db: any, generateId: () => string, now?: () => Date, sessionProvisioner?: { ensure: Function } | null, createSandboxClient?: (opts: { auth?: Record<string, any> }) => { removeSessionWorkspace: Function } | null, logger?: { error: Function }, }) {
+    if (!deps?.transactionManager || typeof deps.transactionManager.run !== 'function') {
+      throw new Error('ConversationService requires transactionManager');
+    }
+    if (typeof deps.createRepositories !== 'function' || !deps.db) {
+      throw new Error('ConversationService requires repositories and db');
+    }
+    if (typeof deps.generateId !== 'function') {
+      throw new Error('ConversationService requires generateId');
+    }
+    this.tx = deps.transactionManager;
+    this.createRepositories = deps.createRepositories;
+    this.db = deps.db;
+    this.generateId = deps.generateId;
+    this.now = deps.now ?? (() => new Date());
+    this.sessionProvisioner = deps.sessionProvisioner ?? null;
+    // Owner-scoped Sandbox HTTP client factory (D2: conversation delete
+    // triggers Sandbox workspace GC). Optional — delete() still archives
+    // the conversation when unset (dev/test), it just skips Sandbox cleanup.
+    this.createSandboxClient = deps.createSandboxClient ?? null;
+    this.logger = deps.logger ?? console;
+  }
+
+  async #resolveOwner(auth, repos = this.createRepositories(this.db)) {
+    const resolver = new ExternalIdentityResolver({
+      organizations: repos.organizations,
+      externalRefs: repos.externalRefs,
+    });
+    return resolver.resolveOwner(auth);
+  }
+
+  /**
+   * Resolve the current AgentSession for a conversation when the pointer is set.
+   * Best-effort: list/get still succeed if the session row is missing.
+   *
+   * @param repos
+   * @param row conversation row
+   * @param owner
+   */
+  async #sessionForConversation(repos: Record<string, any>, row: Record<string, any>, owner: { orgId: string, userId: string }) {
+    const agentSessionId = row?.currentAgentSessionId ?? null;
+    if (!agentSessionId || typeof repos.sessions?.getById !== 'function') {
+      return null;
+    }
+    try {
+      return await repos.sessions.getById(agentSessionId, owner);
+    } catch {
+      return null;
+    }
+  }
+
+  async list(auth: ExternalAuth, opts: { limit?: number } = {}) {
+    const repos = this.createRepositories(this.db);
+    let owner;
+    try {
+      owner = await this.#resolveOwner(auth, repos);
+    } catch (err) {
+      // A trusted principal with no provisioned owner has no conversations yet.
+      if (err instanceof OwnerScopedNotFoundError) return [];
+      throw err;
+    }
+    const rows = await repos.conversations.listForOwner(owner, {
+      limit: opts.limit ?? 200,
+      includeArchived: false,
+    });
+    const presented = [];
+    for (const row of rows) {
+      const session = await this.#sessionForConversation(repos, row, owner);
+      let displayRow = row;
+      if (
+        isPlaceholderConversationTitle(row.title) &&
+        typeof repos.messages?.listByConversation === 'function'
+      ) {
+        try {
+          const messages = await repos.messages.listByConversation(
+            row.conversationId,
+            owner,
+            { limit: 500 },
+          );
+          const title = conversationTitleFromMessages(messages);
+          if (!isPlaceholderConversationTitle(title)) {
+            displayRow = { ...row, title };
+          }
+        } catch {
+          // Listing conversations must remain available if legacy title
+          // recovery cannot read an individual transcript.
+        }
+      }
+      presented.push(presentConversation(displayRow, [], session));
+    }
+    return presented;
+  }
+
+  async get(conversationId, auth) {
+    if (!isUlid(conversationId)) {
+      throw new ValidationError('conversationId must be a ULID');
+    }
+    const id = assertUlid(conversationId, 'conversationId');
+    const repos = this.createRepositories(this.db);
+    const owner = await this.#resolveOwner(auth, repos);
+    const row = await repos.conversations.getById(id, owner);
+    if (!row || isArchived(row)) {
+      throw new OwnerScopedNotFoundError('Conversation not found', {
+        resource: 'conversations',
+        id,
+      });
+    }
+    // Browser refresh uses GET conversation.messages as the durable transcript
+    // floor (event rehydrate still supplies tools/process/artifacts).
+    let messages = [];
+    try {
+      if (typeof repos.messages?.listByConversation === 'function') {
+        messages = await repos.messages.listByConversation(id, owner, {
+          limit: 500,
+        });
+      }
+    } catch {
+      messages = [];
+    }
+    const session = await this.#sessionForConversation(repos, row, owner);
+    const title = isPlaceholderConversationTitle(row.title)
+      ? conversationTitleFromMessages(messages)
+      : row.title;
+    return presentConversation({ ...row, title }, messages, session);
+  }
+
+  async create(auth, input = {}) {
+    if (input == null || typeof input !== 'object' || Array.isArray(input)) {
+      throw new ValidationError('conversation body must be an object');
+    }
+    // @ts-expect-error 遗留JS占位类型object未展开，访问title需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'title' does not exist on type 'object'.
+    const title = normalizeTitle(input.title);
+    const selectedAgentId = normalizeSelectedAgentId(
+      // @ts-expect-error 遗留JS占位类型object未展开，访问agent_id需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'agent_id' does not exist on type 'object'.
+      input.agent_id ?? input.agentId ?? null,
+    );
+    let lastRace = null;
+    for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.tx.run(async (trx) => {
+          const repos = this.createRepositories(trx);
+          const provisioner = new RunParentProvisioner(
+            {
+              organizations: repos.organizations,
+              externalRefs: repos.externalRefs,
+              catalog: repos.catalog,
+              conversations: repos.conversations,
+              sessions: repos.sessions,
+            },
+            {
+              generateId: this.generateId,
+              now: this.now,
+              db: trx,
+            },
+          );
+          const parents = await provisioner.provision(
+            {
+              ...auth,
+              externalConversationId: null,
+            },
+            { agentId: selectedAgentId },
+          );
+          const scope = { orgId: parents.orgId, userId: parents.userId };
+          const row = await repos.conversations.updateMeta(
+            parents.conversationId,
+            scope,
+            { title },
+          );
+
+          // Browser APIs expose the internal ULID. Register it as a stable BFF
+          // external subject so CreateRun can resolve the same conversation.
+          await repos.externalRefs.getOrCreateConversationRef({
+            orgId: parents.orgId,
+            userId: parents.userId,
+            provider: auth.provider || 'bff',
+            externalSubject: parents.conversationId,
+            conversationId: parents.conversationId,
+          });
+          // Provisioner allocates logical sandbox/workspace ULIDs with the
+          // AgentSession; surface them so FE dataset/artifact paths work
+          // immediately after create (not only after refresh + ensure).
+          return presentConversation(row, [], {
+            agentSessionId:
+              parents.agentSessionId ?? row.currentAgentSessionId ?? null,
+            sandboxSessionId: parents.sandboxSessionId ?? null,
+            workspaceId: parents.workspaceId ?? null,
+          });
+        });
+      } catch (err) {
+        if (!(err instanceof ParentProvisioningRaceError)) throw err;
+        lastRace = err;
+      }
+    }
+    throw lastRace || new ParentProvisioningRaceError();
+  }
+
+  async delete(conversationId, auth) {
+    if (!isUlid(conversationId)) {
+      throw new ValidationError('conversationId must be a ULID');
+    }
+    const id = assertUlid(conversationId, 'conversationId');
+    let owner = null;
+    let boundSessions = [];
+    await this.tx.run(async (trx) => {
+      const repos = this.createRepositories(trx);
+      owner = await this.#resolveOwner(auth, repos);
+      const current = await repos.conversations.getById(id, owner, {
+        forUpdate: true,
+      });
+      if (!current || isArchived(current)) {
+        throw new OwnerScopedNotFoundError('Conversation not found', {
+          resource: 'conversations',
+          id,
+        });
+      }
+      await repos.conversations.archive(id, owner, this.now());
+      // Snapshot every Sandbox session ever bound to this conversation while
+      // still inside the owner-scoped transaction. The actual Sandbox HTTP
+      // cleanup happens after commit — never hold a DB transaction open
+      // across an outbound network call.
+      boundSessions =
+        typeof repos.sessions?.listByConversation === 'function'
+          ? await repos.sessions.listByConversation(id, owner)
+          : [];
+    });
+    // D2 triage: conversation delete/archive triggers Sandbox workspace GC.
+    // Fail-soft by design — the conversation is already archived above, so a
+    // Sandbox outage must never turn into a failed user-facing delete.
+    await this.#cleanupSandboxWorkspaces(auth, owner, boundSessions);
+  }
+
+  /**
+   * Best-effort Sandbox workspace removal for every AgentSession ever bound
+   * to a just-archived conversation. Never throws: logs and continues so one
+   * unreachable/failing session never blocks cleanup of the others, and
+   * Sandbox being down never surfaces as a failed conversation delete.
+   * @param auth
+   * @param owner
+   * @param sessions
+   */
+  async #cleanupSandboxWorkspaces(auth: ExternalAuth, owner: { orgId: string, userId: string } | null, sessions: Array<{ sandboxSessionId: string }>) {
+    if (!owner || !sessions?.length || typeof this.createSandboxClient !== 'function') {
+      return;
+    }
+    const sandbox = this.createSandboxClient({
+      auth: {
+        actingUserId: owner.userId,
+        actingOrganizationId: owner.orgId,
+        actingRole: auth?.role || 'user',
+      },
+    });
+    if (!sandbox || typeof sandbox.removeSessionWorkspace !== 'function') return;
+    for (const session of sessions) {
+      try {
+        await sandbox.removeSessionWorkspace(session.sandboxSessionId);
+      } catch (err) {
+        this.logger.error(
+          `[conversation-service] Sandbox workspace cleanup failed for ` +
+            `sandboxSessionId=${session.sandboxSessionId}: ${sanitizeError(err)}`,
+        );
+      }
+    }
+  }
+
+  async ensureSession(auth, input = {}) {
+    if (!this.sessionProvisioner?.ensure) {
+      const error = new Error('Sandbox session provisioning unavailable');
+      // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'Error'.
+      error.code = 'SANDBOX_SESSION_PROVISION_FAILED';
+      throw error;
+    }
+    if (input == null || typeof input !== 'object' || Array.isArray(input)) {
+      throw new ValidationError('session ensure body must be an object');
+    }
+    const rawConversationId =
+      // @ts-expect-error 遗留JS占位类型object未展开，访问conversationId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'conversationId' does not exist on type 'object'.
+      input.conversationId ?? input.conversation_id ?? null;
+    let conversationId = null;
+    // 既有会话：Agent 由会话本身决定（D2 不可变），请求体里的 agent_id 不参与。
+    // 新会话：这里就是"建会话"的时刻，按请求选 Agent。
+    let selectedAgentId = normalizeSelectedAgentId(
+      // @ts-expect-error 遗留JS占位类型object未展开，访问agent_id需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'agent_id' does not exist on type 'object'.
+      input.agent_id ?? input.agentId ?? null,
+    );
+    if (rawConversationId != null && rawConversationId !== '') {
+      if (!isUlid(rawConversationId)) {
+        throw new ValidationError('conversationId must be a ULID');
+      }
+      conversationId = assertUlid(rawConversationId, 'conversationId');
+      const repos = this.createRepositories(this.db);
+      const owner = await this.#resolveOwner(auth, repos);
+      const conversation = await repos.conversations.getById(
+        conversationId,
+        owner,
+      );
+      if (!conversation || isArchived(conversation)) {
+        throw new OwnerScopedNotFoundError('Conversation not found', {
+          resource: 'conversations',
+          id: conversationId,
+        });
+      }
+      selectedAgentId = conversation.agentId;
+    }
+
+    let parents = null;
+    let lastRace = null;
+    for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
+      try {
+        parents = await this.tx.run(async (trx) => {
+          const repos = this.createRepositories(trx);
+          const provisioner = new RunParentProvisioner(
+            {
+              organizations: repos.organizations,
+              externalRefs: repos.externalRefs,
+              catalog: repos.catalog,
+              conversations: repos.conversations,
+              sessions: repos.sessions,
+            },
+            {
+              generateId: this.generateId,
+              now: this.now,
+              db: trx,
+            },
+          );
+          const provisioned = await provisioner.provision(
+            {
+              ...auth,
+              externalConversationId: conversationId,
+            },
+            { agentId: selectedAgentId },
+          );
+          if (provisioned.created.conversation) {
+            await repos.conversations.updateMeta(
+              provisioned.conversationId,
+              { orgId: provisioned.orgId, userId: provisioned.userId },
+              { title: 'New chat' },
+            );
+            await repos.externalRefs.getOrCreateConversationRef({
+              orgId: provisioned.orgId,
+              userId: provisioned.userId,
+              provider: auth.provider || 'bff',
+              externalSubject: provisioned.conversationId,
+              conversationId: provisioned.conversationId,
+            });
+          }
+          return provisioned;
+        });
+        break;
+      } catch (err) {
+        if (!(err instanceof ParentProvisioningRaceError)) throw err;
+        lastRace = err;
+      }
+    }
+    if (!parents) throw lastRace || new ParentProvisioningRaceError();
+
+    const provisioned = await this.sessionProvisioner.ensure({
+      orgId: parents.orgId,
+      userId: parents.userId,
+      conversationId: parents.conversationId,
+      agentSessionId: parents.agentSessionId,
+      sandboxSessionId: parents.sandboxSessionId,
+      workspaceId: parents.workspaceId,
+      // @ts-expect-error 遗留JS占位类型object未展开，访问traceId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceId' does not exist on type 'object'.
+      traceId: input.traceId,
+    });
+    return {
+      conversation_id: parents.conversationId,
+      session_id: parents.sandboxSessionId,
+      sandbox_session_id: parents.sandboxSessionId,
+      agent_session_id: parents.agentSessionId,
+      workspace_id: parents.workspaceId,
+      reused_session: parents.created.session !== true,
+      status: provisioned.status,
+    };
+  }
+
+  /**
+   * Resolve a Sandbox session for a trusted external principal. The returned
+   * owner ids are internal ULIDs and are intended only for the BFF-to-Sandbox
+   * server hop; callers must not expose them to browsers or A2A clients.
+   *
+   * @param auth
+   * @param sandboxSessionId
+   */
+  async resolveSandboxSession(auth: { provider?: string, externalOrgId: string, externalUserId: string }, sandboxSessionId: string) {
+    if (!isUlid(sandboxSessionId)) {
+      throw new ValidationError('sandboxSessionId must be a ULID');
+    }
+    const repos = this.createRepositories(this.db);
+    const owner = await this.#resolveOwner(auth, repos);
+    const row = await repos.sessions.getBySandboxSessionId(
+      assertUlid(sandboxSessionId, 'sandboxSessionId'),
+      owner,
+    );
+    if (!row) {
+      throw new OwnerScopedNotFoundError('Sandbox session not found', {
+        resource: 'agent_sessions',
+        id: sandboxSessionId,
+      });
+    }
+    return {
+      session_id: row.sandboxSessionId,
+      sandbox_session_id: row.sandboxSessionId,
+      agent_session_id: row.agentSessionId,
+      conversation_id: row.conversationId,
+      workspace_id: row.workspaceId,
+      org_id: owner.orgId,
+      user_id: owner.userId,
+      status: row.status,
+      execution_fence_token: row.executionFenceToken,
+    };
+  }
+}

@@ -1,0 +1,1557 @@
+/**
+ * FencedToolGovernanceRecorder (PR-06 B2).
+ *
+ * Atomic under ACTIVE session executionFenceToken:
+ * ledger mutations + run_events + outbox in one transaction.
+ * External emit only after commit.
+ *
+ * Idempotency is MySQL-authoritative (survives process restart):
+ * - policy audit: append only when ToolExecution getOrCreate.created
+ * - approval.requested: append only when Approval getOrCreatePending.created
+ * - tool.execution.started/completed/failed: append only when ledger status changes
+ *
+ * In-process pending Map only serializes concurrent calls on the same instance;
+ * it is not the authority for replay across restarts.
+ *
+ * Approval resolution/resume is NOT claimed (PR-09).
+ */
+
+import { assertUlid } from '../domain/shared/ulid.js';
+import {
+  extractStartedProcessId,
+  extractSubmittedArtifact,
+} from './tool-result-projections.js';
+import { SessionFenceConflictError } from '../domain/session/errors.js';
+import { ConflictError } from '../infrastructure/mysql/errors.js';
+import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
+import {
+  TOOL_EXECUTION_STATUS,
+  TOOL_SOURCE,
+  assertToolSource,
+  assertToolRiskLevel,
+  isTerminalToolExecutionStatus,
+} from '../domain/tool/tool-execution-status.js';
+import {
+  APPROVAL_STATUS,
+  DURABLE_APPROVAL_PENDING,
+} from '../domain/tool/approval-status.js';
+import {
+  buildCanonicalEnvelope,
+  redactEventData,
+} from './fenced-run-event-recorder.js';
+import { createPromiseTail } from './promise-tail.js';
+import { SANDBOX_TOOL_NAMES } from '../runtime/policy/tool-names.js';
+import { redactPayload } from '../lib/event-redaction.js';
+import {
+  DurablePolicyConflictError,
+  assertCompatiblePolicyReplay,
+} from './durable-policy-replay.js';
+import {
+  assertToolExecutionReplayMatch,
+  policyDecisionFingerprint,
+} from '../infrastructure/mysql/repositories/tool-execution-repository.js';
+import { RUN_STATUS, runStateMachine } from '../domain/run/index.js';
+import {
+  DURABLE_INTERACTION_PENDING,
+  INTERACTION_STATUS,
+} from '../domain/interaction/interaction-status.js';
+import { terminalizeParallelToolsForPark } from './parallel-tool-park.js';
+import { bindDispatchedSandboxRequest } from './tool-dispatch-binding.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+// 纯判定拆到 `durable-policy-replay.ts`。这里保留再导出：既有调用方
+// （`dsh-run-executor.ts`、`application/index.ts`）的导入路径不必改动。
+export {
+  DurablePolicyConflictError,
+  assertCompatiblePolicyReplay,
+} from './durable-policy-replay.js';
+
+export type RunEventContext = import('./fenced-run-event-recorder.js').RunEventContext;
+export type CanonicalRunEventEnvelope =
+  import('./fenced-run-event-recorder.js').CanonicalRunEventEnvelope;
+export class FencedToolGovernanceRecorder {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  tx: Loose;
+  createRepositories: Loose;
+  generateId: Loose;
+  context: Loose;
+  executionFenceToken: Loose;
+  now: Loose;
+  emit: Loose;
+  isLockLost: Loose;
+  _tail: Loose;
+  _inflight: Map<any, any>;
+
+  /**
+   * @param {{
+   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
+   *   createRepositories: (db: any) => any,
+   *   generateId: () => string,
+   *   context: RunEventContext,
+   *   executionFenceToken: number,
+   *   now?: () => Date,
+   *   emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null,
+   *   isLockLost?: () => boolean,
+   * }} deps
+   */
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, context: RunEventContext, executionFenceToken: number, now?: () => Date, emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null, isLockLost?: () => boolean, }) {
+    if (!deps?.transactionManager?.run) {
+      throw new Error('FencedToolGovernanceRecorder requires transactionManager');
+    }
+    if (typeof deps.createRepositories !== 'function') {
+      throw new Error('FencedToolGovernanceRecorder requires createRepositories');
+    }
+    if (typeof deps.generateId !== 'function') {
+      throw new Error('FencedToolGovernanceRecorder requires generateId');
+    }
+    if (!deps.context?.runId || !deps.context?.agentSessionId) {
+      throw new Error('FencedToolGovernanceRecorder requires run context');
+    }
+    if (
+      deps.executionFenceToken == null ||
+      !Number.isFinite(Number(deps.executionFenceToken))
+    ) {
+      throw new Error('FencedToolGovernanceRecorder requires executionFenceToken');
+    }
+
+    this.tx = deps.transactionManager;
+    this.createRepositories = deps.createRepositories;
+    this.generateId = deps.generateId;
+    this.context = Object.freeze({ ...deps.context });
+    this.executionFenceToken = Number(deps.executionFenceToken);
+    this.now = deps.now ?? (() => new Date());
+    this.emit = typeof deps.emit === 'function' ? deps.emit : null;
+    this.isLockLost = deps.isLockLost ?? (() => false);
+    this._tail = createPromiseTail();
+    /**
+     * In-process concurrent claim only (same instance). Not restart authority.
+     * @type {Map<string, Promise<any>>}
+     */
+    this._inflight = new Map();
+  }
+
+  enqueue(fn) {
+    return this._tail.enqueue(fn);
+  }
+
+  async flush() {
+    await this._tail.flush();
+  }
+
+  #assertLock() {
+    if (this.isLockLost()) {
+      throw new SessionFenceConflictError(
+        'session lock lost; refusing durable governance write',
+        {
+          agentSessionId: this.context.agentSessionId,
+          expectedToken: this.executionFenceToken,
+        },
+      );
+    }
+  }
+
+  /**
+   * Serialize concurrent same-key work on this instance only.
+   */
+  async #withInflight<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const existing = this._inflight.get(key);
+    if (existing) return existing;
+    const p = (async () => {
+      try {
+        return await work();
+      } finally {
+        this._inflight.delete(key);
+      }
+    })();
+    this._inflight.set(key, p);
+    return p;
+  }
+
+  async #appendEventInTrx(repos: any, input: { type: string, data: Record<string, any>, spanId?: string | null, timestamp: Date }) {
+    const eventId = assertUlid(this.generateId(), 'eventId');
+    const outboxId = assertUlid(this.generateId(), 'outboxId');
+    const data = redactEventData(input.data ?? {});
+    const spanId = input.spanId ?? null;
+    const sandboxSessionId =
+      this.context.sandboxSessionId != null &&
+      String(this.context.sandboxSessionId).trim()
+        ? String(this.context.sandboxSessionId)
+        : null;
+    const stored = await repos.runEvents.append({
+      eventId,
+      runId: this.context.runId,
+      orgId: this.context.orgId,
+      userId: this.context.userId,
+      eventType: input.type,
+      eventVersion: 1,
+      payloadJson: {
+        context: {
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+          conversationId: this.context.conversationId,
+          agentSessionId: this.context.agentSessionId,
+          runId: this.context.runId,
+          traceId: this.context.traceId,
+          spanId,
+          ...(sandboxSessionId ? { sandboxSessionId } : {}),
+        },
+        data,
+      },
+      traceId: this.context.traceId,
+      spanId,
+      createdAt: input.timestamp,
+    });
+    const envelope = buildCanonicalEnvelope({
+      eventId: stored.eventId,
+      sequence: stored.sequenceNo,
+      type: input.type,
+      timestamp: input.timestamp,
+      context: { ...this.context, spanId },
+      data,
+      eventVersion: 1,
+    });
+    await repos.outbox.insert({
+      outboxId,
+      aggregateType: AGGREGATE_TYPE_RUN,
+      aggregateId: this.context.runId,
+      eventType: input.type,
+      payloadJson: {
+        eventId: envelope.eventId,
+        eventVersion: envelope.eventVersion,
+        sequence: envelope.sequence,
+        type: envelope.type,
+        timestamp: envelope.timestamp,
+        context: envelope.context,
+        data: envelope.data,
+        runId: this.context.runId,
+        orgId: this.context.orgId,
+        userId: this.context.userId,
+      },
+    });
+    return envelope;
+  }
+
+  #resolveToolSource(toolName: string, explicit?: unknown) {
+    if (explicit) return assertToolSource(explicit);
+    if (SANDBOX_TOOL_NAMES.includes(toolName)) return TOOL_SOURCE.SANDBOX;
+    if (toolName.startsWith('mcp__')) return TOOL_SOURCE.MCP;
+    return TOOL_SOURCE.INTERNAL;
+  }
+
+  /**
+   * Policy decision audit + ToolExecution propose.
+   * Restart-safe: audit only when ToolExecution is newly created.
+   * Always returns stable `{ toolExecution, audit, created, envelopes }`.
+   *
+   * @param {{
+   *   toolCallId: string,
+   *   toolName: string,
+   *   args?: unknown,
+   *   decision: {
+   *     decision: string,
+   *     reasonCode: string,
+   *     reason: string,
+   *     policyId: string,
+   *     riskLevel: string,
+   *   },
+   *   toolSource?: string,
+   * }} input
+   */
+  async recordPolicyDecision(input: { toolCallId: string, toolName: string, args?: unknown, decision: { decision: string, reasonCode: string, reason: string, policyId: string, riskLevel: string, }, toolSource?: string, }) {
+    this.#assertLock();
+    const toolCallId = String(input.toolCallId || '').trim();
+    if (!toolCallId) {
+      throw new Error('recordPolicyDecision requires toolCallId');
+    }
+    const toolName = String(input.toolName || '').trim();
+
+    return this.#withInflight(`policy.decision:${toolCallId}`, async () => {
+      const decision = input.decision;
+      const toolSource = this.#resolveToolSource(toolName, input.toolSource);
+      const riskLevel = assertToolRiskLevel(decision.riskLevel || 'low');
+      // Exact durable policy identity (hidden in args envelope).
+      const policyFingerprint = policyDecisionFingerprint({
+        decision: decision.decision,
+        reasonCode: decision.reasonCode,
+        reason: decision.reason,
+        policyId: decision.policyId,
+        riskLevel: decision.riskLevel,
+      });
+
+      let desiredStatus = (TOOL_EXECUTION_STATUS.PROPOSED as string);
+      let errorCode = null;
+      if (decision.decision === 'deny') {
+        desiredStatus = TOOL_EXECUTION_STATUS.FAILED;
+        errorCode = decision.reasonCode || 'POLICY_DENIED';
+      }
+
+      let result: any = null;
+
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        const scope = {
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+        };
+        await repos.sessions.assertExecutionFence(
+          this.context.agentSessionId,
+          scope,
+          this.executionFenceToken,
+          { forUpdate: true, requireActive: true },
+        );
+
+        if (!repos.toolExecutions || !repos.sandboxAudit) {
+          throw new Error(
+            'createRepositories must wire toolExecutions and sandboxAudit (PR-06 B2)',
+          );
+        }
+
+        // Approval requests remain PROPOSED until requestApproval atomically
+        // creates the Approval and pauses the Run. policyFingerprint is stored
+        // in hidden envelope metadata.
+        const proposed = await repos.toolExecutions.getOrCreate({
+          toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
+          runId: this.context.runId,
+          agentSessionId: this.context.agentSessionId,
+          toolCallId,
+          toolName,
+          toolSource,
+          riskLevel,
+          argumentsJson: input.args ?? {},
+          status: desiredStatus,
+          errorCode,
+          policyFingerprint,
+          traceId: this.context.traceId,
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+        });
+
+        let toolExecution = proposed.toolExecution;
+
+        const firstPolicyDecision =
+          proposed.created || proposed.adoptedPolicyFingerprint;
+
+        // Fail-closed durable policy state on replay.
+        // - exact fingerprint only
+        // - allow only for PROPOSED (never re-execute RUNNING/SUCCEEDED/…)
+        if (!firstPolicyDecision) {
+          assertCompatiblePolicyReplay(toolExecution, {
+            decision: decision.decision,
+            desiredStatus,
+            errorCode,
+            policyFingerprint,
+          });
+        }
+
+        // Replay: if existing is still PROPOSED but we need deny/waiting, transition once.
+        if (
+          !proposed.created &&
+          toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED &&
+          desiredStatus !== TOOL_EXECUTION_STATUS.PROPOSED
+        ) {
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+            toStatus: desiredStatus,
+            errorCode,
+            setCompletedAt: desiredStatus === TOOL_EXECUTION_STATUS.FAILED,
+          });
+          toolExecution = tr.toolExecution;
+        }
+
+        // DSH's start event precedes beforeToolCall. Only an allowed policy
+        // decision may move the side-effect-free PROPOSED row into RUNNING.
+        let startedEnvelope = null;
+        if (
+          decision.decision === 'allow' &&
+          proposed.adoptedPolicyFingerprint &&
+          toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED
+        ) {
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            setStartedAt: true,
+          });
+          toolExecution = tr.toolExecution;
+          if (tr.changed) {
+            startedEnvelope = await this.#appendEventInTrx(repos, {
+              type: 'tool.execution.started',
+              timestamp: this.now(),
+              data: {
+                toolCallId,
+                toolName,
+                toolExecutionId: toolExecution.toolExecutionId,
+                args: redactPayload(input.args ?? {}),
+              },
+            });
+          }
+        }
+
+        // Exactly-once audit per ToolExecution proposal across restarts.
+        let audit = null;
+        if (firstPolicyDecision) {
+          audit = await repos.sandboxAudit.append({
+            auditId: assertUlid(this.generateId(), 'auditId'),
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            eventType: 'policy.decision',
+            sandboxSessionId: this.context.sandboxSessionId ?? null,
+            executionId: null,
+            processId: null,
+            traceId: this.context.traceId,
+            payloadJson: {
+              toolCallId,
+              toolName,
+              toolExecutionId: toolExecution.toolExecutionId,
+              decision: decision.decision,
+              reasonCode: decision.reasonCode,
+              reason: decision.reason,
+              policyId: decision.policyId,
+              riskLevel: decision.riskLevel,
+              argsSummary: redactPayload({
+                toolName,
+                keys:
+                  input.args && typeof input.args === 'object'
+                    ? Object.keys((input.args as Record<string, any>)).slice(
+                        0,
+                        16,
+                      )
+                    : [],
+              }),
+              context: {
+                orgId: this.context.orgId,
+                userId: this.context.userId,
+                runId: this.context.runId,
+                agentSessionId: this.context.agentSessionId,
+                conversationId: this.context.conversationId,
+                traceId: this.context.traceId,
+              },
+            },
+          });
+        }
+
+        result = {
+          toolExecution,
+          audit,
+          created: firstPolicyDecision,
+          envelopes: ((
+            startedEnvelope ? [startedEnvelope] : []) as CanonicalRunEventEnvelope[]),
+        };
+      });
+
+      if (this.emit) {
+        for (const envelope of result?.envelopes || []) {
+          await this.emit(envelope);
+        }
+      }
+
+      return result;
+    });
+  }
+
+  /**
+   * require_approval: pending Approval + approval.requested only when newly created.
+   *
+   * @param {{
+   *   toolCallId: string,
+   *   toolName: string,
+   *   args?: unknown,
+   *   decision: object,
+   *   toolExecutionId?: string,
+   * }} input
+   */
+  async requestApproval(input: { toolCallId: string, toolName: string, args?: unknown, decision: Record<string, any>, toolExecutionId?: string, }) {
+    this.#assertLock();
+    const toolCallId = String(input.toolCallId || '').trim();
+    if (!toolCallId) throw new Error('requestApproval requires toolCallId');
+    const toolName = String(input.toolName || '').trim();
+
+    return this.#withInflight(`approval.requested:${toolCallId}`, async () => {
+      const timestamp = this.now();
+      let out: any = null;
+
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        const scope = {
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+        };
+        await repos.sessions.assertExecutionFence(
+          this.context.agentSessionId,
+          scope,
+          this.executionFenceToken,
+          { forUpdate: true, requireActive: true },
+        );
+
+        // Serialize approval creation and resolution on the owned parent Run.
+        const run = await repos.runs.getById(this.context.runId, scope, {
+          forUpdate: true,
+        });
+        if (!run) {
+          throw new ConflictError('approval Run is not owned by this context', {
+            resource: 'runs',
+            id: this.context.runId,
+          });
+        }
+        if (
+          run.status !== RUN_STATUS.RUNNING &&
+          run.status !== RUN_STATUS.WAITING_APPROVAL
+        ) {
+          throw new ConflictError(
+            `cannot request approval while Run is ${run.status}`,
+            { resource: 'runs', id: this.context.runId },
+          );
+        }
+
+        let toolExecution;
+        const expectedSource = this.#resolveToolSource(toolName);
+        if (input.toolExecutionId) {
+          toolExecution = await repos.toolExecutions.getById(
+            input.toolExecutionId,
+            {
+              orgId: this.context.orgId,
+              userId: this.context.userId,
+            },
+            { forUpdate: true },
+          );
+          // Must bind to this run/session/call — never attach approval to wrong call.
+          if (
+            toolExecution.runId !== this.context.runId ||
+            toolExecution.agentSessionId !== this.context.agentSessionId ||
+            toolExecution.toolCallId !== toolCallId
+          ) {
+            throw new ConflictError(
+              'toolExecutionId does not match current run/session/toolCallId',
+              {
+                resource: 'tool_executions',
+                id: toolExecution.toolExecutionId,
+              },
+            );
+          }
+          assertToolExecutionReplayMatch(toolExecution, {
+            toolName,
+            toolSource: expectedSource,
+            argumentsJson: input.args ?? {},
+          });
+        } else {
+          const got = await repos.toolExecutions.getOrCreate({
+            toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
+            runId: this.context.runId,
+            agentSessionId: this.context.agentSessionId,
+            toolCallId,
+            toolName,
+            toolSource: expectedSource,
+            riskLevel: input.decision?.riskLevel || 'high',
+            argumentsJson: input.args ?? {},
+            status: TOOL_EXECUTION_STATUS.PROPOSED,
+            traceId: this.context.traceId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          });
+          toolExecution = got.toolExecution;
+        }
+
+        if (toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED) {
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+            toStatus: TOOL_EXECUTION_STATUS.WAITING_APPROVAL,
+          });
+          toolExecution = tr.toolExecution;
+        }
+
+        const { approval, created } = await repos.approvals.getOrCreatePending({
+          approvalId: assertUlid(this.generateId(), 'approvalId'),
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+          runId: this.context.runId,
+          toolExecutionId: toolExecution.toolExecutionId,
+          requestedBy: this.context.userId,
+          requestJson: {
+            toolCallId,
+            toolName,
+            toolExecutionId: toolExecution.toolExecutionId,
+            decision: input.decision,
+            argsSummary: redactPayload(input.args ?? {}),
+            runId: this.context.runId,
+            agentSessionId: this.context.agentSessionId,
+            traceId: this.context.traceId,
+          },
+        });
+
+        if (approval.status !== APPROVAL_STATUS.PENDING) {
+          throw new DurablePolicyConflictError(
+            `approval ${approval.approvalId} is already ${approval.status}`,
+            {
+              reasonCode: 'POLICY_DURABLE_APPROVAL_RESOLVED',
+              toolExecution,
+            },
+          );
+        }
+        if (created && run.status === RUN_STATUS.WAITING_APPROVAL) {
+          throw new ConflictError(
+            'Run is already waiting on a different approval',
+            { resource: 'runs', id: this.context.runId },
+          );
+        }
+
+      let envelope: CanonicalRunEventEnvelope | null = null;
+        // MySQL-authoritative: event only when Approval row is newly created.
+        if (created) {
+          envelope = await this.#appendEventInTrx(repos, {
+            type: 'approval.requested',
+            timestamp,
+            data: {
+              approvalId: approval.approvalId,
+              toolExecutionId: toolExecution.toolExecutionId,
+              toolCallId,
+              toolName,
+              status: APPROVAL_STATUS.PENDING,
+              reasonCode: input.decision?.reasonCode ?? 'EXTERNAL_HIGH_RISK',
+              riskLevel: input.decision?.riskLevel ?? 'high',
+            },
+          });
+        }
+
+        let statusEnvelope: CanonicalRunEventEnvelope | null = null;
+        if (run.status === RUN_STATUS.RUNNING) {
+          runStateMachine.assertTransition(
+            RUN_STATUS.RUNNING,
+            RUN_STATUS.WAITING_APPROVAL,
+          );
+          await repos.runs.updateStatusIf(this.context.runId, scope, {
+            expectedStatus: RUN_STATUS.RUNNING,
+            status: RUN_STATUS.WAITING_APPROVAL,
+            statusReason: 'approval pending',
+          });
+          statusEnvelope = await this.#appendEventInTrx(repos, {
+            type: 'run.status.changed',
+            timestamp,
+            data: {
+              from: RUN_STATUS.RUNNING,
+              to: RUN_STATUS.WAITING_APPROVAL,
+              status: RUN_STATUS.WAITING_APPROVAL,
+              approvalId: approval.approvalId,
+              toolExecutionId: toolExecution.toolExecutionId,
+            },
+          });
+        }
+
+        out = {
+          approval,
+          toolExecution,
+          envelope,
+          statusEnvelope,
+          envelopes: [envelope, statusEnvelope].filter(Boolean),
+          created,
+          durablePending: Object.freeze({
+            kind: DURABLE_APPROVAL_PENDING,
+            approvalId: approval.approvalId,
+            toolExecutionId: toolExecution.toolExecutionId,
+            toolCallId,
+            toolName,
+            runId: this.context.runId,
+            status: APPROVAL_STATUS.PENDING,
+          }),
+        };
+      });
+
+      if (this.emit) {
+        for (const envelope of out?.envelopes || []) {
+          await this.emit(envelope);
+        }
+      }
+      await terminalizeParallelToolsForPark(this, toolCallId);
+      return out;
+    });
+  }
+
+  /**
+   * Create a durable ask_user request and park the Run in WAITING_INPUT.
+   * The request, interaction.requested event, Run transition, and outbox row
+   * share one transaction; the returned suspension signal is ephemeral.
+   * @param input
+   */
+  async requestInteraction(input: {toolCallId:string,toolName?:string,args?:Record<string, any>,interactionId?:string,interactionType:string,title:string,message?:string|null,options?:string[],placeholder?:string|null,toolExecutionId?:string}) {
+    this.#assertLock();
+    const toolCallId = String(input?.toolCallId || '').trim();
+    if (!toolCallId) throw new Error('requestInteraction requires toolCallId');
+    const interactionType = String(input?.interactionType || '').trim().toLowerCase();
+    if (!['input', 'select', 'confirm'].includes(interactionType)) {
+      throw new Error('interactionType must be input, select, or confirm');
+    }
+    const title = String(input?.title || '').trim();
+    if (!title || title.length > 512) throw new Error('interaction title is required and must be <= 512 characters');
+    const message = input?.message == null ? null : String(input.message);
+    const options = Array.isArray(input?.options)
+      ? input.options.map((value) => String(value)).slice(0, 20)
+      : [];
+    if (interactionType === 'select' && options.length < 2) {
+      throw new Error('select interaction requires at least two options');
+    }
+
+    return this.#withInflight(`interaction.requested:${toolCallId}`, async () => {
+      let out: any = null;
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        const scope = { orgId: this.context.orgId, userId: this.context.userId };
+        await repos.sessions.assertExecutionFence(
+          this.context.agentSessionId,
+          scope,
+          this.executionFenceToken,
+          { forUpdate: true, requireActive: true },
+        );
+        if (!repos.interactions) {
+          throw new Error('createRepositories must wire interactions');
+        }
+        const run = await repos.runs.getById(this.context.runId, scope, {
+          forUpdate: true,
+        });
+        if (!run) throw new ConflictError('interaction Run is not owned by this context', { resource: 'runs', id: this.context.runId });
+        if (run.status !== RUN_STATUS.RUNNING && run.status !== RUN_STATUS.WAITING_INPUT) {
+          throw new ConflictError(`cannot request interaction while Run is ${run.status}`, { resource: 'runs', id: run.runId });
+        }
+
+        let toolExecution;
+        if (input.toolExecutionId) {
+          toolExecution = await repos.toolExecutions.getById(input.toolExecutionId, scope, { forUpdate: true });
+          if (
+            toolExecution.runId !== run.runId ||
+            toolExecution.agentSessionId !== this.context.agentSessionId ||
+            toolExecution.toolCallId !== toolCallId
+          ) {
+            throw new ConflictError('interaction tool execution binding mismatch', { resource: 'tool_executions', id: toolExecution.toolExecutionId });
+          }
+        } else {
+          toolExecution = await repos.toolExecutions.getByRunAndToolCallId(
+            run.runId,
+            toolCallId,
+            scope,
+            { forUpdate: true },
+          );
+        }
+        if (!toolExecution) {
+          const created = await repos.toolExecutions.getOrCreate({
+            toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
+            runId: run.runId,
+            agentSessionId: this.context.agentSessionId,
+            toolCallId,
+            toolName: String(input.toolName || 'ask_user'),
+            toolSource: 'internal',
+            riskLevel: 'low',
+            argumentsJson: input.args ?? {},
+            status: TOOL_EXECUTION_STATUS.PROPOSED,
+            traceId: this.context.traceId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          });
+          toolExecution = created.toolExecution;
+        }
+        if (toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED) {
+          const started = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            setStartedAt: true,
+          });
+          toolExecution = started.toolExecution;
+        }
+        if (toolExecution.status !== TOOL_EXECUTION_STATUS.RUNNING) {
+          throw new ConflictError(`interaction tool execution is ${toolExecution.status}`, { resource: 'tool_executions', id: toolExecution.toolExecutionId });
+        }
+
+        const requestJson = {
+          interactionId: input.interactionId || null,
+          interactionType,
+          title,
+          message,
+          options,
+          placeholder: input.placeholder == null ? null : String(input.placeholder),
+          toolName: String(input.toolName || 'ask_user'),
+          toolCallId,
+          toolExecutionId: toolExecution.toolExecutionId,
+          runId: run.runId,
+          agentSessionId: this.context.agentSessionId,
+          traceId: this.context.traceId,
+        };
+        const pending = await repos.interactions.getOrCreatePending({
+          interactionId: assertUlid(input.interactionId || this.generateId(), 'interactionId'),
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+          runId: run.runId,
+          agentSessionId: this.context.agentSessionId,
+          toolExecutionId: toolExecution.toolExecutionId,
+          toolCallId,
+          interactionType,
+          requestJson,
+        });
+        const interaction = pending.interaction;
+        if (interaction.status !== INTERACTION_STATUS.PENDING) {
+          throw new ConflictError(
+            `interaction ${interaction.interactionId} is already ${interaction.status}`,
+            { resource: 'interactions', id: interaction.interactionId },
+          );
+        }
+        const envelopes: any[] = [];
+        if (pending.created) {
+          await this.#appendEventInTrx(repos, {
+            type: 'interaction.requested',
+            timestamp: this.now(),
+            data: {
+              interactionId: interaction.interactionId,
+              interactionType,
+              title,
+              message,
+              options,
+              placeholder: requestJson.placeholder,
+              toolCallId,
+              toolExecutionId: toolExecution.toolExecutionId,
+              status: INTERACTION_STATUS.PENDING,
+            },
+          }).then((envelope) => envelopes.push(envelope));
+        }
+        if (run.status === RUN_STATUS.RUNNING && pending.created) {
+          runStateMachine.assertTransition(RUN_STATUS.RUNNING, RUN_STATUS.WAITING_INPUT);
+          await repos.runs.updateStatusIf(run.runId, scope, {
+            expectedStatus: RUN_STATUS.RUNNING,
+            status: RUN_STATUS.WAITING_INPUT,
+            statusReason: 'user interaction pending',
+          });
+          await this.#appendEventInTrx(repos, {
+            type: 'run.status.changed',
+            timestamp: this.now(),
+            data: {
+              from: RUN_STATUS.RUNNING,
+              to: RUN_STATUS.WAITING_INPUT,
+              status: RUN_STATUS.WAITING_INPUT,
+              interactionId: interaction.interactionId,
+              interactionType,
+              title,
+              message,
+              options,
+            },
+          }).then((envelope) => envelopes.push(envelope));
+        }
+        out = {
+          interaction,
+          toolExecution,
+          created: pending.created,
+          envelopes,
+          durablePending: Object.freeze({
+            kind: DURABLE_INTERACTION_PENDING,
+            interactionId: interaction.interactionId,
+            interactionType,
+            title,
+            message,
+            options,
+            toolCallId,
+            toolExecutionId: toolExecution.toolExecutionId,
+            runId: run.runId,
+            status: INTERACTION_STATUS.PENDING,
+          }),
+        };
+      });
+      if (this.emit) {
+        for (const envelope of out?.envelopes || []) await this.emit(envelope);
+      }
+      return out;
+    });
+  }
+
+  /**
+   * tool.execution.started only when ledger transitions into RUNNING.
+   *
+   * @param input
+   */
+  async recordToolStarted(input: { toolCallId: string, toolName: string, args?: unknown, toolSource?: string, approvalId?: string, preflight?: boolean }) {
+    this.#assertLock();
+    const toolCallId = String(input.toolCallId || '').trim();
+    if (!toolCallId) throw new Error('recordToolStarted requires toolCallId');
+    const toolName = String(input.toolName || '').trim();
+
+    return this.#withInflight(`tool.execution.started:${toolCallId}`, async () => {
+      const timestamp = this.now();
+      let envelope: CanonicalRunEventEnvelope | null = null;
+      let toolExecution: any = null;
+      let statusChanged = false;
+
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        await repos.sessions.assertExecutionFence(
+          this.context.agentSessionId,
+          {
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          },
+          this.executionFenceToken,
+          { forUpdate: true, requireActive: true },
+        );
+
+        const existing = await repos.toolExecutions.getByRunAndToolCallId(
+          this.context.runId,
+          toolCallId,
+          {
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          },
+          { forUpdate: true },
+        );
+
+        const expectedSource = this.#resolveToolSource(
+          toolName,
+          input.toolSource,
+        );
+        if (existing) {
+          // Full name/source/args integrity check on restart/replay.
+          assertToolExecutionReplayMatch(existing, {
+            toolName,
+            toolSource: expectedSource,
+            ...(input.preflight === true && input.args === undefined
+              ? {}
+              : { argumentsJson: input.args ?? {} }),
+          });
+          if (existing.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
+            if (!input.approvalId) {
+              throw new ConflictError(
+                'TOOL_WAITING_APPROVAL: cannot start tool execution while approval is pending',
+                {
+                  resource: 'tool_executions',
+                  id: existing.toolExecutionId,
+                },
+              );
+            }
+            const approval = await repos.approvals.getById(
+              input.approvalId,
+              {
+                orgId: this.context.orgId,
+                userId: this.context.userId,
+              },
+              { forUpdate: true },
+            );
+            if (
+              approval.runId !== this.context.runId ||
+              approval.toolExecutionId !== existing.toolExecutionId ||
+              approval.status !== APPROVAL_STATUS.APPROVED
+            ) {
+              throw new ConflictError(
+                'approved replay does not match the waiting tool execution',
+                { resource: 'approvals', id: approval.approvalId },
+              );
+            }
+            // Approval resume validates the durable row here, then lets the
+            // next DSH model call pass through tools/pre-execute. The durable
+            // one-time CAS is performed there immediately before dispatch;
+            // transitioning to RUNNING during this preflight would make that
+            // CAS look already consumed and could never prove the replay's
+            // arguments at the actual execution boundary.
+            if (input.preflight === true) {
+              toolExecution = existing;
+              return;
+            }
+          }
+          if (isTerminalToolExecutionStatus(existing.status)) {
+            if (input.approvalId) {
+              throw new ConflictError(
+                'approved replay has already reached a terminal tool state',
+                { resource: 'tool_executions', id: existing.toolExecutionId },
+              );
+            }
+            // Already finished — no start event on restart.
+            toolExecution = existing;
+            return;
+          }
+          toolExecution = existing;
+        } else {
+          if (input.approvalId) {
+            // An approval is a claim on one already parked ToolExecution. Do
+            // not create a fresh PROPOSED row when the binding is missing;
+            // that would let an arbitrary approvalId authorize new bytes.
+            throw new ConflictError(
+              'approved replay requires an existing waiting tool execution',
+              { resource: 'tool_executions', id: toolCallId },
+            );
+          }
+          const got = await repos.toolExecutions.getOrCreate({
+            toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
+            runId: this.context.runId,
+            agentSessionId: this.context.agentSessionId,
+            toolCallId,
+            toolName,
+            toolSource: expectedSource,
+            riskLevel: 'low',
+            argumentsJson: input.args ?? {},
+            status: TOOL_EXECUTION_STATUS.PROPOSED,
+            policyPending: true,
+            traceId: this.context.traceId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          });
+          toolExecution = got.toolExecution;
+        }
+
+        if (
+          toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED ||
+          toolExecution.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL
+        ) {
+          // DSH: this call IS the dispatch boundary (tools/pre-execute already
+          // allowed it). DSH's "leave a PROPOSED placeholder for policy to adopt"
+          // left DSH commands running under PROPOSED (G2 gate, 2026-09-17).
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: toolExecution.status,
+            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            setStartedAt: true,
+          });
+          toolExecution = tr.toolExecution;
+          statusChanged = tr.changed;
+        } else if (toolExecution.status === TOOL_EXECUTION_STATUS.RUNNING) {
+          if (input.approvalId) {
+            // A second worker may observe the same APPROVED row after the
+            // first worker's claim committed. RUNNING is the durable one-time
+            // consume marker; it must not be treated as an idempotent replay.
+            throw new ConflictError(
+              'approved replay was already claimed for this tool execution',
+              { resource: 'tool_executions', id: toolExecution.toolExecutionId },
+            );
+          }
+          statusChanged = false;
+        } else {
+          throw new ConflictError(
+            `cannot start tool from status ${toolExecution.status}`,
+            {
+              resource: 'tool_executions',
+              id: toolExecution.toolExecutionId,
+            },
+          );
+        }
+
+        // Same transaction: bind request hash + fence before anything is dispatched.
+        toolExecution = await bindDispatchedSandboxRequest({
+          repos, toolExecution, toolName, args: input.args ?? {},
+          executionFenceToken: this.executionFenceToken, context: this.context,
+        });
+        // Event only when ledger actually moved into RUNNING.
+        if (statusChanged) {
+          envelope = await this.#appendEventInTrx(repos, {
+            type: 'tool.execution.started',
+            timestamp,
+            data: {
+              toolCallId,
+              toolName,
+              toolExecutionId: toolExecution.toolExecutionId,
+              args: redactPayload(input.args ?? {}),
+              ...(input.approvalId
+                ? { approvalId: input.approvalId, approvalReplay: true }
+                : {}),
+            },
+          });
+        }
+      });
+
+      if (envelope && this.emit) await this.emit(envelope);
+      return { envelope, toolExecution, statusChanged };
+    });
+  }
+
+  /**
+   * tool.execution.completed|failed only when ledger transitions to terminal.
+   * Same terminal + same integrity → no event; different result → conflict.
+   * WAITING_APPROVAL / incompatible status → fail closed.
+   *
+   * @param {{
+   *   toolCallId: string, toolName: string, isError?: boolean, result?: unknown, toolSource?: unknown, args?: unknown,
+   * }} input
+   */
+  async recordToolEnded(input: { toolCallId: string, toolName: string, isError?: boolean, result?: unknown, toolSource?: unknown, args?: unknown, }) {
+    this.#assertLock();
+    const toolCallId = String(input.toolCallId || '').trim();
+    if (!toolCallId) throw new Error('recordToolEnded requires toolCallId');
+    const toolName = String(input.toolName || '').trim();
+    const isError = Boolean(input.isError);
+    const eventType = isError
+      ? 'tool.execution.failed'
+      : 'tool.execution.completed';
+    const toStatus = isError
+      ? TOOL_EXECUTION_STATUS.FAILED
+      : TOOL_EXECUTION_STATUS.SUCCEEDED;
+
+    return this.#withInflight(`${eventType}:${toolCallId}`, async () => {
+      const timestamp = this.now();
+      let envelope: CanonicalRunEventEnvelope | null = null;
+      let artifactEnvelope: CanonicalRunEventEnvelope | null = null;
+      let toolExecution: any = null;
+      let statusChanged = false;
+
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        await repos.sessions.assertExecutionFence(
+          this.context.agentSessionId,
+          {
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          },
+          this.executionFenceToken,
+          { forUpdate: true, requireActive: true },
+        );
+
+        let existing = await repos.toolExecutions.getByRunAndToolCallId(
+          this.context.runId,
+          toolCallId,
+          {
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          },
+          { forUpdate: true },
+        );
+
+        // End event has name/status/result; args often absent from DSH end event.
+        // Validate name + derived source; args integrity only when args provided.
+        if (existing) {
+          assertToolExecutionReplayMatch(existing, {
+            toolName,
+            toolSource: this.#resolveToolSource(toolName, input.toolSource),
+            ...(input.args !== undefined
+              ? { argumentsJson: input.args }
+              : {}),
+          });
+        }
+
+        if (existing?.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
+          throw new ConflictError(
+            'TOOL_WAITING_APPROVAL: cannot complete tool while approval is pending',
+            {
+              resource: 'tool_executions',
+              id: existing.toolExecutionId,
+            },
+          );
+        }
+
+        if (!existing) {
+          const got = await repos.toolExecutions.getOrCreate({
+            toolExecutionId: assertUlid(this.generateId(), 'toolExecutionId'),
+            runId: this.context.runId,
+            agentSessionId: this.context.agentSessionId,
+            toolCallId,
+            toolName,
+            toolSource: this.#resolveToolSource(toolName),
+            riskLevel: 'low',
+            argumentsJson: {},
+            status: TOOL_EXECUTION_STATUS.PROPOSED,
+            traceId: this.context.traceId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          });
+          existing = got.toolExecution;
+        }
+
+        toolExecution = existing;
+
+        if (toolExecution.status === TOOL_EXECUTION_STATUS.PROPOSED) {
+          await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.PROPOSED,
+            toStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            setStartedAt: true,
+          });
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            toStatus,
+            resultJson: input.result ?? null,
+            errorCode: isError ? 'TOOL_ERROR' : null,
+            setCompletedAt: true,
+          });
+          toolExecution = tr.toolExecution;
+          statusChanged = tr.changed;
+        } else if (toolExecution.status === TOOL_EXECUTION_STATUS.RUNNING) {
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            toStatus,
+            resultJson: input.result ?? null,
+            errorCode: isError ? 'TOOL_ERROR' : null,
+            setCompletedAt: true,
+          });
+          toolExecution = tr.toolExecution;
+          statusChanged = tr.changed;
+        } else if (toolExecution.status === toStatus) {
+          // Same terminal — integrity check inside transitionStatus; no event.
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: toStatus,
+            toStatus,
+            resultJson: input.result ?? toolExecution.resultJson,
+          });
+          toolExecution = tr.toolExecution;
+          statusChanged = false;
+        } else if (isTerminalToolExecutionStatus(toolExecution.status)) {
+          // Different terminal (e.g. SUCCEEDED vs FAILED) — fail closed.
+          throw new ConflictError(
+            `tool execution already terminal as ${toolExecution.status}; cannot end as ${toStatus}`,
+            {
+              resource: 'tool_executions',
+              id: toolExecution.toolExecutionId,
+            },
+          );
+        } else {
+          throw new ConflictError(
+            `cannot end tool from status ${toolExecution.status}`,
+            {
+              resource: 'tool_executions',
+              id: toolExecution.toolExecutionId,
+            },
+          );
+        }
+
+        if (statusChanged) {
+          const processId =
+            !isError && toolName === 'process_start'
+              ? extractStartedProcessId(input.result)
+              : null;
+          envelope = await this.#appendEventInTrx(repos, {
+            type: eventType,
+            timestamp,
+            data: {
+              toolCallId,
+              toolName,
+              toolExecutionId: toolExecution.toolExecutionId,
+              isError,
+              ...(processId ? { processId } : {}),
+              result: redactPayload(input.result ?? null),
+            },
+          });
+
+          const artifact =
+            !isError && toolName === 'submit_artifact'
+              ? extractSubmittedArtifact(input.result)
+              : null;
+          if (artifact) {
+            artifactEnvelope = await this.#appendEventInTrx(repos, {
+              type: 'artifact.ready',
+              timestamp,
+              data: {
+                artifactId: artifact.artifactId,
+                name: artifact.name,
+                mimeType: artifact.mimeType,
+                size: artifact.size,
+                sha256: artifact.sha256,
+                description: artifact.description,
+                toolCallId,
+                toolExecutionId: toolExecution.toolExecutionId,
+              },
+            });
+          }
+        }
+      });
+
+      if (envelope && this.emit) await this.emit(envelope);
+      if (artifactEnvelope && this.emit) await this.emit(artifactEnvelope);
+      return {
+        envelope,
+        artifactEnvelope,
+        envelopes: [envelope, artifactEnvelope].filter(Boolean),
+        toolExecution,
+        statusChanged,
+      };
+    });
+  }
+
+  /**
+   * Explicit ambiguous/unknown tool completion (PR-07B).
+   *
+   * ONLY for uncertain outcomes (transport/timeout ambiguity). Ordinary tool
+   * errors must continue to use {@link recordToolEnded} → FAILED.
+   * Transitions RUNNING → UNKNOWN (terminal). Emits durable
+   * `tool.execution.failed` with unknownOutcome marker — never success.
+   * Idempotent on same UNKNOWN + same result; conflicts with
+   * SUCCEEDED/FAILED/CANCELLED/WAITING_APPROVAL/PROPOSED.
+   *
+   * @param {{
+   *   toolCallId: string,
+   *   toolName: string,
+   *   result?: unknown,
+   *   errorCode?: string | null,
+   *   toolSource?: string,
+   *   args?: unknown,
+   * }} input
+   */
+  async recordToolUnknown(input: { toolCallId: string, toolName: string, result?: unknown, errorCode?: string | null, toolSource?: string, args?: unknown, }) {
+    this.#assertLock();
+    const toolCallId = String(input.toolCallId || '').trim();
+    if (!toolCallId) throw new Error('recordToolUnknown requires toolCallId');
+    const toolName = String(input.toolName || '').trim();
+    const eventType = 'tool.execution.failed';
+    const toStatus = TOOL_EXECUTION_STATUS.UNKNOWN;
+    const errorCode =
+      input.errorCode != null && String(input.errorCode).trim()
+        ? String(input.errorCode)
+        : 'TOOL_OUTCOME_UNKNOWN';
+    // Stable default — never invent a fresh object on idempotent replay.
+    const defaultUnknownResult = Object.freeze({
+      unknown: true,
+      reason: 'TOOL_OUTCOME_UNKNOWN',
+    });
+
+    return this.#withInflight(`tool.execution.unknown:${toolCallId}`, async () => {
+      const timestamp = this.now();
+      let envelope: CanonicalRunEventEnvelope | null = null;
+      let toolExecution: any = null;
+      let statusChanged = false;
+
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        await repos.sessions.assertExecutionFence(
+          this.context.agentSessionId,
+          {
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          },
+          this.executionFenceToken,
+          { forUpdate: true, requireActive: true },
+        );
+
+        let existing = await repos.toolExecutions.getByRunAndToolCallId(
+          this.context.runId,
+          toolCallId,
+          {
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+          },
+          { forUpdate: true },
+        );
+
+        if (existing) {
+          assertToolExecutionReplayMatch(existing, {
+            toolName,
+            toolSource: this.#resolveToolSource(toolName, input.toolSource),
+            ...(input.args !== undefined
+              ? { argumentsJson: input.args }
+              : {}),
+          });
+        }
+
+        if (existing?.status === TOOL_EXECUTION_STATUS.WAITING_APPROVAL) {
+          throw new ConflictError(
+            'TOOL_WAITING_APPROVAL: cannot mark unknown while approval is pending',
+            {
+              resource: 'tool_executions',
+              id: existing.toolExecutionId,
+            },
+          );
+        }
+
+        if (!existing) {
+          throw new ConflictError(
+            'recordToolUnknown requires an existing ToolExecution (no invent)',
+            {
+              resource: 'tool_executions',
+              id: `${this.context.runId}:${toolCallId}`,
+            },
+          );
+        }
+
+        toolExecution = existing;
+
+        if (toolExecution.status === TOOL_EXECUTION_STATUS.RUNNING) {
+          const resultJson =
+            input.result !== undefined ? input.result : defaultUnknownResult;
+          const tr = await repos.toolExecutions.transitionStatus({
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: TOOL_EXECUTION_STATUS.RUNNING,
+            toStatus,
+            resultJson,
+            errorCode,
+            setCompletedAt: true,
+          });
+          toolExecution = tr.toolExecution;
+          statusChanged = tr.changed;
+        } else if (toolExecution.status === toStatus) {
+          // Idempotent same UNKNOWN: only re-check integrity when caller
+          // supplies result. Omitted result must not re-fingerprint a newly
+          // constructed default object against stored integrity.
+          const replay: Record<string, unknown> = {
+            toolExecutionId: toolExecution.toolExecutionId,
+            orgId: this.context.orgId,
+            userId: this.context.userId,
+            fromStatus: toStatus,
+            toStatus,
+          };
+          if (input.result !== undefined) {
+            replay.resultJson = input.result;
+          }
+          const tr = await repos.toolExecutions.transitionStatus(replay);
+          toolExecution = tr.toolExecution;
+          statusChanged = false;
+        } else if (isTerminalToolExecutionStatus(toolExecution.status)) {
+          throw new ConflictError(
+            `tool execution already terminal as ${toolExecution.status}; cannot mark UNKNOWN`,
+            {
+              resource: 'tool_executions',
+              id: toolExecution.toolExecutionId,
+            },
+          );
+        } else {
+          // PROPOSED and any other non-RUNNING non-terminal status.
+          throw new ConflictError(
+            `cannot mark UNKNOWN from status ${toolExecution.status}`,
+            {
+              resource: 'tool_executions',
+              id: toolExecution.toolExecutionId,
+            },
+          );
+        }
+
+        if (statusChanged) {
+          const resultForEvent =
+            input.result !== undefined ? input.result : defaultUnknownResult;
+          envelope = await this.#appendEventInTrx(repos, {
+            type: eventType,
+            timestamp,
+            data: {
+              toolCallId,
+              toolName,
+              toolExecutionId: toolExecution.toolExecutionId,
+              isError: true,
+              unknownOutcome: true,
+              errorCode,
+              result: redactPayload(resultForEvent),
+            },
+          });
+        }
+      });
+
+      if (envelope && this.emit) await this.emit(envelope);
+      return { envelope, toolExecution, statusChanged };
+    });
+  }
+
+  /**
+   * Bind sandbox request-hash to an existing RUNNING ToolExecution ledger row
+   * (PR-07B batch 2B). Must complete before any Sandbox transport call.
+   *
+   * Reuses ToolExecutionRepository.bindSandboxRequest (session/run FOR SHARE,
+   * direct tool FOR UPDATE; ACTIVE fence; conversation + sandboxSession +
+   * exact toolName; RUNNING + tool_source=sandbox only).
+   *
+   * @param {{
+   *   toolCallId: string,
+   *   toolName: string,
+   *   requestHash: string,
+   *   requestHashVersion?: number,
+   *   toolExecutionId?: string,
+   * }} input
+   * @returns {Promise<{
+   *   toolExecutionId: string,
+   *   requestHash: string,
+   *   requestHashVersion: number,
+   *   bound: boolean,
+   *   toolExecution: object,
+   * }>}
+   */
+  async bindSandboxRequest(input: { toolCallId: string, toolName: string, requestHash: string, requestHashVersion?: number, toolExecutionId?: string, }) {
+    this.#assertLock();
+    const toolCallId = String(input?.toolCallId || '').trim();
+    if (!toolCallId) {
+      throw new Error('bindSandboxRequest requires toolCallId');
+    }
+    const toolName = String(input?.toolName || '').trim();
+    if (!toolName) {
+      throw new Error('bindSandboxRequest requires toolName');
+    }
+    const requestHash = String(input?.requestHash || '');
+    if (!/^[0-9a-f]{64}$/.test(requestHash)) {
+      throw new Error('bindSandboxRequest requires requestHash (64 lowercase hex)');
+    }
+    // Strict positive safe int — no string/bool/float coercion.
+    const rawVer =
+      input?.requestHashVersion != null ? input.requestHashVersion : 1;
+    if (
+      typeof rawVer !== 'number' ||
+      !Number.isSafeInteger(rawVer) ||
+      rawVer <= 0
+    ) {
+      throw new Error(
+        'bindSandboxRequest requires positive safe integer requestHashVersion',
+      );
+    }
+    const requestHashVersion = rawVer;
+
+    const conversationId = this.context.conversationId;
+    const sandboxSessionId = this.context.sandboxSessionId;
+    if (
+      conversationId == null ||
+      !String(conversationId).trim() ||
+      sandboxSessionId == null ||
+      !String(sandboxSessionId).trim()
+    ) {
+      throw new Error(
+        'bindSandboxRequest requires frozen context conversationId and sandboxSessionId',
+      );
+    }
+
+    return this.#withInflight(`sandbox.bind:${toolCallId}`, async () => {
+      let out: any = null;
+      await this.tx.run(async (trx) => {
+        const repos = this.createRepositories(trx);
+        if (!repos?.toolExecutions?.bindSandboxRequest) {
+          throw new Error(
+            'createRepositories must wire toolExecutions.bindSandboxRequest',
+          );
+        }
+        const bindInput: Record<string, unknown> = {
+          runId: this.context.runId,
+          toolCallId,
+          toolName,
+          agentSessionId: this.context.agentSessionId,
+          conversationId: String(conversationId),
+          sandboxSessionId: String(sandboxSessionId),
+          requestHash,
+          requestHashVersion,
+          executionFenceToken: this.executionFenceToken,
+          orgId: this.context.orgId,
+          userId: this.context.userId,
+        };
+        if (
+          input.toolExecutionId != null &&
+          String(input.toolExecutionId).trim() !== ''
+        ) {
+          bindInput.toolExecutionId = assertUlid(
+            input.toolExecutionId,
+            'toolExecutionId',
+          );
+        }
+        const result = await repos.toolExecutions.bindSandboxRequest(bindInput);
+        out = {
+          toolExecutionId: String(result.toolExecution.toolExecutionId),
+          requestHash,
+          requestHashVersion,
+          bound: Boolean(result.bound),
+          toolExecution: result.toolExecution,
+        };
+      });
+      return out;
+    });
+  }
+}

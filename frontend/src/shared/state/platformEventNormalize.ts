@@ -60,15 +60,25 @@ function pickStr(...vals: unknown[]): string {
   return '';
 }
 
+function isReasoningPart(part: Record<string, unknown>): boolean {
+  const type = String(part.type || '');
+  return type === 'reasoning' || type === 'thinking';
+}
+
 function messageText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (!isPlainObject(value)) return '';
-  if (typeof value.text === 'string') return value.text;
-  if (!Array.isArray(value.content)) return '';
+  if (typeof value.text === 'string' && !Array.isArray(value.content)) return value.text;
+  if (!Array.isArray(value.content)) {
+    return typeof value.text === 'string' ? value.text : '';
+  }
   return value.content
     .map((part) => {
       if (typeof part === 'string') return part;
-      return isPlainObject(part) && typeof part.text === 'string' ? part.text : '';
+      if (!isPlainObject(part) || typeof part.text !== 'string') return '';
+      if (isReasoningPart(part)) return '';
+      const type = String(part.type || 'text');
+      return type === 'text' ? part.text : '';
     })
     .filter(Boolean)
     .join('');
@@ -116,19 +126,41 @@ export function inferToolSource(
   ) {
     return 'mcp';
   }
+  // 2026-08-31（ADR 0009 D4 / 计划 H9.3）：工具名从旧引擎的一套换成 DSH 出厂的一套。
+  // 旧名留着**只为历史会话**——过去的 Run 里有这些调用记录，卡片要能继续分类；
+  // 新的 Run 不会再产生它们（风险表里映射成退役）。
   if (
+    // 出厂工具面（当前）
     n === 'bash' ||
     n === 'read' ||
+    n === 'read_image' ||
     n === 'write' ||
     n === 'edit' ||
+    n === 'glob' ||
+    n === 'grep' ||
+    n === 'job_list' ||
+    n === 'job_output' ||
+    n === 'job_kill' ||
+    // 旧引擎名（历史会话）
     n === 'python' ||
-    n === 'process_start' ||
+    n === 'ls' ||
+    n === 'find' ||
+    n.startsWith('process_') ||
     n === 'submit_artifact' ||
     n.startsWith('sandbox')
   ) {
     return 'sandbox';
   }
-  if (n.startsWith('skill') || n === 'ask_user' || n.includes('internal')) {
+  if (
+    n.startsWith('skill') ||
+    n === 'subagent' ||
+    n === 'ask_user_question' ||
+    // 旧引擎名（历史会话）
+    n === 'ask_user' ||
+    n === 'spawn_subagent' ||
+    n === 'check_subagent' ||
+    n.includes('internal')
+  ) {
     return 'internal';
   }
   return 'unknown';
@@ -424,7 +456,11 @@ function normalizePayload(
   if (type.startsWith('message.')) {
     const message = isPlainObject(p.message) ? p.message : null;
     if (p.role == null && message?.role != null) p.role = message.role;
-    if (p.text_truncated == null && messageTextWasTruncated(message)) {
+    if (
+      p.text_truncated === true ||
+      p.textTruncated === true ||
+      messageTextWasTruncated(message)
+    ) {
       p.text_truncated = true;
     }
     if (p.text == null) {
@@ -481,4 +517,29 @@ function normalizePayload(
   }
 
   return p;
+}
+
+export function latestStreamingAssistantId(
+  run: { messageIds?: readonly string[] } | null | undefined,
+  messagesById: Record<string, { role?: string; status?: string } | undefined>,
+): string {
+  if (!run?.messageIds) return '';
+  for (const id of [...run.messageIds].reverse()) {
+    const candidate = messagesById[id];
+    if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
+      return id;
+    }
+  }
+  return '';
+}
+
+export function latestAssistantId(
+  run: { messageIds?: readonly string[] } | null | undefined,
+  messagesById: Record<string, { role?: string; status?: string } | undefined>,
+): string {
+  if (!run?.messageIds) return '';
+  for (const id of [...run.messageIds].reverse()) {
+    if (messagesById[id]?.role === 'assistant') return id;
+  }
+  return '';
 }

@@ -2,7 +2,7 @@
  * Display parsing for the subagent-spawn and task-state tool results.
  *
  * Both Agent extensions return `toolOk(toolResultJson(...))`, i.e. a JSON
- * document inside a Pi tool-result envelope. Without these parsers the cards
+ * document inside a DSH tool-result envelope. Without these parsers the cards
  * would show the model's wire format to the user, so the envelope unwrapping
  * is the part worth pinning.
  */
@@ -44,7 +44,7 @@ const CHILD_A = '01K0G2PAV8FPMVC9QHJG7JPN60';
 const CHILD_B = '01K0G2PAV8FPMVC9QHJG7JPN61';
 
 describe('tool result envelope', () => {
-  it('unwraps the JSON document out of a Pi tool result', () => {
+  it('unwraps the JSON document out of a DSH tool result', () => {
     assert.deepEqual(parseToolResultJson(envelope({ childRunId: CHILD_A })), {
       childRunId: CHILD_A,
     });
@@ -104,6 +104,24 @@ describe('spawn_subagent card fields', () => {
     );
     assert.equal(fields.errorCode, 'SUBAGENT_CONCURRENCY_LIMIT');
     assert.equal(fields.childRunId, null);
+  });
+});
+
+describe('delegate_to_agent card fields', () => {
+  it('is rendered as a sub-agent card and names the target agent', () => {
+    assert.equal(isSpawnSubagentToolName('delegate_to_agent'), true);
+    const fields = parseSpawnSubagentFields(
+      { agent: 'data-analyst', description: 'sales numbers', prompt: '  sum Q3 sales  ' },
+      envelope({ agent: 'data-analyst', childRunId: CHILD_A, status: 'SUCCEEDED' }),
+    );
+    assert.equal(fields.agent, 'data-analyst');
+    assert.equal(fields.label, 'sales numbers');
+    assert.equal(fields.task, 'sum Q3 sales');
+    assert.equal(fields.childRunId, CHILD_A);
+  });
+
+  it('leaves agent empty for a same-agent sub-agent', () => {
+    assert.equal(parseSpawnSubagentFields({ task: 'go' }, undefined).agent, null);
   });
 });
 
@@ -201,15 +219,21 @@ describe('tool name detectors', () => {
 });
 
 describe('todo card fields', () => {
-  it('prefers the stored list over the arguments', () => {
+  // 2026-08-31（ADR 0009 / 计划 H9.1）：这条以前叫「prefers the stored list over
+  // the arguments」。方向反了——出厂 `dsh-tool-todo` 的 result **不含 todos**
+  // （只有 `Updated todo list: …` 文本与 `{counts}`），清单在 `arguments.todos`
+  // 与 `todo/write` 事件里。继续「result 优先」的话，换到出厂工具之后卡片会静默
+  // 退化成一行文本：不报错，只是清单没了。
+  it('takes the list from the arguments — the factory result has no todos', () => {
     const fields = parseTodoFields(
-      { items: [{ content: 'stale' }] },
-      envelope({
+      {
         todos: [
           { position: 2, content: 'second', status: 'in_progress' },
           { position: 1, content: 'first', status: 'completed' },
         ],
-      }),
+      },
+      // 出厂结果的真实形状（证据：docs/evidence/2026-08-31-dsh-tool-registry.md H0.5）
+      envelope({ counts: { pending: 0, inProgress: 1, completed: 1 } }),
     );
     assert.deepEqual(
       fields.todos.map((t) => [t.position, t.content, t.status]),
@@ -217,8 +241,20 @@ describe('todo card fields', () => {
         [1, 'first', 'completed'],
         [2, 'second', 'in_progress'],
       ],
-      'stored positions are authoritative and drive the order',
+      'positions drive the order regardless of the order sent',
     );
+  });
+
+  it('还认旧引擎会话的两种形状（arguments.items 与 result.todos）', () => {
+    // 历史会话里三种形状都存在，卡片要能继续渲染它们。
+    const legacyArgs = parseTodoFields({ items: [{ content: 'from items' }] }, envelope({}));
+    assert.deepEqual(legacyArgs.todos.map((t) => t.content), ['from items']);
+
+    const legacyResult = parseTodoFields(
+      {},
+      envelope({ todos: [{ position: 1, content: 'from result', status: 'pending' }] }),
+    );
+    assert.deepEqual(legacyResult.todos.map((t) => t.content), ['from result']);
   });
 
   it('renders an in-flight write from the arguments', () => {
@@ -304,5 +340,40 @@ describe('memory card fields', () => {
       envelope({ memories: [{ memoryId: 'x' }, null, 'nope'] }),
     );
     assert.deepEqual(fields.results, []);
+  });
+});
+
+// ── 工具名换代（ADR 0009 D4 / 计划 H9.3）─────────────────────────────────
+
+describe('工具名换代后的识别', () => {
+  it('新旧名字都认——历史会话里两套都存在', async () => {
+    const { isAskUserToolName } = await import('../src/widgets/runtime-steps/interactionFields.js');
+    const { isSpawnSubagentToolName } = await import('../src/widgets/runtime-steps/subagentFields.js');
+
+    // 出厂名（当前）
+    assert.equal(isAskUserToolName('ask_user_question'), true);
+    assert.equal(isSpawnSubagentToolName('subagent'), true);
+    // 旧引擎名（历史会话里有这些调用记录，卡片要能继续渲染）
+    assert.equal(isAskUserToolName('ask_user'), true);
+    assert.equal(isSpawnSubagentToolName('spawn_subagent'), true);
+    // 不相干的名字仍然不认
+    assert.equal(isAskUserToolName('bash'), false);
+    assert.equal(isSpawnSubagentToolName('bash'), false);
+  });
+
+  it('出厂工具面被归到正确的来源类，不落进 unknown', async () => {
+    const { inferToolSource } = await import('../src/shared/state/platformEventNormalize.js');
+    // 落进 unknown 的后果不是报错，是卡片显示成一块无归属的原始 JSON——
+    // 换工具名之后最容易出现的正是这种「不报错但看着不对」。
+    for (const name of ['read', 'write', 'edit', 'bash', 'glob', 'grep', 'job_list', 'job_output']) {
+      assert.equal(inferToolSource(name, {}), 'sandbox', `${name} 应归到 sandbox`);
+    }
+    for (const name of ['skill', 'subagent', 'ask_user_question']) {
+      assert.equal(inferToolSource(name, {}), 'internal', `${name} 应归到 internal`);
+    }
+    // 旧引擎名（历史会话）同样不能落进 unknown
+    for (const name of ['ls', 'find', 'python', 'process_start', 'spawn_subagent', 'ask_user']) {
+      assert.notEqual(inferToolSource(name, {}), 'unknown', `${name} 是历史会话里的名字`);
+    }
   });
 });

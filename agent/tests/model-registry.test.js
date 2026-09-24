@@ -16,7 +16,7 @@ import {
   loadModelsFromFile,
   normalizeModelEntry,
   resolveModel,
-  toPiModel,
+  toRuntimeModel,
 } from '../src/infrastructure/model-registry.js';
 
 /**
@@ -126,7 +126,7 @@ describe('normalizeModelEntry', () => {
     assert.equal(e.pricing.input_per_mtok, 1);
   });
 
-  it('maps pi-style id/contextWindow/maxTokens aliases', () => {
+  it('maps camelCase id/contextWindow/maxTokens aliases', () => {
     const e = normalizeModelEntry({
       id: 'alias-model',
       contextWindow: 9999,
@@ -166,40 +166,40 @@ describe('capability switch', () => {
     assert.equal(reasoning.supports_developer_role, true);
   });
 
-  it('toPiModel maps registry capabilities into session model object', () => {
+  it('toRuntimeModel maps registry capabilities into session model object', () => {
     const gpt = fixtureModel('fixture-reasoning');
-    const pi = toPiModel(gpt, { baseUrl: 'https://llm.example', apiKey: 'k' });
+    const model = toRuntimeModel(gpt, { baseUrl: 'https://llm.example', apiKey: 'k' });
 
-    assert.equal(pi.id, 'fixture-reasoning');
-    assert.equal(pi.contextWindow, 262144);
-    assert.equal(pi.maxTokens, 65536);
-    assert.equal(pi.compat.supportsDeveloperRole, true);
-    assert.equal(pi.cost.input, gpt.pricing.input_per_mtok);
-    assert.equal(pi.baseUrl, 'https://llm.example');
-    assert.equal(pi.headers, undefined);
-    // Required pi-ai Model.reasoning from supports_reasoning
-    assert.equal(pi.reasoning, true);
-    // Must not set ImagesModel-only `output`
-    assert.equal('output' in pi, false);
+    assert.equal(model.id, 'fixture-reasoning');
+    assert.equal(model.contextWindow, 262144);
+    assert.equal(model.maxTokens, 65536);
+    assert.equal(model.compat.supportsDeveloperRole, true);
+    assert.equal(model.cost.input, gpt.pricing.input_per_mtok);
+    assert.equal(model.baseUrl, 'https://llm.example');
+    assert.equal(model.headers, undefined);
+    // Required descriptor field reasoning, from supports_reasoning
+    assert.equal(model.reasoning, true);
+    // Must not set image-model-only `output`
+    assert.equal('output' in model, false);
   });
 
-  it('toPiModel uses registry values — not a single hard-coded context/max', () => {
+  it('toRuntimeModel uses registry values — not a single hard-coded context/max', () => {
     // The wide-context entry keeps its context while sharing the output cap.
     const gemini = fixtureModel('fixture-wide');
     const gpt = fixtureModel('fixture-reasoning');
-    const piGemini = toPiModel(gemini, { baseUrl: 'http://x' });
-    const piGpt = toPiModel(gpt, { baseUrl: 'http://x' });
-    assert.equal(piGemini.contextWindow, 1048576);
-    assert.equal(piGpt.maxTokens, 65536);
-    assert.notEqual(piGemini.contextWindow, piGpt.contextWindow);
-    assert.equal(piGemini.maxTokens, piGpt.maxTokens);
-    assert.equal(piGemini.reasoning, false);
-    assert.equal(piGpt.reasoning, true);
+    const modelGemini = toRuntimeModel(gemini, { baseUrl: 'http://x' });
+    const modelGpt = toRuntimeModel(gpt, { baseUrl: 'http://x' });
+    assert.equal(modelGemini.contextWindow, 1048576);
+    assert.equal(modelGpt.maxTokens, 65536);
+    assert.notEqual(modelGemini.contextWindow, modelGpt.contextWindow);
+    assert.equal(modelGemini.maxTokens, modelGpt.maxTokens);
+    assert.equal(modelGemini.reasoning, false);
+    assert.equal(modelGpt.reasoning, true);
   });
 
-  it('toPiModel required Model fields match pi-ai shape', () => {
+  it('toRuntimeModel carries every field assertModelShape requires', () => {
     const flash = fixtureModel('fixture-plain');
-    const pi = toPiModel(flash, { baseUrl: 'http://x' });
+    const model = toRuntimeModel(flash, { baseUrl: 'http://x' });
     for (const field of [
       'id',
       'name',
@@ -212,11 +212,11 @@ describe('capability switch', () => {
       'contextWindow',
       'maxTokens',
     ]) {
-      assert.ok(field in pi, `missing ${field}`);
+      assert.ok(field in model, `missing ${field}`);
     }
-    assert.equal(typeof pi.reasoning, 'boolean');
-    assert.equal(Array.isArray(pi.input), true);
-    assert.equal(typeof pi.cost.input, 'number');
+    assert.equal(typeof model.reasoning, 'boolean');
+    assert.equal(Array.isArray(model.input), true);
+    assert.equal(typeof model.cost.input, 'number');
   });
 });
 
@@ -268,6 +268,21 @@ describe('disabled model', () => {
       [],
     );
   });
+
+  it('the shipped seed is exactly the live LLMIO catalog', () => {
+    assert.deepEqual(
+      SEED_MODELS.map((m) => m.model_id),
+      ['deepseek-flash', 'qwen3.8-27b'],
+    );
+    assert.deepEqual(
+      [...SEED_MODELS.find((m) => m.model_id === 'deepseek-flash').input_modalities],
+      ['text', 'image'],
+    );
+    assert.deepEqual(
+      [...SEED_MODELS.find((m) => m.model_id === 'qwen3.8-27b').input_modalities],
+      ['text'],
+    );
+  });
 });
 
 describe('usage recording', () => {
@@ -278,12 +293,12 @@ describe('usage recording', () => {
 describe('env overrides (backward compatible)', () => {
   it('MODEL_CONTEXT_WINDOW / MODEL_MAX_TOKENS override active model only', () => {
     const reg = buildRegistry({ seed: SEED_MODELS, filePath: null });
-    const base = resolveModel('deepseek-v4-flash', {
+    const base = resolveModel('deepseek-flash', {
       registry: reg,
       applyOverrides: false,
     });
     const overridden = applyEnvOverrides(base, {
-      MODEL_ID: 'deepseek-v4-flash',
+      MODEL_ID: 'deepseek-flash',
       MODEL_CONTEXT_WINDOW: '64000',
       MODEL_MAX_TOKENS: '4096',
     });
@@ -292,9 +307,9 @@ describe('env overrides (backward compatible)', () => {
 
     // Overrides for a different MODEL_ID do not apply.
     const other = applyEnvOverrides(
-      resolveModel('deepseek-v4-pro', { registry: reg, applyOverrides: false }),
+      resolveModel('qwen3.8-27b', { registry: reg, applyOverrides: false }),
       {
-        MODEL_ID: 'deepseek-v4-flash',
+        MODEL_ID: 'deepseek-flash',
         MODEL_CONTEXT_WINDOW: '1',
         MODEL_MAX_TOKENS: '1',
       },
@@ -341,14 +356,13 @@ describe('file-backed registry', () => {
   });
 });
 
-describe('cost accounting is pi-ai’s job', () => {
-  it('registry pricing reaches the pi-ai Model, which is what computes cost', () => {
-    // pi-ai fills usage.cost from Model.cost on every assistant message
-    // (pi-ai/dist/models.js). The registry used to run the same arithmetic on
-    // the same numbers; that duplicate is gone, and this pins the one path
-    // that remains: catalog pricing -> Model.cost -> pi-ai usage.cost.
-    const entry = resolveModel('deepseek-v4-pro', { env: {} });
-    const model = toPiModel(entry, { baseUrl: 'http://localhost' });
+describe('model registry carries pricing, not cost arithmetic', () => {
+  it('registry pricing reaches the Model descriptor', () => {
+    // The registry used to run its own cost arithmetic on these numbers; that
+    // duplicate is gone. This pins the one projection that remains:
+    // catalog pricing -> Model.cost.
+    const entry = resolveModel('deepseek-flash', { env: {} });
+    const model = toRuntimeModel(entry, { baseUrl: 'http://localhost' });
     assert.deepEqual(model.cost, {
       input: entry.pricing.input_per_mtok,
       output: entry.pricing.output_per_mtok,
@@ -367,7 +381,7 @@ describe('cost accounting is pi-ai’s job', () => {
       assert.equal(
         mod[gone],
         undefined,
-        `${gone} duplicates pi-ai cost accounting — do not reintroduce it`,
+        `${gone} was a duplicate cost engine — do not reintroduce it`,
       );
     }
   });

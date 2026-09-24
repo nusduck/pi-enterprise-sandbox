@@ -12,7 +12,11 @@ import { createMysqlKnex } from '../../src/infrastructure/mysql/client.js';
 import { createServiceContainer } from '../../src/bootstrap/container.js';
 import { startWorkerMain } from '../../src/bootstrap/worker-main.js';
 
-const databaseUrl = String(process.env.AGENT_DATABASE_URL || '').trim();
+// 夹具自己直连数据库写副作用表，用测试给的带口令连接串；被测的 Worker 本身
+// 走 AGENT_DATABASE_URL（无口令）+ DBPM 取密，与生产一致。
+const databaseUrl = String(
+  process.env.TEST_FIXTURE_DATABASE_URL || process.env.AGENT_DATABASE_URL || '',
+).trim();
 const workerLabel = String(process.env.TEST_WORKER_LABEL || '').trim();
 const sideEffectTable = String(
   process.env.TEST_SIDE_EFFECT_TABLE || '',
@@ -27,6 +31,10 @@ const toolExecutionStatus = String(
 const executorMode = String(
   process.env.TEST_EXECUTOR_MODE || 'hang-after-side-effect',
 ).trim();
+// 副作用表放在兄弟库：被测 Worker 启动时按发布清单核对自己的库，多一张表就会拒启（ADR 0011 D6）。
+const sideEffectSchema = String(
+  process.env.TEST_SIDE_EFFECT_SCHEMA || '',
+).trim();
 
 function emit(message) {
   process.stdout.write(
@@ -38,7 +46,8 @@ if (
   !databaseUrl ||
   !workerLabel ||
   !expectedRunId ||
-  !/^release_gate_[a-z0-9_]+$/.test(sideEffectTable)
+  !/^release_gate_[a-z0-9_]+$/.test(sideEffectTable) ||
+  !/^dsh_gate_[a-z0-9_]+$/.test(sideEffectSchema)
 ) {
   emit({ type: 'fatal', message: 'invalid Agent Worker fixture configuration' });
   process.exit(2);
@@ -60,7 +69,7 @@ const runExecutorFactory = ({ runId }) => ({
     }
 
     if (toolExecutionStatus) {
-      await sideEffectDb('tool_executions').insert({
+      await sideEffectDb('tbl_agsvc_tool_executions').insert({
         tool_execution_id: `01K0G2PAV8FPMVC9QHJ7JPN${runId.slice(-1)}`,
         run_id: runId,
         agent_session_id: ctx.run.agentSessionId,
@@ -79,7 +88,7 @@ const runExecutorFactory = ({ runId }) => ({
       });
     }
 
-    await sideEffectDb(sideEffectTable)
+    await sideEffectDb.withSchema(sideEffectSchema).table(sideEffectTable)
       .insert({
         tool_call_id: toolCallId,
         run_id: runId,
@@ -96,7 +105,7 @@ const runExecutorFactory = ({ runId }) => ({
         updated_at: sideEffectDb.fn.now(3),
       });
 
-    const row = await sideEffectDb(sideEffectTable)
+    const row = await sideEffectDb.withSchema(sideEffectSchema).table(sideEffectTable)
       .where({ tool_call_id: toolCallId })
       .first();
     emit({
@@ -121,35 +130,54 @@ try {
       createServiceContainer(env, { runExecutorFactory }),
   });
 
-  started.workerHandle.worker.on('stalled', (jobId, previous) => {
-    emit({
-      type: 'stalled',
-      jobId: String(jobId),
-      previous: String(previous),
+  // ADR 0012 之后每个子任务深度一层消费者；事件带上队列名，gate 才能断言
+  // 子 Run 是在它自己那一层被接管和重放的，而不是被根队列捡走。
+  for (const handle of started.workerHandles) {
+    const queueName = handle.queueName;
+    handle.worker.on('active', (job) => {
+      emit({
+        type: 'active',
+        queueName,
+        jobId: String(job.id),
+        attemptsStarted: Number(job.attemptsStarted || 0),
+      });
     });
-  });
-  started.workerHandle.worker.on('completed', (job, result) => {
-    emit({
-      type: 'completed',
-      jobId: String(job.id),
-      data: job.data,
-      attemptsStarted: Number(job.attemptsStarted || 0),
-      stalledCounter: Number(job.stalledCounter || 0),
-      result,
+    handle.worker.on('stalled', (jobId, previous) => {
+      emit({
+        type: 'stalled',
+        queueName,
+        jobId: String(jobId),
+        previous: String(previous),
+      });
     });
-  });
-  started.workerHandle.worker.on('failed', (job, error) => {
-    emit({
-      type: 'failed',
-      jobId: job?.id == null ? null : String(job.id),
-      message: error instanceof Error ? error.message.slice(0, 256) : 'error',
+    handle.worker.on('completed', (job, result) => {
+      emit({
+        type: 'completed',
+        queueName,
+        jobId: String(job.id),
+        data: job.data,
+        attemptsStarted: Number(job.attemptsStarted || 0),
+        stalledCounter: Number(job.stalledCounter || 0),
+        result,
+      });
     });
-  });
+    handle.worker.on('failed', (job, error) => {
+      emit({
+        type: 'failed',
+        queueName,
+        jobId: job?.id == null ? null : String(job.id),
+        message: error instanceof Error ? error.message.slice(0, 256) : 'error',
+      });
+    });
+  }
 
-  await started.workerHandle.worker.waitUntilReady();
+  await Promise.all(
+    started.workerHandles.map((handle) => handle.worker.waitUntilReady()),
+  );
   emit({
     type: 'ready',
     queueName: started.workerHandle.queueName,
+    queueNames: started.workerHandles.map((handle) => handle.queueName),
   });
 
   if (process.env.TEST_EMIT_RECOVERY_SCANS === 'true') {

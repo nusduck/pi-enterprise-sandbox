@@ -39,8 +39,8 @@ function toolRow() {
 describe('ToolExecutionRepository listByRun', () => {
   it('returns public rows for an owned run and fails closed for another owner', async () => {
     const state = createFakeState();
-    state.tables.runs = [{ run_id: RUN, org_id: ORG, user_id: USER }];
-    state.tables.tool_executions = [toolRow()];
+    state.tables.tbl_agsvc_runs = [{ run_id: RUN, org_id: ORG, user_id: USER }];
+    state.tables.tbl_agsvc_tool_executions = [toolRow()];
     const repository = new ToolExecutionRepository(createFakeKnex(state));
 
     const rows = await repository.listByRun(RUN, { orgId: ORG, userId: USER });

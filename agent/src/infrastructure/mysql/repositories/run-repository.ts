@@ -1,0 +1,760 @@
+/**
+ * Run repository (plan §8.10) — ownership-scoped.
+ * next_event_sequence is owned by RunEventRepository allocation.
+ *
+ * PR-04 T1 additions for Run services:
+ * - list non-terminal / recoverable runs (worker recovery)
+ * - conditional status update accepting expected current status(es)
+ * - plan ULID + Run status + trace_id validation on writes/filters
+ *
+ * No internal transition table — callers use domain RunStateMachine to decide
+ * the next status; this repository only persists under owner + CAS guards.
+ */
+
+import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
+import { mapRun, toMysqlDateTime, formatDateTime } from '../row-mappers.js';
+import { ConflictError, NotFoundError } from '../errors.js';
+import { assertUlid, isUlid } from '../../../domain/shared/ulid.js';
+import {
+  isRunStatus,
+  NON_TERMINAL_RUN_STATUSES,
+  TERMINAL_RUN_STATUSES,
+} from '../../../domain/run/run-status.js';
+import { InvalidRunStatusError } from '../../../domain/run/errors.js';
+import { normalizeW3cTracestate } from '../../sandbox/trace-context.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
+/** Default / max page size for list helpers. */
+export const RUN_LIST_DEFAULT_LIMIT = 50;
+export const RUN_LIST_MAX_LIMIT = 200;
+
+/** Bound for cancel_reason (migration 20260718000004). */
+export const CANCEL_REASON_MAX_LEN = 255;
+
+/** plan §8.10 runs.trace_id is CHAR(32). */
+export const TRACE_ID_PATTERN = /^[0-9a-fA-F]{32}$/;
+
+/** W3C forbids the all-zero trace-id. */
+export const TRACE_ID_ALL_ZERO = '0'.repeat(32);
+
+/**
+ * @param limit
+ * @param [fallback]
+ * @returns {number}
+ */
+export function resolveRunListLimit(limit: unknown, fallback: number = RUN_LIST_DEFAULT_LIMIT) {
+  if (limit == null) return fallback;
+  const n = Number(limit);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(
+      `limit must be an integer between 1 and ${RUN_LIST_MAX_LIMIT}`,
+    );
+  }
+  if (n > RUN_LIST_MAX_LIMIT) {
+    throw new Error(
+      `limit must be an integer between 1 and ${RUN_LIST_MAX_LIMIT}`,
+    );
+  }
+  return n;
+}
+
+/**
+ * @param status
+ * @param [field]
+ * @returns {string}
+ */
+export function assertRunStatus(status: unknown, field: string = 'status') {
+  if (!isRunStatus(status)) {
+    throw new InvalidRunStatusError(
+      status,
+      `Invalid ${field}: expected plan §10 Run status`,
+    );
+  }
+  return (status as string);
+}
+
+/**
+ * W3C trace-id: 32 hex, not all-zero; returns lowercase canonical form.
+ * @param traceId
+ * @returns {string}
+ */
+export function assertTraceId(traceId: unknown) {
+  if (typeof traceId !== 'string' || !TRACE_ID_PATTERN.test(traceId)) {
+    throw new Error('traceId must be 32 hex characters (CHAR(32))');
+  }
+  const normalized = traceId.toLowerCase();
+  if (normalized === TRACE_ID_ALL_ZERO) {
+    throw new Error('traceId must not be the all-zero W3C invalid id');
+  }
+  return normalized;
+}
+
+/** @param {unknown} traceState @returns {string | null} */
+export function assertTraceState(traceState) {
+  try {
+    return normalizeW3cTracestate(traceState);
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? error.message : 'traceState is invalid',
+    );
+  }
+}
+
+/** @param {unknown} traceFlags @returns {string} */
+export function assertTraceFlags(traceFlags) {
+  const normalized = String(traceFlags ?? '01').trim().toLowerCase();
+  if (!/^[0-9a-f]{2}$/.test(normalized)) {
+    throw new Error('traceFlags must be exactly two hexadecimal characters');
+  }
+  return normalized;
+}
+
+/** @param {unknown} spanId @returns {string | null} */
+export function assertTraceParentSpanId(spanId) {
+  if (spanId == null || spanId === '') return null;
+  const normalized = String(spanId).trim().toLowerCase();
+  if (!/^[0-9a-f]{16}$/.test(normalized) || normalized === '0'.repeat(16)) {
+    throw new Error('traceParentSpanId must be a non-zero W3C span id');
+  }
+  return normalized;
+}
+
+/**
+ * Normalize expected status(es) for conditional update.
+ * @param expected
+ * @returns {string[]}
+ */
+export function normalizeExpectedStatuses(expected: string | string[]) {
+  const list = Array.isArray(expected) ? expected : [expected];
+  const out = [];
+  for (const s of list) {
+    if (typeof s !== 'string' || !s.trim()) {
+      throw new Error('expectedStatus(es) must be non-empty strings');
+    }
+    out.push(assertRunStatus(s.trim(), 'expectedStatus'));
+  }
+  if (!out.length) {
+    throw new Error('expectedStatus(es) must be non-empty strings');
+  }
+  return out;
+}
+
+function requireOwnerUlids(scope: { orgId: string, userId: string }) {
+  const s = requireOwnerScope(scope);
+  return {
+    orgId: assertUlid(s.orgId, 'orgId'),
+    userId: assertUlid(s.userId, 'userId'),
+  };
+}
+
+/**
+ * Extend core mapRun with PR-04 T2 cancel intent columns (additive).
+ * @param row
+ */
+export function mapRunRow(row: Record<string, unknown>) {
+  const base = mapRun(row);
+  return {
+    ...base,
+    cancelRequestedAt: formatDateTime(row.cancel_requested_at),
+    cancelReason:
+      row.cancel_reason == null ? null : String(row.cancel_reason),
+    cancelRequestedBy:
+      row.cancel_requested_by == null
+        ? null
+        : String(row.cancel_requested_by),
+  };
+}
+
+/**
+ * Sanitize cancel reason: strip controls, bound length, never store secrets patterns.
+ * @param reason
+ * @returns {string | null}
+ */
+export function sanitizeCancelReason(reason: unknown) {
+  if (reason == null) return null;
+  if (typeof reason !== 'string') {
+    throw new Error('cancel reason must be a string when provided');
+  }
+  // Strip C0 controls and DEL; collapse whitespace.
+  let s = reason.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  // Drop obvious bearer / token material rather than storing it.
+  if (/bearer\s+[a-z0-9._\-]+/i.test(s) || /authorization\s*:/i.test(s)) {
+    s = '[redacted]';
+  }
+  if (s.length > CANCEL_REASON_MAX_LEN) {
+    s = s.slice(0, CANCEL_REASON_MAX_LEN);
+  }
+  return s;
+}
+
+/** Bound for runs.subagent_label (migration 20260822000001). */
+export const SUBAGENT_LABEL_MAX_LEN = 128;
+
+/** Children of one parent returned by a single {@link RunRepository#listChildren}. */
+export const SUBAGENT_CHILD_LIST_MAX = 50;
+
+/**
+ * Levels {@link RunRepository#listDescendants} will walk. One more than the
+ * spawn depth cap, so raising `AGENT_SUBAGENT_MAX_DEPTH` by one does not
+ * silently leave the deepest generation unreachable by a cascade.
+ */
+export const SUBAGENT_MAX_WALK_DEPTH = 4;
+
+/**
+ * @param depth
+ * @returns {number}
+ */
+export function assertSubagentDepth(depth: unknown) {
+  if (depth == null || depth === '') return 0;
+  const n = Number(depth);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new Error('subagentDepth must be a non-negative integer');
+  }
+  return n;
+}
+
+/**
+ * Model-authored label: strip controls, collapse whitespace, bound length.
+ * @param label
+ * @returns {string | null}
+ */
+export function sanitizeSubagentLabel(label: unknown) {
+  if (label == null || label === '') return null;
+  if (typeof label !== 'string') {
+    throw new Error('subagentLabel must be a string when provided');
+  }
+  const s = label
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return null;
+  return s.slice(0, SUBAGENT_LABEL_MAX_LEN);
+}
+
+/** Owner-scoped 查询的租户边界。所有仓储方法都按它定位归属。 */
+type OwnerScope = { orgId: string; userId: string };
+
+export class RunRepository {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+  now: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
+    if (!db) throw new Error('RunRepository requires a knex executor');
+    this.db = db;
+    this.now = opts.now ?? (() => new Date());
+  }
+
+  /**
+   * @param {{
+   *   runId: string,
+   *   orgId: string,
+   *   userId: string,
+   *   conversationId: string,
+   *   agentSessionId: string,
+   *   agentVersionId: string,
+   *   triggeringMessageId: string,
+   *   source: string,
+   *   parentRunId?: string | null,
+   *   subagentDepth?: number,
+   *   subagentLabel?: string | null,
+   *   status: string,
+   *   statusReason?: string | null,
+   *   queueName: string,
+   *   attempt?: number,
+   *   traceId: string,
+   *   nextEventSequence?: number,
+   *   startedAt?: Date | string | null,
+   *   completedAt?: Date | string | null,
+   *   createdAt?: Date | string,
+   *   updatedAt?: Date | string,
+   * }} input
+   */
+  async create(input: { runId: string, orgId: string, userId: string, conversationId: string, agentSessionId: string, agentVersionId: string, triggeringMessageId: string, source: string, parentRunId?: string | null, subagentDepth?: number, subagentLabel?: string | null, status: string, statusReason?: string | null, queueName: string, attempt?: number, traceId: string, nextEventSequence?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, createdAt?: Date | string, updatedAt?: Date | string, }) {
+    const scope = requireOwnerUlids(input);
+    const runId = assertUlid(input.runId, 'runId');
+    const conversationId = assertUlid(input.conversationId, 'conversationId');
+    const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
+    const agentVersionId = assertUlid(input.agentVersionId, 'agentVersionId');
+    const triggeringMessageId = assertUlid(
+      input.triggeringMessageId,
+      'triggeringMessageId',
+    );
+    const status = assertRunStatus(input.status);
+    const parentRunId =
+      input.parentRunId == null || input.parentRunId === ''
+        ? null
+        : assertUlid(input.parentRunId, 'parentRunId');
+    if (parentRunId === runId) {
+      throw new Error('parentRunId must not be the run itself');
+    }
+    const subagentDepth = assertSubagentDepth(input.subagentDepth);
+    if (parentRunId == null && subagentDepth > 0) {
+      throw new Error('subagentDepth requires a parentRunId');
+    }
+    const subagentLabel = sanitizeSubagentLabel(input.subagentLabel);
+    const traceId = assertTraceId(input.traceId);
+    // @ts-expect-error 遗留JS占位类型object未展开，访问traceState需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceState' does not exist on type '{ runId: strin
+    const traceState = assertTraceState(input.traceState);
+    // @ts-expect-error 遗留JS占位类型object未展开，访问traceFlags需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceFlags' does not exist on type '{ runId: strin
+    const traceFlags = assertTraceFlags(input.traceFlags);
+    // @ts-expect-error 遗留JS占位类型object未展开，访问traceParentSpanId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceParentSpanId' does not exist on type '{ runId
+    const traceParentSpanId = assertTraceParentSpanId(input.traceParentSpanId);
+
+    const now = toMysqlDateTime(input.createdAt || this.now());
+    await this.db('tbl_agsvc_runs').insert({
+      run_id: runId,
+      org_id: scope.orgId,
+      user_id: scope.userId,
+      conversation_id: conversationId,
+      agent_session_id: agentSessionId,
+      agent_version_id: agentVersionId,
+      triggering_message_id: triggeringMessageId,
+      source: input.source,
+      parent_run_id: parentRunId,
+      subagent_depth: subagentDepth,
+      subagent_label: subagentLabel,
+      status,
+      status_reason: input.statusReason ?? null,
+      queue_name: input.queueName,
+      attempt: input.attempt ?? 0,
+      trace_id: traceId,
+      trace_state: traceState,
+      trace_flags: traceFlags,
+      trace_parent_span_id: traceParentSpanId,
+      next_event_sequence: input.nextEventSequence ?? 0,
+      started_at: input.startedAt ? toMysqlDateTime(input.startedAt) : null,
+      completed_at: input.completedAt ? toMysqlDateTime(input.completedAt) : null,
+      cancel_requested_at: null,
+      cancel_reason: null,
+      cancel_requested_by: null,
+      created_at: now,
+      updated_at: toMysqlDateTime(input.updatedAt || input.createdAt || this.now()),
+    });
+    return this.getById(runId, scope);
+  }
+
+  async getById(runId: string, scope: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
+    const s = requireOwnerUlids(scope);
+    const id = assertUlid(runId, 'runId');
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs').where({ run_id: id }), s);
+    if (opts.forUpdate) q = q.forUpdate();
+    const row = await q.first();
+    return row ? mapRunRow(row) : null;
+  }
+
+  async requireById(runId: string, scope: { orgId: string, userId: string }) {
+    const row = await this.getById(runId, scope);
+    if (!row) {
+      throw new NotFoundError('Run not found', {
+        resource: 'runs',
+        id: runId,
+      });
+    }
+    return row;
+  }
+
+  /**
+   * Runs spawned by one parent Run, newest first.
+   *
+   * Owner-scoped like every other read: a child always carries the parent's
+   * org/user, so the scope filter alone is enough — there is no need to load
+   * the parent first. `childRunIds` narrows to a caller-named subset; unknown
+   * or foreign ids simply do not come back rather than erroring, so one
+   * finished child cannot make a whole poll fail.
+   *
+   * @param parentRunId
+   * @param scope
+   * @param [opts]
+   */
+  async listChildren(parentRunId: string, scope: { orgId: string, userId: string }, opts: { childRunIds?: readonly string[] | null, limit?: number } = {}) {
+    const s = requireOwnerUlids(scope);
+    const parentId = assertUlid(parentRunId, 'parentRunId');
+    const limit = Math.min(
+      resolveRunListLimit(opts.limit, SUBAGENT_CHILD_LIST_MAX),
+      SUBAGENT_CHILD_LIST_MAX,
+    );
+    let q = applyOwnerScope(
+      this.db('tbl_agsvc_runs').where({ parent_run_id: parentId }),
+      s,
+    );
+    if (Array.isArray(opts.childRunIds)) {
+      const ids = opts.childRunIds
+        .filter((id) => isUlid(id))
+        .slice(0, SUBAGENT_CHILD_LIST_MAX);
+      // An all-invalid id list must not silently widen to "every child".
+      if (ids.length === 0) return [];
+      q = q.whereIn('run_id', ids);
+    }
+    const rows = await q.orderBy('created_at', 'desc').limit(limit);
+    return rows.map(mapRunRow);
+  }
+
+  /**
+   * Every non-terminal Run below one parent, breadth-first.
+   *
+   * Bounded twice over: `maxDepth` levels (the spawn cap is 2, so this is two
+   * round trips in practice) and `SUBAGENT_CHILD_LIST_MAX` rows per level. A
+   * `parent_run_id` cycle is impossible — a child's parent always predates it —
+   * but the visited set makes the walk terminate anyway rather than trusting
+   * that invariant with an unbounded loop.
+   *
+   * @param rootRunId
+   * @param scope
+   * @param [opts]
+   */
+  async listDescendants(rootRunId: string, scope: { orgId: string, userId: string }, opts: { maxDepth?: number, onlyNonTerminal?: boolean } = {}) {
+    const s = requireOwnerUlids(scope);
+    const rootId = assertUlid(rootRunId, 'rootRunId');
+    const maxDepth = Math.min(
+      Math.max(1, Number(opts.maxDepth) || SUBAGENT_MAX_WALK_DEPTH),
+      SUBAGENT_MAX_WALK_DEPTH,
+    );
+    const onlyNonTerminal = opts.onlyNonTerminal !== false;
+    const visited: Set<string> = new Set([rootId]);
+    const found: Record<string, any>[] = [];
+    let frontier = [rootId];
+
+    for (let depth = 0; depth < maxDepth && frontier.length > 0; depth += 1) {
+      const rows = await applyOwnerScope(
+        this.db('tbl_agsvc_runs').whereIn('parent_run_id', frontier),
+        s,
+      )
+        .orderBy('created_at', 'desc')
+        .limit(SUBAGENT_CHILD_LIST_MAX * frontier.length);
+      const next = [];
+      for (const row of rows) {
+        const run = mapRunRow(row);
+        if (visited.has(run.runId)) continue;
+        visited.add(run.runId);
+        next.push(run.runId);
+        // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
+        if (!onlyNonTerminal || !TERMINAL_RUN_STATUSES.includes(run.status)) {
+          found.push(run);
+        }
+      }
+      frontier = next;
+    }
+    return found;
+  }
+
+  /**
+   * Worker load: org-scoped only (job carries orgId, not userId).
+   * Never crosses org boundaries. After load, callers build full owner scope
+   * from the returned run.userId.
+   *
+   * @param runId
+   * @param orgId
+   * @param [opts]
+   */
+  async getByIdForOrg(runId: string, orgId: string, opts: { forUpdate?: boolean } = {}) {
+    const id = assertUlid(runId, 'runId');
+    const oid = assertUlid(orgId, 'orgId');
+    let q = this.db('tbl_agsvc_runs').where({ run_id: id, org_id: oid });
+    if (opts.forUpdate) q = q.forUpdate();
+    const row = await q.first();
+    return row ? mapRunRow(row) : null;
+  }
+
+  async requireByIdForOrg(runId: string, orgId: string, opts: { forUpdate?: boolean } = {}) {
+    const row = await this.getByIdForOrg(runId, orgId, opts);
+    if (!row) {
+      throw new NotFoundError('Run not found', {
+        resource: 'runs',
+        id: runId,
+      });
+    }
+    return row;
+  }
+
+  /**
+   * System-worker scan of non-terminal runs (PR-04 T3 recovery).
+   *
+   * Explicitly NOT an owner API — no userId filter. Use only from trusted
+   * recovery/requeue workers. Bounded by limit + optional afterRunId cursor
+   * (run_id ascending). Optional orgId narrows a single tenant for safety.
+   *
+   * Returns full rows so callers can build ref-only jobs { runId, orgId, traceId }.
+   *
+   * @param {{
+   *   statuses?: string[],
+   *   limit?: number,
+   *   afterRunId?: string | null,
+   *   orgId?: string | null,
+   * }} [opts]
+   */
+  async listNonTerminalForSystemWorker(opts: { statuses?: string[], limit?: number, afterRunId?: string | null, orgId?: string | null, } = {}) {
+    const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
+    const statuses =
+      opts.statuses && opts.statuses.length
+        ? opts.statuses.map((st) => assertRunStatus(st, 'statuses'))
+        : [...NON_TERMINAL_RUN_STATUSES];
+
+    let q = this.db('tbl_agsvc_runs')
+      .whereIn('status', statuses)
+      .orderBy('run_id', 'asc')
+      .limit(limit);
+
+    if (opts.afterRunId) {
+      q = q.andWhere('run_id', '>', assertUlid(opts.afterRunId, 'afterRunId'));
+    }
+    if (opts.orgId) {
+      q = q.andWhere({ org_id: assertUlid(opts.orgId, 'orgId') });
+    }
+
+    const rows = await q;
+    return rows.map(mapRunRow);
+  }
+
+  async list(scope: { orgId: string, userId: string }, opts: { conversationId?: string, status?: string, limit?: number } = {}) {
+    const s = requireOwnerUlids(scope);
+    const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs'), s).orderBy('created_at', 'desc');
+    if (opts.conversationId) {
+      q = q.andWhere({
+        conversation_id: assertUlid(opts.conversationId, 'conversationId'),
+      });
+    }
+    if (opts.status) q = q.andWhere({ status: assertRunStatus(opts.status) });
+    q = q.limit(limit);
+    const rows = await q;
+    return rows.map(mapRunRow);
+  }
+
+  /** Owner-scoped lookup used by the durable Trace query endpoint. */
+  async listByTraceId(
+    traceId: string,
+    scope: OwnerScope,
+    opts: { limit?: number } = {},
+  ) {
+    const s = requireOwnerUlids(scope);
+    const trace = assertTraceId(traceId);
+    const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
+    const rows = await applyOwnerScope(
+      this.db('tbl_agsvc_runs').where({ trace_id: trace }),
+      s,
+    )
+      .orderBy('created_at', 'asc')
+      .limit(limit);
+    return rows.map(mapRunRow);
+  }
+
+  /**
+   * List non-terminal runs for an owner (worker recovery / health).
+   * Status filter uses plan §10 non-terminal set — not an internal transition table.
+   *
+   * @param scope
+   * @param {{
+   *   conversationId?: string,
+   *   agentSessionId?: string,
+   *   limit?: number,
+   *   statuses?: string[],
+   * }} [opts]
+   */
+  async listNonTerminal(scope: { orgId: string, userId: string }, opts: { conversationId?: string, agentSessionId?: string, limit?: number, statuses?: string[], } = {}) {
+    const s = requireOwnerUlids(scope);
+    const limit = resolveRunListLimit(opts.limit, RUN_LIST_DEFAULT_LIMIT);
+    const statuses =
+      opts.statuses && opts.statuses.length
+        ? opts.statuses.map((st) => assertRunStatus(st, 'statuses'))
+        : [...NON_TERMINAL_RUN_STATUSES];
+
+    let q = applyOwnerScope(this.db('tbl_agsvc_runs'), s)
+      .whereIn('status', statuses)
+      .orderBy('created_at', 'asc');
+    if (opts.conversationId) {
+      q = q.andWhere({
+        conversation_id: assertUlid(opts.conversationId, 'conversationId'),
+      });
+    }
+    if (opts.agentSessionId) {
+      q = q.andWhere({
+        agent_session_id: assertUlid(opts.agentSessionId, 'agentSessionId'),
+      });
+    }
+    q = q.limit(limit);
+    const rows = await q;
+    return rows.map(mapRunRow);
+  }
+
+  /**
+   * Recoverable = non-terminal (alias for workers scanning incomplete work).
+   * Explicitly excludes plan §10 terminal set.
+   *
+   * @param scope
+   * @param {{
+   *   conversationId?: string,
+   *   agentSessionId?: string,
+   *   limit?: number,
+   * }} [opts]
+   */
+  async listRecoverable(scope: { orgId: string, userId: string }, opts: { conversationId?: string, agentSessionId?: string, limit?: number, } = {}) {
+    return this.listNonTerminal(scope, {
+      ...opts,
+      statuses: [...NON_TERMINAL_RUN_STATUSES],
+    });
+  }
+
+  /**
+   * Unconditional status patch (preserved API). Prefer
+   * {@link updateStatusIf} for RunStateMachine-controlled transitions.
+   *
+   * @param runId
+   * @param scope
+   * @param {{
+   *   status?: string,
+   *   statusReason?: string | null,
+   *   attempt?: number,
+   *   startedAt?: Date | string | null,
+   *   completedAt?: Date | string | null,
+   * }} patch
+   */
+  async updateStatus(runId: string, scope: { orgId: string, userId: string }, patch: { status?: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, }) {
+    const s = requireOwnerUlids(scope);
+    const id = assertUlid(runId, 'runId');
+    const update: Record<string, unknown> = { updated_at: toMysqlDateTime(this.now()) };
+    if (patch.status !== undefined) update.status = assertRunStatus(patch.status);
+    if (patch.statusReason !== undefined) update.status_reason = patch.statusReason;
+    if (patch.attempt !== undefined) update.attempt = patch.attempt;
+    if (patch.startedAt !== undefined) {
+      update.started_at = patch.startedAt ? toMysqlDateTime(patch.startedAt) : null;
+    }
+    if (patch.completedAt !== undefined) {
+      update.completed_at = patch.completedAt
+        ? toMysqlDateTime(patch.completedAt)
+        : null;
+    }
+    const n = await applyOwnerScope(
+      this.db('tbl_agsvc_runs').where({ run_id: id }),
+      s,
+    ).update(update);
+    if (!n) {
+      throw new NotFoundError('Run not found', {
+        resource: 'runs',
+        id: runId,
+      });
+    }
+    return this.requireById(id, s);
+  }
+
+  /**
+   * Conditional status update: only succeeds when current status is in
+   * `expectedStatus` / `expectedStatuses`. Suitable for
+   * RunStateMachine-controlled transitions (compare-and-set).
+   *
+   * Does not embed a transition table — caller supplies the expected source
+   * statuses and the already-validated target status.
+   *
+   * @param runId
+   * @param scope
+   * @param {{
+   *   expectedStatus?: string,
+   *   expectedStatuses?: string[],
+   *   status: string,
+   *   statusReason?: string | null,
+   *   attempt?: number,
+   *   startedAt?: Date | string | null,
+   *   completedAt?: Date | string | null,
+   * }} patch
+   */
+  async updateStatusIf(runId: string, scope: { orgId: string, userId: string }, patch: { expectedStatus?: string, expectedStatuses?: string[], status: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, }) {
+    const s = requireOwnerUlids(scope);
+    const id = assertUlid(runId, 'runId');
+    if (typeof patch.status !== 'string' || !patch.status.trim()) {
+      throw new Error('updateStatusIf requires a non-empty target status');
+    }
+    const target = assertRunStatus(patch.status);
+    const expected = normalizeExpectedStatuses(
+      patch.expectedStatuses ?? patch.expectedStatus ?? [],
+    );
+
+    const update: Record<string, unknown> = {
+      status: target,
+      updated_at: toMysqlDateTime(this.now()),
+    };
+    if (patch.statusReason !== undefined) {
+      update.status_reason = patch.statusReason;
+    }
+    if (patch.attempt !== undefined) update.attempt = patch.attempt;
+    if (patch.startedAt !== undefined) {
+      update.started_at = patch.startedAt ? toMysqlDateTime(patch.startedAt) : null;
+    }
+    if (patch.completedAt !== undefined) {
+      update.completed_at = patch.completedAt
+        ? toMysqlDateTime(patch.completedAt)
+        : null;
+    }
+
+    const n = await applyOwnerScope(
+      this.db('tbl_agsvc_runs').where({ run_id: id }).whereIn('status', expected),
+      s,
+    ).update(update);
+
+    if (n) {
+      return this.requireById(id, s);
+    }
+
+    const current = await this.getById(id, s);
+    if (!current) {
+      throw new NotFoundError('Run not found', {
+        resource: 'runs',
+        id: runId,
+      });
+    }
+    throw new ConflictError(
+      `Run status conflict: expected one of [${expected.join(', ')}], was ${current.status}`,
+      { resource: 'runs', id: runId },
+    );
+  }
+
+  /**
+   * Persist durable cancel intent (first-writer wins). Does not change status.
+   * Status transitions to CANCELLING remain the sole RunStateMachine's job.
+   *
+   * @param runId
+   * @param scope
+   * @param {{
+   *   reason?: string | null,
+   *   requestedBy: string,
+   *   requestedAt?: Date | string,
+   * }} intent
+   */
+  async setCancelIntent(runId: string, scope: { orgId: string, userId: string }, intent: { reason?: string | null, requestedBy: string, requestedAt?: Date | string, }) {
+    const s = requireOwnerUlids(scope);
+    const id = assertUlid(runId, 'runId');
+    const requestedBy = assertUlid(intent.requestedBy, 'requestedBy');
+    const reason = sanitizeCancelReason(intent.reason);
+    const at = toMysqlDateTime(intent.requestedAt || this.now());
+
+    // First-writer wins: only fill null cancel_requested_at.
+    const n = await applyOwnerScope(
+      this.db('tbl_agsvc_runs').where({ run_id: id }).whereNull('cancel_requested_at'),
+      s,
+    ).update({
+      cancel_requested_at: at,
+      cancel_reason: reason,
+      cancel_requested_by: requestedBy,
+      updated_at: toMysqlDateTime(this.now()),
+    });
+
+    if (n) {
+      return this.requireById(id, s);
+    }
+
+    const current = await this.getById(id, s);
+    if (!current) {
+      throw new NotFoundError('Run not found', {
+        resource: 'runs',
+        id: runId,
+      });
+    }
+    // Already had intent — idempotent return of current row.
+    return current;
+  }
+}
+
+/** Re-export terminal set for callers that only depend on the repository module. */
+export { TERMINAL_RUN_STATUSES, NON_TERMINAL_RUN_STATUSES };

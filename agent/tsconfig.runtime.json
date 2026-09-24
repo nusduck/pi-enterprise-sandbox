@@ -1,0 +1,22 @@
+{
+  "$comment": [
+    "只检查 src/runtime/**，且**打开 strict**。",
+    "",
+    "阶段 F 把 agent/runtime 这个独立包并进 src/runtime 之后，它的源码就落到了",
+    "agent 主 tsconfig 的宽松规则下——而它原本是 strict 的。降级会真的丢东西：",
+    "合并当天就有一处 `if (!verdict.ok) verdict.reason` 报错，因为布尔判别式的",
+    "联合收窄依赖 strictNullChecks。",
+    "",
+    "出产物仍由 tsconfig.build.json 一次编译整棵树（TS 不支持同一 program 内",
+    "按目录分规则）；这份配置只作为 `npm run typecheck` 的额外闸门存在，",
+    "直到主程序也打开 strict。"
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true
+  },
+  "include": [
+    "src/runtime/**/*.ts"
+  ]
+}

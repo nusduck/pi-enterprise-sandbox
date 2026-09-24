@@ -76,7 +76,7 @@ describe('mysql client value boundary', () => {
     try {
       const state = createFakeState();
       const knex = createFakeKnex(state);
-      state.tables.trace_spans = [];
+      state.tables.tbl_agsvc_trace_spans = [];
       const repo = new TraceSpanRepository(knex, {
         now: () => new Date('2026-07-18T19:37:00.000Z'),
       });
@@ -94,12 +94,12 @@ describe('mysql client value boundary', () => {
       const scope = { orgId: ORG, userId: USER };
 
       await repo.materializeRunFacts(run, scope);
-      const firstStartedAt = state.tables.trace_spans[0].started_at;
+      const firstStartedAt = state.tables.tbl_agsvc_trace_spans[0].started_at;
       await repo.materializeRunFacts(run, scope);
 
       assert.equal(firstStartedAt, '2026-07-18 19:36:59.479');
-      assert.equal(state.tables.trace_spans.length, 1);
-      assert.equal(state.tables.trace_spans[0].started_at, firstStartedAt);
+      assert.equal(state.tables.tbl_agsvc_trace_spans.length, 1);
+      assert.equal(state.tables.tbl_agsvc_trace_spans[0].started_at, firstStartedAt);
 
       await repo.upsert({
         ...scope,
@@ -109,10 +109,25 @@ describe('mysql client value boundary', () => {
         status: 'ok',
         finishedAt: '2026-07-18T19:37:00.479Z',
       });
-      assert.equal(state.tables.trace_spans[0].duration_ms, 1_000);
+      assert.equal(state.tables.tbl_agsvc_trace_spans[0].duration_ms, 1_000);
     } finally {
       if (originalTz == null) delete process.env.TZ;
       else process.env.TZ = originalTz;
+    }
+  });
+});
+
+describe('mysql 会话 UTC 初始化接线', () => {
+  // 行为细节（等待完成、失败致命、切端点）在 failover.unit.test.js；这里只钉住
+  // 生产工厂确实换成了故障切换 client，而不是回到只挂 afterCreate 的旧形态。
+  it('工厂使用故障切换 client，会话初始化不依赖 afterCreate', async () => {
+    const knex = createMysqlKnex('mysql://u:p@127.0.0.1:3306/db', { pool: { max: 1 } });
+    try {
+      assert.equal(knex.client.constructor.name, 'FailoverMysql2Client');
+      assert.equal(knex.client.config.pool.afterCreate, undefined);
+      assert.equal(knex.client.driverName, 'mysql2');
+    } finally {
+      await destroyMysqlKnex(knex);
     }
   });
 });

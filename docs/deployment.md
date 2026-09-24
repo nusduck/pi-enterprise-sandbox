@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> 生产部署指南 — 四服务 + Nginx 反向代理 + SSL + 资源限制 + 持久化存储
+> 生产部署指南 — Frontend / BFF / Agent / Exec（含 MCP 第二入口）+ Nginx 反向代理（HTTP / TLS 双模式）+ 资源限制 + 持久化存储
 
 ## 快速启动（开发模式）
 
@@ -16,8 +16,8 @@ docker compose up --build -d
 curl -f http://localhost:3000/            # Frontend
 curl -f http://localhost:4000/health/ready  # BFF + dependencies
 curl -f http://localhost:4100/health      # Agent
-docker compose exec sandbox curl -fsS http://localhost:8081/health      # Sandbox liveness
-docker compose exec sandbox curl -fsS http://localhost:8081/ready       # Sandbox readiness (workspaces + DB)
+docker compose exec sandbox node -e "fetch('http://127.0.0.1:8081/health').then(r=>r.text()).then(console.log)"
+docker compose exec sandbox node -e "fetch('http://127.0.0.1:8081/ready').then(r=>r.text()).then(console.log)"
 ```
 
 | 服务 | 端口 | 容器内端口 |
@@ -31,13 +31,26 @@ docker compose exec sandbox curl -fsS http://localhost:8081/ready       # Sandbo
 ## 生产部署
 
 ```bash
-# 使用生产 overlay（Nginx + SSL + 资源限制）
+# 使用生产 overlay（Nginx + 资源限制）
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 
-# 验证
+# 验证（TLS 模式，默认）
 curl -sf https://localhost/health/ready
-curl -sf https://localhost/nginx/status
+
+# 内网明文部署：入口只监听 80
+TLS_ENABLED=false docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d nginx
+curl -sf http://localhost/health/ready
 ```
+
+**入口形态由 `TLS_ENABLED` 决定**（默认 `true`）：`true` 时边缘 nginx 终止 TLS，80 只做
+ACME 与 301 跳转，并声明 HSTS；`false` 时只监听 80 明文，不生成也不要求证书、不声明 HSTS
+（对没有加密端口的站点声明 HSTS 会把浏览器锁死在打不开的地址上）。两套 server 模板共用同一份
+`nginx/templates/locations.conf`，路由、SSE 免缓冲、55MB 上传上限等语义不随模式改变。
+值不是 `true` / `false` 时容器拒绝启动；渲染后还会跑一次 `nginx -t`，坏配置不会起到 502。
+
+明文模式是**内网部署的显式选择**：会话 Cookie、上传内容与 SSE 都不加密，只应在受信内网
+（或由更外层入口加密）使用。BFF 的会话 Cookie 相应不带 `Secure`（否则浏览器在明文连接上
+根本不会回传，登录直接失效），`HttpOnly` 与 `SameSite=Lax` 保留。
 
 ### Workspace / temp disk quota (production)
 
@@ -62,18 +75,157 @@ disk isolation. Production validation requires **both**:
 Child monitor codes: `workspace_quota_exceeded`,
 `workspace_inode_limit_exceeded`, `workspace_quota_enforcement_failed`.
 
+从 2026-09-16 起这两条声明**真的接线了**（此前 `evaluateChildQuota` /
+`ChildWorkspaceQuotaWatch` / `assertProductionQuotaBackend` 只存在于定义链里，
+没有任何调用方）：
+
+- 内部 shell 的 `run` 与 `start` 在 spawn **之前**做一次准入判定，超额或测量
+  失败一律不启动进程，原因如实写进结果的 stderr（`exitCode: 126`，
+  `sandbox.denied: true`）；
+- spawn 之后按 `SANDBOX_WORKSPACE_CHILD_QUOTA_SAMPLE_INTERVAL_S` 采样，越线就
+  终止这次执行及其后代；正常结束、取消、spawn 失败三条出口都会停掉采样器；
+- `DEPLOYMENT_ENV`/`NODE_ENV` 为 `production` 且配置了正数配额时，exec 在装配
+  阶段调用 `assertProductionQuotaBackend()`——缺监控或缺硬配额声明直接拒绝启动。
+
+控制面账本（产物/数据集预留）的默认额度以前写死 1024 MB，与运维声明无关；
+现在取 `SANDBOX_WORKSPACE_QUOTA_MB`（Compose 默认 500）。**升级注意**：既有
+工作区可能已经用掉超过 500 MB。超额工作区不会被删数据，走与其它超额工作区
+相同的策略——只限制新增写入，读取与清理不受影响。切换前先盘点各工作区已用量。
+
+### Per-execution resource limits
+
+`.env.example` 与 Compose 一直声明的这几个变量，2026-09-16 之前在 `exec/src`
+里**一个消费者都没有**。现在逐条落到命名空间**内部**的 `ulimit` 包装器
+（必须在 bwrap 之内设：`RLIMIT_NPROC` 按 UID 计数，在宿主侧收紧会把 exec 自己
+的线程算进去，可能直接让命名空间建不起来）：
+
+| 变量 | 落到 | 语义 | 允许范围 |
+|---|---|---|---|
+| `SANDBOX_MAX_PROCESS_COUNT` | `ulimit -u` | 命名空间内的进程数上限 | 4–4096，`0`=不限制 |
+| `SANDBOX_MAX_OPEN_FILES` | `ulimit -n` | **逐进程** fd 上限 | 16–65536，`0`=不限制 |
+| `SANDBOX_MAX_CPU_TIME_SECONDS` | `ulimit -t` | **逐进程** CPU 秒（不是墙钟，也不是进程树总和） | 1–86400，`0`=不限制 |
+| `SANDBOX_MAX_FILE_SIZE_MB` | `ulimit -f` | 单个文件的最大长度 | 1–1048576，`0`=不限制 |
+| `SANDBOX_MAX_ADDRESS_SPACE_MB` | `ulimit -v` | **逐进程虚拟地址空间**（默认关） | 256–1048576，`0`=不下发 |
+| `SANDBOX_EXECUTION_TIMEOUT_SECONDS` | 前台执行预算 | 请求里的 `timeoutMs` 不得超过它，超了 400 | 1–86400 |
+| `SANDBOX_MAX_OUTPUT_CHARS` | 输出上限 | 同时决定 `stdoutMaxBytes` 的天花板（×4） | 1000–5000000 |
+
+值不是整数或落在范围外时 exec **拒绝启动**，不静默换成默认值。
+
+这些限额与配额准入/采样、请求断开取消对**两个执行入口一视同仁**：Agent 走的
+`/internal/v1/shell/run`，以及外部 MCP 客户端经 facade 走的
+`/internal/mcp/v1/shell/execute`、`/internal/mcp/v1/python/execute`（共用
+`exec/src/shell/guarded-execution.ts`）。MCP 请求的 `timeout_seconds` 超过
+`SANDBOX_EXECUTION_TIMEOUT_SECONDS` 时回 400，不静默夹短。
+
+`SANDBOX_MAX_MEMORY_MB` **不会**被翻译成逐任务 rlimit，**也不设置任何内存限额**：
+exec 只读它来打启动日志。原因：rlimit 里唯一沾边的是 `RLIMIT_AS`（虚拟地址空间），
+而地址空间不等于进程树常驻内存——Python/numpy 这类运行时预留的虚拟地址空间远大于
+实际使用量，按 512 MB 收紧会让正常命令直接起不来。进程树的内存总量只有 cgroup
+管得住，那是 Compose/systemd 的事。声明了它而没有开 `SANDBOX_MAX_ADDRESS_SPACE_MB`
+时，exec 启动日志会打一条 `exec NOTICE:`——**日志里的数字不是已生效的额度**。
+
+实际的内存硬限额在哪里：
+
+| 部署 | 真正生效的内存限额 | 说明 |
+|---|---|---|
+| `docker-compose.prod.yml` | `SANDBOX_MEM_LIMIT`（默认 `1g`，`deploy.resources.limits.memory`） | 整个 sandbox 容器共用，不是逐任务 |
+| `docker-compose.yml`（开发） | **无** | 没有设容器内存限制，不能据 `SANDBOX_MAX_MEMORY_MB` 声称有兜底 |
+| VM / systemd | 由 unit 的 `MemoryMax=` 决定 | 仓库不替运维设置 |
+
+需要内存兜底的部署，上线前用 `docker inspect --format '{{.HostConfig.Memory}}' <容器>`
+或 `systemctl show -p MemoryMax <unit>` 核对 cgroup 上确实有值。
+
+### VM exec release（单 VM 裸装，design §9）
+
+目标拓扑里执行面是单 VM、单实例、systemd 托管。仓库提供不可变 release 包与部署资产（`deploy/vm/`），
+**不**提供 VM 上的系统工具链安装（bwrap、Python venv、办公工具、Chromium 等由运维按 design §9.1 装好，
+`docs/reviews/2026-09-07-updrdb-dbpm/probe/vm_preflight.sh` 做装机前体检）。
+
+**构建**（在目标架构的 Linux 容器里编译并安装依赖，原生模块不跨平台搬运）：
+
+```bash
+scripts/vm/build-exec-release.sh --arch amd64      # 产物：.runtime/vm-release/exec-<sha12>-amd64.tar.gz + .sha256
+```
+
+工作区有未提交改动时拒绝构建（`--allow-dirty` 只用于本地验证，id 带 `-dirty-<时间>`）。release 内含
+`release-manifest.json`（提交、架构、构建用 Node 与 glibc、schema 清单哈希、原生模块、符号链接）与
+`SHA256SUMS`，不含源码与开发依赖。Node 必须是 `/usr/local/bin/node`（满足 `>=22.19.0 <23`）：
+Bubblewrap 只暴露 `/usr /bin /sbin /lib /lib64`，装在 `/opt` 的 Node 在沙箱里不可见。
+
+**安装与切换**（root，脚本在 release 的 `vm/` 下）：
+
+```bash
+vm/install-release.sh init                              # 建 dsh-exec 系统用户、/var/lib/dsh-exec/*（0700）、/etc/dsh-exec
+vm/install-release.sh install exec-<id>.tar.gz          # 校验 .sha256 与 SHA256SUMS，解包为 root 所有的只读目录
+install -m 0640 -o root -g dsh-exec exec.env /etc/dsh-exec/exec.env   # 由 vm/exec.env.example 填写
+vm/install-release.sh activate exec-<id>                # 原子切换 /opt/dsh-exec/current，安装 unit，daemon-reload
+systemctl enable dsh-exec                                # 首次
+systemctl restart dsh-exec                               # 在维护窗口内：先停准入、drain 或停止执行
+```
+
+脚本从不自动重启服务；同一 release id 不能重复安装。回滚 = `activate <旧 id>` 后在维护窗口内重启。
+
+**`exec.env`**：只列 exec 实际读取的变量（开发 Compose 里的大量 `SANDBOX_*` 是 Python 执行面时代的，TS 执行面不读）。
+`EXEC_INTERNAL_ALLOW_CIDR` 为空时 exec 拒绝全部内部面请求；VM 上启动前检查另外要求它非空，避免服务起来却全部 403，按实测的 LB SNAT / 源地址填写。
+
+**启动链**：`ExecStartPre=vm/exec-preflight.sh`（非 root；Node 位置与版本；release 完整、架构匹配且对运行用户只读；
+必需配置非空且不是模板占位符；四个数据根属主为运行用户且 0700；系统 Skill 根可读；bwrap 存在且非 setuid）→
+exec 自身按 取密 → schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen 启动。任一步失败服务不监听。
+
+**停止**：`KillMode=mixed`——SIGTERM 只发给主进程（先置未就绪、关 listener），主进程退出或 `TimeoutStopSec` 到期后，
+cgroup 里剩余的 bwrap 子进程一律 SIGKILL；被中断作业的账本由下次启动的孤儿回收收口。
+
+**启动失败的重试**：`Restart=on-failure` 同样作用于 ExecStartPre 与 exec 启动期检查失败——每 5 秒重试，300 秒内 5 次后
+unit 进入 failed。修好配置后需 `systemctl reset-failed dsh-exec` 再启动。
+
+**加固项**：unit 启用 `NoNewPrivileges`、空 capability、`ProtectSystem=strict`、`ProtectHome`、`PrivateTmp`、
+`ProtectProc=invisible` 等，`ReadWritePaths` 只放 `/var/lib/dsh-exec` 与共享草稿根。兼容性以 exec 启动期 bwrap 预检为准，
+2026-09-15 在 Debian bookworm（systemd 252）与 openEuler 24.03 LTS（systemd 255）容器中逐项实测：
+
+| 指令 | 结果 | unit |
+|---|---|---|
+| `ProtectProc=invisible` | 两个环境均可启动，`/ready` 隔离 ok | 启用 |
+| `ProtectKernelTunables=yes` / `ProtectKernelLogs=yes` | systemd 252 可启动；**systemd 255 上任一项单独开启**，bwrap `Can't mount proc on /newroot/proc: Operation not permitted`，exec 拒启 | 不启用 |
+| `RestrictNamespaces=yes` | bwrap `No permissions to create new namespace`，exec 拒启 | 不启用 |
+| `ProcSubset=pid` | bwrap 读不到 `/proc/sys/kernel/overflowuid`，exec 拒启 | 不启用 |
+| `PrivateUsers=yes` | 可启动，但改变服务所见 uid 映射，与共享存储属主 / ACL 的影响未评估 | 不启用 |
+| `SystemCallFilter` / `MemoryDenyWriteExecute` | 未测；前者需审计 bwrap 系统调用，后者与 Node JIT 冲突 | 不启用 |
+
+目标 VM 内核（麒麟、KySec）上的结果可能不同，上线前按同一方式复测；不兼容时 exec 拒绝启动而不是降级运行。
+
+**模型工具链**（dnf 系：openEuler / 麒麟，root 运行，脚本随 release 在 `vm/toolchain/`）：
+
+```bash
+vm/toolchain/install-toolchain.sh --cache /srv/dsh-toolchain-cache            # 离线：缓存里必须已有全部制品
+vm/toolchain/install-toolchain.sh --cache /srv/dsh-toolchain-cache --allow-download   # 缺的按清单 URL 下载
+```
+
+- 制品清单 `vm/toolchain/toolchain-sources.json` 钉住 Node、uv、ripgrep、fd、pandoc、LibreOffice、Chromium 两种架构的文件名 / URL / SHA256，并写明哈希来源（发布方摘要、签名验证后记录、首次下载记录）。脚本**先核对 SHA256 再使用**，不匹配或未钉版即失败，从不 `curl | sh`。
+- openEuler 24.03 LTS 官方源（OS / everything / EPOL / update）不提供 ripgrep、fd、pandoc、LibreOffice、Chromium，按决定使用上游官方包：ripgrep / fd / pandoc 为 GitHub release（musl 静态版 / 官方 tar 包），LibreOffice 为 TDF 官方 RPM（GPG 签名验证后钉 SHA256），Chromium 为 Playwright 1.63.0 分发的 Chrome for Testing 构建（发布方无摘要，按下载记录）。是否允许在目标 VM 使用这些第三方二进制需另行确认。
+- 其余来自 dnf 源（清单 `dnf_packages`，包名按 openEuler 24.03 核对，麒麟上需复核）、PyPI（`requirements.txt`，未钉版本，安装后把实际版本写入 `/usr/local/share/dsh-toolchain/python-freeze.txt`）与 npm（bun / docx / pptxgenjs 与 BaoYu 锁文件，版本同 `runtime-versions.json`）；可用 `UV_INDEX_URL`、`npm_config_registry` 指向内网镜像。
+- 沙箱另外只读挂入 `/etc/fonts` 与 CA 信任库（Debian 的 `/etc/ssl`、`/etc/ca-certificates`；RHEL 系的 `/etc/pki/tls/certs`、`/etc/pki/tls/cert.pem`、`/etc/pki/tls/openssl.cnf`、`/etc/pki/ca-trust/extracted`，不含 `/etc/pki/tls/private` 等），系统自带的字体配置与 CA 包无需复制到 `/usr/local`。
+- 安装位置全部在 Bubblewrap 可见的 `/usr/local` 与 `/opt/dsh-python/venv`：官方 LibreOffice RPM 默认装到 `/opt`，脚本解包后搬到 `/usr/local/lib/libreofficeX.Y`；`baoyu-chromium` 改写为指向 `/usr/local/lib/dsh-chromium/chrome/chrome`。
+- 结束时核对各工具版本、Python / Node 文档库可导入、`soffice.bin` 与 `chrome` 无缺失共享库，失败即非零退出。重复运行跳过已装的同版本组件。
+
+**本仓库的演练范围**：release 在带 systemd 的 Debian 容器中验证过安装、负对照、启动、停止清理、孤儿回收与回滚；
+在 openEuler 24.03（systemd 255）特权容器中验证过工具链离线安装、当前 unit 下启动就绪，以及 Bubblewrap 内的工具 smoke
+（文档生成与读回、soffice 转换、pdftotext / qpdf、pandoc、OCR、rg / fd、BaoYu wrapper、Chromium 经 CDP 渲染 mermaid）。
+Chrome for Testing 的一次性 `--screenshot` 模式在该环境挂起，产品内 Chromium 只经 CDP 使用。
+同一容器接替开发栈执行面后，Agent / Worker / BFF / sandbox-mcp 经它跑通了登录 → 带工具 Run → 进程 logs/signal → 跨租户 404。
+麒麟 VM、KySec / SELinux、真实 user namespace 限制、x86_64 与目标 VM 上的工具链 smoke 仍需在目标环境做（design §12 T6）。
+
 
 
 ### 生产架构
 
 ```
                            ┌───────────────────────┐
-                           │   Nginx (443/80)        │
-                           │   TLS + Rate Limit     │
+                           │   Nginx (80 / 443)     │
+                           │   Rate limit + 可选 TLS │
                            └──────┬────────────────┘
                                   │
                   ┌───────────────▼──────────────┐
-                  │   frontend (Nginx:80)         │
+                  │   frontend (Nginx:8080)       │
                   │   Static SPA + /api/* proxy   │
                   └───────────────┬──────────────┘
                                   │
@@ -84,17 +236,17 @@ Child monitor codes: `workspace_quota_exceeded`,
                                   │
                   ┌───────────────▼──────────────┐
                   │   agent (Node:4100)           │
-                  │   pi-coding-agent SDK · LLM   │
+                  │   DeepSeek Harness · LLM      │
                   └───────────────┬──────────────┘
                                   │
                   ┌───────────────▼──────────────┐
-                  │   sandbox (FastAPI:8081)       │
-                  │   Execution · Files · Auth     │
-                  │   MySQL 8 (formal topology)    │
+                  │   exec (Node/TS:8081)          │
+                  │   Execution · Files · Isolation│
+                  │   MySQL (formal topology)      │
                   └──────────────────────────────┘
                                   │
                   ┌───────────────▼──────────────┐
-                  │   redis:7.2 (Agent-only)      │
+                  │   redis:5.0.14 (Agent-only)   │
                   │   Queue · Lease · Stream      │
                   │   (not fact authority)        │
                   └──────────────────────────────┘
@@ -104,9 +256,9 @@ Child monitor codes: `workspace_quota_exceeded`,
                   └──────────────────────────────┘
 ```
 
-图中 Redis 连接属于 Agent 的队列/lease/stream 协调；Sandbox 只使用独立
-的 replay Redis 保存 internal HMAC jti。外部 MCP 由 Agent 的
-pi-mcp-adapter 直连，不经过 Sandbox，也不与 Sandbox replay Redis 共用凭据。
+图中 Redis 连接属于 Agent 的队列/lease/stream 协调；exec **不连任何 Redis**
+（ADR 0008 D8 去掉 jti 防重放后，内部面只靠 HMAC 与来源白名单）。外部 MCP 由 Agent 的
+`@deepseek-ai/dsh-mcp-client` 直连，不经过 Sandbox。
 若部署独立的 `sandbox-mcp`，它同样不经过 Agent：只使用服务 Redis 的专用
 key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。见
 [`sandbox-mcp.md`](./sandbox-mcp.md)。
@@ -117,29 +269,70 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_API_TOKEN` | — | 旧 BFF compatibility adapters 的 service key；不是正式 Agent execution authorization，也不能代表终端用户 |
+| `SANDBOX_API_TOKEN` | — | exec 公共会话面（`/sessions/*`、`/conversations/*`、`/datasets`）的 service key，BFF 与 agent 都以 `X-API-Key` 发送；**exec 启动时必填**，缺失即拒绝启动（fail-closed，否则会话面完全无鉴权）。它不是正式 Agent execution authorization，也不能代表终端用户 |
 | `SANDBOX_INTERNAL_HMAC_KEYRING` | — | 正式 Agent→Sandbox `/internal/v1/*` HMAC keyring；生产必填，密钥不得写入日志 |
 | `SANDBOX_INTERNAL_HMAC_ACTIVE_KID` | — | 当前签名 key id；必须存在于 keyring |
-| `SANDBOX_INTERNAL_REDIS_URL` | — | 独立 replay Redis，用于 HMAC jti 防重放；不得复用 Agent Redis 凭据 |
+| `EXEC_INTERNAL_ALLOW_CIDR` | 开发 Compose：`127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`；生产 overlay：必填 | exec 内部面（`/internal/v1/*`）的来源 CIDR 白名单（逗号分隔）。**空值 = 拒绝全部内部面请求**（启动日志告警），非法 CIDR = 拒绝启动，放行全部须显式写 `0.0.0.0/0,::/0`。判定用的对端地址取自 TCP socket（IPv4-mapped IPv6 按 IPv4 匹配），**不采信 `X-Forwarded-For` / `X-Real-IP`**，取不到对端地址一律拒绝 |
+| `EXEC_HTTP_LOG` | 空 | 设为 `1` 打开 exec 内部面的请求行日志（JSON 一行：方法/路径/状态码，不含 query）|
+| `SANDBOX_JWT_SECRET` | — | **Agent HTTP 进程**签发/校验浏览器 JWT 的 HMAC 密钥；变量名为迁移兼容保留，生产必须是强密钥且不会传给 exec |
+| `SANDBOX_JWT_TTL_SECONDS` / `SANDBOX_JWT_ISSUER` / `SANDBOX_JWT_AUDIENCE` | `86400` / `dsh-enterprise-sandbox` | Agent 浏览器会话 token 的有效期与签发约束 |
+| `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 注册入口开关；生产 compose 强制 `false` |
 | `SANDBOX_AUTH_ADMIN_USERNAMES` | — | 注册即晋升 admin 的用户名列表（逗号分隔）。注册始终忽略客户端提供的 role/organization_id，这是真实部署上创建首个管理员的唯一途径 |
 | `AGENT_REQUEST_TIMEOUT_MS` | `15000` | BFF → Agent 出站调用超时（SSE 长连接除外）；防止挂起的依赖拖垮无关路由 |
 | `SANDBOX_REQUEST_TIMEOUT_MS` | `15000` | BFF → Sandbox 出站调用超时（SSE 长连接除外） |
 | `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL` | dev `true` / 生产禁止 | Agent `/internal/*` 平面的鉴权开关。token 未配置且未显式设为 true 时启动即失败（fail-closed）；生产配置校验拒绝 true |
 | `MCP_SERVERS_JSON` | `[]` | Agent Runtime 外部 MCP Server registry；凭据仅通过 `authTokenRef`/`envRefs`/`headerRefs` 引用环境变量 |
-| `AGENT_MCP_RUNTIME_ROOT` | `/tmp/pi-enterprise-mcp-runtime` | 每个 Run 的私有 `pi-mcp-adapter` 配置目录；配置文件为 `0600` 并在 runtime dispose 时删除 |
+| `A2A_REMOTE_AGENTS_JSON` | 空 | 可被 `delegate_to_remote_agent` 调用的远端 A2A Agent 登记表；凭据仅通过 `authTokenRef` 引用环境变量。见下文「远端 A2A Agent」 |
 
 ### MCP 启动与可见性（一期）
 
 `MCP_SERVERS_JSON` 是一期 MCP 的唯一运维清单：其中 `enabled=true` 的每个
-Server 在 Agent 进程启动时都会由 `pi-mcp-adapter` 连接并执行 `tools/list`。
+Server 在 Agent 进程启动时都会由 `@deepseek-ai/dsh-mcp-client` 连接并执行 `tools/list`。
 发现到的工具会自动对全部 Agent 可见，名称固定为
 `mcp__{serverId}__{toolName}`；不需要修改 AgentVersion。
 
-启动发现结果在该进程内固定，修改配置必须重启 Agent，不支持热加载。每个
+启动发现结果在该进程内固定，修改配置必须重启 Agent（boot 时读取 `MCP_SERVERS_JSON`，不必重跑 `npm run gen:patch`），不支持热加载。每个
 MCP 工具默认走 approval；一期不提供按 AgentVersion 的 MCP server/tool
-allowlist。`GET /ready` 返回每个 Server 的连接状态及总 Server/tool 数量；
-任何启用的 Server 不可达会使 readiness 返回 `503`，并打印
-`[agent-mcp] MCP readiness error`，不会静默退化为 `tools=[]`。
+allowlist。`GET /ready` 返回每个启用 Server 的连接状态及总 Server/tool 数量；
+状态是「启用清单 × 当前工具注册表」的投影：有工具注册为 `connected`，没有（连不上、
+引用的 env 缺失被跳过、重连预算耗尽）为 `unavailable` 并使 readiness 返回 `503`，
+启动时打印 `[agent-mcp] MCP Server unavailable id=…`，不会静默退化为「没配置」。
+`/ready` 每次重读注册表，Server 恢复后无需重启即恢复就绪（启动时不可达、运行中断开、stdio 崩溃三种情形
+均已用真插件树实测，见 [证据](evidence/k8s-deployment-review-followup-2026-09-19.md)）。
+
+重连：出厂 `dsh-mcp-client` 对启动失败与运行中断开都按指数退避重连（0.5s 起翻倍、封顶 30s）。出厂默认连续
+10 次失败（约 2 分钟）后**放弃并注销工具，之后只有重启进程才会再连**——配合上面的 readiness 规则，一台 MCP
+故障超过约两分钟 Agent 就永久未就绪。因此本仓库生成的条目默认 `reconnect.maxAttempts` 不设上限；需要出厂语义的
+Server（例如可能崩溃循环的 stdio 子进程）在该条目里显式写
+`"reconnect": { "maxAttempts": 10 }`（可选键 `enabled`、`initialDelayMs`、`maxDelayMs`、`maxAttempts`，非法值拒绝启动）。
+
+已知盲区：Server 运行中断开或 stdio 子进程崩溃后，出厂插件保留上一代工具直到重连成功或预算耗尽，
+这段时间 `/ready` 仍报 `connected` 而调用失败（HTTP 为 `fetch failed`，stdio 为 `Not connected`）；
+只暴露零个工具的 Server 会被报成 `unavailable`。
+
+### 远端 A2A Agent（出站委派）
+
+设计见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。`A2A_REMOTE_AGENTS_JSON`
+是 JSON 数组，每项：
+
+| 键 | 必填 | 说明 |
+|---|---|---|
+| `id` | ✅ | `[A-Za-z0-9_-]{1,32}`，AgentVersion 的 `delegation.remoteAgents` 引用它 |
+| `cardUrl` | ✅ | 远端 Agent Card 的绝对地址；**生产必须 https**。卡片声明的端点必须与它同源，否则拒绝调用 |
+| `authTokenRef` | ✅ | 存放 Bearer 凭据的**环境变量名**；该变量必须非空 |
+| `name` / `description` |  | 进系统提示给模型看 |
+| `timeoutMs` |  | 单次委派总时限，默认 600000，范围 1000–3600000 |
+| `enabled` |  | `false` 时跳过（仍参与 id 去重） |
+
+- 进程启动时解析，任何不合法（未知键、重复 id、变量未设置、生产用 http）都**拒绝启动**；修改后重启
+  `agent` 与 `agent-worker`，不支持热加载。
+- 远端**不参与** `/ready`：按需调用，一台远端宕机不让 Agent 下线；失败以工具错误
+  （`A2A_REMOTE_UNAVAILABLE` / `A2A_REMOTE_TIMEOUT` / `A2A_REMOTE_FAILED` / `A2A_REMOTE_NEEDS_INPUT`）返回给模型。
+- 出站请求单次 30 s 超时、响应体上限 1 MiB、不跟随重定向，凭据只发往 `cardUrl` 同源。
+- 工具风险为 `external_high`，平台风险表默认 `high → require_approval`；只有改平台风险表
+  （`config/agent/tool-risk.json`）才能免审批，AgentVersion 只能再收紧。
+- 远端可以是本部署自己的 A2A 面：在「A2A Access」签发凭据，`cardUrl` 填
+  `<A2A_PUBLIC_BASE_URL>/a2a/agents/<agent_id>/.well-known/agent-card.json`。
 
 ### Execution policy profile
 
@@ -165,30 +358,30 @@ metadata/link-local 目的地阻断始终开启。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_BIND_HOST` | `0.0.0.0` | **仅控制监听接口**。`0.0.0.0` 不等于允许任意来源。旧名 `SANDBOX_HOST` 仍可用 |
-| `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + Docker 私网 | Sandbox HTTP 来源 CIDR 白名单。空列表 = 拒绝全部（失败关闭） |
-| `SANDBOX_TRUSTED_PROXY_CIDRS` | _(空)_ | 可信反向代理。默认忽略 `X-Forwarded-For`；仅当 TCP peer 属于此列表时，才从右向左剥离可信代理解析真实客户端 |
+exec 固定监听 `0.0.0.0:${EXEC_PORT|SANDBOX_PORT}`（IPv4），没有监听地址开关，也不支持「可信代理」解析转发头。
+三个面各自鉴权，互不替代：
 
-**默认 allowlist（compose / 本地容器）:**
-`127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`
+| 面 | 来源限制 | 鉴权 |
+|----|----------|------|
+| 内部面 `/internal/v1/*`（Agent / Worker） | `EXEC_INTERNAL_ALLOW_CIDR`：空值拒绝全部，非法值拒启 | HMAC（`SANDBOX_INTERNAL_HMAC_*`） |
+| 公共会话面 `/sessions/*` 等（BFF / Agent） | 无 | `SANDBOX_API_TOKEN`（`X-API-Key`） |
+| MCP 窄桥 `/internal/mcp/v1/*`（sandbox-mcp） | 无 | `SANDBOX_MCP_INTERNAL_TOKEN` |
 
-**本机非 Docker 更严示例（仅 loopback）:**
+**本机非 Docker 示例（Agent 在同机）：**
 ```env
-SANDBOX_BIND_HOST=127.0.0.1
-SANDBOX_ALLOWED_CLIENT_CIDRS=127.0.0.1/32,::1/128
-SANDBOX_TRUSTED_PROXY_CIDRS=
+EXEC_INTERNAL_ALLOW_CIDR=127.0.0.1/32
 ```
 
-**反向代理示例（nginx 在 Docker 网桥，业务来源为办公网）:**
+**VM / 负载均衡示例：** 按实测的 LB SNAT 或源地址保留方式填写 Agent / Worker 实际到达 exec 的源地址段，不要照抄 Pod CIDR：
 ```env
-SANDBOX_BIND_HOST=0.0.0.0
-SANDBOX_ALLOWED_CLIENT_CIDRS=10.0.0.0/8,172.16.0.0/12
-SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
+EXEC_INTERNAL_ALLOW_CIDR=10.20.30.0/24
 ```
+
+`SANDBOX_BIND_HOST`、`SANDBOX_ALLOWED_CLIENT_CIDRS`、`SANDBOX_TRUSTED_PROXY_CIDRS` 属于已删除的 Python 执行面，TS exec 不读取。
 
 外部 MCP 由 Agent Runtime 直接连接，不经过 Sandbox。凭据由 `authTokenRef` 指向的环境变量注入。
 
-**命名分离：** `SANDBOX_ALLOWED_CLIENT_CIDRS` 只约束 **入站** HTTP 客户端；
+**命名分离：** `EXEC_INTERNAL_ALLOW_CIDR` 只约束 **入站** 内部面来源；
 `SANDBOX_NETWORK_MODE` 只约束 **出站执行** 策略。已移除 container-wide iptables
 与 `SANDBOX_ALLOWED_CIDRS` / 端口 union allowlist 作为隔离权威的设计。
 
@@ -201,7 +394,8 @@ SANDBOX_TRUSTED_PROXY_CIDRS=172.16.0.0/12
 Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox/api/frontend；
 开发 Compose 另外给 Sandbox 接入 `service_egress`，仅当显式设置
 `SANDBOX_NETWORK_MODE=unrestricted` 时，沙箱子进程才可访问通过
-`SANDBOX_EXEC_ENV_*` 注入的远程业务库。生产 overlay 用 `!override` 移除该网络，
+`SANDBOX_EXEC_ENV_*` 注入的远程业务库；这些显式 allowlist 值通过受控 spawn 环境
+进入子进程，不拼入 Bubblewrap 命令行。生产 overlay 用 `!override` 移除该网络，
 并固定 `SANDBOX_NETWORK_MODE=disabled`；`agent`/`agent-worker` 始终接入
 `service_egress` 以访问 LLM。
 
@@ -211,17 +405,26 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 |------|--------|------|
 | `LLMIO_BASE_URL` | — | **必需** — LLM API 基地址 |
 | `LLMIO_API_KEY` | — | **必需** — LLM API 密钥 |
-| `MODEL_ID` | `deepseek-v4-flash` | 模型 ID |
+| `MODEL_ID` | `deepseek-flash` | 默认模型 ID。当前目录只保留网关可用的 `deepseek-flash`（多模态）与 `qwen3.8-27b`（文本） |
 
-### Domain & SSL
+### Domain & 入口形态
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DOMAIN` | `localhost` | 生产 Nginx SSL 域名 |
+| `TLS_ENABLED` | `true` | 边缘 nginx 的入口形态。`true`：终止 TLS，80 跳 443，声明 HSTS，缺证书时自签一张；`false`：只监听 80 明文（内网部署），不生成证书、不声明 HSTS。**只接受 `true` / `false`**，其它值容器拒绝启动 |
+| `DOMAIN` | `localhost` | 生产 Nginx `server_name`（TLS 模式下也是自签证书的 CN） |
 | `NGINX_HTTP_PORT` | `80` | HTTP 端口 |
-| `NGINX_HTTPS_PORT` | `443` | HTTPS 端口 |
+| `NGINX_HTTPS_PORT` | `443` | HTTPS 端口。明文模式下仍会发布，但没有监听者——端口发布在编排期决定，模式在运行期决定 |
 
-### Database（MySQL 8）
+### Frontend nginx 上游
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `API_UPSTREAM` | `http://api-server:4000`（镜像 `ENV` 与开发 Compose） | frontend 容器 `/api/` 的转发目标；K8s 中填 api-server 内部 LB。只接受 `http://host[:port]`：带路径、query、空白、换行、`;`、`$`、`https://` 或端口越界时容器在 nginx 启动前退出 |
+
+frontend 镜像把 `nginx/default.conf.template` 放进官方镜像的 `/etc/nginx/templates/`，启动时由 `20-envsubst-on-templates.sh` 渲染到 `conf.d/default.conf`，`NGINX_ENVSUBST_FILTER=^API_UPSTREAM$` 保证 `$host`、`$remote_addr` 等 nginx 变量不被替换。镜像删除了官方自带的 `conf.d/default.conf`，并在渲染前后各跑一个校验钩子：`05-validate-api-upstream.sh` 拒绝不安全的值；`25-verify-rendered-config.sh` 要求渲染文件存在、无残留占位符且确实指向本次上游——官方渲染脚本在 `conf.d` 不可写（如只读根文件系统）时只打日志继续启动，这里改为拒启。若平台要求只读根文件系统，需给 `/etc/nginx/conf.d`、`/var/cache/nginx`、`/var/run` 挂可写 `emptyDir`（design §2.1 的 nginx 临时目录，尚未在目标环境验证）。
+
+### Database（开发 MySQL 5.7 / 生产 overlay MySQL 8）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -232,8 +435,15 @@ Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox
 | `AGENT_DATABASE_URL` | `mysql://…@mysql:3306/sandbox` | Agent 事实库（仅 `mysql://` / `mysql2://`） |
 | `SANDBOX_DATABASE_URL` | `mysql+pymysql://…@mysql:3306/sandbox` | Sandbox 持久化（`mysql+pymysql://` 或 `mysql://`） |
 | `SANDBOX_COMPOSE_DATABASE_URL` | 未设置（默认 MySQL compose DSN） | 仅开发 Compose 的显式 Sandbox DSN override；旧 `.env` 中的 `SANDBOX_DATABASE_URL` 不参与默认插值 |
+| `UPDRDB_ENDPOINTS` | 未设置（使用 DSN 的 host:port 单端点） | UPDRDB 两个 Proxy，恰好两个 `host:port` 逗号分隔。Agent / Agent Worker（Knex 与 DSH 会话存储）和 Sandbox 执行面读取；设置后按端点故障切换，DSN 只提供 user/database/参数。格式错误拒绝启动 |
 
-**开发:** `docker compose up` 启动 `mysql:8.0`；DSN 默认指向 compose 网络内 `mysql` 服务。占位密码仅用于本地，勿用于共享/生产环境。
+**开发:** `docker compose up` 启动 `mysql:5.7`（对齐 UPDRDB 的 UPSQL 5.7 内核，见 [ADR 0011](adr/0011-updrdb-upredis-dbpm-migration.md)）；DSN 默认指向 compose 网络内 `mysql` 服务。占位密码仅用于本地，勿用于共享/生产环境。
+
+5.7 使用独立数据卷 `mysql57_dev_data`。MySQL 官方[不支持 8.0 降级到 5.7](https://dev.mysql.com/doc/refman/8.0/en/downgrading.html)：把旧的 `mysql_dev_data` 挂给 5.7 会在 InnoDB 数据字典校验处崩溃退出。旧 8.0 卷**已于 2026-09-14 决定作废**，不再作为回退点，也不要挂给 5.7；需要回收磁盘时手工删除该卷。若本地 `.env` 显式设过 `MYSQL_DATA_VOLUME`，必须同步改成新卷名。
+
+**UPDRDB 双 Proxy 建连**（ADR 0011 D5，design §4.2/§4.3）：设置 `UPDRDB_ENDPOINTS` 后，三个 MySQL 接入点（Agent Knex、Agent DSH 会话存储、exec 裸池）每次取连接时按「粘住当前主用 → 网络故障拉黑 180s 并试另一个 → 拉黑过期不主动回切」选择端点；单次握手 3s，一次取连接（含会话初始化）总预算 10s。认证失败、库不存在、会话初始化失败不换端点，直接报错。**已发出的 SQL 一律不重试**（包括 commit 响应丢失），由既有幂等键与回读判定。每条物理连接交付前执行 `SET SESSION time_zone = '+00:00'`，失败的连接丢弃。
+
+官方 `mysql:5.7` 镜像只有 amd64；Apple Silicon 上通过 `MYSQL_PLATFORM`（默认 `linux/amd64`）模拟运行，可用但比原生慢。
 
 **生产:** `docker-compose.prod.yml` 内置 MySQL 8、healthcheck、持久 volume，以及 Sandbox/Agent 对 MySQL 的健康依赖。启动前必须设置强 `MYSQL_PASSWORD` 与 `MYSQL_ROOT_PASSWORD`；production overlay **不**回退 SQLite 或 PostgreSQL。Sandbox 生产配置校验拒绝非 MySQL DSN。
 
@@ -262,68 +472,204 @@ builds must be performed in CI or an internal mirror with access to the
 configured Debian, PyPI, and npm registries; deployed containers do not need
 those registries for the bundled Skills themselves.
 
-**Compose migration order:** `agent-migrate` is the only migration owner. It
-waits for MySQL health, runs `migrate:latest` once, and exits. `sandbox`,
-`agent`, and `agent-worker` all require
-`service_completed_successfully`; the long-running Agent processes force
-`AGENT_MIGRATE_ON_START=false`, so they cannot race the one-shot job. A failed
-migration intentionally blocks the data plane. Inspect with
-`docker compose logs agent-migrate`, correct the schema/configuration issue,
-then rerun `docker compose up agent-migrate` (or the full `up` command).
+**Schema 发布（ADR 0011 D6）：任何服务启动时都不迁移，开发与生产同一流程。**
+Knex migrations 仍是唯一 schema 权威，但生产账号没有 DDL 权限，建表改为执行导出的发布包：
+
+1. 在**空的专用影子库**上导出：`SCHEMA_SHADOW_DATABASE_URL=… npm run schema:sql --prefix agent -- --out DIR`
+   （增量加 `--from <已上线的最后一个迁移>`）。发布包包含 `0000_knex_bookkeeping.sql`（仅首装）、
+   按迁移分段的 `NNNN_<migration>.sql`、`schema-manifest.json` 与 `release.json`（起止迁移、迁移文件
+   与每段 SQL 的 sha256、执行说明）。导出时影子库结构必须与随包清单一致，否则拒绝产出。
+2. 交付前在第二个空库/基线库重放核对：`SCHEMA_REPLAY_DATABASE_URL=… npm run schema:replay --prefix agent -- --dir DIR`。
+3. DBA 用 mysql 客户端**按顺序逐段**执行，首个错误即停，禁止 `--force`；每段最后一句才写
+   `knex_migrations`，失败段不会被记成已完成。失败处理见
+   [部分迁移恢复 runbook](runbooks/mysql-partial-migration-recovery.md)。
+4. 执行后只读核对：`SCHEMA_VERIFY_DATABASE_URL=… npm run schema:verify --prefix agent`。
+
+`agent`、`agent-worker`、`sandbox` 启动时都会按随镜像分发的 `contract/schema/schema-manifest.json`
+核对真实元数据（表、列类型/可空/默认值、索引、外键动作、四个 append-only 触发器正文、迁移记录），
+任何差异都以 `SCHEMA_DRIFT` 拒绝启动——Agent 在连 Redis 之前，Worker 在消费任务之前，exec 在孤儿回收之前。
+应用账号必须能读 `information_schema` 中这些对象（含 `TRIGGERS`）；读不到按「缺失」处理，不视为无差异，
+生产最小权限需要 DBA 确认。开发环境：`docker compose up -d mysql` 后执行 `scripts/dev/schema-apply.sh`；
+空库上直接 `up` 时三个服务会重启等待，建表完成后自动通过核对。备份恢复（`scripts/restore.sh`）同样只做核对，不迁移。
+
+**库表命名规范（UPspec《数据库设计规范》，[ADR 0013](adr/0013-upspec-table-naming.md)）。** 库缩写 `agsvc`；
+迁移 `20260923000001_upspec_naming.js` 起共享 MySQL 的物理对象如下，`tests/test_schema_upspec_naming.py`
+按清单守住，新迁移必须照此命名：
+
+| 对象 | 规则 | 例 |
+|---|---|---|
+| 表 | `tbl_agsvc_<业务名>`，≤128 字节 | `tbl_agsvc_runs` |
+| 索引 | `ind_agsvc_<表缩写>_(a\|i)<序号>`，≤18 字节；`a` 唯一、`i` 普通；一表一个缩写，全库不重复；单表 ≤18 个 | `ind_agsvc_run_i5` |
+| 短字符串 | 长度 ≤16 用 `char(n)` | `tbl_agsvc_cron_jobs.schedule_type char(16)` |
+| NOT NULL 列 | 带默认值：字符串 `''`、整数 `0`、时间 `'1970-01-01 00:00:00.000'`（5.7 的 `SET DEFAULT` 只收字面量） | — |
+
+有意的例外：主键列与身份/租户/引用（`*_id`、`*_subject`、`*_provider`）、操作者（`*_by`）、凭据与完整性
+（`*_hash`、`*_key`、`*_digest`、`sha256`、`checksum`、`username`）列**不设默认值**，漏写时由数据库拒绝
+（AGENTS.md §2 fail-closed）；JSON/TEXT 列 5.7 不允许默认值；有业务语义的 NULL（如 `expires_at IS NULL`
+表示永不过期）保留。Knex 记账表 `knex_migrations*`、外键约束名与触发器名不改（前者改名会让 Knex 认不出已执行的迁移，
+后两者规范未约束）。文档与代码注释里的「`runs` 表」等指业务名，物理表名一律带 `tbl_agsvc_` 前缀。
+
+> **升级注意（破坏性）**：该迁移把 40 张表整体改名，新旧版本的代码与库**互不兼容**。已有库升级时按
+> 「停写 → 导出增量发布包（`--from 20260912000001_claim_without_skip_locked.js`）→ DBA 执行 → `schema:verify`
+> → 部署新镜像」进行，不能滚动发布；表改名是一条原子 `RENAME TABLE`，其后每张表一条 `ALTER TABLE`，
+> 中途失败见 [部分迁移恢复 runbook](runbooks/mysql-partial-migration-recovery.md#upspec-naming-migration-20260923000001)。
 
 **Triggers / binary log (migration gate):** Agent migrations issue `CREATE TRIGGER`
 as the non-SUPER application user. Compose-managed `mysql` services set
 `--log-bin-trust-function-creators=1` (dev + prod overlay). Do **not** grant
 `SUPER` to `MYSQL_USER`. If `AGENT_DATABASE_URL` points at **external/managed**
-MySQL, operators must enable the equivalent platform flag before first migrate;
-the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
+MySQL, operators must enable the equivalent platform flag before applying the
+schema release (the DBA account creates the triggers); migration tooling
+fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 `SET GLOBAL` on remote hosts. See
 [mysql-partial-migration-recovery.md § Triggers and binary logging](runbooks/mysql-partial-migration-recovery.md#triggers-and-binary-logging).
 
 研发阶段不可逆的空环境切换见 [Development reset runbook](runbooks/development-reset.md)。该流程明确不备份、不迁移、不恢复旧数据。
 
-### Redis 7（Agent-only 运行态协调）
+### DBPM 取密（ADR 0011 D10）
+
+应用进程的数据库 / Redis 口令**只来自 DBPM**，启动时取一次、只放内存，不写进程环境、不打印。连接串**不带口令**；带口令、`DBPM_URL` 缺失、DSN 用户名与 DBPM 条目不一致、两台 DBPM 都取不到，都直接拒绝启动——没有环境变量口令回退。
+
+启动顺序：校验配置 → 按角色取密 → 建连（含 UTC 会话初始化、Proxy 故障切换）→ 预检 → 就绪。
+
+| 进程 | UPDRDB 条目 | 服务 Redis 条目 |
+|------|-------------|-----------------|
+| agent / agent-worker | ✔ | ✔ |
+| sandbox（exec） | ✔ | — |
+| sandbox-mcp | — | ✔（对外 facade，拿不到 UPDRDB 口令） |
+
+exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-16 随 ADR 0008 D8 退役）。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `REDIS_PASSWORD` | 开发占位 `redis_dev_only`；生产无默认 | Redis `requirepass`（生产必填强 secret，fail-fast） |
-| `REDIS_URL` | `redis://:…@redis:6379/0` | 通用 / plan 别名 DSN |
-| `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`） |
+| `DBPM_URL` | 开发：`dbpm-fake:7000,dbpm-fake:7001`；生产无默认 | 恰好两个 `host:port`。连接 3s、每台 5s、两台总预算 10s；第一台任何失败都切第二台 |
+| `DBPM_DB_NAME` / `DBPM_DB_USER_NAME` | 开发：`sandbox` / `MYSQL_USER` | UPDRDB 条目；用户名必须与 DSN 用户名一致 |
+| `DBPM_REDIS_DB_NAME` / `DBPM_REDIS_DB_USER_NAME` | 开发：`redis` / `default` | 服务 Redis 条目 |
+| `AGENT_COMPOSE_DATABASE_URL` / `AGENT_COMPOSE_REDIS_URL` / `SANDBOX_MCP_COMPOSE_REDIS_URL` | 无口令的 compose 内默认 | 仅开发 Compose 插值用；宿主 `.env` 里旧的带口令 `AGENT_DATABASE_URL` 等不会被带进容器 |
+| `SCHEMA_SHADOW_DATABASE_URL` / `SCHEMA_REPLAY_DATABASE_URL` / `SCHEMA_VERIFY_DATABASE_URL` | 未设置 | 仅 schema 工具（开发/DBA）：带口令的完整 DSN，口令也可用对应 `SCHEMA_*_PASSWORD` 单独传入；不走 DBPM，不进应用容器 |
+| `FAKE_DBPM_FAIL_PORTS` | 未设置 | 仅开发：让假 DBPM 的某个端口返回错误，演练主备切换 |
+
+**开发:** `docker compose up` 启动 `dbpm-fake`（`scripts/dev/fake-dbpm.mjs`，真协议假服务端，只挂 `backend_internal`、不发布端口），口令即 `MYSQL_PASSWORD` / `REDIS_PASSWORD` 的开发占位值；应用服务等它 healthy 后启动。宿主机直接起服务进程时，同样需要一个 DBPM 地址（可 `node scripts/dev/fake-dbpm.mjs` 起本机假服务端）。
+
+**生产:** `docker-compose.prod.yml` 把 `dbpm-fake` 放进永不启用的 profile（并强制 production，脚本会拒绝运行），四个应用服务的 `depends_on` 用 `!override` 去掉它；`DBPM_URL`、`DBPM_DB_NAME`、`DBPM_REDIS_DB_NAME`、`DBPM_REDIS_DB_USER_NAME` 必填（`:?`，无默认）。`MYSQL_PASSWORD` / `REDIS_PASSWORD` 只用于数据库 / Redis 服务端自身。口令变更需要重启取密进程；没有双口令重叠窗口时安排维护窗口。
+
+### Redis 5.0.14（Agent-only 运行态协调，UPRedis 基线）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `REDIS_PASSWORD` | 开发占位 `redis_dev_only`；生产无默认 | Redis 服务端 `requirepass`（生产必填强 secret，fail-fast）；应用口令经 DBPM 下发 |
+| `REDIS_URL` | `redis://redis:6379/0`（不带口令） | 通用 / plan 别名 DSN |
+| `AGENT_REDIS_URL` | 同 `REDIS_URL` 形 | Agent 客户端主 DSN（仅 `redis://` / `rediss://`；带口令拒绝启动） |
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试 DSN |
-| `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue |
+| `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue 的**基名**（深度 0）。深层队列由它派生：`<base>-d1`、`<base>-d2`（见下文分层拓扑） |
+| `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，HTTP 与 Worker 必须一致；必须含非空 hash tag，否则拒绝启动。Redis 被多环境复用时用环境独立值（如 `{dsh-test-bull}`）。改值前按 [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
+| `AGENT_WORKER_CONCURRENCY` | `4` | Worker 的并发**总预算**（ADR 0012）。不是每层各一份——它按深度分层切分，见下文。必须 ≥ `AGENT_SUBAGENT_MAX_DEPTH + 1`，否则拒绝启动 |
+| `AGENT_SUBAGENT_MAX_DEPTH` | `2` | 允许的最大子任务嵌套深度。同时决定队列层数（`0..N`）与保留槽数量 |
+| `AGENT_WORKER_PROBE_PORT` | `4101` | Worker 探针 listener 端口（`/health`、`/ready`，见 [Health Checks](#health-checks)）；非 1–65535 整数拒绝启动 |
+| `AGENT_WORKER_PROBE_HOST` | `0.0.0.0` | Worker 探针监听地址；K8s 探针打 Pod IP，不要改成 loopback |
+| `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS` | `5000` | Worker 依赖守卫探测间隔（500–600000，非法值拒绝启动）；连续 2 次失败暂停取任务、连续 2 次成功恢复，见 [Health Checks](#health-checks) |
+| `AGENT_WORKER_DRAIN_TIMEOUT_MS` | `150000` | Worker 关停时等待在途 Run 结束的期限（1000–3600000，非法值拒绝启动）。到期仍有 Run 在跑即不清理直接退出（码 1），交给崩溃恢复扫描（工具仍在执行的 Run 不自动重放）；编排终止宽限（K8s `terminationGracePeriodSeconds`、Compose `stop_grace_period`）必须大于它加关停尾部，见 [Health Checks](#health-checks) |
 | `AGENT_RUN_MAX_TOOL_CALLS` | `200` | 单个 Run 最多执行的工具调用数；达到后下一轮只能基于已有结果作答 |
 | `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `6` | 同一工具与规范化参数组合的最多执行次数 |
 | `AGENT_RUN_MAX_MODEL_TURNS` | `120` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
 
-**开发:** `docker compose up` 启动 `redis:7.2`（AOF + `redis_dev_data` volume）。Agent 依赖 Redis health；默认 DSN 指向 compose 网络内 `redis` 服务。占位密码仅用于本地。
+#### Run 队列按子任务深度分层（ADR 0012）
 
-**生产:** `docker-compose.prod.yml` 要求 `REDIS_PASSWORD` 已设置（`${REDIS_PASSWORD:?…}` fail-fast），启用 `requirepass`、healthcheck、持久 `redis_data` volume，Agent 对 Redis `service_healthy` 依赖；**不**对外发布 Redis 端口。BFF **不**获得 Redis 权威环境变量。
+`agent-worker` 为**每个允许的子任务深度**建一个 BullMQ 队列与一个消费者：
+深度 0 是 `agent-runs`（沿用历史名字），深度 n 是 `agent-runs-d{n}`。
 
-**Sandbox internal plane（PR-07 replay-only）:**
+为什么：父 Run 发起子 Run 后是**前台等待**结果、不让出消费槽。父子共用一个
+队列时，N 个父 Run 占满 N 个槽 → 子 Run 排不上 → 父 Run 等不到结果，整条队列
+停住。提高并发不解决（任何有限 N 都有同样的饱和条件）。
+
+`AGENT_WORKER_CONCURRENCY` 是**总预算**，按「每个深度 ≥ 1 的层保留 1 个槽、
+其余全给深度 0」切分：
+
+| `AGENT_WORKER_CONCURRENCY` | `AGENT_SUBAGENT_MAX_DEPTH` | 分配（d0 / d1 / d2） |
+|---|---|---|
+| 4（默认） | 2（默认） | **2 / 1 / 1** |
+| 6 | 2 | 4 / 1 / 1 |
+| 3 | 2 | 1 / 1 / 1 |
+| 2 | 2 | **拒绝启动**（预算不够给每层留一个槽） |
+| 4 | 0 | 4（只有一层） |
+
+**升级注意：根任务的同时执行量会下降。** 同样是 `4`，分层前根任务并发是 4，
+分层后是 2。把 `AGENT_WORKER_CONCURRENCY` 提到 `6` 恢复的是**根任务槽数 4**，
+不等于已证明吞吐与分层前相同（深层各只有一个槽，总进程负载也变了）；也可以降低
+`AGENT_SUBAGENT_MAX_DEPTH`。容量以压测为准。
+
+**升级不需要排空**：深度 0 沿用 `agent-runs`，旧队列里的存量（含升级前按旧规则
+投进去的子 Run）仍由深度 0 的消费者处理。
+
+**缩深 / 回滚必须先收敛**：调小 `AGENT_SUBAGENT_MAX_DEPTH` 或换回旧镜像之后，
+没有人消费超出目标深度的层。新镜像的 Worker 在**任何恢复扫描、cron、outbox 与
+消费者启动之前**检查两处，任一处有存量就拒绝启动并点名：
+
+- **Redis**：本配置不服务的队列（探测到 `agent-runs-d8`）里 wait / paused / active /
+  delayed / prioritized 的作业数；
+- **MySQL 权威账本**：`runs` 里 `subagent_depth` 超过目标深度的**非终态** Run。
+  只看 Redis 不够——等待审批 / 用户输入的子 Run 在队列里没有作业，但审批或应答
+  之后恢复入队会因越界被拒。
+
+**读不到也拒启**：Redis 读取异常、不认识的 key 类型、MySQL 查询失败都按「无法证明
+已收敛」处理，不当作空（只有 key 不存在才算 0）。拒启交给编排器重启重试。
+
+缩深顺序：停止产生超深子任务（暂停接新 Run，或用 AgentVersion `configJson.subagent`
+收紧深度——**不要**先改 `AGENT_SUBAGENT_MAX_DEPTH`，它同时决定消费拓扑）→ 原拓扑继续
+运行，让超深的 Run 走到终态（含处理完挂起的审批 / 输入）→ 以新配置启动，闸门不再
+报错即为收敛。禁止新旧消费者同时在跑。
+
+**换回旧镜像时闸门不存在**——旧镜像不做上述检查，它「启动不报错」不代表已收敛。
+旧镜像只有 `agent-runs` 一个队列、按单队列投递，所以超深的非终态 Run 恢复时仍会
+投进它消费的队列；会被落下的是**已经躺在分层队列里的作业**。切换前在外部确认
+每个分层队列都为 0 再换（prefix 取 `AGENT_RUN_QUEUE_PREFIX`，默认 `{bull}`）：
+
+```bash
+for q in agent-runs-d1 agent-runs-d2; do
+  for s in wait paused active; do redis-cli LLEN "{bull}:$q:$s"; done
+  for s in delayed prioritized; do redis-cli ZCARD "{bull}:$q:$s"; done
+done
+```
+
+若回滚目标是**另一个带分层的新镜像**但深度更小，按上面的缩深顺序走，闸门会同时查账本：
+等价的外部查询是
+`SELECT subagent_depth, COUNT(*) FROM runs WHERE status NOT IN ('SUCCEEDED','FAILED','CANCELLED') AND subagent_depth > <目标深度> GROUP BY subagent_depth`。
+
+就绪判定随之收紧：**任何一个必需层的消费者不在跑，`/ready` 就不就绪**；
+依赖守卫的暂停 / 恢复对全部层生效。
+
+**开发:** `docker compose up` 启动 `redis:5.0.14`（AOF + `maxmemory-policy noeviction` + `redis5_dev_data` volume；7.2 写出的旧卷 5.0 读不了，不复用）。Agent 依赖 Redis health；默认 DSN 指向 compose 网络内 `redis` 服务。占位密码仅用于本地。要在本地复现 UPRedis Proxy 的路由限制（零 key `EVAL` 被拒、同一命令/事务的 key 必须同一节点），再叠加 `scripts/dev/docker-compose.upredis-sim.yml`，服务 Redis 的三个消费者会改连模拟代理。
+
+**UPRedis 放行:** 目标 Redis 的全部后端节点与切换候选须持久配置 `noeviction`（两套 Redis 分别核验）。上线前用生产 prefix 跑 `agent/tests/redis/upredis-queue.integration.test.js`（`TEST_UPREDIS_URL` / `TEST_UPREDIS_PASSWORD` / `TEST_UPREDIS_PREFIX`，代理目标加 `TEST_UPREDIS_EXPECT_ROUTING=1`）：立即/延迟/重试/stalled/取消与状态查询、单 key CAS，逐 key 核对无遗留。
+
+**生产:** `docker-compose.prod.yml` 要求 `REDIS_PASSWORD` 已设置（`${REDIS_PASSWORD:?…}` fail-fast），启用 `requirepass`、healthcheck、持久 `redis5_data` volume（旧 `redis_data` 为 7.2 数据，按[队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) drain 后保留，不挂载）、`noeviction`，Agent 对 Redis `service_healthy` 依赖；**不**对外发布 Redis 端口。BFF **不**获得 Redis 权威环境变量。
+
+**Sandbox internal plane:**
 
 | 变量 | 说明 |
 | --- | --- |
-| `SANDBOX_INTERNAL_PLANE_ENABLED` | 开发默认 `false`；**生产必须 `true`**（启动 fail-closed） |
-| `SANDBOX_INTERNAL_REDIS_PASSWORD` | **独立** replay 密码；**禁止**等于 `REDIS_PASSWORD` |
-| `SANDBOX_INTERNAL_REDIS_URL` | 指向专用服务 `sandbox-replay-redis:6379/0`（固定 DB0）；仅 jti `SET NX` |
-| `SANDBOX_INTERNAL_HMAC_KEYRING` / `ACTIVE_KID` | Agent→Sandbox HMAC；生产必填 |
-| `SANDBOX_INTERNAL_DRAIN_TIMEOUT_SECONDS` | 必须 **>0**；超时后先 UNKNOWN reconcile，再关 MySQL |
+| `SANDBOX_INTERNAL_HMAC_KEYRING` / `ACTIVE_KID` | Agent→Sandbox HMAC；**内部面唯一的闸门**，缺任一项 exec 拒绝启动，生产必填 |
+| `EXEC_INTERNAL_ALLOW_CIDR` | 来源白名单，见上文 Auth 表；空值拒绝全部内部面请求 |
 
-- Compose 使用 **独立** `sandbox-replay-redis` 服务 + 独立 volume/密码；**不是** Agent `redis` 换 DB 索引。
-- 最小权限：键 `sandbox:internal:replay:v1:*`；命令 SET/PING（及握手）；固定 DB0；不授 SELECT。
-- Sandbox **不得**获得 Agent Redis 凭据；Agent **不得**获得 replay secret。
-- 真实 Redis ACL / 连通性为本仓库最终 gate，离线测试只覆盖配置语义。
+- exec **不连 Redis**。ADR 0008 D8 去掉了 jti 防重放及其专用实例，`sandbox-replay-redis`
+  服务、数据卷、独立口令，以及 `SANDBOX_INTERNAL_PLANE_ENABLED` / `_REDIS_URL` /
+  `_REDIS_PASSWORD` / `_MAX_CONCURRENCY` / `_DRAIN_TIMEOUT_SECONDS` 五个**没有读取方**的变量
+  已于 2026-09-16 一并删除。存量部署升级时把它们从 `.env` 与编排配置里删掉，并删除
+  `sandbox_replay_redis5_*` 卷（里面只有过期 jti，无需保留）。
+- 重放防护的现状：签名覆盖方法、路径、规范化 query 与请求体摘要，claim 带有效期与
+  fence；内部网络不对外，且来源受 CIDR 白名单约束。**没有**跨请求的 jti 去重。
+- Sandbox **不得**获得 Agent Redis 凭据。
 
 **清空 Redis 与恢复:**
 
-- Redis 清空 / 丢失只影响运行态协调（queue、lease、live stream、短期 cache）以及 Sandbox internal jti 防重放窗口，**不**删除 MySQL 中的 Conversation / Run / 审计事实。
+- Redis 清空 / 丢失只影响 Agent 的运行态协调（queue、lease、live stream、短期 cache），**不**删除 MySQL 中的 Conversation / Run / 审计事实。
 - 未成功发布到 Redis Stream 的事件保留在 MySQL `domain_outbox`，Outbox publisher 可在 Redis 恢复后重试。
 - 完整事件历史与 SSE 重放以 MySQL `run_events` 为准；Redis Stream 可按长度裁剪。
 
-已提交文档中的 DSN 示例仅使用开发占位或省略密码（`redis://:…@host:6379/0`）；勿把真实生产密码写进仓库。
+已提交文档中的应用 DSN 示例一律不带口令（口令经 DBPM 下发）；测试用 `TEST_*` 连接串只使用开发占位口令。勿把真实生产密码写进仓库。
 
 ### 资源限制
 
@@ -350,9 +696,10 @@ the Agent fail-closes with `MYSQL_TRIGGER_BINLOG_BLOCKED` and will **not**
 ## Sandbox internal authentication
 
 正式 Agent 工具调用只使用 `/internal/v1/*` HMAC 平面。每个请求都携带
-短期 claim、scope、owner/run/session identity、body digest 和 jti；Sandbox
-通过独立 replay Redis 拒绝重放。一个永不过期的 `SANDBOX_API_TOKEN` 不能
-替代该授权。
+短期 claim、scope、owner/run/session identity、body digest 与 jti，签名覆盖
+方法、路径与规范化 query。**jti 只签不去重**（ADR 0008 D8 退役了专用的 replay
+Redis）：抗重放依赖 claim 有效期、fence 与来源白名单，不是跨请求去重。
+一个永不过期的 `SANDBOX_API_TOKEN` 不能替代该授权。
 
 Agent 自身的 `/internal/*` HTTP 面（conversations、runs、A2A admin 等）由
 `AGENT_INTERNAL_TOKEN` 保护，比较为常量时间；**token 缺失时平面直接关闭**
@@ -383,34 +730,44 @@ curl -f http://localhost:4000/health/ready
 
 | Volume | 路径 | 说明 |
 |--------|------|------|
-| `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产） |
-| `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产） |
+| `nginx_ssl` | `/etc/nginx/ssl` | SSL 证书（生产，仅 `TLS_ENABLED=true`） |
+| `nginx_certbot` | `/var/www/certbot` | Let's Encrypt ACME challenge（生产，仅 `TLS_ENABLED=true`） |
 | `./skills` | Agent `/home/sandbox/skill:ro` + Sandbox `:ro` | 共享系统 Skill，始终只读 |
 | `./.runtime/sandbox/workspaces` | `/var/sandbox/workspaces` | Agent Session 物理工作区 |
 | `./.runtime/sandbox/tmp` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
 | `./.runtime/sandbox/artifacts` | `/var/sandbox/artifacts` | 显式提交的 Artifact blob |
 | `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态 |
+| `./.runtime/sandbox/skill-draft` | Agent `/home/sandbox/skill-draft` + exec `/var/sandbox/skill-draft` | owner-scoped Skill 草稿；Compose 显式打开 |
+| `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布版本（按摘要分目录） |
+
+Compose 一次性服务 `skill-draft-init` 会在 agent / agent-worker / sandbox 启动前把
+`./.runtime/sandbox/skill-draft` 建成 `0777`。Agent（up_docker，uid 1000）与 Sandbox（uid 10001）
+共用这棵树；若不先放开宿主 bind 源，Compose 创建出的 root 所有 `0755` 目录会让
+第一次草稿上传在创建 `<org>/<user>` 前就 EACCES。上传解包进草稿时也会把包内目录 /
+文件写成 `0777` / `0666`，让两侧都能继续改。
 
 ### Skill 挂载与用户生命周期
 
-> **存量部署迁移注意**：api-server 与 agent 容器自 2026-08-23 起以非 root
-> （`node` 用户）运行。此前创建的 `agent_user_skills` 卷属主为 root，需重建
-> 该卷或手动 chown 一次，否则用户 Skill 上传会因权限失败。
+> **存量部署迁移注意**：api-server 与 agent 容器自 2026-08-23 起以非 root 运行
+> （2026-09-18 起用户名为 `up_docker`，uid 仍是 1000，已有卷属主不受影响）。更早创建的
+> `agent_user_skills` 卷属主为 root，需重建该卷或手动 chown 一次，否则用户 Skill 上传会因权限失败。
+>
+> **容器用户（2026-09-18）**：K8s 内的 agent / agent-worker、api-server、sandbox-mcp、frontend 镜像都以
+> `up_docker`（1000:1000）运行，`USER` 写数字，Pod 可以直接开 `runAsNonRoot`。frontend 因此改听 **8080**
+> （非 root 绑不了 80），Compose 映射与边缘 nginx 的 `proxy_pass` 已随之改为 `frontend:8080`；K8s 清单的
+> containerPort / 探针 / Service targetPort 要写 8080。执行面镜像与 VM 上的 exec 不变。
 
-Skill 分两层，挂在两个 canonical 路径：
+Skill 分三层：
 
 | 层 | 路径 | 来源 | 可见范围 | 卷 |
 |----|------|------|----------|----|
 | 系统 | `/home/sandbox/skill` | 仓库 `./skills` | 所有人 | `:ro` |
-| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 上传 ZIP 或 Agent 生成 | 仅该用户 | named volume `agent_user_skills` |
+| 草稿 | `/home/sandbox/skill-draft/<orgId>/<userId>`（exec 物理根 `/var/sandbox/skill-draft`） | 模型 `write` / `bash` 或上传 | 仅该用户；不进 prompt | host bind |
+| 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>/<package>/.v/<digest>/<package>`（侧车 `.v/<digest>.json`）；模型侧路径 `/home/sandbox/skill-user/<package>` | 启用时从草稿复制 | 仅该用户；按启用清单逐包 `ro_bind` | named volume `agent_user_skills` |
 
-Skill 生命周期不根据部署环境切换。Agent/Worker 对用户卷可写，Sandbox 始终以只读方式
-只绑定调用者本人的目录。`skill_install` 接受当前回合 ZIP attachment id，或模型在该 session
-的 workspace/`tmp` 内构建的归档路径（`source="sandbox"`，两侧各自限定路径，Skill 根被拒，
-并且必须带 `source_digest` 把审批绑定到具体字节而不只是路径）；
-`skill_create` 接受 Agent 生成的结构化 package。install/create/edit/uninstall 全部为 high risk，
-附件上传会先形成 Dataset；安装审批通过前，Agent 不会读取其内容、解压或写入 Skill 目录。
-系统 Skill 不能被同名覆盖。
+Compose 通过 `SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft` 显式打开草稿写面；直接启动 exec 时变量缺失则能力关闭。模型不再拥有 Skill 变更工具，只能在自己的草稿根写文件。用户在 Capabilities 页点击启用后，Agent 在一个事务里锁住该 owner 的 membership 行，校验结构与系统同名遮蔽，按复制后字节的摘要发布只读版本并写 `user_skill_enablements`；停用只删账本行，字节保留给仍在运行的 Run。旧版本在同名包下次启停时回收：既不被事务前后的账本引用、又超过 `SKILL_VERSION_GC_GRACE_MS`（Agent HTTP 读取，非负整数毫秒，默认 `86400000` 即 24 小时）才删除。
+
+Worker 在 Run 开始时按账本逐条核对版本目录与侧车，核对不过的包不进该 Run 并记告警。exec **不扫描目录**：只挂载内部请求清单点名、且版本目录与侧车一致的包；缺版本或侧车不符返回 `SKILL_PACKAGE_UNAVAILABLE`，用户 Skill 存储不可读或未配置返回 `SKILL_STORE_UNAVAILABLE`。2026-09-14 之前按 `<package>/SKILL.md` 平铺发布的已启用包不再被识别，需要重新启用（开发数据已按用户决定清理）。
 
 `validateProductionConfig` 仍然拒绝任何非 canonical 的
 `SKILLS_ROOT` / `SKILLS_USER_ROOT`（这些是 Bubblewrap profile 认识的挂载点）。
@@ -431,10 +788,14 @@ AgentVersion 的 `configJson.toolPolicy` 是下层，**只能收紧**。
 | 探针 | 端点 | 成功 | 失败含义 |
 |------|------|------|----------|
 | Sandbox liveness | `GET /health` | 200 | 进程无响应 |
-| Sandbox readiness | `GET /ready` | 200 | **503** = workspace/`/tmp` 不可写、数据库/internal plane 不可用或 Bubblewrap preflight 失败；响应含 `internal_plane_status` |
-| Agent readiness | `GET /ready`（Agent port） | 200 | **503** = Agent data plane、Sandbox，或任一 `enabled` MCP Server 不可用；响应含 MCP Server/tool 数量与状态 |
+| Sandbox readiness | `GET /ready`（同 `/health/ready`） | 200 | **503** = 已进入关停；数据库 `SELECT 1` 失败或 2s 超时；workspaces / tmp / artifacts / control 任一根不是可读写目录；或启动期 Bubblewrap 预检未通过（`isolation: unchecked / unavailable`）。响应只含 `database`、`storage.<名>`、`isolation` 的 ok / unavailable，不含路径与错误文本。bwrap 不在每次请求中重跑，只读启动期结果 |
+| Agent readiness | `GET /ready`（Agent port） | 200 | **503** = Agent data plane 不可用（容器未启动，或本次 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败，与 Worker 同一判定）、Sandbox 未就绪（执行面 `GET /ready` 非 2xx 或 body 不是 `status: ready`，`sandbox: not_ready`；3s 内没答上为 `unreachable`），或任一 `enabled` MCP Server 不可用（没有工具注册，`status: unavailable`，仍列在 `mcp.servers` 里）；data plane 与执行面并行检查。MCP 状态每次请求按当前工具注册表重算。响应含 MCP Server/tool 数量与状态 |
+| Agent Worker liveness | `GET /health`（`AGENT_WORKER_PROBE_PORT`，默认 4101） | 200 | Worker 事件循环无响应；不查依赖 |
+| Agent Worker readiness | `GET /ready`（同上） | 200 | **503** = 未完成启动（含 schema 核对、恢复扫描、消费者创建）、已进入关停、BullMQ 消费者未运行或被依赖守卫暂停（`consumer: paused`），或 MySQL `SELECT 1` / Redis `PING` 在 2s 内失败；响应只含各项 ok/unavailable，不含错误详情 |
+| sandbox-mcp liveness | `GET /health`（8082） | 200 | facade 进程无响应；不查依赖 |
+| sandbox-mcp readiness | `GET /ready`（8082） | 200 | **503** = 未启动或已关停、服务 Redis `PING` 失败，或执行面 `GET /ready` 非 200（各 2s 超时）；探针请求不带桥 token，只证明执行面可达，不证明窄桥 token 被接受 |
 | API Server liveness | `GET /health/live` | 200 | BFF 进程不可用 |
-| API Server readiness | `GET /health/ready` | 200 | Agent 或 Sandbox 未就绪（503） |
+| API Server readiness | `GET /health/ready` | 200 | **503** = Agent `GET /ready` 或 Sandbox `GET /ready` 未返回 2xx + `status: ready`（并行，各 4s / 3s 超时）；不再看下游 liveness。响应只含各自 `ready` / `not_ready` / `unreachable` |
 | Frontend | `GET /` | 200 | 静态站/反代不可用 |
 
 ```bash
@@ -443,21 +804,30 @@ curl -f http://localhost:3000/
 
 # API Server（仅 node-agent；无 Python/双 Runtime）
 curl -f http://localhost:4000/health/ready
-# {"status":"ok","version":"4.0.0","agent":{"status":"ok"},"sandbox":{"status":"ok"}}
+# {"status":"ok","version":"4.0.0","agent":{"status":"ready"},"sandbox":{"status":"ready"}}
 
 # Sandbox liveness（进程存活；公开路由，无需 API key）
 docker compose exec sandbox curl -fsS http://localhost:8081/health
-# {"status":"ok","version":"…","workspace_available":true,…}
+# {"status":"ok"}
 
 # Sandbox readiness（依赖就绪；未就绪时 curl -f 因 503 失败）
 docker compose exec sandbox curl -fsS http://localhost:8081/ready
-# {"status":"ok","workspace_available":true,…}  或 HTTP 503 status=not_ready
+# {"status":"ready","shutting_down":false,"database":"ok","storage":{"workspaces":"ok","tmp":"ok","artifacts":"ok","control":"ok"},"isolation":"ok"}
+# 或 HTTP 503 status=not_ready（对应项为 unavailable / unchecked）
 
-# Nginx (生产)
+# Nginx (生产；明文模式用 http://)
 curl -f https://localhost/nginx/status
 ```
 
 容器 `healthcheck` 当前使用 `/health`（liveness）。编排侧若需“可接流量”语义，应对 Sandbox 使用 `/ready`。
+
+Agent Worker 不发布业务 HTTP 面，探针 listener（`AGENT_WORKER_PROBE_PORT`，默认 `4101`；`AGENT_WORKER_PROBE_HOST` 默认 `0.0.0.0`）只有上表两条路由，其余一律 404，端口不发布到宿主，K8s 中也不应注册到任何 LB。端口值非法时 Worker 拒绝启动。listener 先于容器启动，启动期间 `/ready` 为 503；收到 SIGTERM 后立即置为未就绪，并**同时**发起两件事：关全部消费者（BullMQ `worker.close()`，立即不再取新作业，再等在途 Run）与停后台循环（依赖守卫、cron、恢复定时器、outbox；守卫在关停中不再 resume 消费者）。两者合起来受 `AGENT_WORKER_DRAIN_TIMEOUT_MS`（默认 150s）约束，**从收到信号起算**——outbox 在 MySQL 挂起时无上限等待也被它覆盖。期限内都结束则清理 runtime / 连接 / 遥测（上限 15s，超时退出码 1），最后关 listener，退出码 0；期限到则打印 `[agent-worker] drain deadline … reached` 后**不清理直接退出**（码 1）——与进程被 SIGKILL 等价，走既有崩溃恢复路径：租约过期后恢复扫描接手，工具账本全是终态的 Run 自动重放；仍有工具处于 RUNNING（副作用边界未决）的 Run **不自动重放**，保持非终态，需人工核对后取消（`POST /api/runs/{id}/cancel`，无活租约时恢复扫描将其落为 CANCELLED）。此时不关连接池，以免在跑的 Run 撞上连接关闭提前写坏状态。一个 Run 可以包含多次工具（单次默认 120s）与模型调用，排空期限不保证完成长 Run，只保证关停有界、可预期。编排终止宽限要大于排空期限加关停尾部：本地 K8s 清单为 180s，生产 Compose `stop_grace_period: 180s`；开发 Compose 保持默认 10s（本地重启不等排空）。
+
+K8s 探针（本地清单 `scripts/dev/k8s/manifests.yaml` 为参照，生产清单由平台维护）：Agent HTTP 在 MCP 预检、DBPM 取密、建连与 schema 核对之后才 listen（MCP SDK 对无响应 Server 的初始化超时为 60s），需要 **startupProbe**（本地清单 `/health`、5s × 36 = 180s 预算），通过前 liveness 不生效，否则慢启动会在约 30s 后被反复杀掉。Worker 探针 listener 先于启动链起来，不需要 startupProbe。所有探针显式写 `timeoutSeconds`（kubelet 默认 1s）且大于应用内的依赖检查预算：Agent `/ready` 5s（并行 2s / 3s）、BFF `/health/ready` 6s（并行 4s / 3s）、Worker 与 sandbox-mcp `/ready` 3s（并行各 2s）。readiness=false 只会让编排摘流量，因此 Worker 另有依赖守卫：每 `AGENT_WORKER_DEPENDENCY_CHECK_INTERVAL_MS`（默认 5s）用与 `/ready` 相同的 ping 探测 MySQL / Redis，**连续 2 次失败**即 `worker.pause(true)` 停止取新任务（不等待、不打断在跑的任务，在跑的 Run 由既有 lease / fence 兜底），**连续 2 次成功**后 `resume()`，只恢复自己造成的暂停。暂停与恢复各打一行 `[agent-worker]` 日志。`pause(true)` 不会打断 BullMQ 已发出的阻塞取任务，暂停后到达的作业仍可能被取到，因此处理器在执行前再检查一次：消费者暂停中就把作业 `moveToDelayed` 回队列（延后一个探测间隔，不计失败、不消耗 attempts），恢复后再执行。Cron 调度、outbox 发布与恢复扫描不暂停：它们不从队列取任务，依赖故障时单轮失败、下一轮重试。
+
+```bash
+docker compose exec agent-worker node -e "fetch('http://127.0.0.1:4101/ready').then(async r=>console.log(r.status, await r.text()))"
+```
 
 ### Compose smoke path（多轮 / 审批 / 二进制 / 取消 / 产物）
 
@@ -478,8 +848,37 @@ node scripts/smoke-cross-service.mjs
 4. 上传二进制文件 → 下载校验字节一致
 5. 生成中点击停止 → 流结束且无悬挂执行
 6. Agent `submit_artifact` 后出现可下载交付物（非 `write` 自动下载）
+7. 启动后台 `bash` → `/api/processes?session_id=...` 可列出、读日志、发 signal；另一租户访问同一 session/run/process 返回 404
 
-Node / Python / Pi SDK 版本钉以根目录 `runtime-versions.json` 为准：服务镜像与 CI 统一 **Node 22**（`node:22-slim`、`engines >=22.19.0 <23`）、Sandbox **Python 3.11**（`python:3.11-slim`）、Agent SDK **0.80.3** 精确钉。一致性由 `tests/test_runtime_versions.py` 校验。
+长进程元数据持久化在 MySQL `exec_jobs`，migration 仍由 Agent 启动流程统一执行。
+stdout/stderr 增量缓冲和活进程句柄只在当前 exec 进程内：重启后可以看到持久记录，
+但不能恢复旧日志字节或重新控制遗留 OS 进程；启动时 orphan recovery 会把未结束记录
+收敛为终态。需要跨 exec 重启续读/续控时，应先增加持久日志与可重附着的进程监管，
+当前不能把这项写成已支持。
+
+Node / DSH / 模型工具链版本钉以根目录 `runtime-versions.json` 为准：服务镜像与 CI 统一 **Node 22**（`node:22-slim`、`engines >=22.19.0 <23`），Agent 精确钉 DSH **0.1.1-rc.2**；Python 3.11 仅作 pytest 与 exec 镜像内的模型工具链。旧引擎的 SDK 与版本钉已全部移除。一致性由 `tests/test_runtime_versions.py` 校验。
+
+## 从 pi 命名升级（2026-09-23）
+
+旧引擎退役后，产品、镜像、路径与库字段里的 `pi` 命名统一改为 `dsh`（或与引擎无关的中性名）。已有部署升级时
+逐项处理；新部署不涉及。
+
+| 项 | 旧 | 新 | 升级动作 |
+|---|---|---|---|
+| 数据库 | `pi_session_version`、`pi_entry_id` / `pi_entry_kind`、`pi_sdk_version` 与存储标记 | 迁移 `20260923000002_dsh_naming.js` | 停写 → 按 `schema:sql --from 20260923000001_upspec_naming.js` 导出增量包并执行 → `schema:verify` → 部署新镜像；新旧代码与新旧库互不兼容，不能滚动发布 |
+| 镜像 / 容器名 | `pi-enterprise-*` | `dsh-enterprise-*` | 自建编排里引用镜像名、容器名的地方同步修改；`.env` 里显式写了旧名的 `*_IMAGE` / `*_CONTAINER` 一并改 |
+| Compose 项目名 | `COMPOSE_PROJECT_NAME=pi-enterprise-sandbox` | `dsh-enterprise-sandbox` | **已有部署保留旧值**：项目名决定数据卷名，改了会拿到空卷 |
+| 浏览器会话 Cookie | `pi_enterprise_session` | `dsh_enterprise_session` | 无需操作；升级后所有用户需重新登录一次 |
+| JWT issuer / audience 默认值 | `pi-enterprise-sandbox` | `dsh-enterprise-sandbox` | `.env` 已显式设置的保持不变即可；未设置的升级后旧 token 失效，重新登录 |
+| VM exec | `pi-exec` 用户 / unit，`/opt/pi-exec`、`/etc/pi-exec`、`/var/lib/pi-exec` | `dsh-exec` 同构路径 | 维护窗口内停 `pi-exec` → `install-release.sh init` 建新用户与目录 → 迁移 `exec.env` 与数据根（`chown -R dsh-exec`，并把 `exec.env` 里的路径改成新根）→ `activate` → 启用 `dsh-exec`、禁用并删除旧 unit |
+| VM 工具链 | `/opt/pi-python/venv`、`/usr/local/lib/pi-chromium`、`/usr/local/lib/pi-skill-runtime`、`/usr/local/share/pi-toolchain` | `dsh-*` 同构路径 | 用新 release 重跑 `install-toolchain.sh`；确认无引用后删除旧目录 |
+| 共享 Skill 根 | `/mnt/pi-skill/*` | `/mnt/dsh-skill/*` | 挂载点与 `exec.env` 的 `SANDBOX_*SKILL*_ROOT` 同步修改 |
+| A2A 扩展 URI | `https://pi-enterprise.local/a2a/extensions/enterprise/v1` | `https://dsh-enterprise.local/...` | 通知按 URI 识别扩展的 A2A 客户端 |
+| 备份格式标记 | `format=pi-enterprise-backup-v1` | `format=dsh-enterprise-backup-v1` | 无需操作；`restore.sh` 两种都接受 |
+| 前端模型偏好 | localStorage `pi.*` | `dsh.*` | 无需操作；各会话的模型选择会回到默认一次 |
+
+库里有一个值有意保留：会话 journal 的 header 行 `session_entry_id = '__pi_session_header__'`。journal digest 按
+`<entry_id>:<payloadHash>` 计算，已持久化的 protected manifest 绑定了这些 digest，改写会让所有存量会话无法恢复。
 
 ## Backup
 
@@ -506,24 +905,15 @@ credential。MySQL 使用 `--single-transaction`；需要数据库与运行文�
 
 ## Monitoring
 
-### Prometheus Metrics
+### 指标
 
-Sandbox 暴露 `/metrics` 端点：
-
-| Metric | Type | 说明 |
-|--------|------|------|
-| `sandbox_execution_total` | Counter | 按状态统计的执行总数 |
-| `sandbox_execution_failed_total` | Counter | 失败执行数 |
-| `sandbox_execution_timeout_total` | Counter | 超时执行数 |
-| `sandbox_active_sessions` | Gauge | 活跃会话数 |
-| `sandbox_workspace_bytes` | Gauge | 工作区磁盘使用量 |
-| `sandbox_rate_limited_total` | Counter | 速率限制触发数 |
+执行面（exec）当前**没有** `/metrics` 端点；旧 Python 执行面的 Prometheus 指标已随其删除。可观测性目前依赖 [Health Checks](#health-checks) 中各进程的 `/ready`、容器日志与下文容器监控。
 
 ### 容器监控
 
 ```bash
 # 资源使用
-docker stats pi-enterprise-frontend pi-enterprise-api pi-enterprise-sandbox
+docker stats dsh-enterprise-frontend dsh-enterprise-api dsh-enterprise-sandbox
 
 # 日志
 docker compose logs -f --tail=100 sandbox
@@ -535,6 +925,8 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f nginx
 ```
 
 ## Let's Encrypt (Production SSL)
+
+> 仅适用于 `TLS_ENABLED=true`。明文模式不使用 `nginx_ssl` / `nginx_certbot` 两个卷。
 
 ```bash
 # 安装 certbot
@@ -548,20 +940,20 @@ docker cp /etc/letsencrypt/live/your-domain.com/fullchain.pem nginx:/etc/nginx/s
 docker cp /etc/letsencrypt/live/your-domain.com/privkey.pem nginx:/etc/nginx/ssl/
 
 # 重新加载 nginx
-docker exec pi-enterprise-nginx nginx -s reload
+docker exec dsh-enterprise-nginx nginx -s reload
 ```
 
 自动续期 cron：
 ```bash
 # /etc/cron.d/certbot-renew
-0 3 * * * root certbot renew --quiet && docker exec pi-enterprise-nginx nginx -s reload
+0 3 * * * root certbot renew --quiet && docker exec dsh-enterprise-nginx nginx -s reload
 ```
 
 ## Scaling
 
 | 场景 | 推荐方案 |
 |------|----------|
-| 单实例开发 | MySQL 8 + Redis 7 + Docker Compose |
+| 单实例开发 | MySQL 5.7 + Redis 7 + Docker Compose |
 | 生产 | MySQL 8 + Redis 7 + Compose prod overlay（强制 secrets） |
 | 多实例 | MySQL + Redis + 共享工作区存储 (NFS/EFS) |
 | 高可用 | 负载均衡器 + MySQL 复制 / 托管 MySQL + 托管 Redis |
@@ -582,7 +974,7 @@ docker compose run --rm sandbox python -c "import fastapi; print('ok')"
 curl http://localhost:4000/health/ready
 
 # 检查 API Server → Sandbox 通信
-docker exec pi-enterprise-api curl -f http://sandbox:8081/health
+docker exec dsh-enterprise-api curl -f http://sandbox:8081/health
 
 # 重启服务
 docker compose restart api-server
@@ -592,13 +984,13 @@ docker compose restart api-server
 
 ```bash
 # 仅检查变量名是否存在，不打印值
-docker exec pi-enterprise-sandbox sh -c \
+docker exec dsh-enterprise-sandbox sh -c \
   'test -n "$SANDBOX_INTERNAL_HMAC_KEYRING" && test -n "$SANDBOX_INTERNAL_HMAC_ACTIVE_KID"'
-docker exec pi-enterprise-agent sh -c \
+docker exec dsh-enterprise-agent sh -c \
   'test -n "$SANDBOX_INTERNAL_HMAC_KEYRING" && test -n "$SANDBOX_INTERNAL_HMAC_ACTIVE_KID"'
 
-# 检查独立 replay Redis 与 Sandbox readiness
-docker compose ps sandbox-replay-redis sandbox
+# 检查 Sandbox readiness（exec 不连 Redis，没有 replay 实例可查）
+docker compose ps sandbox
 docker compose exec sandbox curl -fsS http://localhost:8081/ready
 ```
 
@@ -610,11 +1002,11 @@ docker compose down -v
 docker compose up -d
 
 # 备份 MySQL（示例；生产请用受控备份链路）
-docker exec pi-enterprise-mysql \
+docker exec dsh-enterprise-mysql \
   mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" > backup.sql
 
 # 运行 SQL 查询（交互）
-docker exec -it pi-enterprise-mysql \
+docker exec -it dsh-enterprise-mysql \
   mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"
 ```
 

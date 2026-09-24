@@ -65,7 +65,7 @@ describe('authFromRequest', () => {
 
   it('uses the HttpOnly session cookie when Authorization is absent', () => {
     const auth = authFromRequest({
-      headers: { cookie: 'theme=dark; pi_enterprise_session=jwt.cookie.token' },
+      headers: { cookie: 'theme=dark; dsh_enterprise_session=jwt.cookie.token' },
     });
     assert.equal(auth.authorization, 'Bearer jwt.cookie.token');
   });

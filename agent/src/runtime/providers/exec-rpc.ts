@@ -1,0 +1,498 @@
+/**
+ * Exec RPC 共享客户端——Agent 侧唯一与 exec 内部面说话的地方。
+ *
+ * 为什么单独一层：`remote-fs/shell/jobs` 三个 provider 都要做同一套事——
+ * 组信封、算 body_sha256、签 HMAC、fetch、把 WireError 翻回类型化 Error、
+ * 脱敏。把这些抄三遍会重演 `_shared.md §7` 的“同一件事两处各算一遍”。
+ * 这一层是唯一做 fetch + 签名 + 响应解析的地方，三个 provider 只拼路径与 payload。
+ *
+ * 本机零文件/进程操作；所有 I/O 都在 exec 侧。`resolve()` 异步也因此成立
+ * （对齐 `dsh-fs` 注释“远程后端可能需要 I/O”）。
+ *
+ * 错误处理：任何跨边界抛出物都经 `toWireError` 无条件脱敏（硬约束 #1），
+ * `physicalRoots` 必传无默认值——漏传直接编译失败，不静默放行。
+ */
+
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash, randomUUID } from 'node:crypto';
+import { FsError } from '@deepseek-ai/dsh-fs';
+import { ContractError, toWireError } from '@dsh/contract/errors.js';
+import type { RpcEnvelope } from '@dsh/contract/envelope.js';
+import type { WireError } from '@dsh/contract/errors.js';
+import { issueInternalToken, internalBindingForHtu } from '@dsh/contract/hmac.js';
+import { canonicalQueryBytes, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
+import type { InternalHmacKeyringInput } from '@dsh/contract/hmac.js';
+import { classifyExecOutcomeUnknown } from './exec-outcome.js';
+
+/** 客户端必需的身份与签名材料——由 `runtime` 启动时从服务端环境变量注入，不落盘。 */
+export interface ExecRpcConfig {
+  readonly baseUrl: string;
+  readonly keyring: InternalHmacKeyringInput;
+  readonly activeKid: string;
+  /** 每个请求的 envelope 要填的租户上下文；fenceToken 单调递增，由调用方每次现取。 */
+  readonly orgId: string;
+  readonly userId: string;
+  readonly workspaceId: string;
+  readonly runId?: string | undefined;
+  /**
+   * Sandbox Session ULID。产物 submit 必须按这个 id 落账——workspaceId 是
+   * 另一枚 ULID，用它当 sessionId 会让前端按 sandbox_session_id 列表永远
+   * 看不到刚提交的产物。
+   */
+  readonly sandboxSessionId?: string | undefined;
+  /** 当前 fence，未设置时传 0（pre-run session.ensure 特例由服务端校验）。 */
+  readonly fenceToken: number;
+  /** 仅用于错误脱敏的物理根列表；必填无默认值（fail-closed）。 */
+  readonly physicalRoots: readonly string[];
+  /**
+   * 本 Run 的已启用用户 Skill 清单（design §3.3 S1）。随每个请求进入受签名覆盖的请求体
+   * 或规范化 query；exec 只挂载清单点名的版本。缺省即空。
+   */
+  readonly enabledSkills?: readonly EnabledSkillRef[] | undefined;
+  /**
+   * 单次 fetch 的**默认**超时毫秒，默认 15000。
+   *
+   * 这是「一次普通 RPC 该等多久」，不是「一条命令可以跑多久」：前台 shell
+   * 的预算由调用方按 `ShellExecSpec.timeoutMs` 逐次给（见 `post()` 的
+   * `deadlineMs`）。2026-09-16 之前两者被混成一个值——Agent 把 120000 ms 放进
+   * payload，客户端却在 15000 ms 就 abort，sandbox 那边的命令还在继续跑
+   * （审查 R2）。
+   */
+  readonly timeoutMs?: number | undefined;
+  /** 可注入的 fetch，便于 macOS 无 exec 的内存替身测试。 */
+  readonly fetchImpl?: typeof fetch | undefined;
+}
+
+function assertNonEmpty(value: string, field: string): void {
+  if (value.length === 0) throw new ContractError('ENVELOPE_INVALID', `${field} must be non-empty`);
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '');
+}
+
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function randomHex(len: number): string {
+  const bytes = new Uint8Array(len);
+  // 同步随机仅用于测试桩 claim 的 tool_call_id 等幂等键，非安全关键熵
+  for (let i = 0; i < len; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** 默认的单次 RPC 传输超时。 */
+export const EXEC_RPC_DEFAULT_TIMEOUT_MS = 15_000;
+
+/**
+ * 传输截止的硬上界。即使调用方给了一个很大的执行预算，一条 HTTP 请求也不
+ * 允许无限期挂着——断网没有被及时感知时，这是最后那道有界上限。
+ */
+export const EXEC_RPC_MAX_DEADLINE_MS = 24 * 60 * 60 * 1_000;
+
+/** 逐次截止的归一化：非有限值/非正数一律退回默认，超上界夹到上界。 */
+export function resolveDeadlineMs(
+  requested: number | undefined,
+  fallback: number | undefined,
+): number {
+  const base = requested ?? fallback ?? EXEC_RPC_DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(base) || base <= 0) return EXEC_RPC_DEFAULT_TIMEOUT_MS;
+  return Math.min(Math.trunc(base), EXEC_RPC_MAX_DEADLINE_MS);
+}
+
+const execRpcAls = new AsyncLocalStorage<ExecRpcConfig>();
+const execJobIdAls = new AsyncLocalStorage<string>();
+
+/** 按 Run 覆盖租户/围栏；Cordis 插件在 boot 时用环境占位构造，prompt 时绑定真值。 */
+export function runWithExecRpc<T>(config: ExecRpcConfig, fn: () => T): T {
+  return execRpcAls.run(config, fn);
+}
+
+export function currentExecRpc(fallback: ExecRpcConfig): ExecRpcConfig {
+  return execRpcAls.getStore() ?? fallback;
+}
+
+/** Bridge the synchronous dsh-jobs start() call into the nested shell.start(). */
+export function runWithExecJobId<T>(id: string, fn: () => T): T {
+  return execJobIdAls.run(id, fn);
+}
+
+export function currentExecJobId(): string | undefined {
+  return execJobIdAls.getStore();
+}
+
+/** 组合插件在 yaml `config: {}` 下从环境装配 HMAC；完整对象则原样使用。 */
+export function readExecRpcFromEnv(env: NodeJS.ProcessEnv = process.env): ExecRpcConfig {
+  const keyring = String(env['SANDBOX_INTERNAL_HMAC_KEYRING'] ?? '').trim();
+  const activeKid = String(env['SANDBOX_INTERNAL_HMAC_ACTIVE_KID'] ?? '').trim();
+  if (keyring.length === 0 || activeKid.length === 0) {
+    throw new Error('boot: SANDBOX_INTERNAL_HMAC_KEYRING and SANDBOX_INTERNAL_HMAC_ACTIVE_KID are required');
+  }
+  return {
+    baseUrl: String(env['SANDBOX_BASE_URL'] ?? 'http://sandbox:8081').replace(/\/+$/, ''),
+    keyring,
+    activeKid,
+    orgId: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    userId: '01ARZ3NDEKTSV4RRFFQ69G5FAW',
+    workspaceId: '01ARZ3NDEKTSV4RRFFQ69G5FAX',
+    fenceToken: 0,
+    physicalRoots: [
+      String(env['SANDBOX_WORKSPACES_ROOT'] ?? '/var/sandbox/workspaces'),
+      String(env['SANDBOX_TEMP_ROOT'] ?? '/var/sandbox/tmp'),
+    ],
+  };
+}
+
+export function resolveExecRpcConfig(
+  partial?: Partial<ExecRpcConfig> | ExecRpcConfig,
+): ExecRpcConfig {
+  if (
+    partial !== undefined &&
+    typeof partial.baseUrl === 'string' &&
+    partial.baseUrl.length > 0 &&
+    partial.keyring != null &&
+    typeof partial.activeKid === 'string' &&
+    partial.activeKid.length > 0 &&
+    Array.isArray(partial.physicalRoots) &&
+    typeof partial.orgId === 'string' &&
+    typeof partial.userId === 'string' &&
+    typeof partial.workspaceId === 'string'
+  ) {
+    return partial as ExecRpcConfig;
+  }
+  return { ...readExecRpcFromEnv(), ...(partial ?? {}) } as ExecRpcConfig;
+}
+
+/** 把 WireError 翻回等待 `instanceof` 分支的强类型 Error。 */
+export function fromWireError(wire: WireError): Error {
+  const code = wire.code;
+  if (
+    code === 'FS_NOT_FOUND' ||
+    code === 'FS_NOT_DIRECTORY' ||
+    code === 'FS_NOT_TEXT' ||
+    code === 'FS_NOT_REGULAR_FILE' ||
+    code === 'FS_TOO_LARGE' ||
+    code === 'FS_PERMISSION_DENIED' ||
+    code === 'FS_SANDBOX_DENIED' ||
+    code === 'FS_IO_ERROR' ||
+    code === 'FS_STALE_VERSION' ||
+    code === 'FS_NOT_OBSERVED' ||
+    code === 'FS_AMBIGUOUS_EDIT' ||
+    code === 'FS_EDIT_NOT_FOUND' ||
+    code === 'FS_ABORTED'
+  ) {
+    return new FsError(wire.message, code);
+  }
+  if (
+    code === 'AUTH_FAILED' ||
+    code === 'ENVELOPE_INVALID' ||
+    code === 'TENANT_MISMATCH' ||
+    code === 'FENCE_EXPIRED' ||
+    code === 'WORKSPACE_NOT_FOUND' ||
+    code === 'SKILL_PACKAGE_UNAVAILABLE' ||
+    code === 'SKILL_STORE_UNAVAILABLE' ||
+    code === 'INTERNAL_ERROR'
+  ) {
+    return new ContractError(code, wire.message);
+  }
+  return new ContractError('INTERNAL_ERROR', wire.message);
+}
+
+/** 用 `for await...of` 转发的异步迭代器守卫——错误在迭代时才抛，需二次包。 */
+export async function* guardIterable<T>(
+  iterable: AsyncIterable<T>,
+  physicalRoots: readonly string[],
+): AsyncIterable<T> {
+  try {
+    for await (const chunk of iterable) {
+      yield chunk;
+    }
+  } catch (err: unknown) {
+    // 无条件脱敏：任何类型抛出物都经 toWireError 三级兜底
+    const wire = toWireError(err, { physicalRoots });
+    throw fromWireError(wire);
+  }
+}
+
+/** 共享的 fetch + HMAC 客户端。 */
+export class ExecRpcClient {
+  private baseUrl: string;
+  private keyring: InternalHmacKeyringInput;
+  private activeKid: string;
+
+  constructor(private config: ExecRpcConfig) {
+    assertNonEmpty(config.baseUrl, 'baseUrl');
+    assertNonEmpty(config.activeKid, 'activeKid');
+    this.baseUrl = normalizeBaseUrl(config.baseUrl);
+    this.keyring = config.keyring;
+    this.activeKid = config.activeKid;
+  }
+
+  /** 按 Run 重绑租户。boot 插件用环境占位构造，create() 必须换成这一 Run 的信封。 */
+  rebind(config: ExecRpcConfig): void {
+    assertNonEmpty(config.baseUrl, 'baseUrl');
+    assertNonEmpty(config.activeKid, 'activeKid');
+    this.config = config;
+    this.baseUrl = normalizeBaseUrl(config.baseUrl);
+    this.keyring = config.keyring;
+    this.activeKid = config.activeKid;
+  }
+
+  activeConfig(): ExecRpcConfig {
+    return currentExecRpc(this.config);
+  }
+
+  private envelope(): RpcEnvelope {
+    const cfg = this.activeConfig();
+    return {
+      requestId: randomUUID(),
+      workspaceId: cfg.workspaceId,
+      orgId: cfg.orgId,
+      userId: cfg.userId,
+      fenceToken: cfg.fenceToken,
+    };
+  }
+
+  /**
+   * POST /internal/v1/<path> 带信封与 HMAC。
+   *
+   * `opts.deadlineMs` 覆盖这一次调用的传输截止（前台 shell 用「执行预算 +
+   * 有界回传余量」）；`opts.signal` 是调用方自己的取消信号，与截止定时器
+   * **融合**成一个 AbortSignal 交给 fetch——连接随之断开，exec 侧的路由再
+   * 把它接到执行面。两者都省略时退回配置里的默认超时。
+   */
+  async post<TPayload, TData>(
+    htu: string,
+    payload: TPayload,
+    physicalRoots: readonly string[],
+    opts: { deadlineMs?: number | undefined; signal?: AbortSignal | undefined } = {},
+  ): Promise<TData> {
+    const envelope = this.envelope();
+    const cfg = this.activeConfig();
+    const enabledSkills = cfg.enabledSkills ?? [];
+    const bodyObj = enabledSkills.length > 0 ? { envelope, payload, enabledSkills } : { envelope, payload };
+    const bodyText = JSON.stringify(bodyObj);
+    const bodyBytes = new TextEncoder().encode(bodyText);
+    const bodySha = sha256Hex(bodyBytes);
+
+    const token = this.issueToken(htu, bodySha, envelope);
+    const url = `${this.baseUrl}${htu}`;
+    const timeoutMs = resolveDeadlineMs(opts.deadlineMs, cfg.timeoutMs ?? this.config.timeoutMs);
+    const controller = new AbortController();
+    let deadlineHit = false;
+    const timer = setTimeout(() => {
+      deadlineHit = true;
+      controller.abort();
+    }, timeoutMs);
+    // 调用方取消要立刻断连，不等截止定时器——否则「模型取消了工具调用」
+    // 与「沙箱还在跑」之间会留一个最长等于预算的窗口。
+    const onCallerAbort = (): void => controller.abort();
+    if (opts.signal !== undefined) {
+      if (opts.signal.aborted) controller.abort();
+      else opts.signal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+
+    try {
+      const fetchImpl: typeof fetch = cfg.fetchImpl ?? this.config.fetchImpl ?? globalThis.fetch;
+      const res = await fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: bodyText,
+        signal: controller.signal,
+      });
+
+      const text = await res.text();
+      let json: unknown = null;
+      try {
+        json = text ? (JSON.parse(text) as unknown) : null;
+      } catch {
+        throw new ContractError('INTERNAL_ERROR', `exec returned non-JSON: ${text.slice(0, 500)}`);
+      }
+
+      const obj = json as Record<string, unknown> | null;
+      if (!obj || typeof obj !== 'object') {
+        throw new ContractError('INTERNAL_ERROR', 'exec returned non-object');
+      }
+
+      if (obj['ok'] === true) {
+        return obj['data'] as TData;
+      }
+
+      const err = obj['error'] as WireError | undefined;
+      if (err !== undefined && typeof err === 'object' && typeof (err as WireError).code === 'string') {
+        throw fromWireError(err as WireError);
+      }
+      throw new ContractError('INTERNAL_ERROR', 'exec returned failure without WireError');
+    } catch (err: unknown) {
+      if (err instanceof FsError || err instanceof ContractError) throw err;
+      // 有副作用的请求可能已送达却没拿到响应：标记结果未知，并明确告诉模型（exec-outcome.ts）。
+      const unknown = classifyExecOutcomeUnknown(htu, err, {
+        deadlineHit,
+        callerAborted: opts.signal?.aborted === true,
+      });
+      if (unknown !== null) throw new ContractError('INTERNAL_ERROR', unknown, { cause: err });
+      // 网络/超时/JSON 解析等未分类错误：无条件脱敏后以 INTERNAL_ERROR 向外抛
+      const wire = toWireError(err, { physicalRoots });
+      throw fromWireError(wire);
+    } finally {
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onCallerAbort);
+    }
+  }
+
+  /** GET /internal/v1/fs/stream-text?envelope=...&target=... 带 HMAC。 */
+  async getStream(
+    htu: string,
+    query: Record<string, string>,
+    physicalRoots: readonly string[],
+  ): Promise<AsyncIterable<string>> {
+    const envelope = this.envelope();
+    const cfg = this.activeConfig();
+    // envelope、业务 query 与启用清单一并放进 query（base64url，便于 GET）。
+    const params: Record<string, string> = {
+      ...query,
+      envelope: Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url'),
+    };
+    const enabledSkills = cfg.enabledSkills ?? [];
+    if (enabledSkills.length > 0) {
+      params['enabledSkills'] = Buffer.from(JSON.stringify(enabledSkills), 'utf8').toString('base64url');
+    }
+    // GET 没有请求体：body_sha256 覆盖规范化后的 query，与 exec `signedQueryBytes` 同一规则。
+    // 以前这里是空串摘要，query 里的信封与目标都不在签名范围内。
+    const bodySha = sha256Hex(canonicalQueryBytes(params));
+    const token = this.issueToken(htu, bodySha, envelope, 'GET');
+    const url = new URL(`${this.baseUrl}${htu}`);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+    const timeoutMs = resolveDeadlineMs(undefined, cfg.timeoutMs ?? this.config.timeoutMs);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const fetchImpl: typeof fetch = cfg.fetchImpl ?? this.config.fetchImpl ?? globalThis.fetch;
+      const res = await fetchImpl(url.toString(), {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => '');
+        // 尝试解析 WireError
+        try {
+          const j = JSON.parse(text) as Record<string, unknown>;
+          const err = j['error'] as WireError | undefined;
+          if (err !== undefined && typeof err.code === 'string') throw fromWireError(err);
+        } catch (e) {
+          if (e instanceof FsError || e instanceof ContractError) throw e;
+        }
+        throw new ContractError('INTERNAL_ERROR', `exec stream failed: ${res.status} ${text.slice(0, 500)}`);
+      }
+
+      // 将 ReadableStream 转为 AsyncIterable<string>（按 UTF-8 解码，已由 exec 侧保证 text）
+      //
+      // 超时分两段：上面那个 `timer` 是**连接**截止（拿到响应头就该清掉，
+      // 见 finally），这里再给**每一块**装一个空闲截止。只有连接超时的话，
+      // exec 在传输途中挂起会让这个异步生成器永远挂着——`finally` 早就把
+      // 定时器清了，没有任何东西会再唤醒它。整体不设上限是有意的：大文件
+      // 可以慢慢传，但"停着不动"必须有尽头。
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      const readChunk = async (): Promise<Awaited<ReturnType<typeof reader.read>>> => {
+        let idle: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
+            idle = setTimeout(() => {
+              // abort 让底层连接真正断开，否则 socket 会一直挂着。
+              controller.abort();
+              reject(
+                new ContractError(
+                  'INTERNAL_ERROR',
+                  `exec stream stalled: no data for ${timeoutMs}ms`,
+                ),
+              );
+            }, timeoutMs);
+            idle.unref?.();
+            reader.read().then(resolve, reject);
+          });
+        } finally {
+          if (idle !== undefined) clearTimeout(idle);
+        }
+      };
+      const iterable: AsyncIterable<string> = {
+        [Symbol.asyncIterator](): AsyncIterator<string> {
+          return {
+            async next(): Promise<IteratorResult<string>> {
+              const { done, value } = await readChunk();
+              if (done) return { done: true, value: undefined as unknown as string };
+              const chunk = decoder.decode(value, { stream: true });
+              return { done: false, value: chunk };
+            },
+            async return(): Promise<IteratorResult<string>> {
+              await reader.cancel().catch(() => undefined);
+              return { done: true, value: undefined as unknown as string };
+            },
+          };
+        },
+      };
+
+      return guardIterable(iterable, physicalRoots);
+    } catch (err: unknown) {
+      if (err instanceof FsError || err instanceof ContractError) throw err;
+      const wire = toWireError(err, { physicalRoots });
+      throw fromWireError(wire);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private issueToken(
+    htu: string,
+    bodySha: string,
+    envelope: RpcEnvelope,
+    method: 'POST' | 'GET' = 'POST',
+  ): string {
+    // 复用 contract/hmac 的严格 schema；此处用最小可用 claim 集合
+    // conversation_id / sandbox_session_id 等在 pre-run 以外为必填，取 envelope 映射
+    //
+    // scope / tool_name 按 htu 从 contract 的绑定表取，**不再对所有 RPC 写死
+    // `fs`**：写死意味着一枚"文件"令牌可以拿去起进程，而 exec 侧从 2026-09-04
+    // 起会按同一张表校验，写死的那套直接过不去。
+    const binding = internalBindingForHtu(htu);
+    if (binding === null) {
+      throw new ContractError('ENVELOPE_INVALID', `no scope binding for ${htu}`);
+    }
+    const conversationId = `conv-${envelope.workspaceId.slice(0, 12)}`;
+    const sandboxSessionId = envelope.workspaceId;
+    const agentSessionId = envelope.workspaceId;
+
+    return issueInternalToken({
+      keyring: this.keyring,
+      activeKid: this.activeKid,
+      claims: {
+        org_id: envelope.orgId,
+        user_id: envelope.userId,
+        conversation_id: conversationId,
+        agent_session_id: agentSessionId,
+        sandbox_session_id: sandboxSessionId,
+        run_id: envelope.requestId,
+        tool_execution_id: `tool-${randomHex(4)}`,
+        tool_call_id: `call-${randomHex(6)}`,
+        tool_name: binding.toolName,
+        scope: [binding.scope] as const,
+        request_hash: sha256Hex(new TextEncoder().encode(`${htu}:${bodySha}`)),
+        execution_fence_token: envelope.fenceToken,
+        trace_id: envelope.requestId,
+        htm: method,
+        htu,
+        body_sha256: bodySha,
+      },
+    });
+  }
+}

@@ -1,8 +1,8 @@
-# Pi Enterprise Sandbox
+# DSH Enterprise Sandbox
 
-> 四服务安全沙箱 + AI 编程助手 · v4.0
+> 企业沙箱 + AI 智能体 · v4.0
 
-四服务架构：前端 SPA + 薄 BFF API Server + 独立 Node Agent + 安全沙箱执行环境。Agent 运行在独立服务中，浏览器零接触 LLM API Key 和工具执行细节。
+五个进程、四份镜像：前端 SPA + 薄 BFF API Server + 独立 Node Agent + TypeScript 执行面（compose 名 `sandbox`）+ 同一镜像的 MCP facade（`sandbox-mcp`）。Agent 运行在独立服务中，浏览器零接触 LLM API Key 和工具执行细节。
 
 ## 快速启动
 
@@ -21,55 +21,65 @@ open http://localhost:3000
 ## 架构
 
 ```
-  Browser → Frontend → API Server → Agent Host → Pi Extension ─┬→ Sandbox API
-                                                               └→ MCP Server
+  Browser → Frontend → API Server → Agent (DSH) → Exec HMAC API
+                                          │
+外部 MCP 客户端 ──────────────────→ sandbox-mcp ──窄桥──→ Exec
 ```
 
 | 组件 | 技术栈 | host→容器端口 |
 |------|--------|---------------|
 | **Frontend** | Vite + React → Nginx | `3000→80` |
 | **API Server (BFF)** | Node.js 22 — auth / files / SSE relay | `4000→4000` |
-| **Agent** | Node.js 22 + pi-coding-agent SDK `0.80.3` | `4100→4100` |
-| **Sandbox API** | Python 3.11 + FastAPI | 仅 Docker 内网 `8081`，不发布宿主端口 |
+| **Agent** | Node.js 22 + DeepSeek Harness（`@deepseek-ai/dsh-*`）| `4100→4100` |
+| **Sandbox（执行面）** | Node.js 22 + TypeScript + Bubblewrap | 仅 Docker 内网 `8081`，不发布宿主端口 |
+| **Sandbox MCP facade** | 同一镜像的第二入口 | 开发期回环 `8082`；生产由边缘代理 |
 
-运行时版本钉（Node 22 / Python 3.11 / Pi SDK 0.80.3）见根目录 `runtime-versions.json`，由 `tests/test_runtime_versions.py` 校验。
+运行时版本钉（Node 22 / Python 3.11 / DSH `0.1.1-rc.2`）见根目录 `runtime-versions.json`，由 `tests/test_runtime_versions.py` 校验。
+
+> Python 3.11 现在只有一个用途：**沙箱镜像里给模型执行代码用的解释器与运行库**
+> （`exec/requirements.txt`）。服务代码已全部是 TypeScript。
 
 ## 目录结构
 
 ```
-pi-sandbox/
+dsh-enterprise-sandbox/
 ├── frontend/             ← SPA 前端（Vite + React；纯 UI，零 Agent SDK）
 │   ├── src/main.tsx      ← 前端入口
 │   ├── Dockerfile        ← Nginx 静态服务
-│   └── nginx.conf        ← /api/* 反向代理到 api-server
+│   └── nginx/            ← /api/* 反向代理模板（上游由 API_UPSTREAM 渲染）与启动校验脚本
 ├── api-server/           ← 薄 BFF（auth / files / SSE relay）
-│   ├── server.js         ← HTTP 入口（Run API、SSE、health）
+│   ├── server.ts         ← HTTP 入口（Run API、SSE、health，容器跑 dist/server.js）
 │   ├── src/routes/       ← runs, files, status, conversations, capabilities...
 │   ├── src/services/     ← sandbox-client + agent-client
 │   └── Dockerfile
-├── agent/                ← 独立 Agent（@earendil-works/pi-coding-agent 0.80.3）
-│   ├── server.js         ← 内部 Run API / health
+├── agent/                ← 独立 Agent（DeepSeek Harness，TypeScript）
+│   ├── server.ts         ← 内部 Run API / health（容器跑 dist/server.js）
+│   ├── worker.ts         ← BullMQ worker
 │   ├── src/application/  ← Run、Session、审批、A2A 应用服务
-│   ├── src/extensions/   ← sandbox-bridge、enterprise-policy、observability、user-interaction（+ 可选 skill-lifecycle）
-│   ├── src/infrastructure/ ← MySQL、Redis、Pi、MCP 与 Sandbox ports
+│   ├── src/infrastructure/dsh/ ← 与组合层的接线
+│   ├── src/runtime/      ← DSH 组合层（provider / policy / projection）
+│   │                        agent 私有，不是独立服务
 │   └── Dockerfile
-├── sandbox/              ← 安全沙箱（Python FastAPI + 多层防护，无 Agent 主循环）
-│   ├── main.py           ← FastAPI 入口
-│   ├── artifact/         ← Artifact 领域、应用、持久化与 public/internal API
-│   ├── routers/          ← internal/v1 执行平面 + files/datasets 兼容适配 + health
-│   ├── services/         ← 会话/执行/文件/审计/审批策略
-│   └── Dockerfile
+├── contract/             ← @dsh/contract：exec ↔ agent runtime 的 RPC 信封、HMAC、错误码
+├── exec/                 ← 执行面 + MCP facade（TypeScript，取代原 Python sandbox/）
+│   ├── src/main.ts       ← 执行面入口（compose: sandbox）
+│   ├── src/mcp-main.ts   ← MCP facade 入口（compose: sandbox-mcp，同 Dockerfile 的 slim `facade` 镜像）
+│   ├── src/isolation/    ← Bubblewrap profile 建模为数据 + 单一 render()
+│   ├── src/fs/ shell/ search/ workspace/  ← 文件、命令与作业、搜索、工作区与配额
+│   ├── src/artifact/ dataset/ attachment/ ← 产物（控制面快照）、数据集、附件
+│   ├── src/http/         ← internal（HMAC）、internal-mcp（窄桥）、public（BFF 契约）
+│   ├── requirements.txt  ← 镜像里给**模型执行代码**用的 Python 运行库
+│   └── Dockerfile        ← 服务 + 模型工具链（python3/chromium/LibreOffice/bun…）
 ├── skills/               ← 可选系统 Skill 挂载（非硬依赖；AgentVersion allowlist + capabilities 控制模型可见性）
-├── tests/                ← pytest 测试套件
+├── tests/                ← pytest：仓库卫生（结构棘轮、版本钉、compose 安全、SSE 夹具）
 ├── scripts/              ← 备份/恢复、development reset、跨服务 smoke
-├── nginx/                ← 生产 Nginx + SSL
+├── nginx/                ← 生产边缘 Nginx（TLS_ENABLED 选 HTTP / TLS 两套 server 模板）
 ├── docs/                 ← 活跃文档（见 docs/README.md 权威顺序）
 ├── .runtime/             ← 全部宿主机运行态（Git/Docker build 均忽略）
 │   ├── sandbox/          ← workspaces、tmp、artifacts、control
-│   ├── agent/            ← 本地 Pi Agent 资源目录
 │   └── …                 ← smoke / release-gate 等按需创建的临时状态
-├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MySQL 8 + Redis 7）
-├── docker-compose.prod.yml      ← 生产 overlay（MySQL 8 + Redis 7 + Nginx + SSL）
+├── docker-compose.yml           ← 开发编排（Frontend + BFF + Agent + Sandbox + MCP + MySQL 5.7 + Redis 5.0.14）
+├── docker-compose.prod.yml      ← 生产 overlay（MySQL 5.7 + Redis 5.0.14 + Nginx + SSL）
 └── .env.example          ← 环境变量模板（与部署文档一致）
 ```
 
@@ -108,8 +118,9 @@ SANDBOX_BASE_URL=http://localhost:8081
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_AUTH_ENABLED` / `AUTH_ENABLED` | `false` | 开启后 Sandbox 要求用户 JWT（或服务令牌 + `X-Acting-*`），会话按 owner 隔离，跨租户统一 404 |
-| `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | 公开自注册；生产必须 `false`（管理员预置 / 邀请制） |
+| `AUTH_ENABLED`（旧别名 `SANDBOX_AUTH_ENABLED`） | `false` | BFF 经 Agent 验证 JWT 后投影可信 owner；跨租户统一 404。exec 不读取浏览器 JWT |
+| `SANDBOX_JWT_SECRET` | _(空)_ | Agent 的浏览器 JWT 签名密钥；生产必须是强密钥 |
+| `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 公开自注册；生产必须 `false`（管理员预置 / 邀请制） |
 | `SANDBOX_AUTH_ADMIN_USERNAMES` | _(空)_ | 管理员用户名白名单，逗号分隔、大小写不敏感 |
 
 `SANDBOX_AUTH_ADMIN_USERNAMES` 是 admin 角色的**唯一**来源。注册接口忽略客户端提交的
@@ -128,14 +139,16 @@ SANDBOX_BASE_URL=http://localhost:8081
 | `SANDBOX_MAX_PROCESS_COUNT` | `20` | 最大子进程数 |
 | `SANDBOX_MAX_OPEN_FILES` | `256` | 子进程最大打开文件描述符数（RLIMIT_NOFILE） |
 | `SANDBOX_MAX_CPU_TIME_SECONDS` | `300` | CPU 时间上限 |
-| `SANDBOX_MAX_MEMORY_MB` | `512` | 内存上限 |
+| `SANDBOX_MAX_MEMORY_MB` | `512` | 仅声明并打启动日志，**不设置任何内存限额**；生产硬限额是 `SANDBOX_MEM_LIMIT`，见 deployment.md |
 | `SANDBOX_MAX_FILE_SIZE_MB` | `50` | 单文件大小上限 |
 | `SANDBOX_WORKSPACE_QUOTA_MB` | `500` | 工作区总空间上限 |
 | `SANDBOX_TEMP_QUOTA_MB` | `500` | Agent Session 私有持久化 `/tmp` 空间上限 |
 | `SANDBOX_SHARED_ENV_KEYS` | _(空)_ | 逗号分隔；从 sandbox 进程 env 注入到每次 bash/python/node/process 子进程 |
 | `SANDBOX_EXEC_ENV_<NAME>` | — | 显式 opt-in：子进程得到 `NAME=value`（推荐） |
 
-共享执行 env 不会继承全部服务环境；`SANDBOX_API_TOKEN` / DB 密码等硬拒绝。单次 `env_overrides` 优先。
+共享执行 env 不会继承全部服务环境；平台 token、JWT、服务密码等硬拒绝。明确 allowlist
+的业务 DB 变量仍可供子进程使用，但通过受控的 spawn 环境传入，不进入 Bubblewrap
+命令行；单次 `env_overrides` 优先。
 
 ### 会话与工作区清理
 
@@ -159,25 +172,28 @@ Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AGENT_DATABASE_URL` | `mysql://sandbox:…@mysql:3306/sandbox` | Agent 事实库 DSN（`mysql://` / `mysql2://`） |
-| `SANDBOX_DATABASE_URL` | `mysql+pymysql://sandbox:…@mysql:3306/sandbox` | Sandbox 持久化 DSN |
+| `AGENT_DATABASE_URL` | `mysql://sandbox@mysql:3306/sandbox`（不带口令） | Agent 事实库 DSN（`mysql://` / `mysql2://`）；口令经 DBPM 下发 |
+| `SANDBOX_DATABASE_URL` | `mysql+pymysql://sandbox@mysql:3306/sandbox`（不带口令） | Sandbox 持久化 DSN；口令经 DBPM 下发 |
+| `DBPM_URL` 等 | 开发指向 `dbpm-fake`；生产必填 | 启动取密，见 [deployment.md](docs/deployment.md#dbpm-取密adr-0011-d10)；连接串带口令拒绝启动 |
 | `SANDBOX_COMPOSE_DATABASE_URL` | 未设置（默认 MySQL compose DSN） | 仅开发 Compose 的显式 Sandbox DSN override；避免旧 `.env` 的 `SANDBOX_DATABASE_URL` 覆盖正式默认 |
 | `MYSQL_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 | `MYSQL_ROOT_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret |
 
-**dev/prod 唯一正式拓扑为 MySQL 8**；生产配置校验拒绝 SQLite / PostgreSQL。凭据一律来自环境变量，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
+**dev/prod 唯一正式拓扑为 MySQL**（开发/CI 5.7，生产 overlay 8）；生产配置校验拒绝 SQLite / PostgreSQL。应用口令只来自 DBPM（ADR 0011 D10）；`MYSQL_PASSWORD` 只配置数据库服务端与 schema 工具，勿硬编码真实密钥。研发清库见 [docs/runbooks/development-reset.md](docs/runbooks/development-reset.md)。
 
-Compose 由一次性 `agent-migrate` 服务独占 Knex migration；`sandbox`、
-`agent`、`agent-worker` 只在 migration 成功退出后启动，长期进程自身不再执行 migration。
+**任何服务启动时都不迁移**（ADR 0011 D6）：开发先 `docker compose up -d mysql` 再
+`scripts/dev/schema-apply.sh` 导出发布包并逐段建表；生产由 DBA 执行发布包。`sandbox`、
+`agent`、`agent-worker` 启动时按随包 schema 清单只读核对，结构不一致即拒绝启动。
 
-### Redis 7（Agent-only 运行态协调）
+### Redis 5.0.14（Agent-only 运行态协调，UPRedis 基线）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AGENT_REDIS_URL` / `REDIS_URL` | `redis://:…@redis:6379/0` | Agent 协调 DSN（仅 `redis://` / `rediss://`） |
+| `AGENT_REDIS_URL` / `REDIS_URL` | `redis://redis:6379/0`（不带口令） | Agent 协调 DSN（仅 `redis://` / `rediss://`）；口令经 DBPM 下发 |
 | `TEST_REDIS_URL` | _(可选)_ | 集成测试用 Redis DSN |
 | `REDIS_PASSWORD` | 开发占位；生产无默认 | 生产必填强 secret（fail-fast） |
 | `AGENT_RUNS_QUEUE_NAME` | `agent-runs` | BullMQ Run Queue 名 |
+| `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，必须含 hash tag；改值先按 [runbook](docs/runbooks/run-queue-prefix-switch.md) drain |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔 |
 | `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似保留长度 |
@@ -193,19 +209,20 @@ Redis 只保存队列、lease、stream、取消信号等运行态；**不是** R
 
 ### Skill
 
-Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。Skill 分两层，
-Agent 自动发现每个 `*/SKILL.md` 包（详见 [skills/README.md](skills/README.md)）：
+Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。Skill 分三层
+（详见 [skills/README.md](skills/README.md)）：
 
 | 层 | 路径 | 内容 | 可见范围 | 可写 |
 |----|------|------|----------|------|
 | 系统 | `/home/sandbox/skill` | 本仓库 `./skills` 自带的 package | 所有人 | 否 |
-| 用户 | `/home/sandbox/skill-user/<orgId>/<userId>` | 该用户 `skill_install` 装的 package | 仅该用户本人 | 是 |
+| 草稿 | `/home/sandbox/skill-draft/<orgId>/<userId>` | 模型为当前用户编写的 package | 仅该用户本人；不进 prompt | 是 |
+| 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>` | 人工启用后从草稿复制的发布副本 | 仅该用户本人 | 否 |
 
-每个 Run 先扫描系统层和调用者自己的用户层；非空
-`AgentVersion.configJson.skills` 作为 allowlist 进一步收窄模型可见的 Skill。
-模型侧的最终权威清单是 `capabilities` 工具。用户可以上传当前回合的
-Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载统一经过高风险
-工具审批，完成后自动刷新能力清单。
+每个 Run 只扫描系统层和调用者自己的已启用层；非空
+`AgentVersion.configJson.skills` 可进一步收窄模型可见的 Skill。模型用普通
+`write` / `bash` 修改草稿，用户在 Capabilities 页启用或停用；模型侧没有
+`skill_install/create/edit/uninstall` 变更工具。启用时 Agent 校验并写
+owner-scoped `user_skill_enablements`，exec 只读挂载发布副本。
 
 ### 其他
 
@@ -213,7 +230,6 @@ Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载�
 |------|--------|------|
 | `SANDBOX_LOG_LEVEL` | `INFO` | 日志级别 |
 | `MCP_SERVERS_JSON` | `[]` | Agent Runtime 管理的外部 MCP Server 列表 |
-| `SANDBOX_UVICORN_WORKERS` | `1` | Uvicorn worker 数 |
 
 ## 开发
 
@@ -221,13 +237,15 @@ Skill ZIP，或与 Agent 交互生成 Skill；安装、生成、编辑和卸载�
 
 ```bash
 # 依赖（从仓库根目录；Node 22）
-uv sync --extra test
+uv sync --extra test          # 只为跑 tests/ 的仓库卫生检查
+npm ci --prefix contract
+npm ci --prefix exec
 npm ci --prefix api-server
 npm ci --prefix agent
 npm ci --prefix frontend
 
-# 本地四进程
-uv run uvicorn sandbox.main:app --port 8081 --reload
+# 本地进程（执行面裸跑需要 Linux：Bubblewrap 要非特权 user namespace）
+npm run build --prefix contract && npm run build --prefix exec && node exec/dist/main.js
 SANDBOX_BASE_URL=http://localhost:8081 npm run dev --prefix agent
 SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
   npm run dev --prefix api-server
@@ -235,8 +253,10 @@ npm run dev --prefix frontend
 
 # 质量门禁（与 CI 对齐）
 uv run pytest tests/ -q --tb=short
+npm test --prefix exec && npx tsc --noEmit -p exec/tsconfig.json
+npm test --prefix contract
+npm test --prefix agent && npm --prefix agent run typecheck
 node --test api-server/tests/*.test.js
-node --test agent/tests/*.test.js agent/tests/sdk-compat/*.test.js
 npm test --prefix frontend && npm run build --prefix frontend
 docker compose config -q
 # 无真实 LLM key 的跨服务 smoke（fake OpenAI；禁止 production）
@@ -267,8 +287,8 @@ node scripts/smoke-cross-service.mjs
 | [文档地图](docs/README.md) | 权威顺序、文档角色、更新纪律 |
 | [验收状态 STATUS](docs/STATUS.md) | 相对 plan §32 的唯一进度板 |
 | [过程日志](docs/PROCESS_LOG.md) | `codex/plan-acceptance` 过程记录（追加） |
-| [架构设计](docs/architecture.md) | 四服务架构、设计决策、安全模型、数据流 |
-| [部署指南](docs/deployment.md) | 生产部署（MySQL 8 + Redis 7）、SSL、备份、监控 |
+| [架构设计](docs/architecture.md) | 进程边界、设计决策、安全模型、数据流 |
+| [部署指南](docs/deployment.md) | 生产部署（MySQL 5.7 + Redis 5.0.14）、SSL、备份、监控 |
 | [开发指南](docs/development.md) | 本地开发、零 Skill、测试、调试 |
 | [API 参考](docs/api.md) | Sandbox API + MCP + SSE、workspace_id 契约 |
 | [前端指南](docs/webui.md) | 前端 SPA 架构、SSE 消费、扩展 |

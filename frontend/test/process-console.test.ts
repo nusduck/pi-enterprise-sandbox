@@ -120,7 +120,7 @@ describe('process console log lines', () => {
   });
 });
 
-describe('process API client (owner-scoped BFF authority)', () => {
+describe('process API client (session-scoped exec authority)', () => {
   it('getProcessLogs hits /api/processes/:id/logs with offset', async () => {
     const originalFetch = globalThis.fetch;
     const urls: string[] = [];
@@ -138,13 +138,18 @@ describe('process API client (owner-scoped BFF authority)', () => {
       );
     }) as typeof fetch;
     try {
-      const logs = await getProcessLogs('proc_auth', { offset: 10, limit: 1000 });
+      const logs = await getProcessLogs('proc_auth', {
+        sessionId: 'session_a',
+        offset: 10,
+        limit: 1000,
+      });
       assert.equal(logs.stdout, 'hist-out\n');
       assert.equal(logs.stderr, 'hist-err\n');
       assert.equal(logs.next_offset, 42);
       assert.match(urls[0] || '', /\/api\/processes\/proc_auth\/logs\?/);
       assert.match(urls[0] || '', /offset=10/);
       assert.match(urls[0] || '', /limit=1000/);
+      assert.match(urls[0] || '', /session_id=session_a/);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -181,11 +186,11 @@ describe('process API client (owner-scoped BFF authority)', () => {
       });
     }) as typeof fetch;
     try {
-      const list = await listProcesses({ runId: 'run_a' });
+      const list = await listProcesses({ runId: 'run_a', sessionId: 'session_a' });
       assert.equal(list[0]?.process_id, 'proc_a');
       assert.ok(calls.some((c) => c.url.includes('/api/processes') && c.url.includes('run_id=run_a')));
 
-      const stdin = await writeProcessStdin('proc_a', 'yes\n');
+      const stdin = await writeProcessStdin('proc_a', 'session_a', 'yes\n');
       assert.equal(stdin.ok, true);
       assert.ok(
         calls.some(
@@ -196,7 +201,7 @@ describe('process API client (owner-scoped BFF authority)', () => {
         ),
       );
 
-      const sig = await signalProcess('proc_a', 'SIGTERM');
+      const sig = await signalProcess('proc_a', 'session_a', 'SIGTERM');
       assert.equal(sig.ok, true);
       assert.ok(
         calls.some(
@@ -207,7 +212,7 @@ describe('process API client (owner-scoped BFF authority)', () => {
         ),
       );
 
-      const cancel = await cancelProcess('proc_a');
+      const cancel = await cancelProcess('proc_a', 'session_a');
       assert.equal(cancel.ok, true);
       assert.ok(
         calls.some(

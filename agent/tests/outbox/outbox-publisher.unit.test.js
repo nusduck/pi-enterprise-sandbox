@@ -179,7 +179,7 @@ describe('OutboxPublisher unit', () => {
       },
     });
     stream = createFakeStream();
-    state.tables.runs = [{ run_id: RUN, status: 'RUNNING' }];
+    state.tables.tbl_agsvc_runs = [{ run_id: RUN, status: 'RUNNING' }];
   });
 
   it('publishes claimed rows to stream with stable eventId', async () => {
@@ -204,7 +204,7 @@ describe('OutboxPublisher unit', () => {
     assert.equal(stream.appends[0].fields.eventId, EVT);
     assert.equal(stream.appends[0].fields.sequence, '7');
     assert.equal(stream.appends[0].fields.type, 'run.started');
-    assert.equal(state.tables.domain_outbox[0].status, 'PUBLISHED');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PUBLISHED');
   });
 
   it('does not claim or fail unrelated non-run outbox rows', async () => {
@@ -227,12 +227,12 @@ describe('OutboxPublisher unit', () => {
     assert.equal(result.published, 1);
     assert.equal(result.failed, 0);
 
-    const org = state.tables.domain_outbox.find((r) => r.outbox_id === ORG_OB);
+    const org = state.tables.tbl_agsvc_domain_outbox.find((r) => r.outbox_id === ORG_OB);
     assert.equal(org.status, 'PENDING');
     assert.equal(org.attempts, 0);
     assert.equal(org.claim_token, null);
     assert.equal(org.last_error, null);
-    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, 'RUNNING');
   });
 
   it('publishes non-run rows that intentionally carry payload.runId', async () => {
@@ -267,9 +267,9 @@ describe('OutboxPublisher unit', () => {
     assert.equal(result.failed, 1);
     assert.equal(result.retried, 0);
     assert.equal(stream.appends.length, 0);
-    assert.equal(state.tables.domain_outbox[0].status, 'FAILED');
-    assert.match(String(state.tables.domain_outbox[0].last_error), /sequence/i);
-    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'FAILED');
+    assert.match(String(state.tables.tbl_agsvc_domain_outbox[0].last_error), /sequence/i);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, 'RUNNING');
   });
 
   it('malformed run-stream row (invalid sequence) fails permanently without redis', async () => {
@@ -298,9 +298,9 @@ describe('OutboxPublisher unit', () => {
     assert.equal(result.retried, 1);
     assert.equal(result.published, 0);
     assert.equal(stream.appends.length, 0);
-    assert.equal(state.tables.domain_outbox[0].status, 'PENDING');
-    assert.ok(state.tables.domain_outbox[0].last_error);
-    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PENDING');
+    assert.ok(state.tables.tbl_agsvc_domain_outbox[0].last_error);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, 'RUNNING');
   });
 
   it('tolerates at-least-once republish with same stable eventId after crash recovery', async () => {
@@ -354,9 +354,9 @@ describe('OutboxPublisher unit', () => {
     assert.equal(stream.appends.length, 1);
     assert.equal(stream.appends[0].fields.eventId, EVT);
     // Row still PUBLISHING — recoverable via stale reclaim; at-least-once.
-    assert.equal(state.tables.domain_outbox[0].status, 'PUBLISHING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PUBLISHING');
     assert.equal(calls, 1);
-    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, 'RUNNING');
   });
 
   it('when markPublished throws after Redis success, propagates and leaves PUBLISHING', async () => {
@@ -380,8 +380,8 @@ describe('OutboxPublisher unit', () => {
       /mysql connection lost during markPublished/,
     );
     assert.equal(stream.appends.length, 1);
-    assert.equal(state.tables.domain_outbox[0].status, 'PUBLISHING');
-    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PUBLISHING');
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, 'RUNNING');
   });
 
   it('runLoop is bounded and stop() does not leak timers', async () => {
@@ -442,15 +442,15 @@ describe('OutboxPublisher unit', () => {
     const publisher = new OutboxPublisher({ repository: repo, stream });
 
     for (let i = 0; i < 3; i += 1) {
-      for (const row of state.tables.domain_outbox) {
+      for (const row of state.tables.tbl_agsvc_domain_outbox) {
         if (row.status === 'PENDING') row.next_attempt_at = null;
       }
       stream.failNextTimes(1);
       await publisher.publishOnce();
     }
 
-    assert.equal(state.tables.domain_outbox[0].status, 'FAILED');
-    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'FAILED');
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, 'RUNNING');
     assert.equal(stream.appends.length, 0);
   });
 

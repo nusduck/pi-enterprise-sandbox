@@ -26,7 +26,8 @@ for required in "$MYSQL_ARCHIVE" "$RUNTIME_ARCHIVE" "$MANIFEST"; do
     fi
 done
 
-if ! grep -qx 'format=pi-enterprise-backup-v1' "$MANIFEST"; then
+# 改名前的备份写的是旧格式标记，内容布局相同，照常接受。
+if ! grep -qxE 'format=(dsh|pi)-enterprise-backup-v1' "$MANIFEST"; then
     echo "Unsupported or invalid backup manifest" >&2
     exit 65
 fi
@@ -45,7 +46,7 @@ done
 
 docker compose ps mysql >/dev/null
 
-echo "=== Pi Enterprise Sandbox Restore ==="
+echo "=== DSH Enterprise Sandbox Restore ==="
 echo "Restore prefix: $BACKUP_PATH"
 echo "Stopping data-plane writers..."
 docker compose stop api-server agent agent-worker sandbox
@@ -69,8 +70,20 @@ gzip -dc "$RUNTIME_ARCHIVE" | docker compose run \
     sandbox \
     -c 'exec tar -C / -xzf - --no-same-owner --no-same-permissions'
 
-echo "[3/3] Applying any forward-compatible Agent migrations..."
-docker compose run --rm --no-deps -T agent-migrate
+echo "[3/3] Verifying the restored schema against this release (read-only)..."
+# Services never migrate (ADR 0011 D6). A backup from an older schema must be
+# brought forward with the matching schema release by the DBA — not here.
+verify_user="$(docker compose exec -T mysql printenv MYSQL_USER)"
+verify_db="$(docker compose exec -T mysql printenv MYSQL_DATABASE)"
+if ! SCHEMA_VERIFY_PASSWORD="$(docker compose exec -T mysql printenv MYSQL_PASSWORD)" \
+    docker compose run --rm --no-deps -T \
+        -e "SCHEMA_VERIFY_DATABASE_URL=mysql://${verify_user}@mysql:3306/${verify_db}" \
+        -e SCHEMA_VERIFY_PASSWORD \
+        --entrypoint node agent dist/src/infrastructure/mysql/cli-schema.js verify; then
+    echo "Restored schema does not match this release manifest." >&2
+    echo "Apply the matching schema release (docs/runbooks/mysql-partial-migration-recovery.md) before starting services." >&2
+    exit 1
+fi
 
 trap - EXIT INT TERM
 restart_data_plane

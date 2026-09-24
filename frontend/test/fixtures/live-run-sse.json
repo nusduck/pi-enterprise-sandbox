@@ -998,7 +998,7 @@
 "journalDigest": "b795a0a018f7504f5ca58be5aba2b0ddd9fa237c00f0b000a550766d178c2ad2",
 "agentSessionId": "01KYWQY8ZCGT5QDGV7BBR10JAN",
 "snapshotVersion": 1,
-"piSessionVersion": 1,
+"sessionVersion": 1,
 "journalHighWaterMark": 11
 },
 "ts": 1785523552896,

@@ -3,6 +3,5 @@
 # result with the host's (macOS-resolved) node_modules.
 node_modules/
 .runtime/
-pi-agent-home/
 .env
 *.log

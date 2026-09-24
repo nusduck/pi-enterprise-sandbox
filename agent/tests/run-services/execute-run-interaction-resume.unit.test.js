@@ -20,7 +20,7 @@ const NOW = '2026-07-19 01:02:03.004';
 const SCOPE = { orgId: ORG, userId: USER };
 
 function seed(state, interactionStatus, toolStatus = 'SUCCEEDED') {
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -45,7 +45,7 @@ function seed(state, interactionStatus, toolStatus = 'SUCCEEDED') {
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -67,7 +67,7 @@ function seed(state, interactionStatus, toolStatus = 'SUCCEEDED') {
       created_at: NOW,
     },
   ];
-  state.tables.run_interactions = [
+  state.tables.tbl_agsvc_run_interactions = [
     {
       interaction_id: INTERACTION,
       org_id: ORG,
@@ -91,9 +91,9 @@ function seed(state, interactionStatus, toolStatus = 'SUCCEEDED') {
       resolved_at: interactionStatus === 'RESOLVED' ? NOW : null,
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
-  state.tables.trace_spans = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
+  state.tables.tbl_agsvc_trace_spans = [];
 }
 
 function makeLease() {
@@ -165,7 +165,7 @@ describe('ExecuteRunService WAITING_INPUT resume', () => {
     assert.equal(result.outcome, RUN_STATUS.WAITING_INPUT);
     assert.equal(result.needsReconciliation, false);
     assert.equal(calls, 0);
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.WAITING_INPUT);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.WAITING_INPUT);
   });
 
   it('claims only a resolved interaction, passes its continuation context, then completes', async () => {
@@ -186,7 +186,7 @@ describe('ExecuteRunService WAITING_INPUT resume', () => {
     });
 
     assert.equal(result.status, RUN_STATUS.SUCCEEDED);
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.SUCCEEDED);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.SUCCEEDED);
     assert.equal(seen.length, 1);
     assert.deepEqual(seen[0].run.interactionResume, {
       interactionId: INTERACTION,
@@ -200,7 +200,7 @@ describe('ExecuteRunService WAITING_INPUT resume', () => {
       toolName: 'ask_user',
     });
     assert.ok(
-      state.tables.run_events.some(
+      state.tables.tbl_agsvc_run_events.some(
         (row) =>
           row.event_type === 'run.status.changed' &&
           JSON.parse(row.payload_json).to === RUN_STATUS.RUNNING,
@@ -208,7 +208,7 @@ describe('ExecuteRunService WAITING_INPUT resume', () => {
       'resume claims WAITING_INPUT → RUNNING durably before execution',
     );
     assert.ok(
-      state.tables.run_events.some((row) => row.event_type === 'run.completed'),
+      state.tables.tbl_agsvc_run_events.some((row) => row.event_type === 'run.completed'),
     );
   });
 
@@ -233,6 +233,6 @@ describe('ExecuteRunService WAITING_INPUT resume', () => {
     assert.equal(result.needsReconciliation, true);
     assert.match(result.error, /not resumable/i);
     assert.equal(calls, 0);
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.WAITING_INPUT);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.WAITING_INPUT);
   });
 });

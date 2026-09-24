@@ -1,0 +1,521 @@
+/**
+ * Agent 目录（多 Agent 选择）的回归测试。
+ *
+ * 覆盖 `docs/design/multi-agent-selection.md` §11 列出的全部回归项：建会话带
+ * agent_id、跨租户 404、非 admin 拒绝、版本不漂移、非法 config 建版本即被拒、
+ * 不传 agent_id 时行为不变。
+ */
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { AgentCatalogService } from '../../src/application/agent-catalog-service.js';
+import { ConversationService } from '../../src/application/conversation-service.js';
+import { CreateRunService } from '../../src/application/create-run-service.js';
+import {
+  AdminRoleRequiredError,
+  OwnerScopedNotFoundError,
+  ValidationError,
+} from '../../src/application/errors.js';
+import { ConflictError } from '../../src/infrastructure/mysql/errors.js';
+import { createFakeRunWorld, FIXED_AUTH } from './helpers/fake-run-world.js';
+
+const NOW = () => new Date('2026-07-18T06:00:00.000Z');
+const ADMIN_AUTH = { ...FIXED_AUTH, role: 'admin' };
+const MEMBER_AUTH = { ...FIXED_AUTH, role: 'user' };
+/** 另一个租户：同一个 provider，不同的 externalOrgId。 */
+const OTHER_ORG_AUTH = {
+  ...FIXED_AUTH,
+  externalOrgId: '770e8400-e29b-41d4-a716-446655440002',
+  externalUserId: '880e8400-e29b-41d4-a716-446655440003',
+  role: 'admin',
+};
+
+function createConversations(world) {
+  return new ConversationService({
+    transactionManager: world.transactionManager,
+    createRepositories: world.createRepositories,
+    db: world.rootDb,
+    generateId: world.generateId,
+    now: NOW,
+  });
+}
+
+function createCatalog(world) {
+  return new AgentCatalogService({
+    transactionManager: world.transactionManager,
+    createRepositories: world.createRepositories,
+    db: world.rootDb,
+    generateId: world.generateId,
+    now: NOW,
+  });
+}
+
+function createRuns(world) {
+  return new CreateRunService({
+    transactionManager: world.transactionManager,
+    createRepositories: world.createRepositories,
+    generateId: world.generateId,
+    now: NOW,
+    runQueue: world.runQueue,
+  });
+}
+
+/** org/user/membership 由第一次建会话 provision 出来。 */
+async function provisionOwner(world, auth = ADMIN_AUTH) {
+  return createConversations(world).create(auth, { title: 'bootstrap' });
+}
+
+describe('AgentCatalogService — 一个 org 下并列多个智能体', () => {
+  it('createAgent 建出 definition + v1，并把 active_version_id 指向 v1', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    const created = await catalog.createAgent(ADMIN_AUTH, {
+      name: '数据分析助手',
+      description: 'SQL + 图表',
+      config: { systemPrompt: '你是数据分析助手', skills: ['sql'] },
+    });
+
+    assert.equal(created.agent.name, '数据分析助手');
+    assert.equal(created.version.version_no, 1);
+    assert.equal(created.agent.active_version_id, created.version.agent_version_id);
+    assert.equal(created.agent.active_version_no, 1);
+    assert.equal(created.version.config.systemPrompt, '你是数据分析助手');
+
+    // 与租户默认 Agent **并列**，不是它的新版本。
+    const { agents } = await catalog.listAgents(MEMBER_AUTH);
+    assert.equal(agents.length, 2);
+    assert.deepEqual(
+      agents.map((agent) => agent.name).sort(),
+      ['default', '数据分析助手'],
+    );
+  });
+
+  it('非 admin 不能写目录，但可以读', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    await assert.rejects(
+      () => catalog.createAgent(MEMBER_AUTH, { name: 'nope' }),
+      AdminRoleRequiredError,
+    );
+    // 角色解析不出来时同样拒绝——fail-closed，不回退到"默认允许"。
+    await assert.rejects(
+      () => catalog.createAgent(FIXED_AUTH, { name: 'nope' }),
+      AdminRoleRequiredError,
+    );
+    assert.equal((await catalog.listAgents(MEMBER_AUTH)).agents.length, 1);
+  });
+
+  it('跨租户的 agentId 一律 404，不泄漏存在性', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    await provisionOwner(world, OTHER_ORG_AUTH);
+    const catalog = createCatalog(world);
+
+    const mine = await catalog.createAgent(ADMIN_AUTH, { name: '只属于我' });
+    const agentId = mine.agent.agent_id;
+
+    for (const call of [
+      () => catalog.listVersions(OTHER_ORG_AUTH, agentId, {}),
+      () => catalog.createVersion(OTHER_ORG_AUTH, agentId, { config: {} }),
+      () => catalog.setActiveVersion(
+        OTHER_ORG_AUTH, agentId, mine.version.agent_version_id,
+      ),
+    ]) {
+      await assert.rejects(call, (err) => {
+        assert.ok(err instanceof OwnerScopedNotFoundError);
+        assert.equal(err.message, 'Agent not found');
+        return true;
+      });
+    }
+
+    // 建会话选别人的 Agent 也是 404，且响应体里没有该 Agent 的任何痕迹。
+    await assert.rejects(
+      () => createConversations(world).create(OTHER_ORG_AUTH, { agent_id: agentId }),
+      (err) => {
+        assert.ok(err instanceof OwnerScopedNotFoundError);
+        assert.equal(err.message, 'Agent not found');
+        return true;
+      },
+    );
+  });
+
+  it('非法 config 在建版本时就被拒，而不是等到 Run 起不来', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    // toolPolicy 是数组：投影会把它读成空，Run 报的是"没有 binding"而不是配置错。
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, {
+        name: 'bad-tool-policy',
+        config: { toolPolicy: ['bash'] },
+      }),
+      ValidationError,
+    );
+    // model 内嵌凭据字段。
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, {
+        name: 'bad-model',
+        config: {
+          modelPolicy: {
+            model: {
+              id: 'm', name: 'm', api: 'chat', provider: 'p', baseUrl: '',
+              reasoning: false, input: [], cost: {}, contextWindow: 1,
+              maxTokens: 1, apiKey: 'sk-leaked',
+            },
+          },
+        },
+      }),
+      ValidationError,
+    );
+    assert.equal(world.tables.tbl_agsvc_agent_definitions.length, 1);
+  });
+});
+
+describe('会话与 Agent 的绑定', () => {
+  it('建会话带 agent_id 时绑到该 Agent；不传时行为不变', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    const conversations = createConversations(world);
+
+    const analyst = await catalog.createAgent(ADMIN_AUTH, { name: '数据分析助手' });
+    const selected = await conversations.create(ADMIN_AUTH, {
+      title: '选了分析助手',
+      agent_id: analyst.agent.agent_id,
+    });
+    assert.equal(selected.agent_id, analyst.agent.agent_id);
+
+    const defaulted = await conversations.create(ADMIN_AUTH, { title: '没选' });
+    const tenantDefault = world.tables.tbl_agsvc_agent_definitions.find(
+      (row) => row.name === 'default',
+    );
+    assert.equal(defaulted.agent_id, tenantDefault.agent_id);
+  });
+
+  it('agent_id 形状非法时报 400，不当成"没选"', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    await assert.rejects(
+      () => createConversations(world).create(ADMIN_AUTH, { agent_id: 'not-a-ulid' }),
+      ValidationError,
+    );
+  });
+
+  it('切活跃版本只影响新会话：已有会话的 Run 仍用原版本', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    const conversations = createConversations(world);
+    const runs = createRuns(world);
+
+    const agent = await catalog.createAgent(ADMIN_AUTH, {
+      name: '代码审查助手',
+      config: { systemPrompt: 'v1' },
+    });
+    const agentId = agent.agent.agent_id;
+    const v1 = agent.version.agent_version_id;
+
+    const pinned = await conversations.create(ADMIN_AUTH, {
+      title: '在 v1 上开的会话',
+      agent_id: agentId,
+    });
+
+    const v2 = await catalog.createVersion(ADMIN_AUTH, agentId, {
+      config: { systemPrompt: 'v2' },
+    });
+    assert.equal(v2.version.version_no, 2);
+    assert.equal(v2.agent.active_version_id, v2.version.agent_version_id);
+    assert.notEqual(v2.version.agent_version_id, v1);
+
+    // 老会话的下一轮 Run 仍钉在 v1。
+    const oldRun = await runs.execute({
+      messages: [{ role: 'user', content: '继续' }],
+      auth: { ...ADMIN_AUTH, externalConversationId: pinned.id },
+      traceId: 'a'.repeat(32),
+      idempotencyKey: 'pinned-follow-up',
+    });
+    const oldRow = world.tables.tbl_agsvc_runs.find((row) => row.run_id === oldRun.runId);
+    assert.equal(oldRow.agent_version_id, v1);
+
+    // 新会话拿到 v2。
+    const fresh = await conversations.create(ADMIN_AUTH, {
+      title: '在 v2 上开的会话',
+      agent_id: agentId,
+    });
+    const freshRun = await runs.execute({
+      messages: [{ role: 'user', content: '你好' }],
+      auth: { ...ADMIN_AUTH, externalConversationId: fresh.id },
+      traceId: 'b'.repeat(32),
+      idempotencyKey: 'fresh-first-turn',
+    });
+    const freshRow = world.tables.tbl_agsvc_runs.find((row) => row.run_id === freshRun.runId);
+    assert.equal(freshRow.agent_version_id, v2.version.agent_version_id);
+  });
+
+  it('回滚 = 把 active_version_id 指回旧版本', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    const agent = await catalog.createAgent(ADMIN_AUTH, { name: '可回滚' });
+    const agentId = agent.agent.agent_id;
+    const v1 = agent.version.agent_version_id;
+    await catalog.createVersion(ADMIN_AUTH, agentId, { config: { systemPrompt: 'v2' } });
+
+    const rolledBack = await catalog.setActiveVersion(ADMIN_AUTH, agentId, v1);
+    assert.equal(rolledBack.agent.active_version_id, v1);
+    assert.equal(rolledBack.agent.active_version_no, 1);
+
+    const { versions } = await catalog.listVersions(ADMIN_AUTH, agentId, {});
+    assert.deepEqual(versions.map((v) => v.version_no), [2, 1]);
+  });
+
+  it('别的 Agent 的 versionId 不能被激活，同样是 404', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    const a = await catalog.createAgent(ADMIN_AUTH, { name: 'A' });
+    const b = await catalog.createAgent(ADMIN_AUTH, { name: 'B' });
+
+    await assert.rejects(
+      () => catalog.setActiveVersion(
+        ADMIN_AUTH, a.agent.agent_id, b.version.agent_version_id,
+      ),
+      (err) => {
+        assert.ok(err instanceof OwnerScopedNotFoundError);
+        assert.equal(err.message, 'Agent version not found');
+        return true;
+      },
+    );
+  });
+
+  it('同名 Agent 冲突时报可读的错误，而不是裸的 ConflictError', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    // fake knex 不执行 ind_agsvc_ad_a1，所以直接让仓储抛出真实
+    // MySQL 会抛的那个错，验证服务把它翻成了调用方看得懂的 400。
+    const catalog = new AgentCatalogService({
+      transactionManager: world.transactionManager,
+      createRepositories: (db) => {
+        const repos = world.createRepositories(db);
+        repos.catalog.createDefinition = async () => {
+          throw new ConflictError('Agent definition name conflict', {
+            resource: 'agent_definitions',
+            id: 'org:重名',
+          });
+        };
+        return repos;
+      },
+      db: world.rootDb,
+      generateId: world.generateId,
+      now: NOW,
+    });
+
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, { name: '重名' }),
+      (err) => {
+        assert.ok(err instanceof ValidationError);
+        assert.match(err.message, /already exists/);
+        return true;
+      },
+    );
+  });
+});
+
+describe('AgentCatalogService — 配置面与激活并发', () => {
+  it('config options / validate 都是 admin 面，member 一律拒绝', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    await assert.rejects(
+      () => catalog.configOptions(MEMBER_AUTH),
+      (err) => err instanceof AdminRoleRequiredError,
+    );
+    await assert.rejects(
+      () => catalog.validateConfig(MEMBER_AUTH, { config: { schemaVersion: 1 } }),
+      (err) => err instanceof AdminRoleRequiredError,
+    );
+
+    const options = await catalog.configOptions(ADMIN_AUTH);
+    assert.equal(options.schemaVersion, 1);
+    assert.ok(options.capabilityRevision.length > 0);
+    // 能力投影里不能出现连接材料或宿主路径。
+    const serialized = JSON.stringify(options);
+    for (const forbidden of ['secretRef', 'command', 'args', 'headers', 'MCP_SERVERS_JSON']) {
+      assert.equal(serialized.includes(forbidden), false, `options leaked ${forbidden}`);
+    }
+  });
+
+  it('validate 只解析：合法请求的字段错误是 valid=false，而不是抛异常', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    const ok = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1, systemPrompt: 'persona' },
+    });
+    assert.equal(ok.valid, true);
+    assert.ok(ok.normalizedConfig);
+
+    const bad = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1, modelPolicy: { modelId: 'not-a-real-model' } },
+    });
+    assert.equal(bad.valid, false);
+    assert.equal(bad.normalizedConfig, undefined);
+    assert.ok(bad.errors.some((error) => error.path === 'modelPolicy.modelId'));
+
+    // 结构性问题仍然是 400（ValidationError），不是 200 + valid=false。
+    await assert.rejects(
+      () => catalog.validateConfig(ADMIN_AUTH, { config: 'nope' }),
+      (err) => err instanceof ValidationError,
+    );
+  });
+
+  it('validate 带别的 org 的 agent_id 时按 404 处理，不泄漏存在性', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    await provisionOwner(world, OTHER_ORG_AUTH);
+    const catalog = createCatalog(world);
+    const mine = await catalog.createAgent(ADMIN_AUTH, { name: '我的' });
+
+    // 自己的 agent_id 可以带。
+    const ok = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1 },
+      agentId: mine.agent.agent_id,
+    });
+    assert.equal(ok.valid, true);
+
+    await assert.rejects(
+      () => catalog.validateConfig(OTHER_ORG_AUTH, {
+        config: { schemaVersion: 1 },
+        agentId: mine.agent.agent_id,
+      }),
+      (err) => err instanceof OwnerScopedNotFoundError,
+    );
+  });
+
+  it('expected_active_version_id 过期时 409，并带上当前指针；一致时正常激活', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    const created = await catalog.createAgent(ADMIN_AUTH, { name: '并发' });
+    const agentId = created.agent.agent_id;
+    const v1 = created.version.agent_version_id;
+
+    // 另一位 admin 抢先发布并激活了 v2。
+    const v2 = await catalog.createVersion(ADMIN_AUTH, agentId, {
+      config: { systemPrompt: 'v2' },
+    });
+    assert.equal(v2.agent.active_version_id, v2.version.agent_version_id);
+
+    // 拿着 v1 快照的管理员再保存并激活 → 冲突，且不落新版本。
+    await assert.rejects(
+      () => catalog.createVersion(ADMIN_AUTH, agentId, {
+        config: { systemPrompt: 'v3' },
+        expectedActiveVersionId: v1,
+      }),
+      (err) => {
+        assert.equal(err.code, 'ACTIVE_VERSION_CONFLICT');
+        assert.equal(err.currentActiveVersionId, v2.version.agent_version_id);
+        return true;
+      },
+    );
+    const afterConflict = await catalog.listVersions(ADMIN_AUTH, agentId);
+    assert.equal(afterConflict.versions.length, 2);
+
+    // 回滚到 v1 也要带对当前指针。
+    await assert.rejects(
+      () => catalog.setActiveVersion(ADMIN_AUTH, agentId, v1, {
+        expectedActiveVersionId: v1,
+      }),
+      (err) => err.code === 'ACTIVE_VERSION_CONFLICT',
+    );
+    const rolledBack = await catalog.setActiveVersion(ADMIN_AUTH, agentId, v1, {
+      expectedActiveVersionId: v2.version.agent_version_id,
+    });
+    assert.equal(rolledBack.agent.active_version_id, v1);
+  });
+
+  it('不激活的保存不受活跃指针影响；旧客户端不传该字段时行为不变', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    const created = await catalog.createAgent(ADMIN_AUTH, { name: '兼容窗口' });
+    const agentId = created.agent.agent_id;
+    const v1 = created.version.agent_version_id;
+
+    await catalog.createVersion(ADMIN_AUTH, agentId, { config: { systemPrompt: 'v2' } });
+
+    // activate:false + 过期的 expected → 不冲突：它不与别人的激活竞争。
+    const draft = await catalog.createVersion(ADMIN_AUTH, agentId, {
+      config: { systemPrompt: 'v3' },
+      activate: false,
+      expectedActiveVersionId: v1,
+    });
+    assert.equal(draft.version.version_no, 3);
+    assert.equal(draft.agent.active_version_id !== draft.version.agent_version_id, true);
+
+    // 完全不传该字段 → 跳过检查（兼容窗口）。
+    const legacyClient = await catalog.createVersion(ADMIN_AUTH, agentId, {
+      config: { systemPrompt: 'v4' },
+    });
+    assert.equal(legacyClient.agent.active_version_id, legacyClient.version.agent_version_id);
+  });
+});
+
+describe('delegation.agents 必须指向本 org 已有的 Agent（agent-delegation.md D2）', () => {
+  it('引用本 org 的 Agent 可以保存；引用不存在的名字被拒且不落库', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+    await catalog.createAgent(ADMIN_AUTH, { name: 'data-analyst' });
+
+    const lead = await catalog.createAgent(ADMIN_AUTH, {
+      name: 'lead',
+      config: { schemaVersion: 1, delegation: { agents: ['data-analyst'] } },
+    });
+    assert.equal(lead.agent.name, 'lead');
+
+    const before = world.tables.tbl_agsvc_agent_versions.length;
+    await assert.rejects(
+      () => catalog.createVersion(ADMIN_AUTH, lead.agent.agent_id, {
+        config: { schemaVersion: 1, delegation: { agents: ['data-analyst', 'ghost'] } },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'DELEGATION_AGENT_UNKNOWN',
+    );
+    assert.equal(world.tables.tbl_agsvc_agent_versions.length, before);
+  });
+
+  it('别的 org 的同名 Agent 与不存在同一个结果', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    await provisionOwner(world, OTHER_ORG_AUTH);
+    const catalog = createCatalog(world);
+    await catalog.createAgent(OTHER_ORG_AUTH, { name: 'data-analyst' });
+
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, {
+        name: 'lead',
+        config: { schemaVersion: 1, delegation: { agents: ['data-analyst'] } },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'DELEGATION_AGENT_UNKNOWN',
+    );
+
+    const preview = await catalog.validateConfig(ADMIN_AUTH, {
+      config: { schemaVersion: 1, delegation: { agents: ['data-analyst'] } },
+    });
+    assert.equal(preview.valid, false);
+    assert.equal(preview.normalizedConfig, undefined);
+    assert.deepEqual(
+      preview.errors.map((e) => [e.path, e.code]),
+      [['delegation.agents[0]', 'DELEGATION_AGENT_UNKNOWN']],
+    );
+  });
+});

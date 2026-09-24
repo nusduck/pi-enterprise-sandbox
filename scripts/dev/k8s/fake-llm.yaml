@@ -1,0 +1,32 @@
+# sim 模式专用：可控假模型（fake-llm.mjs），替代 LLM 网关。
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: fake-llm, namespace: __NS__ }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: fake-llm } }
+  template:
+    metadata: { labels: { app: fake-llm } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: fake-llm
+          image: node:22-slim
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/repo/scripts/dev/k8s/fake-llm.mjs"]
+          ports: [{ containerPort: 8080 }]
+          securityContext: { runAsUser: 1000, runAsNonRoot: true, allowPrivilegeEscalation: false }
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 2 }
+          volumeMounts:
+            - { name: repo-k8s, mountPath: /repo/scripts/dev/k8s, readOnly: true }
+            - { name: repo-support, mountPath: /repo/agent/tests/support, readOnly: true }
+      volumes:
+        - { name: repo-k8s, hostPath: { path: __REPO__/scripts/dev/k8s, type: Directory } }
+        - { name: repo-support, hostPath: { path: __REPO__/agent/tests/support, type: Directory } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: fake-llm, namespace: __NS__ }
+spec:
+  selector: { app: fake-llm }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]

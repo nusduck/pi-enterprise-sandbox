@@ -1,13 +1,13 @@
 /**
  * Per-conversation model picker preference.
  *
- * The composer previously stored a single `pi.selectedModelId` for the whole
+ * The composer previously stored a single `dsh.selectedModelId` for the whole
  * app, so switching chats kept the last picker value. Scope the choice by
  * conversation id. A blank scope is the unsaved "New conversation" draft.
  */
 
-export const LEGACY_MODEL_PREF_KEY = 'pi.selectedModelId';
-export const CONVERSATION_MODEL_PREFS_KEY = 'pi.conversationModelIds';
+export const LEGACY_MODEL_PREF_KEY = 'dsh.selectedModelId';
+export const CONVERSATION_MODEL_PREFS_KEY = 'dsh.conversationModelIds';
 export const DRAFT_CONVERSATION_SCOPE = '';
 
 export function conversationModelScope(
@@ -112,10 +112,14 @@ export function lastRunModelIdForConversation(
 }
 
 export function resolveConversationModelId(opts: {
+  /** Server-bound AgentVersion model; takes precedence over local preferences. */
+  fixedModelId?: string | null;
   stored: string | null | undefined;
   lastRunModelId?: string | null;
   enabledIds: Iterable<string>;
 }): string | null {
+  const fixed = String(opts.fixedModelId || '').trim();
+  if (fixed) return fixed;
   const enabled = [...opts.enabledIds]
     .map((id) => String(id || '').trim())
     .filter(Boolean);

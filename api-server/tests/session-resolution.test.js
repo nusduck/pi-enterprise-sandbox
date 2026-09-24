@@ -5,11 +5,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const routeSource = readFileSync(join(__dirname, '../src/routes/sessions.js'), 'utf8');
+const routeSource = readFileSync(join(__dirname, '../src/routes/sessions.ts'), 'utf8');
 const clientSource = readFileSync(
-  join(__dirname, '../src/services/agent-client.js'),
+  join(__dirname, '../src/services/agent-client.ts'),
   'utf8',
 );
+
 
 describe('formal session ensure authority', () => {
   it('routes pre-upload ensure through Agent and trusted owner resolution', () => {

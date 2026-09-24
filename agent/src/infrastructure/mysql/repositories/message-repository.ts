@@ -1,0 +1,208 @@
+/**
+ * Append-only Message repository (plan §8.7).
+ *
+ * Public API intentionally has no update/replace/delete-content methods.
+ * Sequence allocation uses a conversation-scoped counter via FOR UPDATE on the
+ * conversation row + unique (conversation_id, sequence_no) — not SELECT MAX+1
+ * without locking (and not the forbidden unguarded MAX+1 pattern of §8.11).
+ */
+
+import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
+import { mapMessage, toMysqlDateTime } from '../row-mappers.js';
+import { ConflictError, NotFoundError } from '../errors.js';
+
+/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+type Loose = any;
+
+export class MessageRepository {
+  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
+  db: Loose;
+
+  constructor(db: import('knex').Knex | import('knex').Knex.Transaction) {
+    if (!db) throw new Error('MessageRepository requires a knex executor');
+    this.db = db;
+  }
+
+  /**
+   * Append a single message. Ownership is enforced via conversations.org_id/user_id.
+   *
+   * @param {{
+   *   messageId: string,
+   *   conversationId: string,
+   *   orgId: string,
+   *   userId: string,
+   *   agentSessionId?: string | null,
+   *   runId?: string | null,
+   *   role: string,
+   *   messageType: string,
+   *   contentJson: Record<string, unknown>,
+   *   sequenceNo?: number,
+   *   sessionEntryId?: string | null,
+   *   sessionEntryKind?: string | null,
+   *   createdAt?: Date | string,
+   * }} input
+   */
+  async append(input: { messageId: string, conversationId: string, orgId: string, userId: string, agentSessionId?: string | null, runId?: string | null, role: string, messageType: string, contentJson: Record<string, unknown>, sequenceNo?: number, sessionEntryId?: string | null, sessionEntryKind?: string | null, createdAt?: Date | string, }) {
+    const scope = requireOwnerScope(input);
+    const runInTxn = async (trx) => {
+      const conv = await applyOwnerScope(
+        trx('tbl_agsvc_conversations').where({
+          conversation_id: input.conversationId,
+        }),
+        scope,
+      )
+        .forUpdate()
+        .first();
+      if (!conv) {
+        throw new NotFoundError('Conversation not found for message append', {
+          resource: 'conversations',
+          id: input.conversationId,
+        });
+      }
+
+      let sequenceNo = input.sequenceNo;
+      if (sequenceNo == null) {
+        // Locked parent row: max under lock is safe; preferred vs unguarded MAX+1.
+        const agg = await trx('tbl_agsvc_messages')
+          .where({ conversation_id: input.conversationId })
+          .max('sequence_no as max_seq')
+          .first();
+        const maxSeq = agg?.max_seq == null ? 0 : Number(agg.max_seq);
+        sequenceNo = maxSeq + 1;
+      }
+
+      try {
+        await trx('tbl_agsvc_messages').insert({
+          message_id: input.messageId,
+          conversation_id: input.conversationId,
+          agent_session_id: input.agentSessionId ?? null,
+          run_id: input.runId ?? null,
+          role: input.role,
+          message_type: input.messageType,
+          content_json: JSON.stringify(input.contentJson ?? {}),
+          sequence_no: sequenceNo,
+          // Optional DSH journal markers (PR-05 slice B); null for ordinary messages.
+          session_entry_id:
+            input.sessionEntryId == null || input.sessionEntryId === ''
+              ? null
+              : String(input.sessionEntryId),
+          session_entry_kind:
+            input.sessionEntryKind == null || input.sessionEntryKind === ''
+              ? null
+              : String(input.sessionEntryKind),
+          created_at: toMysqlDateTime(input.createdAt || new Date()),
+        });
+      } catch (err) {
+        const code = (err as { code?: string })?.code;
+        if (code === 'ER_DUP_ENTRY') {
+          throw new ConflictError('Message sequence or id conflict', {
+            resource: 'messages',
+            id: input.messageId,
+          });
+        }
+        throw err;
+      }
+
+      await applyOwnerScope(
+        trx('tbl_agsvc_conversations').where({
+          conversation_id: input.conversationId,
+        }),
+        scope,
+      ).update({ updated_at: toMysqlDateTime(new Date()) });
+
+      const row = await trx('tbl_agsvc_messages')
+        .where({ message_id: input.messageId })
+        .first();
+      return mapMessage(row);
+    };
+
+    // knex.Transaction sets isTransaction; avoid nested savepoints when already in a trx.
+    if (this.db.isTransaction === true) {
+      return runInTxn(this.db);
+    }
+    if (typeof this.db.transaction !== 'function') {
+      throw new Error(
+        'MessageRepository.append requires knex.transaction() or a transaction executor',
+      );
+    }
+    return this.db.transaction(runInTxn);
+  }
+
+  /**
+   * List messages for an owned conversation (append-only read).
+   *
+   * @param conversationId
+   * @param scope
+   * @param [opts]
+   */
+  async listByConversation(conversationId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number } = {}) {
+    const s = requireOwnerScope(scope);
+    const conv = await applyOwnerScope(
+      this.db('tbl_agsvc_conversations').where({ conversation_id: conversationId }),
+      s,
+    ).first();
+    if (!conv) {
+      throw new NotFoundError('Conversation not found', {
+        resource: 'conversations',
+        id: conversationId,
+      });
+    }
+
+    const after = opts.afterSequence ?? 0;
+    const limit = opts.limit ?? 200;
+    const rows = await this.db('tbl_agsvc_messages')
+      .where({ conversation_id: conversationId })
+      .andWhere('sequence_no', '>', after)
+      .orderBy('sequence_no', 'asc')
+      .limit(limit);
+    return rows.map(mapMessage);
+  }
+
+  /**
+   * The newest assistant message written by one Run.
+   *
+   * `check_subagent` needs a finished child's answer, and the assistant
+   * transcript rows (written by the executor from the DSH payload) are where it
+   * lives — the run row only carries status. Owner scope is proven the same
+   * way {@link listByConversation} proves it: the conversation is read under
+   * the scope first, and messages are only reachable through it.
+   *
+   * @param conversationId
+   * @param runId
+   * @param scope
+   * @returns {Promise<object | null>}
+   */
+  async latestAssistantForRun(conversationId: string, runId: string, scope: { orgId: string, userId: string }) {
+    const s = requireOwnerScope(scope);
+    const conv = await applyOwnerScope(
+      this.db('tbl_agsvc_conversations').where({ conversation_id: conversationId }),
+      s,
+    ).first();
+    if (!conv) {
+      throw new NotFoundError('Conversation not found', {
+        resource: 'conversations',
+        id: conversationId,
+      });
+    }
+    const row = await this.db('tbl_agsvc_messages')
+      .where({ conversation_id: conversationId, run_id: runId, role: 'assistant' })
+      .orderBy('sequence_no', 'desc')
+      .first();
+    return row ? mapMessage(row) : null;
+  }
+
+  async getById(messageId: string, scope: { orgId: string, userId: string }) {
+    const s = requireOwnerScope(scope);
+    const row = await this.db('tbl_agsvc_messages as m')
+      .join('tbl_agsvc_conversations as c', 'c.conversation_id', 'm.conversation_id')
+      .where('m.message_id', messageId)
+      .andWhere('c.org_id', s.orgId)
+      .andWhere('c.user_id', s.userId)
+      .select('m.*')
+      .first();
+    return row ? mapMessage(row) : null;
+  }
+}
+
+// Explicitly no updateMessages / replaceAll / updateContent exports.
+Object.freeze(MessageRepository.prototype);

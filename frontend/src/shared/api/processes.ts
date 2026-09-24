@@ -77,9 +77,10 @@ export async function listProcesses(
  */
 export async function getProcessLogs(
   processId: string,
-  opts: { offset?: number; limit?: number } = {},
+  opts: { sessionId: string; offset?: number; limit?: number },
 ): Promise<ProcessLogs> {
   const q = new URLSearchParams();
+  q.set('session_id', opts.sessionId);
   if (opts.offset != null) q.set('offset', String(opts.offset));
   if (opts.limit != null) q.set('limit', String(opts.limit));
   const qs = q.toString() ? `?${q}` : '';
@@ -111,6 +112,7 @@ export async function getProcessLogs(
  */
 export async function writeProcessStdin(
   processId: string,
+  sessionId: string,
   data: string,
   eof = false,
 ): Promise<ProcessActionResult> {
@@ -120,7 +122,7 @@ export async function writeProcessStdin(
       {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ data, eof }),
+        body: JSON.stringify({ session_id: sessionId, data, eof }),
       },
     );
     if (!resp.ok) {
@@ -146,6 +148,7 @@ export async function writeProcessStdin(
  */
 export async function signalProcess(
   processId: string,
+  sessionId: string,
   signal: string,
 ): Promise<ProcessActionResult> {
   try {
@@ -154,7 +157,7 @@ export async function signalProcess(
       {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ signal }),
+        body: JSON.stringify({ session_id: sessionId, signal }),
       },
     );
     if (!resp.ok) {
@@ -180,6 +183,7 @@ export async function signalProcess(
  */
 export async function cancelProcess(
   processId: string,
+  sessionId: string,
 ): Promise<ProcessActionResult> {
   try {
     const resp = await fetch(
@@ -187,7 +191,7 @@ export async function cancelProcess(
       {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({}),
+        body: JSON.stringify({ session_id: sessionId }),
       },
     );
     if (!resp.ok) {

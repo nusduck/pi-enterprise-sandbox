@@ -1,0 +1,204 @@
+/**
+ * 隔离层的数据模型（ADR 0008 D3）。
+ *
+ * 背景：今天 Python 版 `sandbox/isolation/bubblewrap.py` 的 `prepare()` 是一段
+ * 130 行的线性 argv 拼接，把命名空间、挂载、环境变量、启动命令八件事揉在一起写。
+ * 后果有两个：
+ *
+ * 1. 测试只能对最终 argv 做字符串匹配（"某个 flag 在不在数组里"），没法断言
+ *    "可写挂载恰好是这些根、不多不少"这种结构性质。
+ * 2. `preflight()` 手抄了 `prepare()` 的一个子集，两份列表会静默分叉——今天
+ *    `preflight` 就已经漏了 `/run`、`/var`、`/etc`、`/app`、`/sbin` 等好几项
+ *    （见 `exec/src/isolation/preflight.ts` 顶部注释里列出的具体差异）。
+ *
+ * 这个文件只定义**数据**：一次 Bubblewrap 启动需要哪些命名空间、挂载哪些路径、
+ * 设置哪些环境变量、跑什么命令。它本身不产生任何 bwrap 参数——那是
+ * `render.ts` 唯一的工作——也不做任何文件系统访问——那是 `bubblewrap.ts`
+ * （runner）的工作。`IsolationProfile` 只是一份可以被完整序列化、完整比较、
+ * 完整断言的计划书。
+ */
+
+/** Bubblewrap 要 unshare 的命名空间维度。今天 user/pid/ipc/uts 恒定存在，net 取决于网络模式。 */
+export type Namespace = 'user' | 'pid' | 'ipc' | 'uts' | 'net';
+
+/** 网络模式（与 `types.ts` 的 `SandboxMode` 是两个轴：那个只管文件效果，这个只管网络）。 */
+export type NetworkMode = 'disabled' | 'allowlist' | 'unrestricted';
+
+/**
+ * 命名空间与进程身份计划。
+ *
+ * 对应今天 `prepare()` 里 `--unshare-*`、`--uid`/`--gid`、`--as-pid-1`、
+ * `--die-with-parent`、`--new-session`、`--cap-drop ALL` 那一段。
+ */
+export interface NamespacePlan {
+  /** 要 unshare 的命名空间集合。 */
+  readonly namespaces: readonly Namespace[];
+  readonly uid: number;
+  readonly gid: number;
+  /**
+   * 命令是否作为新 PID 命名空间的 init（PID 1）。
+   * 只有 Durable Process Handle 用 true——这样服务重启后杀掉 init，
+   * 内核会连带清理这个私有 PID 命名空间里剩下的全部后代进程。
+   */
+  readonly asPid1: boolean;
+  /**
+   * 是否跟随发起方进程存活。普通工具调用为 true（请求取消后子进程不能变孤儿）；
+   * Durable Process Handle 为 false（服务重启不能顺带杀死它）。
+   */
+  readonly dieWithParent: boolean;
+  readonly newSession: boolean;
+  /**
+   * 今天只支持整体 drop 全部能力（`--cap-drop ALL`）。留字面量类型而不是
+   * `string[]`，是为了不为一个还不存在的需求（细粒度 drop）预先做无意义的抽象。
+   */
+  readonly capDrop: 'ALL';
+}
+
+interface MountCommon {
+  readonly target: string;
+  /**
+   * 这条挂载的源/目标是否绑定某个具体会话（workspace 根、session 私有 temp、
+   * 该会话下的 XDG home 子目录、某个用户已启用的 skill 包）。
+   *
+   * `preflight.ts` 用这个字段筛掉会话特定挂载——探针没有真实会话，这些挂载的
+   * 源路径不存在是预期状态，不是故障，不该出现在"bwrap 本身还能不能跑"的检查里。
+   */
+  readonly sessionSpecific: boolean;
+}
+
+/**
+ * 有源路径的挂载（ro_bind / bind）。
+ *
+ * `required` 的语义就是今天靠注释解释、极易错记的那条规则，现在进了类型：
+ *
+ * - `required: true`  → 源缺失（或任何 stat 失败）即整个启动失败，对应今天的
+ *   `--ro-bind` / `--bind`。
+ * - `required: false` → **只**宽恕 ENOENT，其它错误（最常见是 EACCES：目录存在
+ *   但不可遍历）一样致命，对应今天的 `--ro-bind-try` / `--bind-try`。这条是
+ *   `sandbox/isolation/bubblewrap.py:163-179` 里专门为用户 skill 目录写的一段
+ *   探测逻辑想说清楚的事——bwrap 的 `-try` 变体只吃 ENOENT，一个"目录存在但读不了"
+ *   的坏挂载如果原样传给 bwrap，会带着 bash、python、甚至 `pwd` 一起死。
+ *   `exec/src/isolation/bubblewrap.ts` 的 `resolveEffectiveMounts()` 把这条
+ *   规则从"仅用户 skill 目录"泛化成了"所有 required=false 的挂载"，见该文件注释。
+ */
+export interface BindMount extends MountCommon {
+  readonly kind: 'ro_bind' | 'bind';
+  readonly source: string;
+  readonly required: boolean;
+  /**
+   * 仅对 `required: true` 的挂载有意义：源目录不存在时创建它，而不是失败。
+   * 今天只有 XDG home 三个子目录用到这条（ADR 0004）——它们第一次使用时
+   * 本来就不存在，`--bind` 需要一个真实存在的源，`--bind-try` 又会静默退回
+   * 到每次都重建的空 tmpfs（那正是 ADR 0004 要修的问题），所以选择是"先建后绑"。
+   */
+  readonly ensureDir?: boolean;
+}
+
+/** 没有源路径的挂载：bwrap 在新命名空间内部直接创建，不存在"缺失"这回事。 */
+export interface StructuralMount extends MountCommon {
+  readonly kind: 'dir' | 'proc' | 'dev' | 'tmpfs';
+}
+
+export type Mount = BindMount | StructuralMount;
+
+/** 有序挂载列表。顺序在语义上不敏感（bwrap 对这些 flag 的相对顺序没有要求），
+ * 但保持"静态 → skill → 会话特定"的分组顺序方便阅读与断言。 */
+export type MountPlan = readonly Mount[];
+
+/** 环境变量计划：先 clearenv，再逐个 setenv。 */
+export interface EnvPlan {
+  readonly clearEnv: boolean;
+  readonly vars: Readonly<Record<string, string>>;
+}
+
+/** 启动命令计划。 */
+export interface LaunchPlan {
+  /** 未净化的目标命令，例如 `["bash", "-c", "pwd"]`。 */
+  readonly argv: readonly string[];
+  /**
+   * bwrap 内部的 `--chdir` 目标（沙箱视角的逻辑路径，例如
+   * `/home/sandbox/workspace` 或 `/tmp/service`）。省略时不下发 `--chdir`
+   * （今天的 `preflight()` 就是这样——它没有会话，没有合法的 cwd 可给）。
+   */
+  readonly cwd?: string;
+  /**
+   * >0 时，命令会被包进一层在命名空间**内部**执行的 bash 包装器，先
+   * `ulimit -u` 收紧进程数上限再 exec 真正的命令。必须在命名空间内部做——
+   * 在 bwrap 创建用户命名空间之前设置全局 RLIMIT_NPROC，计的是共享该 UID 的
+   * 全部无关进程，可能直接让命名空间建不起来（这条是今天 Python 版模块顶部
+   * 文档字符串专门强调的事）。
+   */
+  readonly maxProcessCount: number;
+  /**
+   * 命名空间**内部**生效的其余 rlimit（`ulimit -n/-t/-f/-v`）。
+   *
+   * 与 `maxProcessCount` 一样必须在命名空间内部设：在 bwrap 之前收紧
+   * `RLIMIT_NOFILE` 会连 bwrap 自己要打开的挂载 fd 一起限住。省略即不限制。
+   *
+   * 单位与语义逐条写明，避免"数字对了、单位错了"这类只在生产才暴露的偏差：
+   * - `maxOpenFiles`     `ulimit -n`，RLIMIT_NOFILE，逐进程的 fd 上限
+   * - `cpuSeconds`       `ulimit -t`，RLIMIT_CPU，**逐进程**的 CPU 秒（不是墙钟，
+   *                      也不是整棵进程树的总和）
+   * - `fileSizeKb`       `ulimit -f`，RLIMIT_FSIZE，单个文件可写的最大长度，
+   *                      以 1024 字节块计
+   * - `addressSpaceKb`   `ulimit -v`，RLIMIT_AS，**逐进程的虚拟地址空间**，
+   *                      以 1024 字节块计。它**不是**整棵进程树的内存总量——
+   *                      树总量只有 cgroup 能管，那是容器/部署层的兜底，
+   *                      不要把这一条当成逐任务内存额度宣传。
+   */
+  readonly rlimits?: ResourceLimitPlan;
+}
+
+/** 命名空间内部的 rlimit 计划。0 或缺省 = 该项不限制。 */
+export interface ResourceLimitPlan {
+  readonly maxOpenFiles?: number;
+  readonly cpuSeconds?: number;
+  readonly fileSizeKb?: number;
+  readonly addressSpaceKb?: number;
+}
+
+/** 一次 Bubblewrap 启动的完整计划。 */
+export interface IsolationProfile {
+  readonly namespace: NamespacePlan;
+  readonly mounts: MountPlan;
+  readonly env: EnvPlan;
+  readonly launch: LaunchPlan;
+}
+
+/** Profile 数据本身不合法（例如非法环境变量名、cwd 越界）时抛出。
+ * 对应今天 Python 版在 `prepare()` 里直接抛的 `ValueError`。 */
+export class IsolationConfigError extends Error {
+  override readonly name = 'IsolationConfigError';
+}
+
+// ── 沙箱内固定的逻辑路径常量 ─────────────────────────────────────────
+// 与 `sandbox/paths.py` 的同名常量一一对应，是 Agent 提示词里 <location> 依赖
+// 的稳定路径；改这些字符串等于改变模型看到的世界，不要顺手改。
+
+export const AGENT_SKILL_PATH = '/home/sandbox/skill';
+export const AGENT_USER_SKILL_PATH = '/home/sandbox/skill-user';
+export const AGENT_WORKSPACE_PATH = '/home/sandbox/workspace';
+/**
+ * 用户侧 skill 的**草稿根**（ADR 0009 D7 / 计划 H6.2）。
+ *
+ * 三个 skill 根职责分开，这是唯一可写的那个：
+ * - `AGENT_SKILL_PATH`（系统）      `ro_bind`，没人能写，永远进发现与 prompt
+ * - `AGENT_USER_SKILL_PATH`（已启用）逐包 `ro_bind`，没人能写，进发现与 prompt
+ * - `AGENT_DRAFT_SKILL_PATH`（草稿）  `bind` 可写，**不进发现、不进 prompt**
+ *
+ * 「可写」与「进上下文」被这三个根彻底分开，这是本条能同时做到「放松」
+ * （模型直接用 write/bash 造包）和「不塌」（闸门只剩人在 UI 上按的那一下）的原因。
+ */
+export const AGENT_DRAFT_SKILL_PATH = '/home/sandbox/skill-draft';
+export const AGENT_TEMP_PATH = '/tmp';
+
+/**
+ * 模型执行 Python 代码用的 venv（镜像里预装了 pandas/reportlab 等运行库）。
+ *
+ * **单一事实源。** 沙箱的只读挂载与子进程 `PATH` 都从这里派生——两处各写
+ * 一份就是 2026-08-30 那个 bug 的成因：挂载写着 `/app/.venv`（Python 镜像
+ * 时代的路径）、PATH 也写着它，镜像换成 node:22-slim 之后两处同时失效，
+ * 而挂载是 `required: false`，缺失被静默宽恕，于是沙箱里的 `python3` 退化成
+ * 一个什么库都没有的裸解释器，不报错。
+ */
+export const AGENT_PYTHON_VENV = '/opt/dsh-python/venv';

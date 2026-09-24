@@ -4,15 +4,15 @@
  *
  * Starts:
  *   1. Deterministic fake OpenAI-compatible provider
- *   2. Sandbox (uvicorn) on a free port, backed by MySQL
- *   3. Agent pointing at fake LLM + Sandbox + MySQL + Redis
+ *   2. TypeScript exec on a free port, backed by MySQL
+ *   3. Agent pointing at fake LLM + exec + MySQL + Redis
  *   4. Agent Worker (unless SMOKE_START_WORKER=false)
  *   5. BFF pointing at Agent + Sandbox
  *
  * Checks:
  *   - Sandbox /health + /ready
  *   - Agent /health
- *   - BFF /health/ready (agent + sandbox reachable)
+ *   - BFF /health/ready (agent + sandbox /ready)
  *   - Conversation creation through BFF → Agent MySQL
  *   - Run creation, immediate GET, and durable event query
  *   - Optional end-to-end Worker execution with the fake provider
@@ -28,7 +28,8 @@ import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFakeOpenAIProvider } from '../agent/tests/support/fake-openai-provider.js';
-import { assertFakeLlmAllowed } from '../agent/src/config/fake-llm-policy.js';
+import { startDbpmForUrls, stripUrlPassword } from '../agent/tests/support/fake-dbpm-env.js';
+import { assertFakeLlmAllowed } from '../agent/dist/src/config/fake-llm-policy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -239,32 +240,26 @@ function normalizeSandboxMysqlUrl(value) {
   return parsed.toString();
 }
 
-async function prepareDataPlane(mysqlUrl, redisUrl, replayRedisUrl) {
+async function prepareDataPlane(mysqlUrl, redisUrl) {
   const [{ createMysqlKnex, destroyMysqlKnex }, { migrateLatest }, redisMod] =
     await Promise.all([
-      import('../agent/src/infrastructure/mysql/client.js'),
-      import('../agent/src/infrastructure/mysql/migrate.js'),
-      import('../agent/src/infrastructure/redis/client.js'),
+      import('../agent/dist/src/infrastructure/mysql/client.js'),
+      import('../agent/dist/src/infrastructure/mysql/migrate.js'),
+      import('../agent/dist/src/infrastructure/redis/client.js'),
     ]);
 
   const knex = createMysqlKnex(mysqlUrl);
   let redis;
-  let replayRedis;
   try {
     await knex.raw('SELECT 1');
     await migrateLatest(knex);
     redis = redisMod.createRedisClient(redisUrl);
     await redis.ping();
-    replayRedis = redisMod.createRedisClient(replayRedisUrl);
-    await replayRedis.ping();
   } catch (error) {
     throw new Error(
       `formal data-plane preflight failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   } finally {
-    if (replayRedis) {
-      await redisMod.destroyRedisClient(replayRedis).catch(() => {});
-    }
     if (redis) await redisMod.destroyRedisClient(redis).catch(() => {});
     await destroyMysqlKnex(knex).catch(() => {});
   }
@@ -277,7 +272,13 @@ async function waitForExit(child, name) {
   }
 }
 
+let dbpmHandle = null;
+
 async function shutdown() {
+  if (dbpmHandle) {
+    await dbpmHandle.close().catch(() => {});
+    dbpmHandle = null;
+  }
   for (const child of children.splice(0).reverse()) {
     if (!child.killed) child.kill('SIGTERM');
     await Promise.race([once(child, 'exit'), new Promise((r) => setTimeout(r, 2000))]);
@@ -384,10 +385,15 @@ async function main() {
     'AGENT_REDIS_URL',
     'TEST_REDIS_URL',
   ]);
-  const replayRedisUrl = requiredServiceUrl('Sandbox replay Redis URL', [
-    'SMOKE_SANDBOX_REPLAY_REDIS_URL',
-  ]);
-  await prepareDataPlane(agentMysqlUrl, redisUrl, replayRedisUrl);
+  await prepareDataPlane(agentMysqlUrl, redisUrl);
+
+  // 服务进程与生产一样：连接串不带口令，启动时向 DBPM 取（ADR 0011 D10）。
+  // 预检与迁移（上一行）是 smoke 自己直连，仍用带口令的原始连接串。
+  dbpmHandle = await startDbpmForUrls({ mysqlUrl: agentMysqlUrl, redisUrl });
+  const appMysqlUrl = stripUrlPassword(agentMysqlUrl);
+  const appRedisUrl = stripUrlPassword(redisUrl);
+  const appSandboxMysqlUrl = stripUrlPassword(sandboxMysqlUrl);
+  console.log('[smoke] fake DBPM', dbpmHandle.env.DBPM_URL);
 
   const internalHmacKeyring = JSON.stringify({
     'smoke-v1': 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY',
@@ -403,60 +409,46 @@ async function main() {
 
   const smokeDir = path.join(ROOT, '.runtime', 'smoke');
   const wsPath = path.join(smokeDir, `ws-${process.pid}`);
-  const skillsPath = path.join(smokeDir, `skills-${process.pid}`);
-  const agentDir = path.join(smokeDir, `agent-${process.pid}`);
-  // The container image creates the logical /home/sandbox/workspace cwd. This
-  // smoke runs the Worker directly on the host, so give Pi an equivalent
-  // process-local cwd that is guaranteed to exist.
-  const agentCwd = path.join(smokeDir, `agent-workspace-${process.pid}`);
+  const tmpPath = path.join(smokeDir, `tmp-${process.pid}`);
+  const artifactsPath = path.join(smokeDir, `artifacts-${process.pid}`);
+  const controlPath = path.join(smokeDir, `control-${process.pid}`);
+  const userSkillsPath = path.join(smokeDir, `user-skills-${process.pid}`);
+  const draftSkillsPath = path.join(smokeDir, `draft-skills-${process.pid}`);
   await import('node:fs/promises').then((fs) =>
     Promise.all([
       fs.mkdir(smokeDir, { recursive: true }),
-      fs.mkdir(agentCwd, { recursive: true }),
+      ...[wsPath, tmpPath, artifactsPath, controlPath, userSkillsPath, draftSkillsPath]
+        .map((dir) => fs.mkdir(dir, { recursive: true })),
     ]),
   );
 
   console.log('[smoke] fake LLM', fake.baseUrl);
   console.log('[smoke] ports', { sandboxPort, agentPort, bffPort });
 
-  // Prefer venv python if present
-  const python = process.env.SMOKE_PYTHON || path.join(ROOT, '.venv', 'bin', 'python');
-  const uvicornArgs = [
-    '-m',
-    'uvicorn',
-    'sandbox.main:app',
-    '--host',
-    '127.0.0.1',
-    '--port',
-    String(sandboxPort),
-  ];
-
   spawnProc(
-    python,
-    uvicornArgs,
+    process.execPath,
+    ['dist/main.js'],
     {
       DEPLOYMENT_ENV: 'development',
-      SANDBOX_DATABASE_URL: sandboxMysqlUrl,
-      SANDBOX_WORKSPACES_ROOT: wsPath,
-      SANDBOX_TEMP_ROOT: path.join(smokeDir, `tmp-${process.pid}`),
-      SANDBOX_ATTACHMENTS_ROOT: wsPath,
-      SANDBOX_SKILLS_ROOT: skillsPath,
+      SANDBOX_PORT: String(sandboxPort),
+      // 公共会话面必填（fail-closed）；BFF 以同一令牌经 X-API-Key 代理。
       SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
-      SANDBOX_AUTH_ENABLED: 'true',
-      SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: 'false',
-      SANDBOX_INTERNAL_PLANE_ENABLED: 'true',
-      SANDBOX_INTERNAL_REDIS_URL: replayRedisUrl,
+      SANDBOX_DATABASE_URL: appSandboxMysqlUrl,
+      ...dbpmHandle.env,
+      SANDBOX_WORKSPACES_ROOT: wsPath,
+      SANDBOX_TEMP_ROOT: tmpPath,
+      SANDBOX_ARTIFACTS_ROOT: artifactsPath,
+      SANDBOX_CONTROL_ROOT: controlPath,
+      SANDBOX_SKILLS_ROOT: path.join(ROOT, 'skills'),
+      SANDBOX_USER_SKILLS_ROOT: userSkillsPath,
+      SANDBOX_SKILL_DRAFT_ROOT: draftSkillsPath,
       SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
-      AGENT_REDIS_URL: '',
-      REDIS_URL: '',
-      REDIS_PASSWORD: '',
-      SANDBOX_NETWORK_MODE: 'disabled',
-      SANDBOX_BIND_HOST: '127.0.0.1',
-      SANDBOX_ALLOWED_CLIENT_CIDRS: '127.0.0.1/32,::1/128',
-      PYTHONPATH: ROOT,
+      // 空值会拒绝全部内部面请求；Agent 与 Worker 在同机经回环访问。
+      EXEC_INTERNAL_ALLOW_CIDR: '127.0.0.1/32,::1/128',
     },
     'sandbox',
+    path.join(ROOT, 'exec'),
   );
 
   await waitHttp(`http://127.0.0.1:${sandboxPort}/health`);
@@ -464,7 +456,7 @@ async function main() {
 
   spawnProc(
     process.execPath,
-    ['server.js'],
+    ['dist/server.js'],
     {
       PORT: String(agentPort),
       NODE_ENV: 'test',
@@ -473,12 +465,9 @@ async function main() {
       SANDBOX_BASE_URL: `http://127.0.0.1:${sandboxPort}`,
       SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
       AGENT_INTERNAL_TOKEN: SMOKE_AGENT_INTERNAL_TOKEN,
-      AGENT_DATABASE_URL: agentMysqlUrl,
-      AGENT_REDIS_URL: redisUrl,
-      AGENT_MIGRATE_ON_START: 'false',
-      AGENT_PI_AGENT_DIR: agentDir,
-      AGENT_PI_DEFAULT_CWD: agentCwd,
-      AGENT_SESSION_WORKSPACE_CWD: agentCwd,
+      AGENT_DATABASE_URL: appMysqlUrl,
+      AGENT_REDIS_URL: appRedisUrl,
+      ...dbpmHandle.env,      AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
       SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
       SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
       LLMIO_BASE_URL: fake.baseUrl,
@@ -495,25 +484,22 @@ async function main() {
   if (startWorker) {
     spawnProc(
       process.execPath,
-      ['worker.js'],
+      ['dist/worker.js'],
       {
         NODE_ENV: 'test',
         DEPLOYMENT_ENV: 'development',
-        AGENT_DATABASE_URL: agentMysqlUrl,
-        AGENT_REDIS_URL: redisUrl,
-        AGENT_MIGRATE_ON_START: 'false',
-        AGENT_PI_AGENT_DIR: agentDir,
-        AGENT_PI_DEFAULT_CWD: agentCwd,
-        AGENT_SESSION_WORKSPACE_CWD: agentCwd,
+        AGENT_DATABASE_URL: appMysqlUrl,
+        AGENT_REDIS_URL: appRedisUrl,
+        ...dbpmHandle.env,        AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
         SANDBOX_BASE_URL: `http://127.0.0.1:${sandboxPort}`,
         SANDBOX_API_TOKEN: SMOKE_SANDBOX_API_TOKEN,
-        SANDBOX_AUTH_ENABLED: 'false',
         SANDBOX_INTERNAL_HMAC_KEYRING: internalHmacKeyring,
         SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
         LLMIO_BASE_URL: fake.baseUrl,
         LLMIO_API_KEY: 'fake-test-key',
-        MODEL_ID: 'deepseek-v4-flash',
-        AGENT_WORKER_CONCURRENCY: String(Math.min(20, Math.max(1, concurrentRuns))),
+        MODEL_ID: 'deepseek-flash',
+        // 分层队列要求每个子任务深度（默认 0..2）各留一个消费槽，下限 3（ADR 0012）。
+        AGENT_WORKER_CONCURRENCY: String(Math.min(20, Math.max(3, concurrentRuns))),
         AGENT_RECOVERY_INTERVAL_MS: '1000',
         AGENT_OUTBOX_IDLE_MS: '100',
       },
@@ -524,7 +510,7 @@ async function main() {
 
   spawnProc(
     process.execPath,
-    ['server.js'],
+    ['dist/server.js'],
     {
       PORT: String(bffPort),
       NODE_ENV: 'test',
@@ -540,13 +526,13 @@ async function main() {
     path.join(ROOT, 'api-server'),
   );
 
-  // Readiness is the real probe: 200 only when both dependencies answer.
+  // Readiness is the real probe: 200 only when both dependencies' /ready answer ready.
   const statusRes = await waitHttp(`http://127.0.0.1:${bffPort}/health/ready`);
   const status = await statusRes.json();
-  if (status.agent?.status !== 'ok') {
+  if (status.agent?.status !== 'ready') {
     throw new Error(`agent not ok in status: ${JSON.stringify(status.agent)}`);
   }
-  if (status.sandbox?.status !== 'ok') {
+  if (status.sandbox?.status !== 'ready') {
     throw new Error(`sandbox not ok in status: ${JSON.stringify(status.sandbox)}`);
   }
   console.log('[smoke] /health/ready ok', { status: status.status });

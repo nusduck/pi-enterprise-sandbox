@@ -30,7 +30,6 @@ CANONICAL_SKILL_VOLUME = {
 # Services that must never publish host ports after base+prod merge.
 INTERNAL_NO_HOST_PORTS = (
     "mysql",
-    "agent-migrate",
     "redis",
     "frontend",
     "api-server",
@@ -65,44 +64,46 @@ COMPOSE_CONFIG_GATE = (
 
 
 def _valid_rendered_prod_config() -> dict:
-    migration_dependency = {"condition": "service_completed_successfully"}
+    # No migration service (ADR 0011 D6); password-free URLs + real DBPM (D10).
+    healthy = {"condition": "service_healthy"}
+    dbpm = "dbpm-a.example.internal:7000,dbpm-b.example.internal:7000"
+    agent_environment = {
+        "AGENT_DATABASE_URL": "mysql://sandbox@mysql:3306/sandbox",
+        "AGENT_REDIS_URL": "redis://redis:6379/0",
+        "REDIS_URL": "redis://redis:6379/0",
+        "DBPM_URL": dbpm,
+        "SKILLS_ROOT": "/home/sandbox/skill",
+    }
     return {
         "services": {
             "nginx": {"ports": [{"target": 80}, {"target": 443}]},
             "mysql": {},
-            "agent-migrate": {
-                "depends_on": {"mysql": {"condition": "service_healthy"}},
-                "networks": {"backend_internal": None},
-                "restart": "no",
-            },
             "sandbox": {
-                "depends_on": {"agent-migrate": migration_dependency},
+                "depends_on": {"mysql": healthy},
                 "environment": {
-                    "SANDBOX_DATABASE_URL": (
-                        "mysql+pymysql://sandbox:example@mysql:3306/sandbox"
-                    ),
-                    "SANDBOX_INTERNAL_PLANE_ENABLED": "true",
-                    "SANDBOX_INTERNAL_REDIS_URL": (
-                        "redis://:example@sandbox-replay-redis:6379/0"
-                    ),
+                    "SANDBOX_DATABASE_URL": "mysql+pymysql://sandbox@mysql:3306/sandbox",
+                    "DBPM_URL": dbpm,
+                    "SANDBOX_INTERNAL_HMAC_KEYRING": '{"prod-v1":"a2tra2tra2tra2s"}',
+                    "SANDBOX_INTERNAL_HMAC_ACTIVE_KID": "prod-v1",
                     "SANDBOX_SKILLS_ROOT": "/home/sandbox/skill",
+                    "EXEC_INTERNAL_ALLOW_CIDR": "10.20.0.0/16",
                 },
                 "volumes": [dict(CANONICAL_SKILL_VOLUME)],
             },
-            "agent": {
-                "depends_on": {"agent-migrate": migration_dependency},
+            "sandbox-mcp": {
                 "environment": {
-                    "AGENT_MIGRATE_ON_START": "false",
-                    "SKILLS_ROOT": "/home/sandbox/skill",
+                    "SANDBOX_MCP_REDIS_URL": "redis://redis:6379/0",
+                    "DBPM_URL": dbpm,
                 },
+            },
+            "agent": {
+                "depends_on": {"mysql": healthy},
+                "environment": dict(agent_environment),
                 "volumes": [dict(CANONICAL_SKILL_VOLUME)],
             },
             "agent-worker": {
-                "depends_on": {"agent-migrate": migration_dependency},
-                "environment": {
-                    "AGENT_MIGRATE_ON_START": "false",
-                    "SKILLS_ROOT": "/home/sandbox/skill",
-                },
+                "depends_on": {"mysql": healthy},
+                "environment": dict(agent_environment),
                 "volumes": [dict(CANONICAL_SKILL_VOLUME)],
             },
         }
@@ -360,7 +361,6 @@ class TestComposeConfigGateDocumentation:
             "MYSQL_PASSWORD",
             "MYSQL_ROOT_PASSWORD",
             "REDIS_PASSWORD",
-            "SANDBOX_INTERNAL_REDIS_PASSWORD",
             "SANDBOX_API_TOKEN",
             "AGENT_INTERNAL_TOKEN",
             "SANDBOX_JWT_SECRET",
@@ -381,12 +381,64 @@ class TestRenderedProductionConfigVerifier:
         with pytest.raises(SystemExit, match="unexpected services"):
             verify_rendered_prod_config(config)
 
-    def test_rejects_migration_dependency_cycle(self):
+    def test_rejects_a_reintroduced_migration_service(self):
         config = _valid_rendered_prod_config()
-        config["services"]["agent-migrate"]["depends_on"]["sandbox"] = {
-            "condition": "service_started"
-        }
-        with pytest.raises(SystemExit, match="depend only on mysql"):
+        config["services"]["agent-migrate"] = {"depends_on": {"mysql": {}}}
+        with pytest.raises(SystemExit, match="agent-migrate must not exist"):
+            verify_rendered_prod_config(config)
+
+    def test_rejects_a_runtime_migration_switch(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["agent"]["environment"]["AGENT_MIGRATE_ON_START"] = "false"
+        with pytest.raises(SystemExit, match="runtime migration switch"):
+            verify_rendered_prod_config(config)
+
+    def test_rejects_the_dev_credential_stub(self):
+        config = _valid_rendered_prod_config()
+        config["services"]["dbpm-fake"] = {}
+        with pytest.raises(SystemExit, match="dbpm-fake"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("allow_cidr", [None, "", " , "])
+    def test_rejects_missing_internal_allowlist(self, allow_cidr):
+        # exec 对空白名单拒绝全部内部面请求：生产上等于 Agent 调不通执行面。
+        config = _valid_rendered_prod_config()
+        environment = config["services"]["sandbox"]["environment"]
+        if allow_cidr is None:
+            del environment["EXEC_INTERNAL_ALLOW_CIDR"]
+        else:
+            environment["EXEC_INTERNAL_ALLOW_CIDR"] = allow_cidr
+        with pytest.raises(SystemExit, match="EXEC_INTERNAL_ALLOW_CIDR must be set"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("allow_cidr", ["0.0.0.0/0", "10.0.0.0/8,::/0"])
+    def test_rejects_allow_all_internal_allowlist(self, allow_cidr):
+        config = _valid_rendered_prod_config()
+        config["services"]["sandbox"]["environment"]["EXEC_INTERNAL_ALLOW_CIDR"] = allow_cidr
+        with pytest.raises(SystemExit, match="must not allow every source"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize("dbpm_url", ["", "dbpm-fake:7000,dbpm-fake:7001"])
+    def test_rejects_missing_or_stub_dbpm_url(self, dbpm_url):
+        config = _valid_rendered_prod_config()
+        config["services"]["sandbox-mcp"]["environment"]["DBPM_URL"] = dbpm_url
+        with pytest.raises(SystemExit, match="real DBPM_URL"):
+            verify_rendered_prod_config(config)
+
+    @pytest.mark.parametrize(
+        ("service", "key"),
+        [
+            ("agent", "AGENT_DATABASE_URL"),
+            ("agent-worker", "AGENT_REDIS_URL"),
+            ("sandbox", "SANDBOX_DATABASE_URL"),
+            ("sandbox-mcp", "SANDBOX_MCP_REDIS_URL"),
+        ],
+    )
+    def test_rejects_password_in_application_urls(self, service, key):
+        config = _valid_rendered_prod_config()
+        scheme = "redis://:secret@redis:6379/0" if "REDIS" in key else "mysql://sandbox:secret@mysql:3306/sandbox"
+        config["services"][service]["environment"][key] = scheme
+        with pytest.raises(SystemExit, match="must not embed a password"):
             verify_rendered_prod_config(config)
 
     @pytest.mark.parametrize(
@@ -405,12 +457,15 @@ class TestRenderedProductionConfigVerifier:
         with pytest.raises(SystemExit, match="MySQL SANDBOX_DATABASE_URL|MySQL scheme"):
             verify_rendered_prod_config(config)
 
-    def test_rejects_disabled_sandbox_internal_plane(self):
+    @pytest.mark.parametrize(
+        "key",
+        ["SANDBOX_INTERNAL_HMAC_KEYRING", "SANDBOX_INTERNAL_HMAC_ACTIVE_KID"],
+    )
+    def test_rejects_missing_internal_hmac_material(self, key):
+        # keyring / kid 是内部面唯一的闸门：缺任一项 exec 拒绝启动。
         config = _valid_rendered_prod_config()
-        config["services"]["sandbox"]["environment"][
-            "SANDBOX_INTERNAL_PLANE_ENABLED"
-        ] = "false"
-        with pytest.raises(SystemExit, match="internal plane must be enabled"):
+        del config["services"]["sandbox"]["environment"][key]
+        with pytest.raises(SystemExit, match=f"{key} must be set"):
             verify_rendered_prod_config(config)
 
     def test_rejects_legacy_sandbox_dsn_leak_to_agent(self):
@@ -453,3 +508,37 @@ class TestRenderedProductionConfigVerifier:
         )
         with pytest.raises(SystemExit, match="compatibility Skill mounts"):
             verify_rendered_prod_config(config)
+
+
+def test_sandbox_keeps_the_bubblewrap_seccomp_profile() -> None:
+    """Bubblewrap 需要的 namespace/mount 系统调用被 Docker 默认 seccomp 挡着。
+
+    2026-08-30：这行配置在删除 Python 执行面时一并丢了（profile 当时在
+    ``sandbox/seccomp-bubblewrap.json``）。表现是 bwrap 报 "No permissions to
+    create new namespace"——与内核不允许非特权 user namespace 的症状完全一样，
+    因此被误判成宿主限制，白绕了一大圈。这条用例让它不能再被静默删掉。
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    sandbox = compose.split("\n  sandbox:\n", 1)[1].split("\n  sandbox-mcp:", 1)[0]
+
+    assert "seccomp=./exec/seccomp-bubblewrap.json" in sandbox
+    assert "apparmor=unconfined" in sandbox
+    # 私有 /proc 要能在非特权 mount namespace 里挂上。
+    assert "systempaths=unconfined" in sandbox
+
+    profile = root / "exec" / "seccomp-bubblewrap.json"
+    assert profile.is_file(), profile
+    data = _json.loads(profile.read_text(encoding="utf-8"))
+    allowed = {
+        name
+        for group in data.get("syscalls", [])
+        if group.get("action") == "SCMP_ACT_ALLOW"
+        for name in group.get("names", [])
+    }
+    # bwrap 建命名空间与私有挂载所必需的一组。
+    for syscall in ("clone", "unshare", "mount", "pivot_root", "umount2"):
+        assert syscall in allowed, syscall

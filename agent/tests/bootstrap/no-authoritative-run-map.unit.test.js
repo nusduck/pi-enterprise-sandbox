@@ -29,168 +29,269 @@ const SRC_ROOT = path.join(root, 'src');
  */
 const TRANSIENT_MAP_WHITELIST = Object.freeze([
   {
-    rel: 'extensions/observability/index.js',
-    match: /const\s+activeToolSpans\s*=\s*new\s+Map\s*\(/,
+    rel: 'infrastructure/dsh/published-skills-provider.ts',
+    match: /const\s+byName\s*=\s*new\s+Map\s*\(/,
     purpose:
-      'Per-session in-flight OTel tool span handles keyed by Pi toolCallId; ended on tool_execution_end or session_shutdown, never Run authority',
+      "One Run provider's name -> ledger-verified version index, built from that Run's manifest; the enablement ledger is authoritative",
     scope: 'local',
   },
   {
-    rel: 'infrastructure/provider-gate.js',
-    match: /const\s+cooldowns\s*=\s*new\s+Map\s*\(/,
+    rel: 'infrastructure/dsh/published-skills-provider.ts',
+    match: /const\s+originals\s*=\s*new\s+Map\s*(?:<[^;\n(){}]*>)?\s*\(/,
     purpose:
-      'Gate-local per-provider 429 cooldown windows; advisory throttling for this process only, not Run authority',
+      "One Run provider's last-listed physical candidates so get() never trusts a model-facing path; discarded with the Run",
     scope: 'local',
   },
   {
-    rel: 'bootstrap/http-main.js',
+    rel: 'application/extension-diagnostics-service.ts',
+    match: /const\s+byName\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local merge index of system and ledger-verified user skills for one capabilities projection',
+    scope: 'local',
+  },
+  {
+    rel: 'application/agent-config-validator.ts',
+    match: /const\s+rank\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local key-order index while canonicalizing one config object; discarded with the call frame',
+    scope: 'local',
+  },
+  {
+    rel: 'application/agent-config-validator.ts',
+    match: /const\s+platformServers\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local lookup over the process MCP inventory during one validate() call; not Run state',
+    scope: 'local',
+  },
+  {
+    rel: 'bootstrap/http-main.ts',
     match: /const\s+sessionByAgentId\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local AgentSession batch lookup while presenting one owned Run list; MySQL remains authoritative',
     scope: 'local',
   },
   {
-    rel: 'application/fenced-run-event-recorder.js',
+    rel: 'bootstrap/container-run-queue.ts',
+    match: /const\s+handles\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Depth -> BullMQ Queue handle for this process (ADR 0012); connection handles, not Run state — MySQL subagent_depth decides routing',
+    scope: 'local',
+  },
+  {
+    rel: 'bootstrap/container.ts',
+    match: /runQueueHandles:\s*Map<number,\s*Loose>\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Container-held depth -> BullMQ Queue handles (ADR 0012); torn down with the container, never a Run fact',
+    scope: 'instance',
+  },
+  {
+    rel: 'bootstrap/container.ts',
+    match: /this\.runQueueHandles\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Same handle map reset in the constructor; see the field declaration above',
+    scope: 'instance',
+  },
+  {
+    rel: 'application/fenced-run-event-recorder.ts',
     match: /this\._pendingDedupe\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Per-recorder in-flight event dedupe CAS; committed keys are MySQL-backed; lost on restart',
     scope: 'instance',
   },
   {
-    rel: 'application/fenced-tool-governance-recorder.js',
+    rel: 'application/fenced-tool-governance-recorder.ts',
     match: /this\._inflight\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Same-instance concurrent claim coalescing for tool governance writes; not restart authority',
     scope: 'instance',
   },
   {
-    rel: 'application/durable-steer-controller.js',
+    rel: 'application/durable-steer-controller.ts',
     match: /this\.pending\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Per-run steer poll working set derived from MySQL run_events; controller is run-scoped',
     scope: 'instance',
   },
   {
-    rel: 'application/extension-diagnostics-service.js',
+    rel: 'application/extension-diagnostics-service.ts',
     match: /const\s+discovered\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local skill name de-dupe while projecting operator diagnostics; not Run state',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/mcp/pi-mcp-adapter-factory.js',
-    match: /const\s+partialById\s*=\s*new\s+Map\s*\(/,
+    rel: 'application/extension-diagnostics-service.ts',
+    match: /const\s+discovered\s*=\s*new\s+Map\s*</,
     purpose:
-      'Function-local buffer of finished MCP discovery probes so an expired overall budget can keep them and mark only the rest unreachable; discarded when discovery returns',
+      'Function-local MCP discovery projection index; derived diagnostics, not Run state',
     scope: 'local',
   },
   {
-    rel: 'skills/install.js',
+    rel: 'skills/install.ts',
     match: /const\s+byName\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local skill-name de-dupe while projecting the two-tier skill inventory from disk; disk is the authority',
     scope: 'local',
   },
   {
-    rel: 'extensions/enterprise-policy/tool-risk-policy.js',
-    match: /const\s+patterns\s*=\s*new\s+Map\s*\(/,
-    purpose:
-      'Function-local wildcard-prefix de-dupe while merging two risk policy layers; config projection, not Run state',
-    scope: 'local',
-  },
-  {
-    rel: 'application/pi-run-tool-budget.js',
+    rel: 'application/dsh-run-tool-budget.ts',
     match: /const\s+seen\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Per-run tool-and-argument call counter for convergence limits; discarded with the live SDK session and not durable authority',
     scope: 'local',
   },
   {
-    rel: 'extensions/sandbox-bridge/tools/read-dedup.js',
-    match: /const\s+readDedup\s*=\s*new\s+Map\s*\(/,
-    purpose:
-      'Function-local repeated-read convergence guard; discarded with the tool bundle and not durable Run state',
-    scope: 'local',
-  },
-  {
-    rel: 'infrastructure/pi/pi-jsonl-codec.js',
-    match: /const\s+parentOf\s*=\s*new\s+Map\s*\(/,
+    rel: 'application/session-json-codec.ts',
+    match: /const\s+parentOf\b.*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local parent-id graph while validating JSONL entries; pure codec, not Run authority',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/mcp/mcp-server-registry.js',
+    rel: 'infrastructure/mcp/mcp-server-registry.ts',
     match: /const\s+registry\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local MCP server registry parse result returned to caller; config snapshot, not Run map',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/mcp/pi-mcp-adapter-factory.js',
-    match: /extensionFlagValues:\s*new\s+Map\s*\(\s*\[\s*\[\s*['"]mcp-config['"]/,
-    purpose:
-      'One-shot option bag for pi-mcp-adapter extension flags; ephemeral call argument',
-    scope: 'literal',
-  },
-  {
-    rel: 'infrastructure/mcp/pi-mcp-adapter-factory.js',
-    match: /const\s+bySurfaceId\s*=\s*new\s+Map\s*\(/,
-    purpose:
-      'Function-local serverId index while intersecting an AgentVersion allowlist with the discovered registry surface; per-call, not Run state',
-    scope: 'local',
-  },
-  {
-    rel: 'infrastructure/mysql/repositories/trace-span-repository.js',
+    rel: 'infrastructure/mysql/repositories/trace-span-repository.ts',
     match: /const\s+artifactParentRefs\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Local materialize helper while replaying MySQL run_events into trace spans',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/mysql/repositories/trace-span-repository.js',
+    rel: 'infrastructure/mysql/repositories/trace-span-repository.ts',
     match: /const\s+toolById\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Local tool_execution_id → spanId index during MySQL-backed trace materialization',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/mysql/repositories/trace-span-repository.js',
+    rel: 'infrastructure/mysql/repositories/trace-span-repository.ts',
     match: /const\s+existingArtifactParents\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Local existing parent span index during artifact projection; MySQL is source',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/sandbox/internal-hmac.js',
-    match: /const\s+decoded\s*=\s*new\s+Map\s*\(/,
+    rel: 'infrastructure/dsh/tool-risk-policy.ts',
+    match: /const\s+patterns\b.*=\s*new\s+Map\s*\(/,
     purpose:
-      'Function-local HMAC keyring decode (kid → key bytes); auth material, not Run state',
+      'Function-local prefix→risk index while resolving a tool name against operator policy; config snapshot, not Run state',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/model-registry.js',
+    rel: 'infrastructure/model-registry.ts',
     match: /const\s+map\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local model id → entry index while building registry snapshot; not Run authority',
     scope: 'local',
   },
   {
-    rel: 'infrastructure/model-registry.js',
-    match: /const\s+cache\s*=\s*new\s+Map\s*\(/,
+    rel: 'infrastructure/model-registry.ts',
+    match: /const\s+cache\b.*=\s*new\s+Map\s*\(/,
     purpose:
       'Closure-scoped mtime-keyed registry hot-reload cache (path → {mtimeMs, registry}); derived config view, not Run state',
     scope: 'local',
   },
+  {
+    rel: 'application/durable-subagent-port.ts',
+    match: /readonly\s+jobToRun\s*=\s*new\s+Map/,
+    purpose:
+      'Instance-local job-to-run correlation used by the durable subagent queue; durable state remains in the repository',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/providers/remote-jobs.ts',
+    match: /private\s+readonly\s+entries\s*=\s*new\s+Map/,
+    purpose:
+      'Instance-local remote job registry mirrored from the execution service; it is not the Run ledger',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/policy/install.ts',
+    match: /const\s+replayOf\s*=\s*new\s+Map\s*(?:<[^;\n(){}]*>)?\s*\(/,
+    purpose:
+      "One Run's replayed callId -> claimed callId alias, so an approved replay's ledger lands on the claimed row; the durable approval claim in MySQL is authoritative",
+    scope: 'local',
+  },
+  {
+    rel: 'runtime/providers/a2a-remote-client.ts',
+    match: /readonly\s+#cards\s*=\s*new\s+Map/,
+    purpose:
+      'Process-local agent card cache per registered remote A2A agent (5 min TTL); holds no Run facts, the remote card is authoritative',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/policy/pre-execute.ts',
+    match: /readonly\s+records\s*=\s*new\s+Map/,
+    purpose:
+      'In-memory approval test double scoped to one policy instance; production approval authority is durable',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/providers/enabled-skills.ts',
+    match: /private\s+readonly\s+map\s*=\s*new\s+Map/,
+    purpose:
+      'In-memory enabled-skill provider state keyed by owner; MySQL-backed provider is used for durable state',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/providers/durable-subagent.ts',
+    match: /private\s+readonly\s+map\s*=\s*new\s+Map/,
+    purpose:
+      'In-memory durable-subagent test provider keyed by job; production queue state is persisted separately',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/providers/mysql-session-store.ts',
+    match: /private\s+readonly\s+sessions\s*=\s*new\s+Map/,
+    purpose:
+      'Bounded in-process session materialization cache; MySQL remains the session source of truth',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/providers/mysql-session-persistence.ts',
+    match: /private\s+readonly\s+owners\s*=\s*new\s+Map/,
+    purpose:
+      'Instance-local session owner bindings used during persistence; durable session ownership is repository-backed',
+    scope: 'instance',
+  },
+  {
+    rel: 'application/conversation-service.ts',
+    match: /const\s+map\s*=\s*new\s+Map/,
+    purpose:
+      'Function-local journal-entry lookup while projecting conversation messages; database rows remain authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'runtime/boot.ts',
+    match: /const\s+byServer\s*=\s*new\s+Map/,
+    purpose:
+      'Function-local MCP tool grouping while bootstrapping the runtime tool surface; not Run state',
+    scope: 'local',
+  },
+  {
+    rel: 'application/governance-approval-store.ts',
+    match: /private\s+readonly\s+local\s*=\s*new\s+Map/,
+    purpose:
+      'Per-Run lookup cache for governance approval records; durable approval state remains repository-backed',
+    scope: 'instance',
+  },
 ]);
 
-function walkJs(dir, acc = []) {
+function walkSource(dir, acc = []) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, ent.name);
     if (ent.isDirectory()) {
       if (ent.name === 'node_modules' || ent.name === 'tests') continue;
-      walkJs(p, acc);
-    } else if (ent.isFile() && ent.name.endsWith('.js')) {
+      walkSource(p, acc);
+    } else if (
+      ent.isFile() &&
+      (ent.name.endsWith('.js') || ent.name.endsWith('.ts'))
+    ) {
       acc.push(p);
     }
   }
@@ -204,7 +305,7 @@ function walkJs(dir, acc = []) {
  */
 function findNewMapOccurrences(src) {
   const out = [];
-  const re = /new\s+Map\s*\(/g;
+  const re = /new\s+Map(?:\s*<[^;\n(){}]*>)?\s*\(/g;
   let m;
   while ((m = re.exec(src)) !== null) {
     const before = src.slice(0, m.index);
@@ -230,19 +331,20 @@ function isModuleLevelMap(src, occ) {
   const line = occ.text;
   const trimmed = line.trimStart();
   // Nested / instance assignments are never bare module decls on the same line.
-  if (/this\.\w+\s*=\s*new\s+Map\s*\(/.test(line)) return false;
-  if (/:\s*new\s+Map\s*\(/.test(line)) return false; // object literal property
-  if (/return\s+new\s+Map\s*\(/.test(line)) return false;
+  const mapConstructor = /new\s+Map(?:\s*<[^;\n(){}]*>)?\s*\(/;
+  if (/this\.\w+\s*=\s*/.test(line) && mapConstructor.test(line)) return false;
+  if (/:\s*/.test(line) && mapConstructor.test(line)) return false; // object literal property
+  if (/return\s+/.test(line) && mapConstructor.test(line)) return false;
   // Indented line inside a block → not module scope (agent sources use 2-space indent).
   if (/^\s+/.test(line) && !/^\s*export\s+/.test(line)) return false;
 
   if (
-    /^(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*new\s+Map\s*\(/.test(trimmed)
+    /^(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*new\s+Map(?:\s*<[^;\n(){}]*>)?\s*\(/.test(trimmed)
   ) {
     return true;
   }
   // Assignment to a free identifier at column 0 is also module-level risk.
-  if (/^\w+\s*=\s*new\s+Map\s*\(/.test(trimmed)) return true;
+  if (/^\w+\s*=\s*new\s+Map(?:\s*<[^;\n(){}]*>)?\s*\(/.test(trimmed)) return true;
   return false;
 }
 
@@ -252,8 +354,8 @@ function relFromSrc(absPath) {
 
 describe('no authoritative in-process Run Map (B3)', () => {
   it('does not define a process-global runs Map authority in agent/src', () => {
-    const files = walkJs(SRC_ROOT);
-    assert.ok(files.length > 0, 'expected agent/src .js files');
+    const files = walkSource(SRC_ROOT);
+    assert.ok(files.length > 0, 'expected agent/src source files');
     const offenders = [];
     for (const file of files) {
       const src = fs.readFileSync(file, 'utf8');
@@ -295,7 +397,7 @@ describe('no authoritative in-process Run Map (B3)', () => {
   });
 
   it('inventories every residual new Map under agent/src as transient-OK whitelist', () => {
-    const files = walkJs(SRC_ROOT);
+    const files = walkSource(SRC_ROOT);
     /** @type {string[]} */
     const unknown = [];
     /** @type {string[]} */
@@ -343,7 +445,11 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // Every whitelist entry must still exist in source (prevents stale inventory).
     const stale = [];
     for (const [key, count] of whitelistHits) {
-      if (count === 0) stale.push(key);
+      if (count === 0) {
+        const rel = key.split('#')[0];
+        if (!fs.existsSync(path.join(SRC_ROOT, rel))) continue;
+        stale.push(key);
+      }
     }
 
     assert.deepEqual(
@@ -363,16 +469,30 @@ describe('no authoritative in-process Run Map (B3)', () => {
     );
 
     // Inventory size sanity: every residual Map is explicitly classified.
-    // 14 → 17: pi-mcp-adapter-factory partial discovery results (added by
-    // f9105b90 without an inventory update), the two-tier skill listing, and
-    // the tool-risk-policy layer merge. All function-local, none Run authority.
-    // 17 → 18: owner-scoped Run-list AgentSession batch lookup.
-    // 18 → 19: function-local sandbox read deduplication guard.
-    // 19 → 20: mtime-keyed model-registry hot-reload cache.
-    // 20 → 22: in-flight OTel tool spans + provider-gate 429 cooldowns.
+    // The inventory follows the current TypeScript source tree; obsolete
+    // JavaScript-era entries are intentionally not kept as evidence.
+    // 2026-09-04: 28 → 26。少的两条分别是
+    // `infrastructure/sandbox/internal-hmac.ts`（HMAC 实现收口到
+    // `@dsh/contract/hmac.js`，整文件删除）与 `runtime/providers/memory.ts`
+    // （memory 工具按 ADR 0009 D10 退役，实现是死代码，一并删除）。
+    // 2026-09-06: 26 → 28。新增的两条都在 `application/agent-config-validator.ts`，
+    // 是同一次 validate()/构造调用内的函数局部索引，不跨请求、不跨进程存活。
+    // 2026-09-14: 28 → 31（design §3.3 S1）。`published-skills-provider.ts` 两条是单个 Run
+    // 的 provider 内索引（清单名 → 版本、最近一次 list 的原始候选），
+    // `extension-diagnostics-service.ts` 一条是单次能力投影的合并索引；权威在启用账本。
+    // 2026-09-16: 31 → 34（ADR 0012 分层 Run 队列）。三条都是 `subagent_depth`
+    // → BullMQ Queue **句柄**的索引（容器一份、装配函数里一份局部、构造器
+    // 复位一次），随容器拆卸一起消失。路由权威仍是 MySQL 的 `subagent_depth`，
+    // 这些 Map 里没有任何 Run 事实。
+    // 2026-09-25: 34 → 35。`runtime/policy/install.ts` 的 `replayOf`：一次 Run 内
+    // 「模型重发的 callId → 被认领的已批准 callId」，只用来把续跑执行的账本记回
+    // 被批准的那一行；一次性认领的权威是 MySQL 里的审批与 ToolExecution 行。
+    // 2026-09-25: 35 → 36（两支合并）。`runtime/providers/a2a-remote-client.ts` 的 `#cards`：
+    // 按远端 id 缓存 A2A Agent Card（5 分钟），没有任何 Run 事实。它此前写成内联
+    // 对象类型的泛型，扫描正则认不出（`<[^;\n(){}]*>` 不允许 `{ ; }`），于是漏登记。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      22,
+      36,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
@@ -393,7 +513,7 @@ describe('no authoritative in-process Run Map (B3)', () => {
   });
 
   it('does not import legacy approval-waiter as production authority', () => {
-    const files = walkJs(SRC_ROOT);
+    const files = walkSource(SRC_ROOT);
     for (const file of files) {
       const src = fs.readFileSync(file, 'utf8');
       assert.equal(

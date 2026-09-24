@@ -72,8 +72,8 @@ describe('CreateRunService durable path', () => {
     world.runQueue.enqueue = async (ref) => {
       order.push('enqueue');
       // At enqueue time, run must already be committed.
-      assert.equal(world.tables.runs.length, 1);
-      assert.equal(world.tables.runs[0].status, RUN_STATUS.ACCEPTED);
+      assert.equal(world.tables.tbl_agsvc_runs.length, 1);
+      assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.ACCEPTED);
       return origEnqueue(ref);
     };
 
@@ -93,7 +93,7 @@ describe('CreateRunService durable path', () => {
     assert.ok(!isLegacyOrUuidIdentity(created.conversationId));
 
     // External UUID never stored in CHAR(26) columns
-    for (const row of world.tables.runs) {
+    for (const row of world.tables.tbl_agsvc_runs) {
       assert.ok(isUlid(String(row.run_id)));
       assert.ok(isUlid(String(row.org_id)));
       assert.ok(isUlid(String(row.user_id)));
@@ -101,27 +101,27 @@ describe('CreateRunService durable path', () => {
       assert.notEqual(String(row.user_id), FIXED_AUTH.externalUserId);
     }
     assert.ok(
-      world.tables.organization_external_refs.some(
+      world.tables.tbl_agsvc_organization_external_refs.some(
         (r) => r.external_subject === FIXED_AUTH.externalOrgId,
       ),
     );
 
-    assert.equal(world.tables.messages.length, 1);
-    const storedUserMessage = JSON.parse(world.tables.messages[0].content_json);
+    assert.equal(world.tables.tbl_agsvc_messages.length, 1);
+    const storedUserMessage = JSON.parse(world.tables.tbl_agsvc_messages[0].content_json);
     assert.equal(storedUserMessage.text, 'hello');
-    assert.equal(world.tables.conversations[0].title, 'hello');
-    assert.equal(world.tables.run_events.length, 2); // accepted + queued
-    assert.equal(world.tables.domain_outbox.length, 2);
+    assert.equal(world.tables.tbl_agsvc_conversations[0].title, 'hello');
+    assert.equal(world.tables.tbl_agsvc_run_events.length, 2); // accepted + queued
+    assert.equal(world.tables.tbl_agsvc_domain_outbox.length, 2);
     assert.equal(world.enqueuedJobs.length, 1);
     assert.deepEqual(world.enqueuedJobs[0], {
       runId: created.runId,
-      orgId: world.tables.runs[0].org_id,
+      orgId: world.tables.tbl_agsvc_runs[0].org_id,
       traceId: TRACE,
     });
     assert.deepEqual(order, ['enqueue', 'response']);
 
     // After enqueue path, status should be QUEUED (CAS in second txn).
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.QUEUED);
 
     const got = await svc.get.execute({
       runId: created.runId,
@@ -143,7 +143,7 @@ describe('CreateRunService durable path', () => {
       idempotencyKey: 'latest-user-turn',
     });
 
-    const stored = JSON.parse(world.tables.messages[0].content_json);
+    const stored = JSON.parse(world.tables.tbl_agsvc_messages[0].content_json);
     assert.equal(stored.text, '总结这个文档');
     assert.equal(stored.messages.length, 3);
   });
@@ -151,13 +151,13 @@ describe('CreateRunService durable path', () => {
   it('persists an explicit model selection on the triggering message', async () => {
     await svc.create.execute({
       messages: MESSAGES,
-      modelId: 'deepseek-v4-flash-vision-exp',
+      modelId: 'qwen3.8-27b',
       auth: FIXED_AUTH,
       traceId: TRACE,
       idempotencyKey: 'selected-model',
     });
-    const stored = JSON.parse(world.tables.messages[0].content_json);
-    assert.equal(stored.modelId, 'deepseek-v4-flash-vision-exp');
+    const stored = JSON.parse(world.tables.tbl_agsvc_messages[0].content_json);
+    assert.equal(stored.modelId, 'qwen3.8-27b');
   });
 
   it('rejects image turns for a text-only selected model', async () => {
@@ -173,7 +173,7 @@ describe('CreateRunService durable path', () => {
     await assert.rejects(
       () => svc.create.execute({
         messages: imageTurn,
-        modelId: 'deepseek-v4-flash',
+        modelId: 'qwen3.8-27b',
         auth: FIXED_AUTH,
         traceId: TRACE,
         idempotencyKey: 'text-model-image',
@@ -182,7 +182,26 @@ describe('CreateRunService durable path', () => {
         error instanceof ValidationError &&
         /does not support image input/.test(error.message),
     );
-    assert.equal(world.tables.runs.length, 0);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 0);
+  });
+
+  it('accepts image turns for the multimodal default model', async () => {
+    await svc.create.execute({
+      messages: [{
+        role: 'user',
+        content: 'describe this',
+        attachments: [{
+          attachment_id: 'dataset-1',
+          mime_type: 'image/png',
+          size: 4,
+        }],
+      }],
+      modelId: 'deepseek-flash',
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: 'flash-image',
+    });
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
   });
 
   it('titles a fresh conversation from the first user input', async () => {
@@ -233,7 +252,7 @@ describe('CreateRunService durable path', () => {
       }
       return innerRun(async (trx) => {
         const result = await work(trx);
-        writesSeen = world.tables.runs.length === 1;
+        writesSeen = world.tables.tbl_agsvc_runs.length === 1;
         // Pause before commit so concurrent GET cannot observe uncommitted work
         // in a real DB; fake world is not MVCC, so we only assert the service
         // does not return until after this gate + commit.
@@ -283,7 +302,7 @@ describe('CreateRunService durable path', () => {
     assert.ok(
       got.status === RUN_STATUS.ACCEPTED || got.status === RUN_STATUS.QUEUED,
     );
-    assert.equal(world.tables.runs.length, 1);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
   });
 
   it('duplicate same key+body replays without second rows/jobs', async () => {
@@ -293,11 +312,11 @@ describe('CreateRunService durable path', () => {
       traceId: TRACE,
       idempotencyKey: 'dup-key',
     });
-    const runsAfterFirst = world.tables.runs.length;
+    const runsAfterFirst = world.tables.tbl_agsvc_runs.length;
     const jobsAfterFirst = world.enqueuedJobs.length;
-    const eventsAfterFirst = world.tables.run_events.length;
-    const outboxAfterFirst = world.tables.domain_outbox.length;
-    const messagesAfterFirst = world.tables.messages.length;
+    const eventsAfterFirst = world.tables.tbl_agsvc_run_events.length;
+    const outboxAfterFirst = world.tables.tbl_agsvc_domain_outbox.length;
+    const messagesAfterFirst = world.tables.tbl_agsvc_messages.length;
 
     const second = await svc.create.execute({
       messages: MESSAGES,
@@ -308,20 +327,20 @@ describe('CreateRunService durable path', () => {
 
     assert.equal(second.runId, first.runId);
     assert.equal(second.replayed, true);
-    assert.equal(world.tables.runs.length, runsAfterFirst);
+    assert.equal(world.tables.tbl_agsvc_runs.length, runsAfterFirst);
     // Replay may safely re-enqueue (deterministic jobId); never a second Run/message.
     assert.ok(world.enqueuedJobs.length >= jobsAfterFirst);
     assert.ok(world.enqueuedJobs.length <= jobsAfterFirst + 1);
-    assert.equal(world.tables.messages.length, messagesAfterFirst);
+    assert.equal(world.tables.tbl_agsvc_messages.length, messagesAfterFirst);
     // No second accepted event
     assert.equal(
-      world.tables.run_events.filter((e) => e.event_type === 'run.accepted')
+      world.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'run.accepted')
         .length,
-      world.tables.run_events
+      world.tables.tbl_agsvc_run_events
         .slice(0, eventsAfterFirst)
         .filter((e) => e.event_type === 'run.accepted').length || 1,
     );
-    assert.ok(world.tables.domain_outbox.length >= outboxAfterFirst);
+    assert.ok(world.tables.tbl_agsvc_domain_outbox.length >= outboxAfterFirst);
   });
 
   it('different body with same key conflicts', async () => {
@@ -353,17 +372,17 @@ describe('CreateRunService durable path', () => {
     });
     assert.equal(created.status, 'ACCEPTED');
     assert.equal(created.queueWarning, QUEUE_WARNING.ENQUEUE_FAILED);
-    assert.equal(world.tables.runs.length, 1);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.ACCEPTED);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.ACCEPTED);
     assert.equal(world.enqueuedJobs.length, 0);
     // accepted event+outbox present; no queued transition
     assert.equal(
-      world.tables.run_events.filter((e) => e.event_type === 'run.accepted')
+      world.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'run.accepted')
         .length,
       1,
     );
     assert.equal(
-      world.tables.run_events.filter((e) => e.event_type === 'run.queued')
+      world.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'run.queued')
         .length,
       0,
     );
@@ -397,7 +416,7 @@ describe('CreateRunService durable path', () => {
       created.queueWarning,
       QUEUE_WARNING.STATUS_PROJECTION_FAILED,
     );
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.ACCEPTED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.ACCEPTED);
     assert.equal(world.enqueuedJobs.length, 1);
   });
 
@@ -411,7 +430,7 @@ describe('CreateRunService durable path', () => {
     });
     assert.equal(first.queueWarning, QUEUE_WARNING.ENQUEUE_FAILED);
     assert.equal(world.enqueuedJobs.length, 0);
-    assert.equal(world.tables.runs.length, 1);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
 
     world.runQueue.setFail(false);
     const second = await svc.create.execute({
@@ -422,9 +441,9 @@ describe('CreateRunService durable path', () => {
     });
     assert.equal(second.replayed, true);
     assert.equal(second.runId, first.runId);
-    assert.equal(world.tables.runs.length, 1);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
     assert.equal(world.enqueuedJobs.length, 1);
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.QUEUED);
   });
 
   it('terminal replay does not enqueue', async () => {
@@ -434,7 +453,7 @@ describe('CreateRunService durable path', () => {
       traceId: TRACE,
       idempotencyKey: 'term-replay',
     });
-    world.tables.runs[0].status = RUN_STATUS.SUCCEEDED;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.SUCCEEDED;
     const jobsBefore = world.enqueuedJobs.length;
     const second = await svc.create.execute({
       messages: MESSAGES,
@@ -480,12 +499,12 @@ describe('CreateRunService durable path', () => {
       idempotencyKey: 'replay-proj',
     });
     assert.equal(second.replayed, true);
-    assert.equal(world.tables.runs.length, 1);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
     assert.equal(
       second.queueWarning,
       QUEUE_WARNING.STATUS_PROJECTION_FAILED,
     );
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.ACCEPTED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.ACCEPTED);
   });
 
   it('accepted→queued race is idempotent when worker wins CAS', async () => {
@@ -496,7 +515,7 @@ describe('CreateRunService durable path', () => {
       createTx += 1;
       if (createTx === 2) {
         // Pretend worker already transitioned ACCEPTED→QUEUED / STARTING.
-        for (const r of world.tables.runs) {
+        for (const r of world.tables.tbl_agsvc_runs) {
           if (r.status === RUN_STATUS.ACCEPTED) r.status = RUN_STATUS.QUEUED;
         }
       }
@@ -511,10 +530,10 @@ describe('CreateRunService durable path', () => {
     });
     assert.equal(created.status, 'ACCEPTED');
     // Still exactly one run; queue may have 1 accepted + 0 or 1 queued events.
-    assert.equal(world.tables.runs.length, 1);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
     assert.ok(
       [RUN_STATUS.QUEUED, RUN_STATUS.ACCEPTED].includes(
-        world.tables.runs[0].status,
+        world.tables.tbl_agsvc_runs[0].status,
       ),
     );
   });
@@ -548,10 +567,10 @@ describe('CreateRunService durable path', () => {
 
     // Tables restored to snapshot shape for new tenant rows — no partial
     // message/run/event/outbox for the failed attempt.
-    assert.equal(world.tables.runs.length, snap.runs.length);
-    assert.equal(world.tables.messages.length, snap.messages.length);
-    assert.equal(world.tables.run_events.length, snap.run_events.length);
-    assert.equal(world.tables.domain_outbox.length, snap.domain_outbox.length);
+    assert.equal(world.tables.tbl_agsvc_runs.length, snap.tbl_agsvc_runs.length);
+    assert.equal(world.tables.tbl_agsvc_messages.length, snap.tbl_agsvc_messages.length);
+    assert.equal(world.tables.tbl_agsvc_run_events.length, snap.tbl_agsvc_run_events.length);
+    assert.equal(world.tables.tbl_agsvc_domain_outbox.length, snap.tbl_agsvc_domain_outbox.length);
     assert.ok(world.rollbackCount >= 1);
   });
 
@@ -576,13 +595,13 @@ describe('CreateRunService durable path', () => {
     });
     assert.equal(a.conversationId, b.conversationId);
     assert.notEqual(a.runId, b.runId);
-    assert.equal(world.tables.conversations.length, 1);
-    assert.equal(world.tables.organizations.length, 1);
-    assert.equal(world.tables.users.length, 1);
-    assert.equal(world.tables.agent_definitions.length, 1);
-    assert.equal(world.tables.conversations[0].title, 'hello');
+    assert.equal(world.tables.tbl_agsvc_conversations.length, 1);
+    assert.equal(world.tables.tbl_agsvc_organizations.length, 1);
+    assert.equal(world.tables.tbl_agsvc_users.length, 1);
+    assert.equal(world.tables.tbl_agsvc_agent_definitions.length, 1);
+    assert.equal(world.tables.tbl_agsvc_conversations[0].title, 'hello');
     // Active session reused
-    assert.equal(world.tables.agent_sessions.length, 1);
+    assert.equal(world.tables.tbl_agsvc_agent_sessions.length, 1);
   });
 
   it('tenant isolation: foreign owner gets not found on GET', async () => {
@@ -617,10 +636,8 @@ describe('CreateRunService durable path', () => {
       'get-run-service.js',
       'cancel-run-service.js',
     ]) {
-      const src = fs.readFileSync(
-        path.join(dir, '../../src/application', file),
-        'utf8',
-      );
+      const { readSource } = await import('../support/read-source.js');
+      const src = readSource(path.join(dir, '../../src/application', file));
       assert.equal(src.includes('new Map'), false, `${file} must not use Map`);
       assert.equal(
         /const\s+runs\s*=/.test(src),
@@ -649,7 +666,7 @@ describe('CancelRunService durable intent', () => {
       traceId: TRACE,
       idempotencyKey: 'c1',
     });
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.QUEUED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.QUEUED);
 
     const cancelled = await svc.cancel.execute({
       runId: created.runId,
@@ -661,9 +678,9 @@ describe('CancelRunService durable intent', () => {
     assert.equal(cancelled.transitionedToCancelling, true);
     assert.equal(cancelled.signalPending, false);
     assert.notEqual(cancelled.status, RUN_STATUS.CANCELLED);
-    assert.ok(world.tables.runs[0].cancel_requested_at);
-    assert.equal(world.tables.runs[0].cancel_reason, 'user requested');
-    assert.ok(isUlid(String(world.tables.runs[0].cancel_requested_by)));
+    assert.ok(world.tables.tbl_agsvc_runs[0].cancel_requested_at);
+    assert.equal(world.tables.tbl_agsvc_runs[0].cancel_reason, 'user requested');
+    assert.ok(isUlid(String(world.tables.tbl_agsvc_runs[0].cancel_requested_by)));
     assert.equal(world.cancelSignals.length, 1);
   });
 
@@ -681,7 +698,7 @@ describe('CancelRunService durable intent', () => {
       reason: 'stop',
     });
     assert.equal(cancelled.signalPending, true);
-    assert.ok(world.tables.runs[0].cancel_requested_at);
+    assert.ok(world.tables.tbl_agsvc_runs[0].cancel_requested_at);
     assert.equal(world.cancelSignals.length, 0);
   });
 
@@ -693,7 +710,7 @@ describe('CancelRunService durable intent', () => {
       traceId: TRACE,
       idempotencyKey: 'c3',
     });
-    assert.equal(world.tables.runs[0].status, RUN_STATUS.ACCEPTED);
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.ACCEPTED);
 
     const cancelled = await svc.cancel.execute({
       runId: created.runId,
@@ -701,10 +718,10 @@ describe('CancelRunService durable intent', () => {
     });
     assert.equal(cancelled.status, RUN_STATUS.ACCEPTED);
     assert.equal(cancelled.transitionedToCancelling, false);
-    assert.ok(world.tables.runs[0].cancel_requested_at);
+    assert.ok(world.tables.tbl_agsvc_runs[0].cancel_requested_at);
     // No invented CANCELLING from ACCEPTED
     assert.equal(
-      world.tables.run_events.filter(
+      world.tables.tbl_agsvc_run_events.filter(
         (e) =>
           e.event_type === 'run.status.changed' &&
           String(e.payload_json).includes('CANCELLING'),
@@ -720,11 +737,11 @@ describe('CancelRunService durable intent', () => {
       traceId: TRACE,
       idempotencyKey: 'c4',
     });
-    world.tables.runs[0].status = RUN_STATUS.SUCCEEDED;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.SUCCEEDED;
     // No prior cancel intent
-    world.tables.runs[0].cancel_requested_at = null;
-    world.tables.runs[0].cancel_reason = null;
-    world.tables.runs[0].cancel_requested_by = null;
+    world.tables.tbl_agsvc_runs[0].cancel_requested_at = null;
+    world.tables.tbl_agsvc_runs[0].cancel_reason = null;
+    world.tables.tbl_agsvc_runs[0].cancel_requested_by = null;
     const signalsBefore = world.cancelSignals.length;
 
     const cancelled = await svc.cancel.execute({
@@ -738,7 +755,7 @@ describe('CancelRunService durable intent', () => {
     assert.equal(cancelled.cancelRequested, false);
     assert.equal(cancelled.signalPending, false);
     // Must not write intent or fire Redis on terminal
-    assert.equal(world.tables.runs[0].cancel_requested_at, null);
+    assert.equal(world.tables.tbl_agsvc_runs[0].cancel_requested_at, null);
     assert.equal(world.cancelSignals.length, signalsBefore);
   });
 
@@ -755,8 +772,8 @@ describe('CancelRunService durable intent', () => {
       auth: FIXED_AUTH,
       reason: 'user',
     });
-    const intentAt = world.tables.runs[0].cancel_requested_at;
-    world.tables.runs[0].status = RUN_STATUS.CANCELLED;
+    const intentAt = world.tables.tbl_agsvc_runs[0].cancel_requested_at;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.CANCELLED;
     const signalsBefore = world.cancelSignals.length;
 
     const again = await svc.cancel.execute({
@@ -768,8 +785,8 @@ describe('CancelRunService durable intent', () => {
     assert.equal(again.cancelRequested, true);
     assert.ok(again.cancelRequestedAt);
     assert.equal(world.cancelSignals.length, signalsBefore);
-    assert.equal(world.tables.runs[0].cancel_reason, 'user');
-    assert.equal(world.tables.runs[0].cancel_requested_at, intentAt);
+    assert.equal(world.tables.tbl_agsvc_runs[0].cancel_reason, 'user');
+    assert.equal(world.tables.tbl_agsvc_runs[0].cancel_requested_at, intentAt);
   });
 });
 
@@ -807,18 +824,17 @@ describe('parent provisioning session version binding', () => {
 
     // Simulate tenant default active version change: new version row + pointer
     const newVer = world.generateId();
-    world.tables.agent_versions.push({
+    world.tables.tbl_agsvc_agent_versions.push({
       agent_version_id: newVer,
       agent_id: first.agentId,
       version_no: 2,
       config_json: '{}',
       config_hash: 'b'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: first.userId,
       created_at: '2026-07-18 07:00:00.000',
     });
-    for (const d of world.tables.agent_definitions) {
+    for (const d of world.tables.tbl_agsvc_agent_definitions) {
       if (d.agent_id === first.agentId) d.active_version_id = newVer;
     }
 
@@ -927,7 +943,7 @@ describe('in-progress idempotency', () => {
       traceId: TRACE,
       idempotencyKey: 'prog-key',
     });
-    const rec = world.tables.idempotency_records[0];
+    const rec = world.tables.tbl_agsvc_idempotency_records[0];
     rec.response_status = null;
     rec.response_json = null;
     // Same hash → in_progress

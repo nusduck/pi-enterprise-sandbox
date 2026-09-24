@@ -1,0 +1,726 @@
+/**
+ * 策略装配的**组合断言**。
+ *
+ * `policy.test.ts` 测的是纯函数，从 Wave 5 起一直是绿的——而那段时间里
+ * `installEnterprisePolicy` 还不存在，四个挂载点一个都没接，审批/guard/预算/
+ * 脱敏在运行时全部不生效。所以本文件断言的不是"函数行为对不对"，而是
+ * **装上去之后监听器真的被调用、拒绝真的拦得住**。
+ *
+ * 这里用一个最小的 cordis 替身而不是完整 boot：完整 boot 在
+ * `boot.test.ts` 的组合断言里已经覆盖（那条跑子进程），这里要的是能精确
+ * 驱动四个挂载点的能力。
+ */
+
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { installEnterprisePolicy } from '../../src/runtime/policy/install.js';
+import {
+  currentToolExecutionContext,
+  markCurrentToolOutcomeUnknown,
+} from '../../src/runtime/providers/tool-execution-context.js';
+import { InMemoryApprovalStore } from '../../src/runtime/policy/pre-execute.js';
+import type { GuardListener } from '../../src/runtime/policy/guards.js';
+
+type Listener = (...args: unknown[]) => unknown;
+
+/** 够用的 cordis 替身：记录注册，并能按挂载点驱动一次调用。 */
+class FakeCtx {
+  readonly listeners = new Map<string, Listener[]>();
+  readonly guards: Array<(exec: unknown) => string | undefined> = [];
+  readonly tools = {
+    guard: (g: (exec: unknown) => string | undefined): (() => void) => {
+      this.guards.push(g);
+      return () => {
+        const i = this.guards.indexOf(g);
+        if (i >= 0) this.guards.splice(i, 1);
+      };
+    },
+    restrict: (filter: { allow?: readonly string[] }): (() => void) => {
+      this.restrictions.push(filter);
+      return () => undefined;
+    },
+  };
+
+  /**
+   * cordis 的 `inject(names, apply)`：apply 拿到一个已注入服务的作用域。
+   * 替身必须提供它——真实 ctx 上直接取 `.tools` 会抛 "cannot get property
+   * without inject"，替身如果允许直接取，就测不出这个契约。
+   */
+  inject(_names: readonly string[], apply: (scoped: FakeCtx) => void): () => void {
+    apply(this);
+    return () => {
+      this.guards.length = 0;
+    };
+  }
+
+  on(event: string, listener: Listener): () => void {
+    const list = this.listeners.get(event) ?? [];
+    list.push(listener);
+    this.listeners.set(event, list);
+    return () => {
+      const l = this.listeners.get(event) ?? [];
+      const i = l.indexOf(listener);
+      if (i >= 0) l.splice(i, 1);
+    };
+  }
+
+  count(event: string): number {
+    return (this.listeners.get(event) ?? []).length;
+  }
+
+  /** 驱动一次 pre-execute，`next` 默认放行。 */
+  async pre(exec: object, next = async (): Promise<unknown> => ({ kind: 'allow' })): Promise<unknown> {
+    const fn = (this.listeners.get('tools/pre-execute') ?? [])[0];
+    assert.ok(fn, 'tools/pre-execute 未注册');
+    return await (fn(exec, next) as Promise<unknown>);
+  }
+
+  async execute(exec: object, body: () => Promise<unknown>): Promise<unknown> {
+    const fn = (this.listeners.get('tools/execute') ?? [])[0];
+    assert.ok(fn, 'tools/execute 未注册');
+    return await (fn(exec, body) as Promise<unknown>);
+  }
+
+  async post(exec: object, result: unknown, next: () => Promise<unknown>): Promise<unknown> {
+    const fn = (this.listeners.get('tools/post-execute') ?? [])[0];
+    assert.ok(fn, 'tools/post-execute 未注册');
+    return await (fn(exec, result, next) as Promise<unknown>);
+  }
+
+  /** 驱动一次 approval/request，`next` 默认落到出厂的 fail-closed 结果。 */
+  async approval(req: object, next = async (): Promise<unknown> => 'unavailable'): Promise<unknown> {
+    const fn = (this.listeners.get('approval/request') ?? [])[0];
+    assert.ok(fn, 'approval/request answerer 未注册');
+    return await (fn(req, next) as Promise<unknown>);
+  }
+
+  readonly restrictions: Array<{ allow?: readonly string[] }> = [];
+
+  /** 跑一遍所有 guard，返回第一条拒绝理由。 */
+  guardReason(exec: object): string | undefined {
+    for (const g of this.guards) {
+      const hit = g(exec);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
+}
+
+function installOn(ctx: FakeCtx, extra: Partial<Parameters<typeof installEnterprisePolicy>[1]> = {}) {
+  return installEnterprisePolicy(ctx as never, {
+    approvalStore: new InMemoryApprovalStore(),
+    ...extra,
+  });
+}
+
+test('五个挂载点全部注册——这正是 Wave 5 到 2026-08-30 之间缺的那一步', () => {
+  const ctx = new FakeCtx();
+  const guards: GuardListener[] = [() => null];
+  installOn(ctx, { guards });
+
+  assert.equal(ctx.count('tools/pre-execute'), 1, 'pre-execute 必须注册');
+  assert.equal(ctx.count('tools/execute'), 1, 'execute 环绕必须注册');
+  assert.equal(ctx.count('tools/post-execute'), 1, 'post-execute 必须注册');
+  assert.equal(ctx.guards.length, 1, 'ctx.tools.guard() 必须注册');
+  // 2026-08-31（ADR 0009 D5）：审批 answerer。seam 本身没有 answerer，
+  // 缺了它 `ask` 会 fail-closed 到 unavailable——审批功能整体不工作。
+  assert.equal(ctx.count('approval/request'), 1, 'approval answerer 必须注册');
+});
+
+// ── 停泊（ADR 0009 D5 的实测修正形状，计划 H4）────────────────────────────
+
+test('H7.7 visibleTools 收窄可见面，但权威层仍在 guard 上（两层都要）', async () => {
+  const ctx = new FakeCtx();
+  const installed = installOn(ctx, {
+    visibleTools: ['read', 'glob'],
+    guards: [
+      (toolName: string) =>
+        toolName === 'bash'
+          ? { decision: 'deny', reasonCode: 'TENANT', reason: 'bash not allowed', policyId: 'g', riskLevel: 'critical' }
+          : null,
+    ] as never,
+  });
+
+  assert.deepEqual(
+    ctx.restrictions,
+    [{ allow: ['read', 'glob'] }],
+    '必须调 ctx.tools.restrict()——H0.4 实测确认它过滤 scope 继承来的工具面',
+  );
+
+  // 可见性不是权威层：被收窄掉的工具**同时**要在 guard 上被拒。
+  // 只做可见性 = 把闸门交给模型的自觉。
+  assert.match(
+    String(ctx.guardReason({ name: 'bash', arguments: {}, id: 'c1' })),
+    /bash not allowed/,
+  );
+  installed.dispose();
+});
+
+test('H7.7 出厂没有 restrict() 时静默跳过，不让所有 Run 起不来', () => {
+  const ctx = new FakeCtx();
+  // @ts-expect-error 故意抹掉这个方法，模拟上游版本变动
+  delete ctx.tools.restrict;
+  assert.doesNotThrow(() => installOn(ctx, { visibleTools: ['read'] }));
+});
+
+test('H4.7 停泊之后本轮任何工具都被 guard 拒，模型没有工具可用', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  const installed = installOn(ctx, { approvalStore: store, riskOverrides: { bash: 'high' } });
+
+  // 停泊前：低风险工具正常放行。
+  assert.equal(installed.park.parked, false);
+  assert.equal(ctx.guardReason({ name: 'read', arguments: {}, id: 'c0' }), undefined);
+
+  // 高风险工具撞到审批 → 铸 PENDING → 停泊。
+  const decision = (await ctx.pre({ name: 'bash', arguments: { command: 'x' }, id: 'c1' })) as {
+    kind: string;
+  };
+  assert.equal(decision.kind, 'ask');
+  assert.equal(installed.park.parked, true, '铸出 PENDING 的同一刻必须停泊');
+  assert.equal(installed.park.pending?.callId, 'c1');
+  assert.equal(installed.park.pending?.toolName, 'bash');
+
+  // 触发停泊的那一次**不**在 guard 这里被拒——它走的是审批 seam 那条路。
+  assert.equal(ctx.guardReason({ name: 'bash', arguments: {}, id: 'c1' }), undefined);
+
+  // 之后的每一次都被拒，理由码稳定。这是本条的要害：
+  // 实测（scripts/probe-approval-park.ts 场景 A）turn 不会因为一次拒绝而结束，
+  // 模型会拿着错误结果继续走一步。没有这道闸门，它那一步能干任何事。
+  for (const name of ['read', 'write', 'glob', 'todo_write']) {
+    const reason = ctx.guardReason({ name, arguments: {}, id: `after-${name}` });
+    assert.match(
+      String(reason),
+      /RUN_PARKED_AWAITING_APPROVAL/,
+      `${name} 在停泊后必须被拒——否则模型可以在等审批时继续产生副作用`,
+    );
+  }
+});
+
+test('H4.7 停泊是幂等的：并发撞审批时，重放的是当初真正问人的那一次', async () => {
+  const ctx = new FakeCtx();
+  const installed = installOn(ctx, { riskOverrides: { bash: 'high' } });
+  await ctx.pre({ name: 'bash', arguments: { command: 'first' }, id: 'first' });
+  await ctx.pre({ name: 'bash', arguments: { command: 'second' }, id: 'second' });
+  assert.equal(
+    installed.park.pending?.callId,
+    'first',
+    '第一个赢；后来的只是被 guard 拒，不得覆盖停泊记录',
+  );
+});
+
+test('H4.1 answerer：有 APPROVED 记录才放行，PENDING 与 DENIED 都拒', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installOn(ctx, { approvalStore: store });
+
+  // 没有记录 → 交回瀑布（可能还有别的 answerer），最终由出厂 fail-closed 兜底。
+  assert.equal(await ctx.approval({ toolName: 'bash', callId: 'none' }), 'unavailable');
+
+  await store.persistPending({
+    id: 'appr_c9',
+    toolName: 'bash',
+    sourceDigest: 'd',
+    argsCanonical: '{}',
+    status: 'PENDING',
+    runStatusHint: 'WAITING_APPROVAL',
+  });
+  assert.equal(
+    await ctx.approval({ toolName: 'bash', callId: 'c9' }),
+    'rejected',
+    'PENDING = 人还没看，这次不许跑。**绝不能挂 promise 等人**——那会堵住 Worker，' +
+      '而且上游明写请求必须处在一个 open turn 内。',
+  );
+
+  await store.persistPending({
+    id: 'appr_c9',
+    toolName: 'bash',
+    sourceDigest: 'd',
+    argsCanonical: '{}',
+    status: 'APPROVED',
+    runStatusHint: 'WAITING_APPROVAL',
+  });
+  assert.equal(
+    await ctx.approval({ toolName: 'bash', callId: 'c9' }),
+    'allowed-once',
+    '续跑重放时，已批准的那次必须放行',
+  );
+});
+
+test('H4.1 停泊时主动中止本轮，且保住排队中的用户消息', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installOn(ctx, { approvalStore: store, riskOverrides: { bash: 'high' } });
+
+  // 先撞审批，铸出 PENDING 并停泊。
+  await ctx.pre({ name: 'bash', arguments: { command: 'x' }, id: 'c1' });
+
+  const cancels: Array<{ cause: unknown; opts: unknown }> = [];
+  const agent = { cancel: (cause: unknown, opts: unknown) => cancels.push({ cause, opts }) };
+  const outcome = await ctx.approval({ toolName: 'bash', callId: 'c1', agent });
+
+  assert.equal(outcome, 'rejected', '这次调用不许落地');
+  assert.equal(cancels.length, 1, '必须主动中止本轮——否则模型会多走一步（实测场景 A）');
+  assert.deepEqual(cancels[0]?.cause, {
+    kind: 'hook',
+    reason: 'RUN_PARKED_AWAITING_APPROVAL',
+  });
+  assert.deepEqual(
+    cancels[0]?.opts,
+    { keepInbox: true },
+    'cancel 默认会清掉排队中的用户消息，而续跑要用它们',
+  );
+});
+
+test('H4.1 中止失败不改变判定（工具照样不许落地）', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installOn(ctx, { approvalStore: store, riskOverrides: { bash: 'high' } });
+  await ctx.pre({ name: 'bash', arguments: { command: 'x' }, id: 'c1' });
+  const agent = {
+    cancel: () => {
+      throw new Error('agent already disposed');
+    },
+  };
+  assert.equal(await ctx.approval({ toolName: 'bash', callId: 'c1', agent }), 'rejected');
+});
+
+test('H4.1 answerer 没有 callId 时 fail-closed', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx);
+  assert.equal(
+    await ctx.approval({ toolName: 'bash' }),
+    'rejected',
+    '没有 callId 就绑不到具体那次调用；与其猜，不如拒',
+  );
+});
+
+test('低风险工具放行，且把决定权交回瀑布（不抢别人的拒绝权）', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx);
+  let nextCalled = false;
+  const decision = await ctx.pre({ name: 'read', arguments: { path: 'a.txt' }, id: 'c1' }, async () => {
+    nextCalled = true;
+    return { kind: 'allow' };
+  });
+  assert.equal(nextCalled, true, 'allow 时必须 await next()');
+  assert.deepEqual(decision, { kind: 'allow' });
+});
+
+test('高风险工具停在 ask，并落一条持久 PENDING 审批', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installEnterprisePolicy(ctx as never, {
+    approvalStore: store,
+    // 2026-08-31（ADR 0009 D4/D7）：`skill_install` 整套取消后，平台默认表里没有
+    // 任何 high 的本地工具了。高风险只来自**运维覆盖**或 MCP，所以这里显式覆盖，
+    // 测的仍是同一条路径。顺带把「运维覆盖真的生效」也测了。
+    riskOverrides: { bash: 'high' },
+  });
+
+  let nextCalled = false;
+  const decision = (await ctx.pre(
+    { name: 'bash', arguments: { command: 'rm -rf /tmp/x' }, id: 'c2' },
+    async () => {
+      nextCalled = true;
+      return { kind: 'allow' };
+    },
+  )) as { kind: string };
+
+  assert.equal(nextCalled, false, '需要审批时不能把决定权交回瀑布');
+  assert.equal(decision.kind, 'ask');
+
+  // 审批必须**落库**，不是只返回一个决定——WAITING_APPROVAL 之后要能恢复。
+  assert.equal(store.records.size, 1);
+  const [approval] = [...store.records.values()];
+  assert.equal(approval?.toolName, 'bash');
+  assert.equal(approval?.status, 'PENDING');
+  assert.equal(approval?.runStatusHint, 'WAITING_APPROVAL');
+  // source_digest 必须入账：恢复重放时靠它发现参数被换过。
+  assert.match(String(approval?.sourceDigest), /^[0-9a-f]{16,}$/);
+});
+
+test('外部 MCP 工具同样需要审批（external_high）', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  installEnterprisePolicy(ctx as never, { approvalStore: store });
+  const decision = (await ctx.pre({ name: 'mcp__db__query', arguments: {}, id: 'c5' })) as {
+    kind: string;
+  };
+  assert.equal(decision.kind, 'ask');
+});
+
+test('未知工具 fail-closed 拒绝，不是放行', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx);
+  const decision = (await ctx.pre({ name: 'totally_unknown_tool', arguments: {}, id: 'c6' })) as {
+    kind: string;
+  };
+  assert.equal(decision.kind, 'deny');
+});
+
+test('运维配置的风险覆盖真的生效（否则 TOOL_RISK_POLICY_* 是摆设）', async () => {
+  const ctx = new FakeCtx();
+  // `read` 默认是 local_low → allow。运维把它提到 high 就该变成 ask。
+  installOn(ctx, { riskOverrides: { read: 'high' } });
+  const decision = (await ctx.pre({ name: 'read', arguments: { path: 'a' }, id: 'c7' })) as {
+    kind: string;
+  };
+  assert.equal(decision.kind, 'ask', '覆盖表必须能提升风险等级');
+});
+
+test('guard 是单调的：拒绝之后放行的 listener 翻不了案', () => {
+  const ctx = new FakeCtx();
+  const guards: GuardListener[] = [
+    () => ({
+      decision: 'deny',
+      reason: 'cross-tenant workspace',
+      reasonCode: 'TENANT_MISMATCH',
+      policyId: 'test',
+      riskLevel: 'high',
+    }),
+    // 后面这个想放行，必须无效。
+    () => ({
+      decision: 'allow',
+      reason: 'looks fine',
+      reasonCode: 'OK',
+      policyId: 'test',
+      riskLevel: 'low',
+    }),
+  ] as unknown as GuardListener[];
+  installOn(ctx, { guards });
+
+  const reason = ctx.guards[0]?.({ name: 'read', arguments: {} });
+  assert.equal(typeof reason, 'string', 'guard 必须返回拒绝理由');
+  assert.match(String(reason), /cross-tenant/);
+});
+
+test('预算在调用工具体之前判定——第 N+1 次调用根本不执行', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx, { env: { AGENT_RUN_MAX_TOOL_CALLS: '2' } as NodeJS.ProcessEnv });
+
+  let bodyRuns = 0;
+  const body = async (): Promise<string> => {
+    bodyRuns += 1;
+    return 'ok';
+  };
+  await ctx.execute({ name: 'read' }, body);
+  await ctx.execute({ name: 'read' }, body);
+  await assert.rejects(() => ctx.execute({ name: 'read' }, body) as Promise<unknown>, /budget/i);
+  assert.equal(bodyRuns, 2, '超预算的那次工具体不该被执行');
+});
+
+test('失败结果经脱敏后回给模型，物理根不外泄，并记一条账本', async () => {
+  const ctx = new FakeCtx();
+  const ledger: unknown[] = [];
+  installOn(ctx, {
+    physicalRoots: ['/var/sandbox/workspaces/ws_secret'],
+    ledger: (e) => ledger.push(e),
+  });
+
+  const result = (await ctx.post(
+    { name: 'read', id: 'c3' },
+    { isError: true, error: new Error('ENOENT: /var/sandbox/workspaces/ws_secret/a.txt') },
+    async () => ({ kind: 'accept' }),
+  )) as { kind: string; feedback?: { text?: string }[] };
+
+  assert.equal(result.kind, 'block');
+  const text = String(result.feedback?.[0]?.text ?? '');
+  assert.ok(!text.includes('/var/sandbox/workspaces/ws_secret'), `物理根泄漏了: ${text}`);
+  assert.equal(ledger.length, 1);
+});
+
+test('成功结果原样通过，账本仍记一条', async () => {
+  const ctx = new FakeCtx();
+  const ledger: unknown[] = [];
+  installOn(ctx, { ledger: (e) => ledger.push(e) });
+
+  const passed = { kind: 'accept', content: [{ type: 'text', text: 'hello' }] };
+  const result = await ctx.post({ name: 'read', id: 'c4' }, { isError: false }, async () => passed);
+  assert.deepEqual(result, passed);
+  assert.equal(ledger.length, 1);
+});
+
+test('dispose() 卸载全部监听器与 guard', () => {
+  const ctx = new FakeCtx();
+  const installed = installOn(ctx, { guards: [() => null] });
+  installed.dispose();
+  assert.equal(ctx.count('tools/pre-execute'), 0);
+  assert.equal(ctx.count('tools/execute'), 0);
+  assert.equal(ctx.count('tools/post-execute'), 0);
+  assert.equal(ctx.guards.length, 0);
+});
+
+test('真实 boot + agents.create()：策略与提示词确实装到 per-Run scope 上', () => {
+  // 与上面的替身测试互补：替身证明"四个挂载点的行为对"，这条证明"在真的
+  // DSH 上下文里，装配这一步不会被静默跳过"。
+  //
+  // 它抓到过两个真 bug：服务名是 `systemPrompt`（不是 'system-prompt'），
+  // 且必须经 `ctx.inject([...], cb)` 取——直接取属性会抛
+  // "cannot get property without inject"，不是静默跳过。
+  const probe = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/policy-mount-probe.ts');
+  const out = execFileSync('npx', ['tsx', probe], {
+    encoding: 'utf8',
+    cwd: join(dirname(fileURLToPath(import.meta.url)), '..'),
+  });
+  const result = JSON.parse(out.trim().split('\n').pop() as string) as {
+    sectionRegistered: boolean;
+    policyInstalled: boolean;
+  };
+  assert.equal(result.sectionRegistered, true, '企业提示词段必须注册成功');
+  assert.equal(result.policyInstalled, true, '策略必须装配成功');
+});
+
+test('H9.6 工具执行两端都记 durable 账本，且记账失败不打死调用', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ phase: string; toolName: string; isError?: boolean }> = [];
+  installOn(ctx, {
+    toolLedger: {
+      async started({ toolName }) {
+        calls.push({ phase: 'started', toolName });
+      },
+      async ended({ toolName, isError }) {
+        calls.push({ phase: 'ended', toolName, isError });
+      },
+    },
+  } as never);
+
+  const ok = await ctx.execute({ name: 'read', arguments: {}, id: 'c1' }, async () => ({
+    isError: false,
+  }));
+  assert.deepEqual((ok as { isError: boolean }).isError, false);
+  assert.deepEqual(calls, [
+    { phase: 'started', toolName: 'read' },
+    { phase: 'ended', toolName: 'read', isError: false },
+  ]);
+
+  // 工具体抛错时也要记结束——否则 tool_executions 会留下永远 RUNNING 的行。
+  calls.length = 0;
+  await assert.rejects(() =>
+    ctx.execute({ name: 'bash', arguments: {}, id: 'c2' }, async () => {
+      throw new Error('boom');
+    }),
+  );
+  assert.deepEqual(calls.map((c) => c.phase), ['started', 'ended']);
+  assert.equal(calls[1]?.isError, true);
+});
+
+test('工具执行 ALS 暴露当前 callId/name/args，供交互桥绑定 durable 行', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx);
+  let observed;
+  await ctx.execute(
+    { name: 'ask_user_question', arguments: { questions: [] }, id: 'call-als-01' },
+    async () => {
+      await Promise.resolve();
+      observed = currentToolExecutionContext();
+      return { isError: false };
+    },
+  );
+  assert.deepEqual(observed, {
+    callId: 'call-als-01',
+    toolName: 'ask_user_question',
+    args: { questions: [] },
+  });
+});
+
+test('ask_user 停泊抛错不得记 FAILED——否则人答 409', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ phase: string; isError?: boolean }> = [];
+  installOn(ctx, {
+    toolLedger: {
+      async started() {
+        calls.push({ phase: 'started' });
+      },
+      async ended({ isError }) {
+        calls.push({ phase: 'ended', isError });
+      },
+    },
+  } as never);
+
+  await assert.rejects(
+    () =>
+      ctx.execute(
+        { name: 'ask_user_question', arguments: { questions: [] }, id: 'call-park' },
+        async () => {
+          throw new Error('user interaction pending');
+        },
+      ),
+    /user interaction pending/,
+  );
+  assert.deepEqual(calls, [{ phase: 'started' }]);
+});
+
+test('停泊中的 toolCallId 不写 ended 账本——判据是结构化谓词，不是结果文本', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ id: string; phase: string }> = [];
+  const parked = new Set<string>(['call-park-2']);
+  installOn(ctx, {
+    isInteractionPending: (toolCallId: string) => parked.has(toolCallId),
+    toolLedger: {
+      async started({ toolCallId }) {
+        calls.push({ id: toolCallId, phase: 'started' });
+      },
+      async ended({ toolCallId }) {
+        calls.push({ id: toolCallId, phase: 'ended' });
+      },
+    },
+  } as never);
+
+  const parkedResult = await ctx.execute(
+    { name: 'ask_user_question', arguments: { questions: [] }, id: 'call-park-2' },
+    async () => ({
+      isError: true,
+      error: { message: 'user interaction pending' },
+      content: [{ type: 'text', text: 'user interaction pending' }],
+    }),
+  );
+  assert.equal((parkedResult as any)?.isError, true);
+  assert.deepEqual(calls, [{ id: 'call-park-2', phase: 'started' }]);
+
+  // 反面：一个**没有**停泊的工具，哪怕结果里原样回显了那句话，也必须记 ended。
+  // 旧实现在这里会漏记，于是 tool_executions 里留下一行永远 RUNNING。
+  calls.length = 0;
+  await ctx.execute({ name: 'bash', arguments: {}, id: 'call-echo' }, async () => ({
+    isError: true,
+    content: [{ type: 'text', text: 'bash: user interaction pending' }],
+  }));
+  assert.deepEqual(calls, [
+    { id: 'call-echo', phase: 'started' },
+    { id: 'call-echo', phase: 'ended' },
+  ]);
+});
+
+test('派发边界 fail-closed：started 记账失败时不派发工具体', async () => {
+  // 2026-09-17 之前这里断言「记账失败不打死调用」，started 也一样吞掉。可 started
+  // 是派发边界：它失败常见的原因是 fence 已被别的 Worker 接管——这时照样执行
+  // 就是旧 Worker 在别人的 lease 下落副作用，恢复时账本里也查不到这次派发。
+  const ctx = new FakeCtx();
+  let bodyCalls = 0;
+  installOn(ctx, {
+    toolLedger: {
+      async started() {
+        throw new Error('stale execution fence');
+      },
+      async ended() {
+        throw new Error('must not be reached');
+      },
+    },
+  } as never);
+  await assert.rejects(
+    () =>
+      ctx.execute({ name: 'bash', arguments: {}, id: 'c-stale' }, async () => {
+        bodyCalls += 1;
+        return { isError: false };
+      }),
+    /stale execution fence/,
+  );
+  assert.equal(bodyCalls, 0, '派发边界没记上就不能执行');
+});
+
+test('H9.6 ended 记账失败不影响工具结果——副作用已经发生', async () => {
+  const ctx = new FakeCtx();
+  installOn(ctx, {
+    toolLedger: {
+      async started() {},
+      async ended() {
+        throw new Error('mysql down');
+      },
+    },
+  } as never);
+  const out = await ctx.execute({ name: 'read', arguments: {}, id: 'c1' }, async () => ({
+    isError: false,
+    value: 'fine',
+  }));
+  assert.equal((out as { value: string }).value, 'fine', '结束记账失败把一次已执行的调用打死是本末倒置');
+});
+
+test('结果未知：执行面在请求送达后断开时记 unknown，不记 ended', async () => {
+  const ctx = new FakeCtx();
+  const calls: Array<{ phase: string; id: string; reason?: string }> = [];
+  installOn(ctx, {
+    toolLedger: {
+      async started({ toolCallId }) {
+        calls.push({ phase: 'started', id: toolCallId });
+      },
+      async ended({ toolCallId }) {
+        calls.push({ phase: 'ended', id: toolCallId });
+      },
+      async unknown({ toolCallId, reason }) {
+        calls.push({ phase: 'unknown', id: toolCallId, reason });
+      },
+    },
+  } as never);
+
+  // 工具体（DSH 的 bash）把传输错误包成 isError 结果返回。
+  const out = await ctx.execute({ name: 'bash', arguments: {}, id: 'c-lost' }, async () => {
+    markCurrentToolOutcomeUnknown('ECONNRESET');
+    return { isError: true, error: { message: 'connection lost' } };
+  });
+  assert.equal((out as { isError: boolean }).isError, true);
+  assert.deepEqual(calls, [
+    { phase: 'started', id: 'c-lost' },
+    { phase: 'unknown', id: 'c-lost', reason: 'ECONNRESET' },
+  ]);
+
+  // 工具体直接抛错的路径同样按未知记。
+  calls.length = 0;
+  await assert.rejects(() =>
+    ctx.execute({ name: 'bash', arguments: {}, id: 'c-lost-throw' }, async () => {
+      markCurrentToolOutcomeUnknown('deadline');
+      throw new Error('connection lost');
+    }),
+  );
+  assert.deepEqual(calls.map((c) => c.phase), ['started', 'unknown']);
+
+  // 对照：普通失败仍记 ended，且标记不会串到下一次调用。
+  calls.length = 0;
+  await ctx.execute({ name: 'bash', arguments: {}, id: 'c-plain' }, async () => ({
+    isError: true,
+    error: { message: 'exit 1' },
+  }));
+  assert.deepEqual(calls.map((c) => c.phase), ['started', 'ended']);
+});
+
+test('批准后重发的调用把账本记在被批准的那一行上，不另起一行（原行不得永远 RUNNING）', async () => {
+  const ctx = new FakeCtx();
+  const store = new InMemoryApprovalStore();
+  const ledger: Array<{ phase: string; toolCallId: string }> = [];
+  installEnterprisePolicy(ctx as never, {
+    approvalStore: store,
+    riskOverrides: { bash: 'high' },
+    toolLedger: {
+      async started({ toolCallId }: { toolCallId: string }) {
+        ledger.push({ phase: 'started', toolCallId });
+      },
+      async ended({ toolCallId }: { toolCallId: string }) {
+        ledger.push({ phase: 'ended', toolCallId });
+      },
+    },
+  } as never);
+  const args = { command: 'echo baseline-42' };
+
+  // 第一次：停在审批，人批准。
+  const first = (await ctx.pre({ name: 'bash', arguments: args, id: 'c-orig' })) as { kind: string };
+  assert.equal(first.kind, 'ask');
+  const [pending] = [...store.records.values()];
+  assert.ok(pending);
+  store.records.set(pending.id, { ...pending, status: 'APPROVED' });
+
+  // 续跑：模型以新的 callId 原样重发，认领那条批准后执行。
+  const replay = (await ctx.pre({ name: 'bash', arguments: args, id: 'c-new' })) as { kind: string };
+  assert.equal(replay.kind, 'allow');
+  await ctx.execute({ name: 'bash', arguments: args, id: 'c-new' }, async () => ({ isError: false }));
+  assert.deepEqual(ledger, [
+    { phase: 'started', toolCallId: 'c-orig' },
+    { phase: 'ended', toolCallId: 'c-orig' },
+  ]);
+
+  // 对照：普通调用仍记在自己的 callId 上。
+  ledger.length = 0;
+  await ctx.execute({ name: 'read', arguments: {}, id: 'c-plain' }, async () => ({ isError: false }));
+  assert.deepEqual(ledger.map((e) => e.toolCallId), ['c-plain', 'c-plain']);
+});

@@ -98,13 +98,13 @@ describe('PR-14 load/concurrency: CreateRun idempotency', () => {
 
     const runIds = new Set(results.map((r) => r.runId));
     assert.equal(runIds.size, 1, 'exactly one durable Run id');
-    assert.equal(world.tables.runs.length, 1);
-    assert.equal(world.tables.messages.length, 1);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 1);
+    assert.equal(world.tables.tbl_agsvc_messages.length, 1);
     // Deterministic jobId = runId: enqueue may retry, never second Run rows
     const runId = results[0].runId;
     assert.ok(world.enqueuedJobs.every((j) => j.runId === runId));
     assert.equal(
-      world.tables.run_events.filter((e) => e.event_type === 'run.accepted')
+      world.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'run.accepted')
         .length,
       1,
     );
@@ -134,8 +134,8 @@ describe('PR-14 load/concurrency: CreateRun idempotency', () => {
     ]);
 
     assert.notEqual(a.runId, b.runId);
-    assert.equal(world.tables.runs.length, 2);
-    assert.notEqual(world.tables.runs[0].org_id, world.tables.runs[1].org_id);
+    assert.equal(world.tables.tbl_agsvc_runs.length, 2);
+    assert.notEqual(world.tables.tbl_agsvc_runs[0].org_id, world.tables.tbl_agsvc_runs[1].org_id);
 
     const get = buildGet(world);
     await assert.rejects(
@@ -162,9 +162,9 @@ describe('PR-14 load/concurrency: CreateRun idempotency', () => {
       ids.push(r.runId);
     }
     assert.equal(new Set(ids).size, 8);
-    assert.equal(world.tables.conversations.length, 1);
-    assert.equal(world.tables.agent_sessions.length, 1);
-    const seqs = world.tables.run_events.map(
+    assert.equal(world.tables.tbl_agsvc_conversations.length, 1);
+    assert.equal(world.tables.tbl_agsvc_agent_sessions.length, 1);
+    const seqs = world.tables.tbl_agsvc_run_events.map(
       (e) => `${e.run_id}:${e.sequence_no}`,
     );
     assert.equal(seqs.length, new Set(seqs).size, 'no (run,sequence) dupes');
@@ -340,7 +340,7 @@ describe('PR-14 concurrency: recovery scan does not re-exec RUNNING', () => {
       traceId: TRACE,
       idempotencyKey: 'pr14-rec-r',
     });
-    const runningRow = world.tables.runs.find((r) => r.run_id === running.runId);
+    const runningRow = world.tables.tbl_agsvc_runs.find((r) => r.run_id === running.runId);
     runningRow.status = RUN_STATUS.RUNNING;
 
     const jobsBefore = world.enqueuedJobs.length;

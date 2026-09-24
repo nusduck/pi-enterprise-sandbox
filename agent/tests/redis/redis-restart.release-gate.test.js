@@ -19,7 +19,7 @@ const TEST_REDIS_URL = (process.env.TEST_REDIS_URL || '').trim();
 const TEST_REDIS_CONTAINER = (process.env.TEST_REDIS_CONTAINER || '').trim();
 const explicitlyEnabled = process.env.RUN_REDIS_RESTART_GATE === '1';
 
-const safeContainer = /^pi-release-gate-redis-[a-z0-9-]+$/.test(
+const safeContainer = /^dsh-release-gate-redis-[a-z0-9-]+$/.test(
   TEST_REDIS_CONTAINER,
 );
 
@@ -28,7 +28,7 @@ function isDedicatedMysqlUrl(value) {
     const parsed = new URL(value);
     return (
       (parsed.protocol === 'mysql:' || parsed.protocol === 'mysql2:') &&
-      parsed.pathname.slice(1).startsWith('pi_gate_')
+      parsed.pathname.slice(1).startsWith('dsh_gate_')
     );
   } catch {
     return false;
@@ -84,6 +84,34 @@ async function waitForRedis(client, timeoutMs = 15_000) {
   });
 }
 
+function parseInfo(text) {
+  return Object.fromEntries(
+    String(text)
+      .split(/\r?\n/)
+      .filter((line) => line.includes(':'))
+      .map((line) => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1)]),
+  );
+}
+
+async function waitForAofRewrite(client, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  let info = {};
+  while (Date.now() < deadline) {
+    info = parseInfo(await client.call('INFO', 'persistence'));
+    assertStrict.equal(info.aof_enabled, '1', 'dedicated Redis must run with appendonly yes');
+    if (
+      info.aof_rewrite_in_progress === '0' &&
+      info.aof_rewrite_scheduled === '0' &&
+      info.aof_last_rewrite_time_sec !== '-1'
+    ) {
+      assertStrict.equal(info.aof_last_bgrewrite_status, 'ok');
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`AOF rewrite did not finish before deadline: ${JSON.stringify(info)}`);
+}
+
 describe('redis restart release gate safety', () => {
   it('requires explicit opt-in and dedicated resource names', () => {
     if (!explicitlyEnabled) {
@@ -92,11 +120,11 @@ describe('redis restart release gate safety', () => {
     }
     assertStrict.ok(
       safeContainer,
-      'TEST_REDIS_CONTAINER must match pi-release-gate-redis-*',
+      'TEST_REDIS_CONTAINER must match dsh-release-gate-redis-*',
     );
     assertStrict.ok(
       safeMysql,
-      'TEST_MYSQL_URL database must start with pi_gate_',
+      'TEST_MYSQL_URL database must start with dsh_gate_',
     );
     assertStrict.ok(TEST_REDIS_URL, 'TEST_REDIS_URL is required');
   });
@@ -133,7 +161,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
     );
     const [name, image, running] = inspected.stdout.trim().split('|');
     assertStrict.equal(name, `/${TEST_REDIS_CONTAINER}`);
-    assertStrict.equal(image, 'redis:7.2');
+    assertStrict.equal(image, 'redis:5.0.14');
     assertStrict.equal(running, 'true');
 
     mysql = await import('../../src/infrastructure/mysql/index.js');
@@ -153,7 +181,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
     await mysql.migrateLatest(knex);
     client = await createClient();
 
-    await knex('domain_outbox').where({ outbox_id: OUTBOX }).del();
+    await knex('tbl_agsvc_domain_outbox').where({ outbox_id: OUTBOX }).del();
     await client.del(redisMod.runStreamKey(RUN));
   });
 
@@ -176,7 +204,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
 
     if (knex) {
       try {
-        await knex('domain_outbox').where({ outbox_id: OUTBOX }).del();
+        await knex('tbl_agsvc_domain_outbox').where({ outbox_id: OUTBOX }).del();
         await mysql.migrateRollbackAll(knex);
       } finally {
         await mysql.destroyMysqlKnex(knex);
@@ -194,8 +222,10 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
       createdAt: new Date().toISOString(),
     });
 
-    const waitAof = await client.call('WAITAOF', '1', '0', '5000');
-    assertStrict.deepEqual(waitAof.map(Number), [1, 0]);
+    // WAITAOF needs Redis 7.2; the baseline is 5.0.14 (ADR 0011 D9). A completed
+    // BGREWRITEAOF has written and fsynced an AOF that contains the entry above.
+    await client.call('BGREWRITEAOF');
+    await waitForAofRewrite(client);
 
     await docker('restart', '--time', '1', TEST_REDIS_CONTAINER);
     await waitForRedis(client);
@@ -304,7 +334,7 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
       orgId: ORG,
     });
 
-    await knex('agent_definitions').insert({
+    await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
       name: 'release-gate-agent',
@@ -315,13 +345,12 @@ describeLive('redis restart + outbox retry + SSE fallback (dedicated live resour
       created_at: knex.fn.now(3),
       updated_at: knex.fn.now(3),
     });
-    await knex('agent_versions').insert({
+    await knex('tbl_agsvc_agent_versions').insert({
       agent_version_id: VERSION,
       agent_id: AGENT,
       version_no: 1,
       config_json: JSON.stringify({ modelPolicy: {} }),
       config_hash: 'a'.repeat(64),
-      pi_sdk_version: '0.80.3',
       status: 'active',
       created_by: USER,
       created_at: knex.fn.now(3),

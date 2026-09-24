@@ -26,6 +26,7 @@ export function ConversationHeader() {
     toggleSidebar,
     inspectorOpen,
     toggleInspector,
+    agentNameById,
   } = useChat();
 
   const [theme, toggleTheme] = useTheme();
@@ -90,10 +91,31 @@ export function ConversationHeader() {
       )) ||
     null;
 
+  // 这个会话绑在哪个 Agent 上（D2：建会话时钉死）。只有 org 里确实存在多个
+  // Agent 时 `agentNameById` 才解析得出名字，单 Agent 的 org 看不到这个 chip。
+  const agentName = agentNameById(
+    typeof conv?.agent_id === 'string' ? conv.agent_id : null,
+  );
+
+  // This is the version the Agent service bound when the conversation was
+  // created. Never look at the Agent catalog's current active pointer here:
+  // changing an Agent must not silently retarget an existing conversation.
+  const boundVersionId =
+    typeof conv?.agent_version_id === 'string'
+      ? conv.agent_version_id
+      : null;
+  const rawBoundVersionNo = conv?.agent_version_no;
+  const boundVersionNo =
+    rawBoundVersionNo != null && Number.isFinite(Number(rawBoundVersionNo))
+      ? Number(rawBoundVersionNo)
+      : null;
+
   const model =
     run?.modelId ||
     agentSession?.modelId ||
-    (typeof conv?.model === 'string' ? conv.model : null) ||
+    (typeof conv?.model_policy?.fixed_model_id === 'string'
+      ? conv.model_policy.fixed_model_id
+      : null) ||
     null;
 
   return (
@@ -118,6 +140,25 @@ export function ConversationHeader() {
             {title}
           </h1>
           <div className="conv-header-meta">
+            {agentName ? (
+              <span className="conv-chip agent-chip" title={`Agent · ${agentName}`}>
+                {agentName}
+              </span>
+            ) : null}
+            {boundVersionNo != null || boundVersionId ? (
+              <span
+                className="conv-chip agent-version-chip"
+                title={
+                  boundVersionId
+                    ? `Server-bound Agent version · ${boundVersionId}`
+                    : 'Server-bound Agent version'
+                }
+              >
+                {boundVersionNo != null
+                  ? `Bound v${boundVersionNo}`
+                  : `Bound ${boundVersionId?.slice(0, 8)}`}
+              </span>
+            ) : null}
             {model ? (
               <span className="conv-chip model-chip" title={model}>
                 {model}

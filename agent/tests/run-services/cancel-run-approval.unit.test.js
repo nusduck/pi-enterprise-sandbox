@@ -29,7 +29,7 @@ const AUTH = {
 };
 
 function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVAL' } = {}) {
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     {
       org_id: ORG,
       name: 'Acme',
@@ -38,7 +38,7 @@ function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVA
       updated_at: NOW,
     },
   ];
-  state.tables.users = [
+  state.tables.tbl_agsvc_users = [
     {
       user_id: USER,
       external_subject: 'bff:user-ext-1',
@@ -49,7 +49,7 @@ function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVA
       updated_at: NOW,
     },
   ];
-  state.tables.organization_memberships = [
+  state.tables.tbl_agsvc_organization_memberships = [
     {
       org_id: ORG,
       user_id: USER,
@@ -59,7 +59,7 @@ function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVA
       updated_at: NOW,
     },
   ];
-  state.tables.organization_external_refs = [
+  state.tables.tbl_agsvc_organization_external_refs = [
     {
       provider: 'bff',
       external_subject: 'org-ext-1',
@@ -67,7 +67,7 @@ function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVA
       created_at: NOW,
     },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -93,7 +93,7 @@ function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVA
       updated_at: NOW,
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL,
       run_id: RUN,
@@ -115,7 +115,7 @@ function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVA
       created_at: NOW,
     },
   ];
-  state.tables.approvals = [
+  state.tables.tbl_agsvc_approvals = [
     {
       approval_id: APPROVAL,
       org_id: ORG,
@@ -131,9 +131,9 @@ function seed(state, { approvalStatus = 'PENDING', toolStatus = 'WAITING_APPROVA
       decided_at: null,
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
-  state.tables.trace_spans = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
+  state.tables.tbl_agsvc_trace_spans = [];
 }
 
 describe('CancelRunService parked WAITING_APPROVAL', () => {
@@ -177,34 +177,34 @@ describe('CancelRunService parked WAITING_APPROVAL', () => {
 
     assert.equal(first.status, RUN_STATUS.CANCELLED);
     assert.equal(first.terminal, true);
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.CANCELLED);
-    assert.equal(state.tables.approvals[0].status, 'CANCELLED');
-    assert.equal(state.tables.tool_executions[0].status, 'CANCELLED');
-    assert.equal(state.tables.tool_executions[0].error_code, 'RUN_CANCELLED');
-    assert.ok(state.tables.tool_executions[0].completed_at);
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].error_code, 'RUN_CANCELLED');
+    assert.ok(state.tables.tbl_agsvc_tool_executions[0].completed_at);
     assert.ok(
-      state.tables.run_events.some((e) => e.event_type === 'approval.resolved'),
+      state.tables.tbl_agsvc_run_events.some((e) => e.event_type === 'approval.resolved'),
     );
     assert.ok(
-      state.tables.run_events.some((e) => e.event_type === 'run.cancelled'),
+      state.tables.tbl_agsvc_run_events.some((e) => e.event_type === 'run.cancelled'),
     );
     // Terminalized in API txn — no Redis cancel signal needed.
     assert.equal(cancelSignals.length, 0);
 
-    const eventCount = state.tables.run_events.length;
+    const eventCount = state.tables.tbl_agsvc_run_events.length;
     const repeated = await cancel.execute({
       runId: RUN,
       auth: AUTH,
       reason: 'retry',
     });
     assert.equal(repeated.status, RUN_STATUS.CANCELLED);
-    assert.equal(state.tables.run_events.length, eventCount);
+    assert.equal(state.tables.tbl_agsvc_run_events.length, eventCount);
   });
 
   it('cancels APPROVED-but-unexecuted tool when cancel wins after approve', async () => {
     seed(state, { approvalStatus: 'APPROVED', toolStatus: 'WAITING_APPROVAL' });
-    state.tables.approvals[0].decision_by = USER;
-    state.tables.approvals[0].decided_at = NOW;
+    state.tables.tbl_agsvc_approvals[0].decision_by = USER;
+    state.tables.tbl_agsvc_approvals[0].decided_at = NOW;
 
     const result = await cancel.execute({
       runId: RUN,
@@ -213,15 +213,15 @@ describe('CancelRunService parked WAITING_APPROVAL', () => {
     });
     assert.equal(result.status, RUN_STATUS.CANCELLED);
     // Historical APPROVED fact preserved; tool is cancelled so no side effect.
-    assert.equal(state.tables.approvals[0].status, 'APPROVED');
-    assert.equal(state.tables.tool_executions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, 'APPROVED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'CANCELLED');
   });
 
   it('recovery terminalizes WAITING_APPROVAL when cancel intent is set', async () => {
     // Simulate the pre-fix stuck state: intent written, status still parked.
-    state.tables.runs[0].cancel_requested_at = NOW;
-    state.tables.runs[0].cancel_reason = 'stuck intent';
-    state.tables.runs[0].cancel_requested_by = USER;
+    state.tables.tbl_agsvc_runs[0].cancel_requested_at = NOW;
+    state.tables.tbl_agsvc_runs[0].cancel_reason = 'stuck intent';
+    state.tables.tbl_agsvc_runs[0].cancel_requested_by = USER;
 
     const recovery = new RunRecoveryService({
       transactionManager: { run: (fn) => knex.transaction(fn) },
@@ -232,8 +232,8 @@ describe('CancelRunService parked WAITING_APPROVAL', () => {
     });
     const action = await recovery.recoverOneRef({ runId: RUN, orgId: ORG });
     assert.equal(action.action, 'terminalized');
-    assert.equal(state.tables.runs[0].status, RUN_STATUS.CANCELLED);
-    assert.equal(state.tables.approvals[0].status, 'CANCELLED');
-    assert.equal(state.tables.tool_executions[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, RUN_STATUS.CANCELLED);
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, 'CANCELLED');
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].status, 'CANCELLED');
   });
 });

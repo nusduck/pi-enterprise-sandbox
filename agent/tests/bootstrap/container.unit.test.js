@@ -13,10 +13,13 @@ import {
   resolveRedisUrlFromEnv,
   createRepositoryBundle,
   resolveWorkerExecutorFactory,
-  resolveAgentPiAgentDir,
-  ensureAgentPiAgentDir,
   assertWorkerSandboxServiceToken,
 } from '../../src/bootstrap/container.js';
+
+/** 单测不连 DBPM：注入空口令。取密本身的规则见 startup-credentials.unit.test.js。 */
+const NO_DBPM = async () => ({});
+/** 单测不连真库：schema 核对注入空实现。核对本身见 schema-manifest.integration.test.js。 */
+const NO_SCHEMA_CHECK = async () => {};
 
 describe('ServiceContainer', () => {
   it('constructs without connecting', () => {
@@ -60,6 +63,8 @@ describe('ServiceContainer', () => {
       'approvals',
       'sandboxAudit',
       'outbox',
+      'skillEnablements',
+      'authCredentials',
     ]) {
       assert.ok(bundle[k], `missing ${k}`);
     }
@@ -71,10 +76,10 @@ describe('ServiceContainer', () => {
       AGENT_REDIS_URL: 'redis://localhost:6379/0',
     });
     assert.equal(typeof c.createSessionLockManager, 'function');
-    assert.equal(typeof c.createPiRuntimeFactory, 'function');
-    assert.equal(typeof c.createPiSessionAdapter, 'function');
+    assert.equal(typeof c.createDshRuntimeFactory, 'function');
+    assert.equal(typeof c.createDshSessionAdapter, 'function');
     assert.equal(typeof c.createPlatformEventProjector, 'function');
-    assert.equal(typeof c.createPiRunExecutorFactory, 'function');
+    assert.equal(typeof c.createDshRunExecutorFactory, 'function');
     assert.equal(typeof c.createSessionRecoveryService, 'function');
     assert.throws(
       () => c.requireWorkerExecutorFactory(),
@@ -103,6 +108,8 @@ describe('ServiceContainer', () => {
       },
       {
         createMysqlKnex: () => knex,
+        resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyMysqlKnex: async () => {
           destroyed += 1;
         },
@@ -139,6 +146,8 @@ describe('ServiceContainer', () => {
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -147,6 +156,126 @@ describe('ServiceContainer', () => {
     assert.equal(creates, 1);
     assert.equal(c.started, true);
     assert.equal(c.isDataPlaneReady(), true);
+  });
+
+  it('start fetches DBPM credentials first and hands the passwords to every connection', async () => {
+    const seen = [];
+    const c = createServiceContainer(
+      {
+        AGENT_DATABASE_URL: 'mysql://agentap@h/db',
+        AGENT_REDIS_URL: 'redis://localhost:6379/0',
+      },
+      {
+        resolveCredentials: async (_env, need) => {
+          seen.push(['credentials', need]);
+          return { mysql: 'db-from-dbpm', redis: 'redis-from-dbpm' };
+        },
+        verifySchema: NO_SCHEMA_CHECK,
+        createMysqlKnex: (_url, opts) => {
+          seen.push(['knex', opts.password]);
+          return { raw: async () => [[{}]] };
+        },
+        createRedisClient: (_url, opts) => {
+          seen.push(['redis', opts?.password]);
+          return { status: 'ready' };
+        },
+        createRunQueue: (_url, opts) => {
+          seen.push(['queue', opts.password, opts.queueName]);
+          seen.push(['prefix', opts.prefix]);
+          return { queue: { add: async () => ({}) } };
+        },
+        destroyMysqlKnex: async () => {},
+        destroyRedisClient: async () => {},
+        destroyRunQueue: async () => {},
+      },
+    );
+    await c.start();
+    // 分层拓扑（ADR 0012）：默认 maxDepth=2 → 三个队列，深度 0 沿用历史名字。
+    assert.deepEqual(seen, [
+      ['credentials', { mysql: true, redis: true }],
+      ['knex', 'db-from-dbpm'],
+      ['redis', 'redis-from-dbpm'],
+      ['queue', 'redis-from-dbpm', 'agent-runs'],
+      // 未配 AGENT_RUN_QUEUE_PREFIX 时交给工厂取默认 {bull}，不在容器里另写一份默认值。
+      ['prefix', undefined],
+      ['queue', 'redis-from-dbpm', 'agent-runs-d1'],
+      ['prefix', undefined],
+      ['queue', 'redis-from-dbpm', 'agent-runs-d2'],
+      ['prefix', undefined],
+    ]);
+    // 容器只算**路由**拓扑：HTTP 进程只投递，不该被消费者的并发预算卡住。
+    // 槽位分配（默认 4 → 2 / 1 / 1）在 agent-worker 侧做。
+    assert.equal(c.runQueueTopology.totalConcurrency, null);
+    assert.deepEqual(
+      c.runQueueTopology.layers.map((l) => l.depth),
+      [0, 1, 2],
+    );
+    assert.equal(c.credentials.redis, 'redis-from-dbpm', 'worker 需要从容器拿 Redis 口令');
+  });
+
+  it('schema drift aborts start after MySQL connects and before Redis/queue are opened', async () => {
+    const seen = [];
+    let destroyedKnex = 0;
+    const knex = { raw: async () => [[{}]] };
+    const c = createServiceContainer(
+      {
+        AGENT_DATABASE_URL: 'mysql://agentap@h/db',
+        AGENT_REDIS_URL: 'redis://localhost:6379/0',
+      },
+      {
+        resolveCredentials: NO_DBPM,
+        createMysqlKnex: () => knex,
+        destroyMysqlKnex: async () => {
+          destroyedKnex += 1;
+        },
+        verifySchema: async (k, opts) => {
+          seen.push([k === knex, opts.role]);
+          throw Object.assign(new Error('agent-worker: database schema does not match the release manifest — missing_trigger trg_messages_forbid_delete'), { code: 'SCHEMA_DRIFT' });
+        },
+        createRedisClient: () => {
+          seen.push('redis');
+          return { status: 'ready' };
+        },
+        createRunQueue: () => {
+          seen.push('queue');
+          return { queue: {} };
+        },
+      },
+    );
+    await assert.rejects(() => c.start({ role: 'agent-worker' }), (err) => err.code === 'SCHEMA_DRIFT');
+    assert.deepEqual(seen, [[true, 'agent-worker']], '核对拿到的是刚建好的 Knex；Redis/队列都没打开');
+    assert.equal(destroyedKnex, 1, '失败启动要回收 MySQL 句柄');
+    assert.equal(c.started, false);
+  });
+
+  it('a credential failure aborts start before any connection is opened', async () => {
+    let connections = 0;
+    const c = createServiceContainer(
+      {
+        AGENT_DATABASE_URL: 'mysql://agentap@h/db',
+        AGENT_REDIS_URL: 'redis://localhost:6379/0',
+      },
+      {
+        resolveCredentials: async () => {
+          throw new Error('DBPM credential fetch failed for agent-updrdb: ALL_ENDPOINTS_FAILED (#1=CONNECT_FAILED, #2=CONNECT_FAILED)');
+        },
+        createMysqlKnex: () => {
+          connections += 1;
+          return { raw: async () => [[{}]] };
+        },
+        createRedisClient: () => {
+          connections += 1;
+          return { status: 'ready' };
+        },
+        createRunQueue: () => {
+          connections += 1;
+          return { queue: {} };
+        },
+      },
+    );
+    await assert.rejects(() => c.start(), /ALL_ENDPOINTS_FAILED/);
+    assert.equal(connections, 0);
+    assert.equal(c.started, false);
   });
 
   it('worker executor factory required in production', () => {
@@ -174,18 +303,6 @@ describe('ServiceContainer', () => {
       ),
       null,
     );
-  });
-
-  it('ensureAgentPiAgentDir creates concrete agentDir (runtime create boundary)', () => {
-    const base = mkdtempSync(path.join(tmpdir(), 'pi-agent-dir-'));
-    const dir = path.join(base, 'nested-home');
-    try {
-      const resolved = ensureAgentPiAgentDir({ AGENT_PI_AGENT_DIR: dir });
-      assert.equal(resolved, path.resolve(dir));
-      assert.equal(resolveAgentPiAgentDir({ AGENT_PI_AGENT_DIR: dir }), resolved);
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
   });
 
   it('assertWorkerSandboxServiceToken fail-closed in production without token', () => {
@@ -216,16 +333,16 @@ describe('ServiceContainer', () => {
     );
   });
 
-  it('createWorkerServices wires Pi factory when none pre-injected (assembly gate)', async () => {
+  it('createWorkerServices wires DSH factory when none pre-injected (assembly gate)', async () => {
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
     const redis = { status: 'ready' };
-    const agentDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-ws-'));
+    const agentDir = mkdtempSync(path.join(tmpdir(), 'dsh-agent-ws-'));
     const c = createServiceContainer(
       {
         AGENT_DATABASE_URL: 'mysql://u:p@h/db',
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
         AGENT_SESSION_WORKSPACE_CWD: '/home/sandbox/workspace',
-        AGENT_PI_AGENT_DIR: agentDir,
+        AGENT_DSH_AGENT_DIR: agentDir,
         SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
         DEPLOYMENT_ENV: 'production',
         LLMIO_BASE_URL: 'http://llm.example',
@@ -236,24 +353,26 @@ describe('ServiceContainer', () => {
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
     );
     await c.start();
 
-    let piFactoryCalls = 0;
+    let dshFactoryCalls = 0;
     /** @type {unknown} */
     let capturedOpts = null;
-    c.createPiRunExecutorFactory = async (opts) => {
-      piFactoryCalls += 1;
+    c.createDshRunExecutorFactory = async (opts) => {
+      dshFactoryCalls += 1;
       capturedOpts = opts;
       assert.equal(typeof opts.modelResolver, 'function');
       assert.equal(typeof opts.workspaceResolver, 'function');
-      // Real Pi factory marker — not createStubRunExecutor
-      return function productionPiRunExecutorFactory() {
+      // Real DSH factory marker — not createStubRunExecutor
+      return function productionDshRunExecutorFactory() {
         return {
-          kind: 'pi-run-executor-factory',
+          kind: 'dsh-run-executor-factory',
           execute: async () => ({ outcome: 'SUCCEEDED' }),
         };
       };
@@ -272,11 +391,11 @@ describe('ServiceContainer', () => {
     });
 
     const services = await c.createWorkerServices();
-    assert.equal(piFactoryCalls, 1, 'must call createPiRunExecutorFactory once');
+    assert.equal(dshFactoryCalls, 1, 'must call createDshRunExecutorFactory once');
     assert.equal(typeof services.runExecutorFactory, 'function');
     assert.equal(
       services.runExecutorFactory().kind,
-      'pi-run-executor-factory',
+      'dsh-run-executor-factory',
     );
     // Default resolvers present
     const opts = /** @type {{ modelResolver: Function, workspaceResolver: Function, agentDir?: string }} */ (
@@ -291,12 +410,12 @@ describe('ServiceContainer', () => {
     // The signed internal plane is the only route to Sandbox. Booting without
     // it would produce a runtime whose every sandbox tool dies at call time.
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
-    const agentDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-nokey-'));
+    const agentDir = mkdtempSync(path.join(tmpdir(), 'dsh-agent-nokey-'));
     const c = createServiceContainer(
       {
         AGENT_DATABASE_URL: 'mysql://u:p@h/db',
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
-        AGENT_PI_AGENT_DIR: agentDir,
+        AGENT_DSH_AGENT_DIR: agentDir,
         SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
         DEPLOYMENT_ENV: 'development',
       },
@@ -305,6 +424,8 @@ describe('ServiceContainer', () => {
         createRedisClient: () => ({ status: 'ready' }),
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
@@ -312,70 +433,14 @@ describe('ServiceContainer', () => {
     await c.start();
     await assert.rejects(
       () =>
-        c.createPiRunExecutorFactory({
+        c.createDshRunExecutorFactory({
           modelResolver: () => ({ id: 'm', name: 'm', api: 'openai-completions', provider: 'x', baseUrl: 'http://x', reasoning: false, input: ['text'], cost: {}, contextWindow: 1, maxTokens: 1 }),
           workspaceResolver: () => '/home/sandbox/workspace',
           sessionLockManager: { acquire: async () => true, renew: async () => true, release: async () => true },
-          piRuntimeFactory: { agentDir, create: async () => ({ session: {} }) },
+          dshRuntimeFactory: { agentDir, create: async () => ({ session: {} }) },
         }),
       /SANDBOX_INTERNAL_HMAC_KEYRING/,
     );
-  });
-
-  it('createPiRunExecutorFactory assembly requires agentDir and refuses null-auth transport', async () => {
-    const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
-    const redis = { status: 'ready' };
-    const agentDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-exec-'));
-    const c = createServiceContainer(
-      {
-        AGENT_DATABASE_URL: 'mysql://u:p@h/db',
-        AGENT_REDIS_URL: 'redis://localhost:6379/0',
-        AGENT_PI_AGENT_DIR: agentDir,
-        SANDBOX_API_TOKEN: 'dev_only_sandbox_api_token_not_for_prod_32b',
-        SANDBOX_INTERNAL_HMAC_KEYRING: '{"test-v1":"dGVzdC1rZXktbWF0ZXJpYWwtMzItYnl0ZXMtbG9uZy0x"}',
-        SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'test-v1',
-        DEPLOYMENT_ENV: 'development',
-      },
-      {
-        createMysqlKnex: () => knex,
-        createRedisClient: () => redis,
-        createRunQueue: () => ({ queue: { add: async () => ({}) } }),
-        destroyMysqlKnex: async () => {},
-        destroyRedisClient: async () => {},
-        destroyRunQueue: async () => {},
-      },
-    );
-    await c.start();
-    const factory = await c.createPiRunExecutorFactory({
-      modelResolver: () => ({ id: 'm', name: 'm', api: 'openai-completions', provider: 'x', baseUrl: 'http://x', reasoning: false, input: ['text'], cost: {}, contextWindow: 1, maxTokens: 1 }),
-      workspaceResolver: () => '/home/sandbox/workspace',
-      sessionLockManager: {
-        acquire: async () => true,
-        renew: async () => true,
-        release: async () => true,
-      },
-      piRuntimeFactory: {
-        agentDir,
-        create: async (input) => {
-          assert.ok(String(input.agentDir || '').trim(), 'runtime create must receive agentDir');
-          assert.equal(path.resolve(input.agentDir), path.resolve(agentDir));
-          return { session: {} };
-        },
-      },
-      sessionAdapter: {},
-      projector: { project: () => [] },
-      recoveryService: {
-        recover: async () => ({ payload: null, checksum: null }),
-        checkpoint: async () => {},
-      },
-    });
-    assert.equal(typeof factory, 'function');
-    // Extension factory must be per-run scoped (createTransportForRun path).
-    // Building the executor instance must not throw assembly errors.
-    const exec = factory({ runId: '01RUNTEST' });
-    assert.ok(exec);
-    assert.equal(path.resolve(String(exec.agentDir)), path.resolve(agentDir));
-    rmSync(agentDir, { recursive: true, force: true });
   });
 
   it('createWorkerServices uses stub only when explicitly allowed and non-production', async () => {
@@ -393,15 +458,17 @@ describe('ServiceContainer', () => {
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
     );
     await c.start();
-    let piFactoryCalls = 0;
-    c.createPiRunExecutorFactory = async () => {
-      piFactoryCalls += 1;
-      throw new Error('must not build Pi factory when stub allowed');
+    let dshFactoryCalls = 0;
+    c.createDshRunExecutorFactory = async () => {
+      dshFactoryCalls += 1;
+      throw new Error('must not build DSH factory when stub allowed');
     };
     c.createCancelSignal = async () => ({
       request: async () => {},
@@ -414,11 +481,11 @@ describe('ServiceContainer', () => {
       getOwner: async () => null,
     });
     const services = await c.createWorkerServices();
-    assert.equal(piFactoryCalls, 0);
+    assert.equal(dshFactoryCalls, 0);
     assert.equal(typeof services.runExecutorFactory, 'function');
   });
 
-  it('production refuses stub allowlist (still wires Pi factory path)', async () => {
+  it('production refuses stub allowlist (still wires DSH factory path)', async () => {
     assert.equal(
       resolveWorkerExecutorFactory(
         {
@@ -431,40 +498,43 @@ describe('ServiceContainer', () => {
     );
   });
 
-  it('createPiRunExecutorFactory forwards extensionBundleFactory (no network)', async () => {
+  it('createDshRunExecutorFactory forwards the live per-Run ports (no network)', async () => {
     const knex = { raw: async () => [[{}]], transaction: async (fn) => fn({}) };
     const redis = { status: 'ready' };
     const c = createServiceContainer(
       {
         AGENT_DATABASE_URL: 'mysql://u:p@h/db',
         AGENT_REDIS_URL: 'redis://localhost:6379/0',
+        // 内部面 HMAC 是**无条件**要求：通往 exec 的唯一路径是 RPC，它必须签名。
+        // 这个检查以前在"没有注入 extensionBundleFactory"的分支里，注入一个就能
+        // 绕过——那是旧 extension bundle 时代的遗留，2026-08-31（计划 H8）
+        // 连同那个形参一起删了。
+        SANDBOX_INTERNAL_HMAC_KEYRING: '{"k1":"a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"}',
+        SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'k1',
       },
       {
         createMysqlKnex: () => knex,
         createRedisClient: () => redis,
         createRunQueue: () => ({ queue: { add: async () => ({}) } }),
         destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
         destroyRedisClient: async () => {},
         destroyRunQueue: async () => {},
       },
     );
     await c.start();
 
-    function sentinelExtensionBundleFactory() {
-      return [];
-    }
-
-    const factory = await c.createPiRunExecutorFactory({
+    const factory = await c.createDshRunExecutorFactory({
       modelResolver: () => ({ id: 'm' }),
       workspaceResolver: () => '/tmp/ws',
-      extensionBundleFactory: sentinelExtensionBundleFactory,
-      // Inject fakes so no Redis lock / Pi / recovery connections are needed.
+      // Inject fakes so no Redis lock / DSH / recovery connections are needed.
       sessionLockManager: {
         acquire: async () => true,
         renew: async () => true,
         release: async () => true,
       },
-      piRuntimeFactory: { create: async () => ({ session: {} }) },
+      dshRuntimeFactory: { create: async () => ({ session: {} }) },
       sessionAdapter: {},
       projector: { project: () => [] },
       recoveryService: {
@@ -475,10 +545,26 @@ describe('ServiceContainer', () => {
 
     assert.equal(typeof factory, 'function');
     const executor = factory({ runId: 'job-1' });
+
+    // 这条用例以前断言的是「sentinel bundle 函数原样到达 executor」。那个形参
+    // 2026-08-31（计划 H8）删了——它终止在一个被 runtime-factory.create() 忽略
+    // 的参数上，而它带的三样依赖（风险表 / 子 Agent spawn / 治理记录器）
+    // 因此各自断链。现在断言的是**接回真正消费者的那几条**：
+    // 光删不断言，回归就是「配了没用且没人报错」，正是原来的病。
+    assert.notEqual(
+      executor.riskOverrides,
+      null,
+      '运维层风险表必须到达 executor——它按 Run 合并租户层后传给策略装配',
+    );
     assert.equal(
-      executor.extensionBundleFactory,
-      sentinelExtensionBundleFactory,
-      'exact same extensionBundleFactory function must reach PiRunExecutor',
+      typeof executor.subagentSpawnPort?.spawn,
+      'function',
+      '子 Agent 的 durable spawn 面必须到达 executor（计划 H5）',
+    );
+    assert.equal(
+      'extensionBundleFactory' in executor,
+      false,
+      '死形参不该再出现在 executor 上',
     );
   });
 
@@ -504,6 +590,8 @@ describe('ServiceContainer', () => {
           createRedisClient: () => ({ status: 'ready' }),
           createRunQueue: () => ({ queue: { add: async () => ({}) } }),
           destroyMysqlKnex: async () => {},
+        resolveCredentials: NO_DBPM,
+        verifySchema: NO_SCHEMA_CHECK,
           destroyRedisClient: async () => {},
           destroyRunQueue: async () => {},
         },

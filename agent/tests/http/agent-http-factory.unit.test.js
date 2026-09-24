@@ -15,7 +15,8 @@ import {
   parseTraceparent,
   mapErrorToHttp,
   presentCreateRunResponse,
-} from '../../src/bootstrap/create-http-server.js';
+} from '../../src/bootstrap/create-http-server.ts';
+import { readSource } from '../support/read-source.js';
 import {
   OwnerScopedNotFoundError,
   ValidationError,
@@ -691,7 +692,7 @@ describe('createAgentHttpServer factory', () => {
       cancelRunService: { execute: async () => ({}) },
       eventQueryService: { listEvents: async () => ({ events: [] }) },
       dataPlaneReady: false,
-      sandboxHealthCheck: async () => ({ status: 'ok' }),
+      sandboxReadyCheck: async () => ({ status: 'ready' }),
       config: { ALLOW_UNAUTHENTICATED_INTERNAL: true },
     });
     const p = await listen(srv);
@@ -712,7 +713,7 @@ describe('createAgentHttpServer factory', () => {
       cancelRunService: { execute: async () => ({}) },
       eventQueryService: { listEvents: async () => ({ events: [] }) },
       dataPlaneReady: true,
-      sandboxHealthCheck: async () => ({ status: 'ok' }),
+      sandboxReadyCheck: async () => ({ status: 'ready' }),
       mcpReadiness: () => ({
         ready: false,
         serverCount: 1,
@@ -771,11 +772,8 @@ describe('createAgentHttpServer factory', () => {
 });
 
 describe('production import graph', () => {
-  it('server.js does not import run-manager', () => {
-    const src = readFileSync(
-      path.join(__dirname, '../../server.js'),
-      'utf8',
-    );
+  it('server entry does not import run-manager', () => {
+    const src = readSource(path.join(__dirname, '../../server.js'));
     assert.doesNotMatch(src, /from ['"].*run-manager/);
     assert.doesNotMatch(src, /application\/run-manager/);
     assert.match(src, /createAgentHttpServer|startHttpMain/);
@@ -783,7 +781,7 @@ describe('production import graph', () => {
 
   it('create-http-server does not import run-manager', () => {
     const src = readFileSync(
-      path.join(__dirname, '../../src/bootstrap/create-http-server.js'),
+      path.join(__dirname, '../../src/bootstrap/create-http-server.ts'),
       'utf8',
     );
     assert.doesNotMatch(src, /from ['"].*run-manager/);
@@ -793,7 +791,7 @@ describe('production import graph', () => {
 
   it('SSE path wires waitDrain + sleepMs (async backpressure, no listener leak)', () => {
     const src = readFileSync(
-      path.join(__dirname, '../../src/bootstrap/create-http-server.js'),
+      path.join(__dirname, '../../src/bootstrap/create-http-server.ts'),
       'utf8',
     );
     assert.match(src, /waitDrain/);
@@ -806,7 +804,7 @@ describe('production import graph', () => {
 
   it('container module has no top-level knex/ioredis require side effects', () => {
     const src = readFileSync(
-      path.join(__dirname, '../../src/bootstrap/container.js'),
+      path.join(__dirname, '../../src/bootstrap/container.ts'),
       'utf8',
     );
     // Lazy dynamic import only inside start()

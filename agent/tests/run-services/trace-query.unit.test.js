@@ -46,7 +46,7 @@ async function seedOwnedRun(state, knex) {
     now: () => new Date('2026-07-19T00:00:00.000Z'),
   });
 
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     {
       org_id: ORG,
       name: 'Test Org',
@@ -76,7 +76,7 @@ async function seedOwnedRun(state, knex) {
     status: 'active',
   });
 
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -104,7 +104,7 @@ async function seedOwnedRun(state, knex) {
       cancel_requested_by: null,
     },
   ];
-  state.tables.run_events = [
+  state.tables.tbl_agsvc_run_events = [
     {
       event_id: '01K0G2PAV8FPMVC9QHJG7JPN58',
       run_id: RUN,
@@ -136,7 +136,7 @@ async function seedOwnedRun(state, knex) {
       created_at: '2026-07-19 00:00:02.000',
     },
   ];
-  state.tables.tool_executions = [
+  state.tables.tbl_agsvc_tool_executions = [
     {
       tool_execution_id: TOOL_EXEC,
       tool_call_id: 'call-1',
@@ -153,10 +153,10 @@ async function seedOwnedRun(state, knex) {
       created_at: '2026-07-19 00:00:01.000',
     },
   ];
-  state.tables.sandbox_executions = [];
-  state.tables.artifacts = [];
-  state.tables.a2a_tasks = [];
-  state.tables.trace_spans = [];
+  state.tables.tbl_agsvc_sandbox_executions = [];
+  state.tables.tbl_agsvc_artifacts = [];
+  state.tables.tbl_agsvc_a2a_tasks = [];
+  state.tables.tbl_agsvc_trace_spans = [];
 }
 
 function buildService(state, knex) {

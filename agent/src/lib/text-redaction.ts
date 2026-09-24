@@ -1,0 +1,139 @@
+/** Shared secret + host-path redaction for registry, MCP, and runtime projections. */
+
+export const SECRET_PATTERNS = Object.freeze([
+  /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi,
+  // Field-style secrets. Keep compound forms (access_token, client_secret,
+  // x-api-key) ahead of bare `token`/`secret` so durable paths match the
+  // projector INLINE set rather than leaking through the shorter alternation.
+  /\b(api[_-]?key|x-api-key|x-auth-token|access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password|authorization)\s*[:=]\s*[^\s,;]+/gi,
+  // Cookie headers often embed session tokens.
+  /\bCookie\s*:\s*[^\n\r]+/gi,
+  // Provider-style live keys (OpenAI sk-…).
+  /\bsk-[A-Za-z0-9]{10,}\b/g,
+  // Any URI userinfo may carry credentials. Include empty usernames for
+  // password-only Redis URLs such as redis://:password@host/0.
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]*:[^\s/@]+@[^\s]+/gi,
+]);
+
+export function redactSecretText(value) {
+  let text = String(value);
+  for (const pattern of SECRET_PATTERNS) {
+    // Patterns without a capture group pass the match offset as the 2nd
+    // callback arg (a number). Only treat a string capture as a field name.
+    text = text.replace(pattern, (_match, key) =>
+      typeof key === 'string' ? `${key}=[REDACTED]` : '[REDACTED]',
+    );
+  }
+  return text;
+}
+
+/**
+ * Truncate to at most `maxLength` Unicode code points. Plain `String#slice`
+ * counts UTF-16 code units and can split a surrogate pair (e.g. an emoji),
+ * producing an unpaired surrogate in the output. Iterating `for...of` walks
+ * code points instead, so the cut always lands on a character boundary.
+ *
+ * @param value
+ * @param maxLength
+ * @returns {{ text: string, truncated: boolean }}
+ */
+export function safeSlice(value: string, maxLength: number) {
+  const source = String(value ?? '');
+  if (source.length <= maxLength) {
+    return { text: source, truncated: false };
+  }
+  let result = '';
+  let count = 0;
+  for (const ch of source) {
+    if (count >= maxLength) {
+      return { text: result, truncated: true };
+    }
+    result += ch;
+    count += 1;
+  }
+  return { text: result, truncated: false };
+}
+
+/**
+ * Canonical logical skill roots that must survive host-path redaction.
+ * Longest first at use sites, so `/home/sandbox/skill-user` is not truncated
+ * by the `/home/sandbox/skill` prefix.
+ */
+export const LOGICAL_SKILL_ROOTS = Object.freeze([
+  '/home/sandbox/skill',
+  '/home/sandbox/skill-user',
+]);
+
+const PLACEHOLDER = Object.freeze({
+  url: '\uE000U',
+  root: '\uE000R',
+  end: '\uE001',
+});
+
+/** Path continuation after a logical root (segments may include dot-directories and extensions). */
+const PATH_CONTINUE = '(?:/[^\\s]+)*';
+
+const PATH_SEGMENT = '[^/\\s]+';
+
+/** Generic absolute POSIX path — must not follow a relative segment (e.g. a/b). */
+const GENERIC_POSIX_PATH = new RegExp(
+  `(?<![A-Za-z0-9])\\/(?:${PATH_SEGMENT}(?:\\/${PATH_SEGMENT})*)`,
+  'g',
+);
+
+const WINDOWS_PATH = /[A-Za-z]:[\\/][^\s]+/g;
+
+/** Trailing punctuation after a path token (not part of dot-directories or file extensions). */
+const TRAILING_PATH_PUNCT = /[.,;:!?)\]}>"']+$/;
+
+function redactPathToken(match) {
+  const trimmed = match.replace(TRAILING_PATH_PUNCT, '');
+  const suffix = match.slice(trimmed.length);
+  return `[redacted-path]${suffix}`;
+}
+
+/** Allow dots in host/path; credential URLs are handled by secret redaction afterward. */
+const SCHEME_URL = /[a-z][a-z0-9+.-]*:\/\/[^\s,;:!?)\]}>"']+/gi;
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function protectMatches(text, pattern, prefix, saved) {
+  return text.replace(pattern, (match) => {
+    const id = saved.length;
+    saved.push(match);
+    return `${prefix}${id}${PLACEHOLDER.end}`;
+  });
+}
+
+function restoreMatches(text, prefix, saved) {
+  return text.replace(
+    new RegExp(`${escapeRegExp(prefix)}(\\d+)${escapeRegExp(PLACEHOLDER.end)}`, 'g'),
+    (_match, index) => saved[Number(index)] ?? '[redacted-path]',
+  );
+}
+
+/** Strip accidental absolute host paths embedded in free-text fields. */
+export function redactEmbeddedHostPaths(value) {
+  if (value == null) return '';
+  let text = String(value);
+
+  const savedUrls = [];
+  text = protectMatches(text, SCHEME_URL, PLACEHOLDER.url, savedUrls);
+
+  const savedRoots = [];
+  const roots = [...LOGICAL_SKILL_ROOTS].sort((a, b) => b.length - a.length);
+  for (const root of roots) {
+    const pattern = new RegExp(`${escapeRegExp(root)}${PATH_CONTINUE}`, 'g');
+    text = protectMatches(text, pattern, PLACEHOLDER.root, savedRoots);
+  }
+
+  text = text.replace(GENERIC_POSIX_PATH, redactPathToken);
+  text = text.replace(WINDOWS_PATH, redactPathToken);
+
+  text = restoreMatches(text, PLACEHOLDER.root, savedRoots);
+  text = restoreMatches(text, PLACEHOLDER.url, savedUrls);
+
+  return text;
+}

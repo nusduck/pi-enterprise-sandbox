@@ -129,11 +129,11 @@ describe('OutboxRepository unit (fake knex)', () => {
     assert.equal(row.status, OUTBOX_STATUS.PENDING);
     assert.equal(row.attempts, 0);
     assert.equal(row.claimToken, null);
-    assert.equal(state.tables.domain_outbox.length, 1);
-    assert.equal(state.tables.domain_outbox[0].status, 'PENDING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox.length, 1);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PENDING');
   });
 
-  it('claimBatch emits SKIP LOCKED SQL and marks PUBLISHING with token + attempts', async () => {
+  it('claimBatch 用条件 UPDATE + token 回读抢占，不再依赖 SKIP LOCKED', async () => {
     seedOutboxRow(state, { outbox_id: OB1 });
     seedOutboxRow(state, {
       outbox_id: OB2,
@@ -149,17 +149,34 @@ describe('OutboxRepository unit (fake knex)', () => {
     assert.equal(claimed[0].attempts, 1);
     assert.ok(claimed[0].claimToken);
     assert.equal(claimed[1].attempts, 1);
+    // 同一批共用一个 token；后续 CAS 仍按 (outbox_id, token) 收敛。
+    assert.equal(claimed[0].claimToken, claimed[1].claimToken);
 
-    const claimSql = state.rawCalls.find((c) =>
-      /FOR UPDATE SKIP LOCKED/i.test(c.sql),
+    assert.ok(
+      !state.rawCalls.some((c) => /SKIP LOCKED/i.test(c.sql)),
+      'UPSQL 5.7 没有 SKIP LOCKED，抢占路径不得再发出它',
     );
-    assert.ok(claimSql, 'must use SELECT … FOR UPDATE SKIP LOCKED');
-    assert.equal(claimSql.bindings[0], 'PENDING');
-    assert.ok(claimSql.bindings.includes('run'));
-    assert.equal(claimSql.bindings[claimSql.bindings.length - 1], 10);
-    for (const b of claimSql.bindings) {
+
+    const claimUpdate = state.rawCalls.find(
+      (c) => /^\s*UPDATE tbl_agsvc_domain_outbox/i.test(c.sql) && /attempts = attempts \+ 1/i.test(c.sql),
+    );
+    assert.ok(claimUpdate, 'must claim with a conditional UPDATE');
+    assert.match(claimUpdate.sql, /ORDER BY created_at ASC, outbox_id ASC/i);
+    assert.equal(claimUpdate.bindings[0], OUTBOX_STATUS.PUBLISHING);
+    assert.equal(claimUpdate.bindings[1], claimed[0].claimToken);
+    assert.equal(claimUpdate.bindings[3], 'PENDING');
+    assert.ok(claimUpdate.bindings.includes('run'));
+    assert.equal(claimUpdate.bindings[claimUpdate.bindings.length - 1], 10);
+    for (const b of claimUpdate.bindings) {
       assert.ok(b !== undefined);
     }
+
+    const readback = state.rawCalls.find(
+      (c) => /^\s*SELECT/i.test(c.sql) && /WHERE claim_token = \?/i.test(c.sql),
+    );
+    assert.ok(readback, 'must read the batch back by claim token');
+    assert.equal(readback.bindings[0], claimed[0].claimToken);
+    assert.equal(readback.bindings[1], OUTBOX_STATUS.PUBLISHING);
   });
 
   it('claimBatch with run-stream eligibility neither claims nor touches unrelated rows', async () => {
@@ -201,8 +218,8 @@ describe('OutboxRepository unit (fake knex)', () => {
     const ids = claimed.map((c) => c.outboxId).sort();
     assert.deepEqual(ids, [OB1, OB3].sort());
 
-    const org = state.tables.domain_outbox.find((r) => r.outbox_id === ORG_OB);
-    const conv = state.tables.domain_outbox.find((r) => r.outbox_id === OB2);
+    const org = state.tables.tbl_agsvc_domain_outbox.find((r) => r.outbox_id === ORG_OB);
+    const conv = state.tables.tbl_agsvc_domain_outbox.find((r) => r.outbox_id === OB2);
     assert.equal(org.status, 'PENDING');
     assert.equal(org.claim_token, null);
     assert.equal(org.attempts, 0);
@@ -210,7 +227,9 @@ describe('OutboxRepository unit (fake knex)', () => {
     assert.equal(conv.attempts, 0);
   });
 
-  it('simulates concurrent claim: second publisher skips already-locked rows', async () => {
+  // 假 knex 没有 MVCC 与行锁：这里只证明「已抢占的行不会被第二个发布者再抢」
+  // 这一条件更新语义，不能当作并发互斥验证。真重叠事务见 outbox.integration.test.js。
+  it('顺序对照：已被抢占的行不会被第二个发布者重复抢占', async () => {
     seedOutboxRow(state, { outbox_id: OB1 });
     seedOutboxRow(state, {
       outbox_id: OB2,
@@ -257,8 +276,8 @@ describe('OutboxRepository unit (fake knex)', () => {
       eligibility: RUN_STREAM_CLAIM_ELIGIBILITY,
     });
     assert.equal(reclaimed, 1);
-    assert.equal(state.tables.domain_outbox[0].status, 'PENDING');
-    assert.equal(state.tables.domain_outbox[0].claim_token, null);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PENDING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].claim_token, null);
 
     const claimed = await repo.claimBatch({
       limit: 5,
@@ -286,8 +305,8 @@ describe('OutboxRepository unit (fake knex)', () => {
       eligibility: RUN_STREAM_CLAIM_ELIGIBILITY,
     });
     assert.equal(reclaimed, 0);
-    assert.equal(state.tables.domain_outbox[0].status, 'PUBLISHING');
-    assert.equal(state.tables.domain_outbox[0].claim_token, 'ORGTOKENORGTOKENORGTOKENOR');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PUBLISHING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].claim_token, 'ORGTOKENORGTOKENORGTOKENOR');
   });
 
   it('markPublished is token-guarded', async () => {
@@ -301,13 +320,13 @@ describe('OutboxRepository unit (fake knex)', () => {
 
     const bad = await repo.markPublished(OB1, 'WRONGTOKENWRONGTOKENWRONG');
     assert.equal(bad, false);
-    assert.equal(state.tables.domain_outbox[0].status, 'PUBLISHING');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PUBLISHING');
 
     const ok = await repo.markPublished(OB1, 'GOODTOKENGOODTOKENGOODTOKE');
     assert.equal(ok, true);
-    assert.equal(state.tables.domain_outbox[0].status, 'PUBLISHED');
-    assert.equal(state.tables.domain_outbox[0].claim_token, null);
-    assert.ok(state.tables.domain_outbox[0].published_at);
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'PUBLISHED');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].claim_token, null);
+    assert.ok(state.tables.tbl_agsvc_domain_outbox[0].published_at);
   });
 
   it('markPendingForRetry applies backoff and sanitizes error', async () => {
@@ -325,7 +344,7 @@ describe('OutboxRepository unit (fake knex)', () => {
       new Error('redis down mysql://u:secret@h/db'),
     );
     assert.equal(outcome, 'retry');
-    const row = state.tables.domain_outbox[0];
+    const row = state.tables.tbl_agsvc_domain_outbox[0];
     assert.equal(row.status, 'PENDING');
     assert.ok(row.next_attempt_at);
     assert.doesNotMatch(String(row.last_error), /secret/);
@@ -346,7 +365,7 @@ describe('OutboxRepository unit (fake knex)', () => {
       'still failing',
     );
     assert.equal(outcome, 'failed');
-    assert.equal(state.tables.domain_outbox[0].status, 'FAILED');
+    assert.equal(state.tables.tbl_agsvc_domain_outbox[0].status, 'FAILED');
   });
 
   it('listPending and listForRecovery return due / stale rows', async () => {
@@ -380,7 +399,7 @@ describe('OutboxRepository unit (fake knex)', () => {
 
   it('does not reference runs table or mutate business state', async () => {
     seedOutboxRow(state, { outbox_id: OB1 });
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       { run_id: RUN, status: 'RUNNING', org_id: 'x', user_id: 'y' },
     ];
     const claimed = await repo.claimBatch({
@@ -392,7 +411,7 @@ describe('OutboxRepository unit (fake knex)', () => {
       claimed[0].claimToken,
       'redis fail',
     );
-    assert.equal(state.tables.runs[0].status, 'RUNNING');
+    assert.equal(state.tables.tbl_agsvc_runs[0].status, 'RUNNING');
     const allSql = state.rawCalls.map((c) => c.sql).join('\n');
     assert.doesNotMatch(allSql, /\bruns\b/i);
   });

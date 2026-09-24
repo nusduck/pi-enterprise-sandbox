@@ -1,0 +1,260 @@
+# OrbStack 单节点 K8s 的本地清单（不是生产清单；目标环境的清单归平台团队）。
+# 由 up.sh 渲染后 apply，占位符：
+#   __NS__ 命名空间   __REPO__ 仓库绝对路径   __REPLICAS__ agent / agent-worker / api-server 副本数
+#   __MYSQL_IP__ __REDIS_IP__ __DBPM_IP__ __SANDBOX_IP__  集群外依赖在 Docker 网络里的地址
+#   __SKILL_USER_PATH__ __SKILL_DRAFT_PATH__              与 exec 共用的 Skill 目录（节点路径）
+#
+# 拓扑照目标环境摆：agent、agent-worker、api-server、frontend、sandbox-mcp 在 K8s 里；
+# MySQL、Redis、DBPM 与 exec（目标环境是 VM）在集群外，用无 selector 的 Service + EndpointSlice
+# 接入，服务名与 Compose 相同，所以各服务的环境变量不用改主机名。
+# K8s 内的镜像都以 up_docker（1000:1000）运行，镜像 USER 写的是数字，runAsNonRoot 可以校验；
+# 清单里仍显式写 runAsUser / runAsGroup，与目标环境要求一致。
+# 所有 Pod 都关掉 enableServiceLinks：否则 K8s 按 Service 名注入 SANDBOX_MCP_PORT=tcp://…、
+# SANDBOX_PORT、AGENT_PORT 等变量，覆盖应用自己的同名配置（sandbox-mcp 因此读到 NaN 端口拒启）。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __NS__
+---
+# ── 集群外依赖 ──────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata: { name: mysql, namespace: __NS__ }
+spec:
+  ports: [{ name: mysql, port: 3306, targetPort: 3306 }]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: mysql-ext
+  namespace: __NS__
+  labels: { kubernetes.io/service-name: mysql }
+addressType: IPv4
+ports: [{ name: mysql, port: 3306, protocol: TCP }]
+endpoints: [{ addresses: ["__MYSQL_IP__"] }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis, namespace: __NS__ }
+spec:
+  ports: [{ name: redis, port: 6379, targetPort: 6379 }]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: redis-ext
+  namespace: __NS__
+  labels: { kubernetes.io/service-name: redis }
+addressType: IPv4
+ports: [{ name: redis, port: 6379, protocol: TCP }]
+endpoints: [{ addresses: ["__REDIS_IP__"] }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: dbpm-fake, namespace: __NS__ }
+spec:
+  ports:
+    - { name: primary, port: 7000, targetPort: 7000 }
+    - { name: standby, port: 7001, targetPort: 7001 }
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: dbpm-fake-ext
+  namespace: __NS__
+  labels: { kubernetes.io/service-name: dbpm-fake }
+addressType: IPv4
+ports:
+  - { name: primary, port: 7000, protocol: TCP }
+  - { name: standby, port: 7001, protocol: TCP }
+endpoints: [{ addresses: ["__DBPM_IP__"] }]
+---
+# 执行面（目标环境是 VM）。
+apiVersion: v1
+kind: Service
+metadata: { name: sandbox, namespace: __NS__ }
+spec:
+  ports: [{ name: http, port: 8081, targetPort: 8081 }]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: sandbox-ext
+  namespace: __NS__
+  labels: { kubernetes.io/service-name: sandbox }
+addressType: IPv4
+ports: [{ name: http, port: 8081, protocol: TCP }]
+endpoints: [{ addresses: ["__SANDBOX_IP__"] }]
+---
+# ── Agent HTTP ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: agent, namespace: __NS__ }
+spec:
+  replicas: __REPLICAS__
+  selector: { matchLabels: { app: agent } }
+  template:
+    metadata: { labels: { app: agent } }
+    spec:
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: agent
+          image: dsh-enterprise-agent:latest
+          imagePullPolicy: Never
+          command: ["node", "dist/server.js"]
+          envFrom: [{ secretRef: { name: agent-env } }]
+          ports: [{ containerPort: 4100 }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          # 启动链（MCP 预检、DBPM 取密、建连、schema 核对）走完才 listen；MCP SDK 对无响应服务器的
+          # 初始化超时是 60s。startupProbe 给 180s 预算，通过前 liveness 不生效，慢启动不会被反复杀掉。
+          startupProbe: { httpGet: { path: /health, port: 4100 }, periodSeconds: 5, failureThreshold: 36, timeoutSeconds: 2 }
+          livenessProbe: { httpGet: { path: /health, port: 4100 }, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 2 }
+          # /ready 并行检查 data plane（2s）与执行面 /ready（3s），探针超时留余量。
+          readinessProbe: { httpGet: { path: /ready, port: 4100 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 5 }
+          volumeMounts:
+            - { name: skills, mountPath: /home/sandbox/skill, readOnly: true }
+            - { name: skill-user, mountPath: /home/sandbox/skill-user }
+            - { name: skill-draft, mountPath: /home/sandbox/skill-draft }
+            - { name: agent-config, mountPath: /app/config/agent, readOnly: true }
+      volumes:
+        - { name: skills, hostPath: { path: __REPO__/skills, type: Directory } }
+        - { name: skill-user, hostPath: { path: __SKILL_USER_PATH__, type: Directory } }
+        - { name: skill-draft, hostPath: { path: __SKILL_DRAFT_PATH__, type: Directory } }
+        - { name: agent-config, hostPath: { path: __REPO__/config/agent, type: Directory } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: agent, namespace: __NS__ }
+spec:
+  selector: { app: agent }
+  ports: [{ name: http, port: 4100, targetPort: 4100 }]
+---
+# ── Agent Worker（不注册任何 Service；探针打 Pod IP）────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: agent-worker, namespace: __NS__ }
+spec:
+  replicas: __REPLICAS__
+  selector: { matchLabels: { app: agent-worker } }
+  template:
+    metadata: { labels: { app: agent-worker } }
+    spec:
+      enableServiceLinks: false
+      # 必须大于 AGENT_WORKER_DRAIN_TIMEOUT_MS（默认 150s）加关停尾部：排空期限到了由 Worker 自己
+      # 退出并交给租约过期 + 恢复接管，而不是被 SIGKILL 打断在不确定的位置。
+      terminationGracePeriodSeconds: 180
+      containers:
+        - name: agent-worker
+          image: dsh-enterprise-agent:latest
+          imagePullPolicy: Never
+          command: ["node", "dist/worker.js"]
+          envFrom: [{ secretRef: { name: agent-worker-env } }]
+          ports: [{ containerPort: 4101, name: probe }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          # 探针 listener 先于启动链起来，启动期间 liveness 可答，不需要 startupProbe。
+          # 冻结接管场景（docker pause 一个副本）要比租约过期 + 接管更久才重启容器，阈值放宽到 60s。
+          livenessProbe: { httpGet: { path: /health, port: 4101 }, periodSeconds: 10, failureThreshold: 6, timeoutSeconds: 2 }
+          # /ready 并行 MySQL / Redis 各 2s。
+          readinessProbe: { httpGet: { path: /ready, port: 4101 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 3 }
+          volumeMounts:
+            - { name: skills, mountPath: /home/sandbox/skill, readOnly: true }
+            - { name: skill-user, mountPath: /home/sandbox/skill-user }
+            - { name: skill-draft, mountPath: /home/sandbox/skill-draft }
+            - { name: agent-config, mountPath: /app/config/agent, readOnly: true }
+      volumes:
+        - { name: skills, hostPath: { path: __REPO__/skills, type: Directory } }
+        - { name: skill-user, hostPath: { path: __SKILL_USER_PATH__, type: Directory } }
+        - { name: skill-draft, hostPath: { path: __SKILL_DRAFT_PATH__, type: Directory } }
+        - { name: agent-config, hostPath: { path: __REPO__/config/agent, type: Directory } }
+---
+# ── BFF ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: api-server, namespace: __NS__ }
+spec:
+  replicas: __REPLICAS__
+  selector: { matchLabels: { app: api-server } }
+  template:
+    metadata: { labels: { app: api-server } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: api-server
+          image: dsh-enterprise-api:latest
+          imagePullPolicy: Never
+          envFrom: [{ secretRef: { name: api-server-env } }]
+          ports: [{ containerPort: 4000 }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          livenessProbe: { httpGet: { path: /health/live, port: 4000 }, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 2 }
+          # /health/ready 并行访问 Agent /ready（4s）与执行面 /ready（3s）。
+          readinessProbe: { httpGet: { path: /health/ready, port: 4000 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 6 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api-server, namespace: __NS__ }
+spec:
+  selector: { app: api-server }
+  ports: [{ name: http, port: 4000, targetPort: 4000 }]
+---
+# ── 前端 ────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: frontend, namespace: __NS__ }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: frontend } }
+  template:
+    metadata: { labels: { app: frontend } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: frontend
+          image: dsh-enterprise-frontend:latest
+          imagePullPolicy: Never
+          env: [{ name: API_UPSTREAM, value: "http://api-server:4000" }]
+          ports: [{ containerPort: 8080 }]
+          securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, allowPrivilegeEscalation: false }
+          readinessProbe: { httpGet: { path: /, port: 8080 }, periodSeconds: 5, timeoutSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: frontend, namespace: __NS__ }
+spec:
+  selector: { app: frontend }
+  ports: [{ name: http, port: 80, targetPort: 8080 }]
+---
+# ── Sandbox MCP facade（与 Compose 一致：up_docker、丢弃全部 capability、只拿显式列出的变量）──
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: sandbox-mcp, namespace: __NS__ }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: sandbox-mcp } }
+  template:
+    metadata: { labels: { app: sandbox-mcp } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: sandbox-mcp
+          image: enterprise-sandbox-mcp:latest
+          imagePullPolicy: Never
+          command: ["node", "dist/mcp-main.js"]
+          envFrom: [{ secretRef: { name: sandbox-mcp-env } }]
+          ports: [{ containerPort: 8082 }]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          livenessProbe: { httpGet: { path: /health, port: 8082 }, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 2 }
+          # /ready 并行 Redis PING 与执行面 /ready，各 2s。
+          readinessProbe: { httpGet: { path: /ready, port: 8082 }, periodSeconds: 5, failureThreshold: 2, timeoutSeconds: 3 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: sandbox-mcp, namespace: __NS__ }
+spec:
+  selector: { app: sandbox-mcp }
+  ports: [{ name: http, port: 8082, targetPort: 8082 }]

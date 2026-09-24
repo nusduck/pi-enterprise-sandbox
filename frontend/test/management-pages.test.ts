@@ -36,6 +36,7 @@ import {
   SkillItemSchema,
   ToolRegistryItemSchema,
 } from '../src/shared/schemas/management.ts';
+import { hasSelectedSchedule } from '../src/pages/schedules/scheduleHelpers.ts';
 import { parseApi } from '../src/shared/schemas/api.ts';
 
 describe('run helpers', () => {
@@ -268,5 +269,17 @@ describe('management schemas', () => {
     );
     assert.equal(model.model_id, 'gpt-x');
     assert.equal(model.supports_tool_call, true);
+  });
+});
+
+describe('schedule helpers', () => {
+  it('keeps a selected schedule eligible for history refresh only while it exists', () => {
+    const job = {
+      cron_job_id: 'cron-1',
+    } as never;
+    assert.equal(hasSelectedSchedule([job], 'cron-1'), true);
+    assert.equal(hasSelectedSchedule([job], 'cron-2'), false);
+    assert.equal(hasSelectedSchedule([], 'cron-1'), false);
+    assert.equal(hasSelectedSchedule([job], null), false);
   });
 });

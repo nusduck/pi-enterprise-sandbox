@@ -13,6 +13,53 @@ env:
   PYTHON_VERSION: "3.11"
 
 jobs:
+  contract:
+    name: RPC contract (test + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: contract/package-lock.json
+
+      - name: Install, typecheck, and test
+        run: |
+          npm ci --prefix contract
+          npm --prefix contract run typecheck
+          npm test --prefix contract
+
+  exec:
+    name: TypeScript exec (test + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            contract/package-lock.json
+            exec/package-lock.json
+
+      - name: Install and build local contract
+        run: |
+          npm ci --prefix contract
+          npm run build --prefix contract
+
+      - name: Install, typecheck, and test exec
+        run: |
+          npm ci --prefix exec
+          npm --prefix exec run typecheck
+          npm test --prefix exec
+
   python:
     name: Python (pytest)
     runs-on: ubuntu-latest
@@ -35,7 +82,7 @@ jobs:
         run: uv run pytest tests/ -q --tb=short
 
   node-bff:
-    name: Node BFF (tests + smoke)
+    name: Node BFF (tests + typecheck)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -51,16 +98,12 @@ jobs:
       - name: Install API Server dependencies
         run: npm ci --prefix api-server
 
+      - name: Typecheck API Server
+        run: npm --prefix api-server run typecheck
+
       - name: Run API Server unit tests
-        run: node --test api-server/tests/*.test.js
+        run: npm test --prefix api-server
 
-      - name: Syntax-check API Server sources
-        run: |
-          find api-server -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
-            | xargs -0 -n1 node --check
-
-      - name: Import/listen smoke
-        run: node --test api-server/tests/listen-smoke.test.js
 
   node-agent:
     name: Node Agent (tests + smoke)
@@ -74,7 +117,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: agent/package-lock.json
+          cache-dependency-path: |
+            agent/package-lock.json
+            contract/package-lock.json
+
+      # agent 通过 file:../contract 引用 @dsh/contract，其 exports 指向 dist/，须先构建。
+      - name: Install and build local contract
+        run: |
+          npm ci --prefix contract
+          npm run build --prefix contract
 
       - name: Install Agent dependencies
         run: npm ci --prefix agent
@@ -87,8 +138,9 @@ jobs:
           find agent -name '*.js' -type f ! -path '*/node_modules/*' -print0 \
             | xargs -0 -n1 node --check
 
+      # 源码已是 TypeScript，与 npm test 一样经 tsx 加载。
       - name: Import/listen + fake provider smoke
-        run: node --test agent/tests/listen-smoke.test.js agent/tests/fake-openai-provider.test.js
+        run: agent/node_modules/.bin/tsx --test agent/tests/listen-smoke.test.js agent/tests/fake-openai-provider.test.js
 
   frontend:
     name: Frontend (test + build)
@@ -132,27 +184,32 @@ jobs:
           MYSQL_PASSWORD: ci_mysql_password_0123456789
           MYSQL_ROOT_PASSWORD: ci_mysql_root_password_0123456789
           REDIS_PASSWORD: ci_redis_password_0123456789
-          SANDBOX_INTERNAL_REDIS_PASSWORD: ci_replay_password_0123456789
           SANDBOX_API_TOKEN: ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
           AGENT_INTERNAL_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           SANDBOX_JWT_SECRET: jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
           SANDBOX_CORS_ORIGINS: https://app.example.com
           SANDBOX_INTERNAL_HMAC_KEYRING: '{"ci-key":"a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"}'
           SANDBOX_INTERNAL_HMAC_ACTIVE_KID: ci-key
+          EXEC_INTERNAL_ALLOW_CIDR: 10.20.0.0/16
           A2A_PUBLIC_BASE_URL: https://agent.example.com
           A2A_ARTIFACT_DOWNLOAD_SECRET: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          # Production overlay requires a real DBPM (ADR 0011 D10); placeholders only.
+          DBPM_URL: dbpm-a.example.internal:7000,dbpm-b.example.internal:7000
+          DBPM_DB_NAME: ci_updrdb_entry
+          DBPM_REDIS_DB_NAME: ci_redis_entry
+          DBPM_REDIS_DB_USER_NAME: ci_redis_user
         run: |
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
-            --format json --output "$RUNNER_TEMP/pi-enterprise-prod-compose.json"
+            --format json --output "$RUNNER_TEMP/dsh-enterprise-prod-compose.json"
           python3 scripts/verify_compose_prod_config.py \
-            "$RUNNER_TEMP/pi-enterprise-prod-compose.json"
+            "$RUNNER_TEMP/dsh-enterprise-prod-compose.json"
 
   cross-service-smoke:
     name: Cross-service smoke (no real LLM key)
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.0
+        image: mysql:5.7
         env:
           MYSQL_DATABASE: sandbox
           MYSQL_USER: sandbox
@@ -167,24 +224,11 @@ jobs:
           --health-retries=30
           --health-start-period=20s
       redis:
-        image: redis:7.2
+        image: redis:5.0.14
         ports:
           - 6379:6379
         options: >-
           --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=30
-      sandbox-replay-redis:
-        # Bitnami moved the 7.2 line to its legacy registry; the former
-        # bitnami/redis:7.2 tag no longer has a pullable manifest.
-        image: bitnamilegacy/redis:7.2
-        env:
-          REDIS_PASSWORD: ci_replay_password_0123456789
-        ports:
-          - 6380:6379
-        options: >-
-          --health-cmd="redis-cli -a ci_replay_password_0123456789 ping"
           --health-interval=5s
           --health-timeout=3s
           --health-retries=30
@@ -209,13 +253,33 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: |
+            contract/package-lock.json
+            exec/package-lock.json
             agent/package-lock.json
             api-server/package-lock.json
 
       - name: Install Node service dependencies
         run: |
+          npm ci --prefix contract
+          npm ci --prefix exec
           npm ci --prefix agent
           npm ci --prefix api-server
+
+      # exec 启动时真跑一次 bwrap 预检，失败即拒启（fail-closed，无旁路）。
+      # Ubuntu 24.04 默认经 AppArmor 限制非特权 user namespace，bwrap 需要它。
+      - name: Install Bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --unshare-user --unshare-pid --proc /proc true
+
+      - name: Build TypeScript services for smoke entrypoints
+        run: |
+          npm run build --prefix contract
+          npm run build --prefix exec
+          npm run build --prefix agent
+          npm run build --prefix api-server
 
       # docker-compose.yml gives its MySQL `--log-bin-trust-function-creators=1`
       # because Agent migrations create triggers as a non-SUPER application
@@ -227,7 +291,7 @@ jobs:
           # Run the client from the same image as the service: the runner image
           # does not reliably ship a mysql client.
           for i in $(seq 1 30); do
-            if docker run --rm --network host mysql:8.0 \
+            if docker run --rm --network host mysql:5.7 \
                  mysql -h 127.0.0.1 -P 3306 -uroot -pci_mysql_root_password_0123456789 \
                  -e "SET GLOBAL log_bin_trust_function_creators = 1;" 2>/dev/null; then
               echo "log_bin_trust_function_creators=1 set"
@@ -242,7 +306,6 @@ jobs:
         env:
           SMOKE_MYSQL_URL: mysql://sandbox:ci_mysql_password_0123456789@127.0.0.1:3306/sandbox
           SMOKE_REDIS_URL: redis://127.0.0.1:6379/0
-          SMOKE_SANDBOX_REPLAY_REDIS_URL: redis://:ci_replay_password_0123456789@127.0.0.1:6380/0
           SMOKE_START_WORKER: "true"
         run: |
           mkdir -p .smoke-tmp

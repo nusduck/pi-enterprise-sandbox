@@ -250,26 +250,51 @@ export function agentEventToRuntime(
       break;
     }
 
-    case 'file_ready': {
+    case 'file_ready':
+    case 'artifact.ready': {
       const seq = nextSeq(state, ev);
-      const artifactId =
-        ev.artifact_id != null
-          ? String(ev.artifact_id)
-          : `art_${state.runId}_${seq}`;
+      // 同一件事有三种线上形状：老的扁平 `file_ready`、durable 的
+      // `artifact.ready`（字段在 `data` 里），以及两种命名风格（snake / camel）。
+      // 逐字段写三元套三元的话，加一个字段就多一座金字塔——收成两个取值器。
+      const data = (ev.data && typeof ev.data === 'object' ? ev.data : {}) as Record<string, unknown>;
+      const pickString = (...keys: string[]): string | undefined => {
+        for (const key of keys) {
+          const raw = (ev as Record<string, unknown>)[key] ?? data[key];
+          if (raw != null) return String(raw);
+        }
+        return undefined;
+      };
+      const pickNumber = (...keys: string[]): number | undefined => {
+        for (const key of keys) {
+          const raw = (ev as Record<string, unknown>)[key] ?? data[key];
+          if (typeof raw === 'number') return raw;
+        }
+        return undefined;
+      };
+
+      const artifactId = pickString('artifact_id', 'artifactId') ?? `art_${state.runId}_${seq}`;
+      const name = pickString('name');
+      const path = pickString('path');
+      const mimeType = pickString('mime_type', 'mimeType');
+      const size = pickNumber('size', 'sizeBytes');
+      const sha256 = pickString('sha256');
+      const sessionId =
+        pickString('session_id', 'targetSessionId', 'target_session_id') ?? state.sessionId;
       out.push(
         makeRuntimeEvent({
           ...base,
           event_id: eventId(state, seq, ev),
           sequence: seq,
-          session_id: state.sessionId,
+          session_id: sessionId,
           type: 'artifact.created',
           payload: {
             artifact_id: artifactId,
-            name: ev.name != null ? String(ev.name) : undefined,
-            path: ev.path != null ? String(ev.path) : undefined,
-            mime_type: ev.mime_type != null ? String(ev.mime_type) : undefined,
-            size: typeof ev.size === 'number' ? ev.size : undefined,
-            session_id: state.sessionId,
+            name,
+            path,
+            mime_type: mimeType,
+            size,
+            sha256,
+            session_id: sessionId,
           },
         }),
       );

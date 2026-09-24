@@ -1,33 +1,52 @@
 # Node major pin: runtime-versions.json → node.docker_image
+# Compose context is the repo root so `@dsh/contract` (file:../contract) is
+# installable. The HTTP process and worker both import it.
 FROM node:22-slim
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+COPY tsconfig.base.json ./
+COPY contract ./contract
+COPY agent/package.json agent/package-lock.json ./agent/
+
+WORKDIR /app/contract
+RUN npm ci --ignore-scripts && npx tsc
+
+# 阶段 F 之后不再有独立的 agent/runtime 包：DSH 组合层就是 agent/src/runtime/，
+# 与其余源码同一次 tsc 编译，依赖也在 agent/package.json 里。
+WORKDIR /app/agent
 RUN npm ci --ignore-scripts
 
-COPY . .
+WORKDIR /app
+COPY agent ./agent
 
-# Pi Runtime resource root (AGENT_PI_AGENT_DIR) and logical workspace cwd.
-# The workspace directory is intentionally empty in this image: all workspace
-# bytes remain owned by Sandbox and are accessed through the formal transport.
-RUN mkdir -p /app/pi-agent-home /home/sandbox/workspace /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime \
-    && chmod 755 /app/pi-agent-home /home/sandbox/workspace \
-    && chmod 700 /tmp/pi-enterprise-mcp-runtime
-ENV AGENT_PI_AGENT_DIR=/app/pi-agent-home \
-    PI_CODING_AGENT_DIR=/app/pi-agent-home \
-    AGENT_MCP_RUNTIME_ROOT=/tmp/pi-enterprise-mcp-runtime
+WORKDIR /app/agent
+# `allowJs` 只为 mysql/migrations/ 那 21 个纯 DDL 文件（knex 运行时按目录扫描
+# 加载）。`build` 在 tsc 之后还会把 src/runtime/bundle/*.yml 拷进 dist——
+# cordis 的 overlay patch 必须和编译后的 boot.js 同处一棵树。
+RUN npm run build
 
-# Drop root. Unlike Sandbox — which starts as root to build the Bubblewrap
-# jail and then drops with setpriv — the Agent process never needs a
-# privileged operation: it talks to MySQL, Redis, the provider and Sandbox.
-# The writable paths are the Pi resource root, the MCP runtime dir and the
+# Logical workspace cwd. The directory is intentionally empty in this image:
+# all workspace bytes stay owned by exec and are reached over the signed RPC.
+RUN mkdir -p /home/sandbox/workspace /home/sandbox/skill-user /tmp/dsh-enterprise-mcp-runtime \
+    && chmod 755 /home/sandbox/workspace \
+    && chmod 700 /tmp/dsh-enterprise-mcp-runtime
+
+# Drop root. Unlike the exec service — which needs Bubblewrap — the Agent
+# process never performs a privileged operation: it talks to MySQL, Redis, the
+# provider and exec. The writable paths are the MCP runtime dir and the
 # user-skill tier, so those are handed over with the image.
 #
 # /home/sandbox/skill-user is a named volume at runtime. Docker seeds a fresh
 # volume from the image directory, ownership included — a volume created
 # before this change stays root-owned and must be recreated or chowned once.
-RUN chown -R node:node /app /app/pi-agent-home /home/sandbox/skill-user /tmp/pi-enterprise-mcp-runtime
-USER node
+#
+# 目标环境要求 K8s 内的容器以 up_docker（1000:1000）运行：把基础镜像自带的 node
+# （同为 1000）改名，uid 不变，已有卷的属主不受影响。USER 写数字，K8s 的
+# runAsNonRoot 才能校验（写名字会被拒绝建容器）。
+RUN groupmod -n up_docker node \
+    && usermod -l up_docker -d /home/up_docker -m node \
+    && chown -R 1000:1000 /app /home/sandbox/skill-user /tmp/dsh-enterprise-mcp-runtime
+USER 1000:1000
 
 EXPOSE 4100
-CMD ["node", "server.js"]
+CMD ["node", "dist/server.js"]

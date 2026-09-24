@@ -24,9 +24,6 @@ import {
   persistSidebarOpen,
   loadPersistedSidebarOpen,
   clearPersistedChat,
-  lastRunModelIdForConversation,
-  readConversationModelId,
-  resolveConversationModelId,
   writeConversationModelId,
   normalizeServerMessages,
   createAttachmentDraft,
@@ -51,7 +48,6 @@ import {
   getConversation,
   deleteConversation,
   listArtifacts,
-  listModels,
   importArtifact as apiImportArtifact,
   decideApproval,
   login as apiLogin,
@@ -60,13 +56,16 @@ import {
   me as apiMe,
   ApiError,
 } from '../../shared/api';
-import type { ModelItem } from '../../shared/api';
+import type { Agent, ModelItem } from '../../shared/api';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import type { EntityStore } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { projectConversationMessages } from './projections/conversationMessages';
 import { runUploadQueue } from './uploads/runUploadQueue';
 import { useRunControls } from './controllers/useRunControls';
+import { useModelSelection } from './useModelSelection';
+import { fixedModelIdOf, mergeConversation } from './conversationProjection';
+import { useAgentSelection } from './useAgentSelection';
 import { resolveApprovalDecision } from './approvalDecision';
 
 export type ChatController = {
@@ -76,7 +75,14 @@ export type ChatController = {
   dropzoneVisible: boolean;
   models: ModelItem[];
   selectedModelId: string | null;
+  /** Model pinned by the bound AgentVersion for the focused conversation. */
+  fixedModelId: string | null;
   setSelectedModelId: (modelId: string | null) => void;
+  /** org 内可选的智能体；只有一个时 UI 不渲染选择器（D2：一会话一 Agent）。 */
+  agents: Agent[];
+  selectedAgentId: string | null;
+  setSelectedAgentId: (agentId: string | null) => void;
+  agentNameById: (agentId: string | null | undefined) => string | null;
   // Conversations
   selectConversation: (id: string) => Promise<void>;
   startNewChat: () => Promise<void>;
@@ -160,11 +166,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   });
   const [draftText, setDraftText] = useState('');
   const [dropzoneVisible, setDropzoneVisible] = useState(false);
-  const [models, setModels] = useState<ModelItem[]>([]);
-  const [selectedModelId, setSelectedModelIdState] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return readConversationModelId(loadPersistedConversationId());
-  });
   const [entityStore, setEntityStore] = useState<EntityStore>(() =>
     createEntityBridge().getStore(),
   );
@@ -174,8 +175,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Always-current refs for async handlers
   const stateRef = useRef(state);
   stateRef.current = state;
-  const modelsRef = useRef(models);
-  modelsRef.current = models;
   const activeStreamGenRef = useRef(0);
   const conversationLoadGenerationRef = useRef(0);
   /** Invalidates account-scoped requests when login/logout changes identity. */
@@ -224,44 +223,32 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setState((s) => update(s, { flashMessage: null }));
   }, []);
 
-  const applyModelForConversation = useCallback(
-    (conversationId: string | null | undefined) => {
-      const enabledIds = modelsRef.current
-        .map((model) => String(model.model_id || model.id || '').trim())
-        .filter(Boolean);
-      const stored = readConversationModelId(conversationId);
-      const lastRun = lastRunModelIdForConversation(
-        bridge.getStore().runsById,
-        conversationId,
-      );
-      const next = resolveConversationModelId({
-        stored,
-        lastRunModelId: lastRun,
-        enabledIds,
-      });
-      setSelectedModelIdState(next);
-      if (next !== stored) writeConversationModelId(conversationId, next);
-    },
-    [bridge],
+  const currentConversationId = useCallback(
+    () => stateRef.current.conversationId,
+    [],
   );
-
-  const setSelectedModelId = useCallback((modelId: string | null) => {
-    const normalized = String(modelId || '').trim() || null;
-    setSelectedModelIdState(normalized);
-    writeConversationModelId(stateRef.current.conversationId, normalized);
-  }, []);
-
-  const refreshModels = useCallback(async () => {
-    const result = await listModels();
-    const enabled = result.items.filter(
-      (model) => model.enabled !== false && Boolean(model.model_id || model.id),
-    );
-    setModels(enabled);
-    modelsRef.current = enabled;
-    applyModelForConversation(
-      stateRef.current.conversationId || loadPersistedConversationId(),
-    );
-  }, [applyModelForConversation]);
+  const fixedModelIdForConversation = useCallback(
+    (conversationId: string | null | undefined) =>
+      fixedModelIdOf(stateRef.current.conversations, conversationId),
+    [],
+  );
+  const {
+    models,
+    selectedModelId,
+    fixedModelId,
+    setSelectedModelId,
+    refreshModels,
+    applyModelForConversation,
+    resetModels,
+  } = useModelSelection(bridge, currentConversationId, fixedModelIdForConversation);
+  const {
+    agents,
+    selectedAgentId,
+    setSelectedAgentId,
+    refreshAgents,
+    agentNameById,
+    resetAgents,
+  } = useAgentSelection();
 
   const refreshConversations = useCallback(async () => {
     const generation = sessionGenerationRef.current;
@@ -355,20 +342,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // F2: do NOT abort background runs / SSE managers on conversation switch.
       // Only detach UI focus. EntityStore continues receiving events for
       // in-flight background runs.
-      if (cur.isStreaming || cur.abortCtrl) {
-        setState((s) => {
-          // Detach UI without aborting the underlying AbortController —
-          // the stream fetch keeps running so the server run is not cancelled.
-          const n = update(s, {
-            isStreaming: false,
-            // EntityBridge keeps the per-run controller while focus detaches.
-            abortCtrl: null,
-            streamGeneration: (s.streamGeneration || 0) + 1,
-          });
-          activeStreamGenRef.current = n.streamGeneration;
-          return n;
+      // Optimistically focus the target conversation ID for instant feedback.
+      setState((s) => {
+        const n = update(s, {
+          conversationId: id,
+          isStreaming: false,
+          // EntityBridge keeps the per-run controller while focus detaches.
+          abortCtrl: null,
+          streamGeneration: (s.streamGeneration || 0) + 1,
         });
-      }
+        activeStreamGenRef.current = n.streamGeneration;
+        return n;
+      });
 
       try {
         setStatus('Loading…', '#94a3b8');
@@ -381,10 +366,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         setState((s) => {
           // Focus switch without aborting abortCtrl (background run continues)
+          const conversations = mergeConversation(s.conversations, conv);
           const n = update(s, {
             conversationId: conv.id,
             messages,
             sessionId,
+            conversations,
             artifacts: [],
             attachments: [],
             traceId: null,
@@ -626,6 +613,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           conversation_id: cur.conversationId,
           session_id: currentSessionId(),
           model_id: selectedModelId,
+          // 首轮就是建会话：这里选 Agent。既有会话不传——它的 Agent 已经钉死，
+          // 换 Agent 要新建会话（D2）。
+          agent_id: cur.conversationId ? null : selectedAgentId,
           messages: [...cur.messages, userMsg],
         });
         if (!created.run_id) throw new Error('Run response is missing run_id');
@@ -863,6 +853,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       currentTraceId,
       models,
       selectedModelId,
+      selectedAgentId,
     ],
   );
 
@@ -1205,22 +1196,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setStatus(`Logged in as ${data.user?.username || username}`);
       await refreshConversations();
       await refreshModels();
+      await refreshAgents();
     },
-    [setStatus, refreshConversations, refreshModels],
+    [setStatus, refreshConversations, refreshModels, refreshAgents],
   );
 
   const register = useCallback(
     async (username: string, password: string) => {
       sessionGenerationRef.current += 1;
       const data = await apiRegister({ username, password });
-      setState((s) =>
-        update(s, { authReady: true, authUser: data.user || { username } }),
-      );
+      clearPersistedChat();
+      bridge.reset();
+      setState((s) => update(s, {
+        authReady: true,
+        authUser: data.user || { username },
+        conversationId: null,
+        sessionId: null,
+        messages: [],
+        attachments: [],
+      }));
       setStatus(`Registered as ${data.user?.username || username}`);
       await refreshConversations();
       await refreshModels();
+      await refreshAgents();
     },
-    [setStatus, refreshConversations, refreshModels],
+    [setStatus, refreshConversations, refreshModels, refreshAgents, bridge],
   );
 
   const logout = useCallback(async () => {
@@ -1231,9 +1231,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       const previous = stateRef.current;
       previous.abortCtrl?.abort();
-      for (const attachment of previous.attachments) {
-        attachment.abortCtrl?.abort();
-      }
+      for (const attachment of previous.attachments) attachment.abortCtrl?.abort();
 
       // A logout is an identity boundary. Disconnect and discard all runtime
       // entities before the next account can render this provider.
@@ -1241,7 +1239,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       clearPersistedChat();
       setDraftText('');
       setDropzoneVisible(false);
-      setModels([]);
+      resetModels();
+      resetAgents();
       setInspectorOpen(false);
       setState(() => {
         const next = createState({
@@ -1282,31 +1281,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     async function boot() {
       const loadGeneration = ++conversationLoadGenerationRef.current;
       // Auth
+      let authedUser: Awaited<ReturnType<typeof apiMe>> | null = null;
       try {
         const user = await apiMe();
-        if (!cancelled) {
-          setState((s) => update(s, { authReady: true, authUser: user }));
-        }
+        authedUser = user;
+        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: user }));
       } catch (error) {
-        // Remove a stale/expired BFF cookie so the next login starts from a
-        // clean session instead of repeatedly surfacing the same token error.
         if (error instanceof ApiError && error.status === 401) {
-          try {
-            await apiLogout();
-          } catch {
-            /* Anonymous logout is best-effort. */
-          }
+          try { await apiLogout(); } catch { /* Anonymous logout is best-effort. */ }
         }
-        if (!cancelled) {
-          // A missing/expired cookie is an anonymous session, not a reason to
-          // expose a transient signed-out shell while the check is pending.
-          setState((s) => update(s, { authReady: true, authUser: null }));
-        }
+        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: null }));
       }
+
+      if (!authedUser || cancelled) return;
 
       try {
         await refreshConversations();
         await refreshModels();
+        await refreshAgents();
       } catch (error) {
         console.warn('[boot] catalog restore failed:', (error as Error).message);
       }
@@ -1328,6 +1320,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               conversationId: conv.id,
               messages,
               sessionId: conv.sandbox_session_id || null,
+              conversations: mergeConversation(s.conversations, conv),
             }),
           );
           persistConversationId(conv.id);
@@ -1358,7 +1351,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refreshConversations, refreshArtifacts, refreshModels, setStatus, flashError, bridge, applyModelForConversation]);
+  }, [refreshConversations, refreshArtifacts, refreshModels, refreshAgents, setStatus, flashError, bridge, applyModelForConversation]);
 
   // Dispose entity SSE managers on unmount (page unload)
   useEffect(() => {
@@ -1416,7 +1409,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dropzoneVisible,
     models,
     selectedModelId,
+    fixedModelId,
     setSelectedModelId,
+    agents,
+    selectedAgentId,
+    setSelectedAgentId,
+    agentNameById,
     selectConversation,
     startNewChat,
     removeConversation,

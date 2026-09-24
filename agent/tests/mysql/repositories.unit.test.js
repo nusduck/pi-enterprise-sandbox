@@ -132,7 +132,7 @@ describe('repositories with fake knex', () => {
     state = createFakeState();
     knex = createFakeKnex(state);
     scope = { orgId: ORG, userId: USER };
-    state.tables.organizations = [
+    state.tables.tbl_agsvc_organizations = [
       {
         org_id: ORG,
         name: 'Acme',
@@ -141,7 +141,7 @@ describe('repositories with fake knex', () => {
         updated_at: '2026-07-18 00:00:00.000',
       },
     ];
-    state.tables.users = [
+    state.tables.tbl_agsvc_users = [
       {
         user_id: USER,
         external_subject: 'sub-1',
@@ -152,7 +152,7 @@ describe('repositories with fake knex', () => {
         updated_at: '2026-07-18 00:00:00.000',
       },
     ];
-    state.tables.conversations = [
+    state.tables.tbl_agsvc_conversations = [
       {
         conversation_id: CONV,
         org_id: ORG,
@@ -166,8 +166,8 @@ describe('repositories with fake knex', () => {
         archived_at: null,
       },
     ];
-    state.tables.messages = [];
-    state.tables.agent_sessions = [
+    state.tables.tbl_agsvc_messages = [];
+    state.tables.tbl_agsvc_agent_sessions = [
       {
         agent_session_id: SESS,
         org_id: ORG,
@@ -177,14 +177,14 @@ describe('repositories with fake knex', () => {
         sandbox_session_id: SBX,
         workspace_id: WSP,
         status: 'ACTIVE',
-        pi_session_version: 0,
+        session_version: 0,
         last_run_id: null,
         created_at: '2026-07-18 00:00:00.000',
         updated_at: '2026-07-18 00:00:00.000',
         closed_at: null,
       },
     ];
-    state.tables.runs = [
+    state.tables.tbl_agsvc_runs = [
       {
         run_id: RUN,
         org_id: ORG,
@@ -206,7 +206,7 @@ describe('repositories with fake knex', () => {
         updated_at: '2026-07-18 00:00:00.000',
       },
     ];
-    state.tables.run_events = [];
+    state.tables.tbl_agsvc_run_events = [];
   });
 
   it('ConversationRepository enforces ownership on get', async () => {
@@ -287,7 +287,7 @@ describe('repositories with fake knex', () => {
       traceId: TRACE,
     });
     assert.equal(e1.sequenceNo, 1);
-    assert.equal(state.tables.runs[0].next_event_sequence, 1);
+    assert.equal(state.tables.tbl_agsvc_runs[0].next_event_sequence, 1);
 
     const e2 = await repo.append({
       eventId: '01K0G2PAV8FPMVC9QHJG7JPN5D',
@@ -299,7 +299,7 @@ describe('repositories with fake knex', () => {
       traceId: TRACE,
     });
     assert.equal(e2.sequenceNo, 2);
-    assert.equal(state.tables.runs[0].next_event_sequence, 2);
+    assert.equal(state.tables.tbl_agsvc_runs[0].next_event_sequence, 2);
 
     const maxSql = state.rawCalls.some((c) =>
       /MAX\s*\(\s*sequence/i.test(c.sql),
@@ -333,7 +333,7 @@ describe('repositories with fake knex', () => {
 
   it('RunRepository create/get/list are ownership scoped', async () => {
     const repo = new RunRepository(knex);
-    state.tables.runs = [];
+    state.tables.tbl_agsvc_runs = [];
     const created = await repo.create({
       runId: RUN,
       orgId: ORG,
@@ -354,7 +354,7 @@ describe('repositories with fake knex', () => {
 
   it('AgentSessionRepository create + list by conversation', async () => {
     const repo = new AgentSessionRepository(knex);
-    state.tables.agent_sessions = [];
+    state.tables.tbl_agsvc_agent_sessions = [];
     await repo.create({
       agentSessionId: SESS,
       orgId: ORG,
@@ -372,7 +372,7 @@ describe('repositories with fake knex', () => {
 
   it('OrganizationRepository membership is org+user scoped', async () => {
     const repo = new OrganizationRepository(knex);
-    state.tables.organization_memberships = [];
+    state.tables.tbl_agsvc_organization_memberships = [];
     await repo.addMembership({
       orgId: ORG,
       userId: USER,

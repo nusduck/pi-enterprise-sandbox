@@ -1,9 +1,11 @@
 # Documentation map
 
-This directory is the **active** documentation set for Pi Enterprise Sandbox.
+This directory is the **active** documentation set for DSH Enterprise Sandbox.
 `plan.md` is the frozen refactor baseline and final acceptance criteria.
 
-- [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent/api-server/sandbox/frontend)
+- [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent / api-server / exec / frontend / contract)
+- [`design/updrdb-dbpm-deployment.md`](./design/updrdb-dbpm-deployment.md) — UPDRDB / DBPM 与双集群 + VM 的统一迁移设计（未实施；共享 Skill 存储、HTTPS 入口及验收门槛）
+- [`design/waves/HANDOFF.md`](./design/waves/HANDOFF.md) — `refactor/dsh-rebuild` 当前进度与剩余项
 - [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
 - [`sandbox-mcp.md`](./sandbox-mcp.md) — independently deployed Sandbox Streamable HTTP MCP facade
 - [`reviews/*`](./reviews/) — dated review / dead-code inventory reports (working papers; conclusions land in `review-deferred-items.md` or code, then the report is archived to `archive/reviews/`)
@@ -28,6 +30,7 @@ documentation checklist summarized below.
 Out-of-map directories:
 
 - `deliverables/` — gitignored local deliverables; not part of this repo's doc set.
+- `ref/` — gitignored local copies of third-party vendor manuals (UPDRDB, DBPM). Not part of this repo's doc set and not redistributed; keep them locally when you need to verify a vendor claim.
 
 ## Document roles
 
@@ -50,14 +53,23 @@ Out-of-map directories:
 
 | ADR | Topic |
 |-----|-------|
-| [0001](./adr/0001-pi-coding-agent-sdk.md) | Adopt upstream `pi-coding-agent` SDK |
+| [0001](./adr/0001-pi-coding-agent-sdk.md) | Adopt upstream `pi-coding-agent` SDK — **Superseded by 0007** |
+| [0002](./adr/0002-dsh-harness-evaluation.md) | DeepSeek Harness 评估（审批 seam / preset / 闸门的实测结论，0007 与 0009 的证据来源） |
 | [0004](./adr/0004-session-persistent-tmp.md) | Agent Session–private persistent `/tmp` |
+| [0005](./adr/0005-pi-session-jsonl-persistence.md) | Pi session JSONL persistence — **Superseded by 0007 D5** |
+| [0006](./adr/0006-user-skill-enablement-gate.md) | User skill enablement gate |
+| [0007](./adr/0007-agent-runtime-rebuild-on-dsh.md) | Rebuild agent runtime on DeepSeek Harness |
+| [0008](./adr/0008-sandbox-isolation-and-fs-seam-redesign.md) | Exec isolation and FS seam（取代 Python sandbox） |
+| [0009](./adr/0009-dsh-host-tools-and-application-steward.md) | 出厂工具挂 host；application 做 DSH 管家（改写 0007 D4 的审批组合、0006 P1 的闸门形状） |
+| [0010](./adr/0010-retain-custom-a2a-server-layer.md) | 保留自建 A2A 服务端协议面（**撤销 0007 D8**） |
+| [0011](./adr/0011-updrdb-upredis-dbpm-migration.md) | 持久化／协调拓扑迁移至 UPDRDB / UPRedis，口令改由 DBPM 下发 |
 
-**0002 and 0003 are intentionally absent.** They were 07-12 task specs
-(`0002-backend2712`, `0003-fronted0712`) whose decisions `plan.md` superseded;
-they were removed on 2026-07-19 in `7370220d`. The numbers are retired — a new
-ADR takes 0005. Recover the originals from git history if you need the
-historical reasoning; do not cite them as current.
+**0003 is intentionally absent.** `0002-backend2712` and `0003-fronted0712` were
+07-12 task specs whose decisions `plan.md` superseded; they were removed on
+2026-07-19 in `7370220d`. **0002 was later reissued** as the DSH harness
+evaluation above; 0003 stays retired. A new ADR takes the next unused number
+(**0012**). Recover the originals from git
+history if you need the historical reasoning; do not cite them as current.
 
 ## How to close an acceptance item
 

@@ -25,7 +25,7 @@ const TRACE = 'b'.repeat(32);
 
 function makeWorld() {
   const state = createFakeState();
-  state.tables.a2a_audit_events = [];
+  state.tables.tbl_agsvc_a2a_audit_events = [];
   const knex = createFakeKnex(state);
 
   /** @type {Map<string, object>} */
@@ -154,8 +154,8 @@ describe('A2A audit org/client/trace correlation (shipped path)', () => {
     });
 
     assert.ok(task.id);
-    assert.equal(state.tables.a2a_audit_events.length, 1);
-    const raw = state.tables.a2a_audit_events[0];
+    assert.equal(state.tables.tbl_agsvc_a2a_audit_events.length, 1);
+    const raw = state.tables.tbl_agsvc_a2a_audit_events[0];
     assert.equal(raw.org_id, ORG);
     assert.equal(raw.client_id, principal.clientId);
     assert.equal(raw.trace_id, TRACE);
@@ -203,7 +203,7 @@ describe('A2A audit org/client/trace correlation (shipped path)', () => {
       traceId: TRACE,
     });
 
-    const rows = state.tables.a2a_audit_events.map(mapA2aAuditEvent);
+    const rows = state.tables.tbl_agsvc_a2a_audit_events.map(mapA2aAuditEvent);
     const types = rows.map((r) => r.eventType);
     assert.ok(types.includes('a2a.send_message'));
     assert.ok(types.includes('a2a.cancel_task'));
@@ -222,7 +222,7 @@ describe('A2A audit org/client/trace correlation (shipped path)', () => {
 
   it('repository rejects empty clientId and drops all-zero / invalid trace ids', async () => {
     const state = createFakeState();
-    state.tables.a2a_audit_events = [];
+    state.tables.tbl_agsvc_a2a_audit_events = [];
     const knex = createFakeKnex(state);
     const repo = new A2aAuditRepository(knex, {
       now: () => new Date('2026-07-19T12:00:00.000Z'),
@@ -247,7 +247,7 @@ describe('A2A audit org/client/trace correlation (shipped path)', () => {
       traceId: '0'.repeat(32),
     });
     assert.equal(accepted.traceId, null);
-    assert.equal(state.tables.a2a_audit_events[0].trace_id, null);
+    assert.equal(state.tables.tbl_agsvc_a2a_audit_events[0].trace_id, null);
 
     const valid = await repo.append({
       auditId: '01K0G2PAV8FPMVC9QHJG7JPN6C',

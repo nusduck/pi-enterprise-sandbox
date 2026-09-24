@@ -34,7 +34,7 @@ Sandbox 保留 **Agent Session 私有、受配额约束、随 Session 生命周�
 7. `/tmp` 不是用户交付源。只有 `submit_artifact` 产生的不可变 Artifact 快照可被
    BFF/A2A 下载；普通临时文件不会自动出现在前端。
 
-Agent 服务自身用于 `pi-mcp-adapter` 的运行时密钥目录不属于 Sandbox `/tmp`。
+Agent 侧 MCP 已改由 `dsh-mcp-client` 启动期装配；旧 `pi-mcp-adapter` 运行时目录已退役，也不属于 Sandbox `/tmp`。
 它由 Agent 进程私有目录管理，密钥文件权限为 `0600`，runtime dispose 时删除。
 
 ## 取舍
@@ -53,4 +53,3 @@ tmpfs 引入另一套脚本存储或恢复路径。
 - `tests/test_workspace_manager.py` 验证 Workspace/temp 一一对应及失败时不释放绑定。
 - `tests/test_path_validation.py` 验证 `/tmp` 逻辑路径与 traversal/symlink 边界。
 - `tests/test_child_workspace_quota.py` 验证 Workspace 与 temp 的联合有界计量。
-

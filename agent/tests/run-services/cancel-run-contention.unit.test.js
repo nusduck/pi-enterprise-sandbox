@@ -33,10 +33,10 @@ const AUTH = {
 };
 
 function seed(state, status = RUN_STATUS.RUNNING) {
-  state.tables.organizations = [
+  state.tables.tbl_agsvc_organizations = [
     { org_id: ORG, name: 'Acme', status: 'active', created_at: NOW, updated_at: NOW },
   ];
-  state.tables.users = [
+  state.tables.tbl_agsvc_users = [
     {
       user_id: USER,
       external_subject: 'bff:user-ext-1',
@@ -47,13 +47,13 @@ function seed(state, status = RUN_STATUS.RUNNING) {
       updated_at: NOW,
     },
   ];
-  state.tables.organization_memberships = [
+  state.tables.tbl_agsvc_organization_memberships = [
     { org_id: ORG, user_id: USER, role: 'member', status: 'active', created_at: NOW, updated_at: NOW },
   ];
-  state.tables.organization_external_refs = [
+  state.tables.tbl_agsvc_organization_external_refs = [
     { provider: 'bff', external_subject: 'org-ext-1', org_id: ORG, created_at: NOW },
   ];
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -79,9 +79,9 @@ function seed(state, status = RUN_STATUS.RUNNING) {
       updated_at: NOW,
     },
   ];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
-  state.tables.trace_spans = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
+  state.tables.tbl_agsvc_trace_spans = [];
 }
 
 describe('CancelRunService under transaction failure', () => {
@@ -126,7 +126,7 @@ describe('CancelRunService under transaction failure', () => {
       (err) => err instanceof MysqlDependencyError,
     );
 
-    const row = state.tables.runs[0];
+    const row = state.tables.tbl_agsvc_runs[0];
     assert.ok(row.cancel_requested_at, 'the intent must survive the failed transaction');
     assert.equal(row.cancel_requested_by, USER);
     assert.equal(row.cancel_reason, 'user pressed cancel');
@@ -136,14 +136,14 @@ describe('CancelRunService under transaction failure', () => {
   });
 
   it('writes no intent for a Run that already finished', async () => {
-    state.tables.runs[0].status = RUN_STATUS.SUCCEEDED;
+    state.tables.tbl_agsvc_runs[0].status = RUN_STATUS.SUCCEEDED;
     transactions.failFirst = new MysqlDependencyError('deadlock; nothing was committed');
 
     await assert.rejects(
       () => cancel.execute({ runId: RUN, auth: AUTH }),
       (err) => err instanceof MysqlDependencyError,
     );
-    assert.equal(state.tables.runs[0].cancel_requested_at, null);
+    assert.equal(state.tables.tbl_agsvc_runs[0].cancel_requested_at, null);
   });
 
   it('leaves a non-dependency failure alone', async () => {
@@ -152,6 +152,6 @@ describe('CancelRunService under transaction failure', () => {
 
     await assert.rejects(() => cancel.execute({ runId: RUN, auth: AUTH }), (err) => err === boom);
     assert.equal(transactions.count, 1, 'no salvage attempt for an unrelated error');
-    assert.equal(state.tables.runs[0].cancel_requested_at, null);
+    assert.equal(state.tables.tbl_agsvc_runs[0].cancel_requested_at, null);
   });
 });

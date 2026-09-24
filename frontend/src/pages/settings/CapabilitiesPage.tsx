@@ -3,11 +3,13 @@
  * Tabs: Skills · MCP Servers · Tools · Models · Extension Diagnostics
  * Soft-fails when registry BFF endpoints are incomplete.
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   listMcpServers,
   listModels,
   listSkills,
+  setSkillEnabled,
+  uploadSkillDraft,
   listTools,
   getExtensionDiagnostics,
   type ExtensionDiagnostics,
@@ -17,7 +19,13 @@ import {
   type SoftListResult,
   type ToolRegistryItem,
 } from '../../shared/api/capabilities';
-import { IconRefresh, IconSparkles, IconPuzzle, IconTerminal, IconCode, IconLayers } from '../../shared/ui/Icons';
+import { IconRefresh, IconSparkles, IconPuzzle, IconTerminal, IconCode, IconLayers, IconPlus } from '../../shared/ui/Icons';
+import {
+  isDraftSkill,
+  isUserSkill,
+  skillSourceLabel,
+  splitSkillTiers,
+} from './skillHelpers';
 
 const TABS = [
   { id: 'skills', label: 'Skills' },
@@ -64,15 +72,131 @@ function statusLabel(item: {
   return item.enabled === false ? 'disabled' : 'configured';
 }
 
-/** Bundled packages come from the shared root; user packages from the caller's own. */
-function isUserSkill(item: SkillItem): boolean {
-  return item.source === 'user-skill-root';
-}
+function SkillDraftUpload({
+  onSuccess,
+}: {
+  onSuccess: () => void;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-function skillSourceLabel(item: SkillItem): string {
-  if (item.source === 'user-skill-root') return 'User';
-  if (item.source === 'shared-skill-root') return 'System';
-  return item.source || item.path || '—';
+  const handleUpload = async (file: File) => {
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.zip') && !lower.endsWith('.skill')) {
+      setError('Please select a .zip or .skill file');
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      setError('Skill package exceeds the 50MB limit');
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await uploadSkillDraft(file);
+      setSuccess(`Draft package "${res.name}" uploaded. Review and click Enable below to activate.`);
+      onSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files?.length) {
+      const file = e.dataTransfer.files[0];
+      if (file) void handleUpload(file);
+    }
+  };
+
+  return (
+    <div className="mgmt-upload-card">
+      <div
+        className={`mgmt-upload-dropzone${dragOver ? ' drag-over' : ''}${uploading ? ' uploading' : ''}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => !uploading && fileInputRef.current?.click()}
+        role="button"
+        tabIndex={0}
+        aria-label="Upload Skill package (.zip or .skill)"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".zip,.skill,application/zip"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            if (e.target.files?.length) {
+              const file = e.target.files[0];
+              if (file) void handleUpload(file);
+              e.target.value = '';
+            }
+          }}
+        />
+        <div className="mgmt-upload-icon">
+          {uploading ? (
+            <IconRefresh size={22} className="icon-spin" />
+          ) : (
+            <IconPlus size={22} />
+          )}
+        </div>
+        <div className="mgmt-upload-content">
+          <div className="mgmt-upload-title">
+            {uploading ? 'Extracting and verifying draft package…' : 'Upload Skill Package'}
+          </div>
+          <div className="mgmt-upload-desc">
+            Drag and drop a <strong>.zip</strong> or <strong>.skill</strong> package here, or click to browse (Max 50MB).
+          </div>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="mgmt-upload-banner error" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="mgmt-upload-banner-close"
+            onClick={() => setError(null)}
+            aria-label="Dismiss error"
+          >
+            &times;
+          </button>
+        </div>
+      ) : null}
+
+      {success ? (
+        <div className="mgmt-upload-banner success" role="status">
+          <span>{success}</span>
+          <button
+            type="button"
+            className="mgmt-upload-banner-close"
+            onClick={() => setSuccess(null)}
+            aria-label="Dismiss message"
+          >
+            &times;
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -80,19 +204,42 @@ function skillSourceLabel(item: SkillItem): string {
  * package, so an empty "My Skills" reads as "nothing installed" rather than as
  * a section that failed to load.
  */
-function SkillTiers({ items }: { items: SkillItem[] }) {
-  const user = items.filter(isUserSkill);
-  const system = items.filter((item) => !isUserSkill(item));
+function SkillTiers({
+  items,
+  busy,
+  onMutate,
+  onUploadSuccess,
+}: {
+  items: SkillItem[];
+  busy: string | null;
+  onMutate: (name: string, enabled: boolean) => void;
+  onUploadSuccess: () => void;
+}) {
+  const { drafts, user, system, publishedFromDraft } = splitSkillTiers(items);
   return (
     <>
+      <section className="mgmt-section">
+        <h3 className="mgmt-section-title">Drafts ({drafts.length})</h3>
+        <SkillDraftUpload onSuccess={onUploadSuccess} />
+        {drafts.length === 0 ? (
+          <p className="mgmt-empty-body">No Skill drafts waiting for enablement.</p>
+        ) : (
+          <SkillCards items={drafts} busy={busy} onMutate={onMutate} />
+        )}
+      </section>
       <section className="mgmt-section">
         <h3 className="mgmt-section-title">My Skills ({user.length})</h3>
         {user.length === 0 ? (
           <p className="mgmt-empty-body">
-            No Skills installed for your account. Install a Skill ZIP from chat.
+            No enabled Skills for your account. Upload a Skill package to Drafts above and click Enable.
           </p>
         ) : (
-          <SkillCards items={user} />
+          <SkillCards
+            items={user}
+            busy={busy}
+            onMutate={onMutate}
+            fromDraft={publishedFromDraft}
+          />
         )}
       </section>
       <section className="mgmt-section">
@@ -100,31 +247,47 @@ function SkillTiers({ items }: { items: SkillItem[] }) {
         {system.length === 0 ? (
           <p className="mgmt-empty-body">No bundled Skills.</p>
         ) : (
-          <SkillCards items={system} />
+          <SkillCards items={system} busy={busy} onMutate={onMutate} />
         )}
       </section>
     </>
   );
 }
 
-function SkillCards({ items }: { items: SkillItem[] }) {
+function SkillCards({
+  items,
+  busy,
+  onMutate,
+  fromDraft,
+}: {
+  items: SkillItem[];
+  busy: string | null;
+  onMutate: (name: string, enabled: boolean) => void;
+  fromDraft?: Set<string | undefined>;
+}) {
   return (
     <ul className="mgmt-card-list">
       {items.map((s, i) => {
         const name = s.name || s.id || `skill-${i}`;
         const status = statusLabel(s);
+        const draft = isDraftSkill(s);
+        const actionable = draft || isUserSkill(s);
         return (
           <li key={name} className="mgmt-card">
             <header className="mgmt-card-head">
               <div className="mgmt-card-title-row">
                 <IconPuzzle size={16} className="mgmt-card-icon" />
                 <h3 className="mgmt-card-title">{name}</h3>
+                {fromDraft?.has(s.name) ? (
+                  <span className="mgmt-tag">from draft</span>
+                ) : null}
               </div>
               <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
             </header>
             {s.description ? (
               <p className="mgmt-card-reason">{s.description}</p>
             ) : null}
+            {/* 三层用同一张 meta 表，卡片高度和字段位置才对得齐。 */}
             <dl className="mgmt-meta-grid">
               <div>
                 <dt>Source</dt>
@@ -139,6 +302,20 @@ function SkillCards({ items }: { items: SkillItem[] }) {
                 <dd>{s.dynamic ? 'Yes' : 'No'}</dd>
               </div>
             </dl>
+            {/* 动作区固定在卡片底部并右对齐。直接把 button 放进 flex-column 的
+                卡片里会被拉成整行宽的大色块，草稿卡因此和 System 卡长得完全不一样。 */}
+            {actionable ? (
+              <div className="mgmt-card-actions">
+                <button
+                  type="button"
+                  className={`mgmt-btn sm ${draft ? 'primary' : 'secondary'}`}
+                  disabled={busy === name}
+                  onClick={() => onMutate(name, draft)}
+                >
+                  {busy === name ? '…' : draft ? 'Enable' : 'Disable'}
+                </button>
+              </div>
+            ) : null}
           </li>
         );
       })}
@@ -327,6 +504,8 @@ export function CapabilitiesPage() {
     available: false,
   });
   const [diagnostics, setDiagnostics] = useState<ExtensionDiagnostics | null>(null);
+  const [skillBusy, setSkillBusy] = useState<string | null>(null);
+  const [skillError, setSkillError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -352,6 +531,19 @@ export function CapabilitiesPage() {
     void refresh();
   }, [refresh]);
 
+  const mutateSkill = useCallback(async (name: string, enabled: boolean) => {
+    setSkillBusy(name);
+    setSkillError(null);
+    try {
+      await setSkillEnabled(name, enabled);
+      await refresh();
+    } catch (error) {
+      setSkillError(error instanceof Error ? error.message : 'Skill mutation failed');
+    } finally {
+      setSkillBusy(null);
+    }
+  }, [refresh]);
+
   let body: ReactNode = null;
   if (loading) {
     body = <div className="mgmt-empty"><IconSparkles size={24} className="icon-pulse" /><p>Loading capability registry…</p></div>;
@@ -364,7 +556,15 @@ export function CapabilitiesPage() {
           error={skills.error}
         />
       ) : (
-        <SkillTiers items={skills.items} />
+        <>
+          {skillError ? <p className="mgmt-error" role="alert">{skillError}</p> : null}
+          <SkillTiers
+            items={skills.items}
+            busy={skillBusy}
+            onMutate={(name, enabled) => void mutateSkill(name, enabled)}
+            onUploadSuccess={() => void refresh()}
+          />
+        </>
       );
   } else if (tab === 'mcp') {
     body =
@@ -504,7 +704,7 @@ export function CapabilitiesPage() {
         <div>
           <h2 className="mgmt-title">Capabilities</h2>
           <p className="mgmt-subtitle">
-            Skills, MCP servers, tools, and models from the enterprise registry. Users can install Skill ZIP packages from chat.
+            Skills, MCP servers, tools, and models configured for your workspace. Upload packages to Drafts and enable them below.
           </p>
         </div>
         <button
@@ -519,18 +719,27 @@ export function CapabilitiesPage() {
       </header>
 
       <div className="mgmt-filters" role="tablist" aria-label="Capability sections">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`mgmt-chip${tab === t.id ? ' active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          let count: number | null = null;
+          if (t.id === 'skills' && skills.available) count = skills.items.length;
+          else if (t.id === 'mcp' && mcp.available) count = mcp.items.length;
+          else if (t.id === 'tools' && tools.available) count = tools.items.length;
+          else if (t.id === 'models' && models.available) count = models.items.length;
+
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`mgmt-chip${tab === t.id ? ' active' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              <span>{t.label}</span>
+              {count !== null ? <span className="mgmt-chip-count">{count}</span> : null}
+            </button>
+          );
+        })}
       </div>
 
       {body}

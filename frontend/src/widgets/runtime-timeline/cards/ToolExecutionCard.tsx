@@ -135,7 +135,7 @@ export function ToolExecutionCard({
             {fields.errorCode ? '✗' : pending ? '◐' : '⑂'}
           </span>
           <div className="sa-head-text">
-            <span className="sa-kicker">Sub-agent</span>
+            <span className="sa-kicker">{fields.agent ? `Delegated to ${fields.agent}` : 'Sub-agent'}</span>
             <h3 className="sa-title">{fields.label || 'Delegated task'}</h3>
           </div>
         </header>

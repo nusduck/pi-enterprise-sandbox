@@ -1,0 +1,7085 @@
+{
+  "version": 1,
+  "migrations": [
+    "20260718000001_core_platform_schema.js",
+    "20260718000002_outbox_delivery.js",
+    "20260718000003_run_authority_compatibility.js",
+    "20260718000004_run_cancel_intent.js",
+    "20260718000005_agent_session_fencing.js",
+    "20260718000006_agent_session_snapshot_fencing.js",
+    "20260718000007_pi_session_journal.js",
+    "20260718000008_sandbox_tool_execution_claims.js",
+    "20260718000009_a2a_protocol.js",
+    "20260719000001_trace_spans.js",
+    "20260719000002_run_trace_state.js",
+    "20260719000003_run_interactions.js",
+    "20260719000004_interaction_resume_phase.js",
+    "20260719000005_run_trace_context.js",
+    "20260719000006_auth_credentials.js",
+    "20260728000001_cron_jobs.js",
+    "20260729000001_agent_definitions_org_name_unique.js",
+    "20260805000001_a2a_context_id_opaque.js",
+    "20260822000001_run_subagent_lineage.js",
+    "20260822000002_task_state.js",
+    "20260822000003_conversation_subagent_lineage.js",
+    "20260831000001_user_skill_enablement.js",
+    "20260901000001_exec_jobs.js",
+    "20260901000002_dsh_session_persistence.js",
+    "20260904000001_exec_artifacts_datasets.js",
+    "20260904000002_workspace_quota_reservations.js",
+    "20260912000001_claim_without_skip_locked.js",
+    "20260923000001_upspec_naming.js",
+    "20260923000002_dsh_naming.js"
+  ],
+  "allowedExtraTables": [],
+  "tables": {
+    "knex_migrations": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "batch": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "id": {
+          "type": "int unsigned",
+          "nullable": false,
+          "default": null,
+          "extra": "auto_increment",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "migration_time": {
+          "type": "timestamp",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "extra": "on update current_timestamp",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "knex_migrations_lock": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "index": {
+          "type": "int unsigned",
+          "nullable": false,
+          "default": null,
+          "extra": "auto_increment",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "is_locked": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "index"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_a2a_api_credentials": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "client_id": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "credential_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "expires_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "key_id": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "last_used_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "rotated_from_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "scopes_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "secret_hash": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "service_user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "credential_id"
+          ]
+        },
+        "ind_agsvc_aac_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "key_id"
+          ]
+        },
+        "ind_agsvc_aac_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_id"
+          ]
+        },
+        "ind_agsvc_aac_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "service_user_id"
+          ]
+        },
+        "ind_agsvc_aac_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "agent_id"
+          ]
+        },
+        "ind_agsvc_aac_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "client_id",
+            "status"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "a2a_api_credentials_agent_id_foreign": {
+          "columns": [
+            "agent_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_definitions",
+          "referencedColumns": [
+            "agent_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "a2a_api_credentials_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "a2a_api_credentials_service_user_id_foreign": {
+          "columns": [
+            "service_user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_a2a_audit_events": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "a2a_task_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "audit_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "client_id": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "credential_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "event_type": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "method": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "payload_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "audit_id"
+          ]
+        },
+        "ind_agsvc_aae_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "client_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_aae_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "a2a_task_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_aae_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "trace_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "a2a_audit_events_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_a2a_tasks": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "a2a_task_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "client_id": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "context_id": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "credential_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "a2a_task_id"
+          ]
+        },
+        "ind_agsvc_at_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_at_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_id"
+          ]
+        },
+        "ind_agsvc_at_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id"
+          ]
+        },
+        "ind_agsvc_at_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "credential_id"
+          ]
+        },
+        "ind_agsvc_at_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_at_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "agent_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_at_i6": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "client_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_at_i7": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "client_id",
+            "agent_id",
+            "context_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "a2a_tasks_agent_id_foreign": {
+          "columns": [
+            "agent_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_definitions",
+          "referencedColumns": [
+            "agent_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "a2a_tasks_conversation_id_foreign": {
+          "columns": [
+            "conversation_id"
+          ],
+          "referencedTable": "tbl_agsvc_conversations",
+          "referencedColumns": [
+            "conversation_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "a2a_tasks_credential_id_foreign": {
+          "columns": [
+            "credential_id"
+          ],
+          "referencedTable": "tbl_agsvc_a2a_api_credentials",
+          "referencedColumns": [
+            "credential_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "a2a_tasks_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "a2a_tasks_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "a2a_tasks_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_agent_definitions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "active_version_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_by": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "description": {
+          "type": "text",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_id"
+          ]
+        },
+        "ind_agsvc_ad_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "name"
+          ]
+        },
+        "ind_agsvc_ad_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "status"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "agent_definitions_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_agent_session_snapshots": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "captured_fence_token": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "checksum": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "snapshot_format": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "snapshot_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "snapshot_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "snapshot_version": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "workspace_path": {
+          "type": "varchar(1024)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "snapshot_id"
+          ]
+        },
+        "ind_agsvc_assn_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "snapshot_version"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "agent_session_snapshots_agent_session_id_foreign": {
+          "columns": [
+            "agent_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_sessions",
+          "referencedColumns": [
+            "agent_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_agent_sessions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_version_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "closed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "execution_fence_token": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "last_run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "recovery_reason_code": {
+          "type": "varchar(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sandbox_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "session_version": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "workspace_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
+          ]
+        },
+        "ind_agsvc_as_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "sandbox_session_id"
+          ]
+        },
+        "ind_agsvc_as_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        "ind_agsvc_as_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_version_id"
+          ]
+        },
+        "ind_agsvc_as_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id"
+          ]
+        },
+        "ind_agsvc_as_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_as_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "conversation_id"
+          ]
+        },
+        "ind_agsvc_as_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status",
+            "recovery_reason_code"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "agent_sessions_agent_version_id_foreign": {
+          "columns": [
+            "agent_version_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_versions",
+          "referencedColumns": [
+            "agent_version_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "agent_sessions_conversation_id_foreign": {
+          "columns": [
+            "conversation_id"
+          ],
+          "referencedTable": "tbl_agsvc_conversations",
+          "referencedColumns": [
+            "conversation_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "agent_sessions_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "agent_sessions_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_agent_versions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_version_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "config_hash": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "config_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_by": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "version_no": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_version_id"
+          ]
+        },
+        "ind_agsvc_av_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_id",
+            "version_no"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "agent_versions_agent_id_foreign": {
+          "columns": [
+            "agent_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_definitions",
+          "referencedColumns": [
+            "agent_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_approvals": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "approval_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "decided_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "decision_by": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "decision_reason": {
+          "type": "text",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "expires_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "request_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "requested_by": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_execution_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "approval_id"
+          ]
+        },
+        "ind_agsvc_appr_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_appr_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "status"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "approvals_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "approvals_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_artifacts": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "artifact_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "display_name": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "mime_type": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "relative_path": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "relative_path_hash": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "stored generated",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": "lower(sha2(`relative_path`,256))"
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sha256": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "size_bytes": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "artifact_id"
+          ]
+        },
+        "ind_agsvc_arti_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "relative_path_hash",
+            "sha256"
+          ]
+        },
+        "ind_agsvc_arti_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_arti_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "artifacts_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "artifacts_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "artifacts_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_auth_credentials": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "display_name": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "email": {
+          "type": "varchar(320)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "external_org_id": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "external_user_id": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "id": {
+          "type": "bigint unsigned",
+          "nullable": false,
+          "default": null,
+          "extra": "auto_increment",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "is_active": {
+          "type": "tinyint(1)",
+          "nullable": false,
+          "default": "1",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "last_login_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "password_hash": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "role": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "user",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "username": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "id"
+          ]
+        },
+        "ind_agsvc_ac_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "external_user_id"
+          ]
+        },
+        "ind_agsvc_ac_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "username"
+          ]
+        },
+        "ind_agsvc_ac_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "external_org_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_conversation_external_refs": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "external_subject": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "provider": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "provider",
+            "external_subject"
+          ]
+        },
+        "ind_agsvc_cer_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_cer_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "conversation_external_refs_conversation_id_foreign": {
+          "columns": [
+            "conversation_id"
+          ],
+          "referencedTable": "tbl_agsvc_conversations",
+          "referencedColumns": [
+            "conversation_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "conversation_external_refs_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "conversation_external_refs_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_conversations": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "archived_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "current_agent_session_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "parent_run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "title": {
+          "type": "varchar(500)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id"
+          ]
+        },
+        "ind_agsvc_conv_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_id"
+          ]
+        },
+        "ind_agsvc_conv_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_conv_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "parent_run_id"
+          ]
+        },
+        "ind_agsvc_conv_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "updated_at"
+          ]
+        },
+        "ind_agsvc_conv_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "parent_run_id",
+            "updated_at"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "conversations_agent_id_foreign": {
+          "columns": [
+            "agent_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_definitions",
+          "referencedColumns": [
+            "agent_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "conversations_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "conversations_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "fk_conversations_parent_run": {
+          "columns": [
+            "parent_run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_cron_job_runs": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "claimed_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "cron_job_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "cron_job_run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "error_message": {
+          "type": "varchar(1000)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "idempotency_key": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "scheduled_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "cron_job_run_id"
+          ]
+        },
+        "ind_agsvc_cjr_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "idempotency_key"
+          ]
+        },
+        "ind_agsvc_cjr_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "cron_job_id",
+            "scheduled_at"
+          ]
+        },
+        "ind_agsvc_cjr_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_cjr_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status",
+            "claimed_at"
+          ]
+        },
+        "ind_agsvc_cjr_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "cron_job_id",
+            "created_at"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "cron_job_runs_cron_job_id_foreign": {
+          "columns": [
+            "cron_job_id"
+          ],
+          "referencedTable": "tbl_agsvc_cron_jobs",
+          "referencedColumns": [
+            "cron_job_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "cron_job_runs_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_cron_jobs": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "auth_provider": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "claim_token": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "concurrency_policy": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "cron_expression": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "cron_job_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "deleted_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "enabled": {
+          "type": "tinyint(1)",
+          "nullable": false,
+          "default": "1",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "external_org_id": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "external_user_id": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "last_run_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "misfire_policy": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "next_run_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "prompt": {
+          "type": "text",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "schedule_type": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "timezone": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "cron_job_id"
+          ]
+        },
+        "ind_agsvc_cj_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_id"
+          ]
+        },
+        "ind_agsvc_cj_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_cj_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "claim_token"
+          ]
+        },
+        "ind_agsvc_cj_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "enabled",
+            "next_run_at"
+          ]
+        },
+        "ind_agsvc_cj_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "cron_jobs_agent_id_foreign": {
+          "columns": [
+            "agent_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_definitions",
+          "referencedColumns": [
+            "agent_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "cron_jobs_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "cron_jobs_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_datasets": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "completed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "dataset_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "mime_type": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "original_filename": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sha256": {
+          "type": "char(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "size_bytes": {
+          "type": "bigint",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "stored_relative_path": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "dataset_id"
+          ]
+        },
+        "ind_agsvc_dset_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
+          ]
+        },
+        "ind_agsvc_dset_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id"
+          ]
+        },
+        "ind_agsvc_dset_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_dset_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "datasets_agent_session_id_foreign": {
+          "columns": [
+            "agent_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_sessions",
+          "referencedColumns": [
+            "agent_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "datasets_conversation_id_foreign": {
+          "columns": [
+            "conversation_id"
+          ],
+          "referencedTable": "tbl_agsvc_conversations",
+          "referencedColumns": [
+            "conversation_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "datasets_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "datasets_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_domain_outbox": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "aggregate_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "aggregate_type": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "attempts": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "claim_token": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "claimed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "event_type": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "last_error": {
+          "type": "varchar(512)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "next_attempt_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "outbox_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "payload_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "published_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "outbox_id"
+          ]
+        },
+        "ind_agsvc_dob_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status",
+            "next_attempt_at",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_dob_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "claim_token"
+          ]
+        },
+        "ind_agsvc_dob_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status",
+            "claimed_at"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_dsh_session_events": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "record_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "seq": {
+          "type": "bigint unsigned",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "session_id",
+            "seq"
+          ]
+        },
+        "ind_agsvc_dse_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "session_id",
+            "seq"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_dsh_sessions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "header_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "revision": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "session_id"
+          ]
+        },
+        "ind_agsvc_ds_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "session_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_exec_artifacts": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "artifact_id": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "identity": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "mime_type": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "application/octet-stream",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "session_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sha256": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "size_bytes": {
+          "type": "bigint unsigned",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "source_path": {
+          "type": "varchar(4096)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "workspace_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "artifact_id"
+          ]
+        },
+        "ind_agsvc_ea_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        },
+        "ind_agsvc_ea_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "session_id"
+          ]
+        },
+        "ind_agsvc_ea_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_exec_datasets": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "completed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "dataset_id": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "idempotency_key": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "mime_type": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "application/octet-stream",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "original_filename": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "session_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sha256": {
+          "type": "char(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "size_bytes": {
+          "type": "bigint unsigned",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "uploading",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "stored_relative_path": {
+          "type": "varchar(4096)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "workspace_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "dataset_id"
+          ]
+        },
+        "ind_agsvc_ed_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "session_id",
+            "idempotency_key"
+          ]
+        },
+        "ind_agsvc_ed_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        },
+        "ind_agsvc_ed_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "session_id"
+          ]
+        },
+        "ind_agsvc_ed_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_exec_jobs": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "detail": {
+          "type": "text",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "exit_code": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "finished_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "kind": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "bash",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "label": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "output_limit_bytes": {
+          "type": "bigint unsigned",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "pgid": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "pid": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "process_id": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "reported": {
+          "type": "tinyint(1)",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "run_id": {
+          "type": "varchar(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "start_identity": {
+          "type": "varchar(512)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "started_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "workspace_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "process_id"
+          ]
+        },
+        "ind_agsvc_ej_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "created_at"
+          ]
+        },
+        "ind_agsvc_ej_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "workspace_id"
+          ]
+        },
+        "ind_agsvc_ej_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_ej_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_idempotency_records": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "expires_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "idempotency_key": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "operation": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "request_hash": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "resource_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "response_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "response_status": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "idempotency_key",
+            "operation"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_messages": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "content_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "message_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "message_type": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "role": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sequence_no": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "session_entry_id": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "session_entry_kind": {
+          "type": "varchar(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "message_id"
+          ]
+        },
+        "ind_agsvc_msg_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id",
+            "sequence_no"
+          ]
+        },
+        "ind_agsvc_msg_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "session_entry_id"
+          ]
+        },
+        "ind_agsvc_msg_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "sequence_no"
+          ]
+        },
+        "ind_agsvc_msg_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "session_entry_kind",
+            "sequence_no"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "messages_conversation_id_foreign": {
+          "columns": [
+            "conversation_id"
+          ],
+          "referencedTable": "tbl_agsvc_conversations",
+          "referencedColumns": [
+            "conversation_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_organization_external_refs": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "external_subject": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "provider": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "provider",
+            "external_subject"
+          ]
+        },
+        "ind_agsvc_oer_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "organization_external_refs_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_organization_memberships": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "role": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        },
+        "ind_agsvc_om_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "organization_memberships_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "organization_memberships_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_organizations": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_process_executions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "command_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "ended_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "execution_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "exit_code": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "pid": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "process_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sandbox_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "started_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "stderr_path": {
+          "type": "varchar(1024)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "stdout_path": {
+          "type": "varchar(1024)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "process_id"
+          ]
+        },
+        "ind_agsvc_pe_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "execution_id"
+          ]
+        },
+        "ind_agsvc_pe_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_pe_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_pe_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "sandbox_session_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_pe_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "process_executions_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "process_executions_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "process_executions_sandbox_session_id_foreign": {
+          "columns": [
+            "sandbox_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_sandbox_sessions",
+          "referencedColumns": [
+            "sandbox_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "process_executions_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_run_events": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "event_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "event_type": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "event_version": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "payload_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sequence_no": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "span_id": {
+          "type": "char(16)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "event_id"
+          ]
+        },
+        "ind_agsvc_re_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "sequence_no"
+          ]
+        },
+        "ind_agsvc_re_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_re_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "run_events_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "run_events_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_run_interactions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "cancelled_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "interaction_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "interaction_type": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "request_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "resolved_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "responded_by": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "response_hash": {
+          "type": "char(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "response_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "resume_applied_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "resume_claimed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "resume_phase": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "NONE",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_call_id": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_execution_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "interaction_id"
+          ]
+        },
+        "ind_agsvc_ri_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "tool_call_id"
+          ]
+        },
+        "ind_agsvc_ri_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "run_id",
+            "status",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_ri_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "resume_phase",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_ri_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "status",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_ri_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
+          ]
+        },
+        "ind_agsvc_ri_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "responded_by"
+          ]
+        },
+        "ind_agsvc_ri_i6": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "tool_execution_id"
+          ]
+        },
+        "ind_agsvc_ri_i7": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "run_interactions_agent_session_id_foreign": {
+          "columns": [
+            "agent_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_sessions",
+          "referencedColumns": [
+            "agent_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "run_interactions_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "run_interactions_responded_by_foreign": {
+          "columns": [
+            "responded_by"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "run_interactions_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "run_interactions_tool_execution_id_foreign": {
+          "columns": [
+            "tool_execution_id"
+          ],
+          "referencedTable": "tbl_agsvc_tool_executions",
+          "referencedColumns": [
+            "tool_execution_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "run_interactions_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_runs": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_version_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "attempt": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "cancel_reason": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "cancel_requested_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "cancel_requested_by": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "completed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "next_event_sequence": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "parent_run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "queue_name": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "source": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "started_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status_reason": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "subagent_depth": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "subagent_label": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_flags": {
+          "type": "char(2)",
+          "nullable": false,
+          "default": "01",
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_parent_span_id": {
+          "type": "char(16)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "trace_state": {
+          "type": "varchar(512)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "triggering_message_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_run_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "cancel_requested_at"
+          ]
+        },
+        "ind_agsvc_run_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_run_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "parent_run_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_run_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_run_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_run_i6": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "trace_id"
+          ]
+        },
+        "ind_agsvc_run_i7": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_version_id"
+          ]
+        },
+        "ind_agsvc_run_i8": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id"
+          ]
+        },
+        "ind_agsvc_run_i9": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "fk_runs_parent_run": {
+          "columns": [
+            "parent_run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "runs_agent_session_id_foreign": {
+          "columns": [
+            "agent_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_sessions",
+          "referencedColumns": [
+            "agent_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "runs_agent_version_id_foreign": {
+          "columns": [
+            "agent_version_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_versions",
+          "referencedColumns": [
+            "agent_version_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "runs_conversation_id_foreign": {
+          "columns": [
+            "conversation_id"
+          ],
+          "referencedTable": "tbl_agsvc_conversations",
+          "referencedColumns": [
+            "conversation_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "runs_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "runs_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_sandbox_audit_events": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "audit_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "event_type": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "execution_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "payload_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "process_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sandbox_session_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "audit_id"
+          ]
+        },
+        "ind_agsvc_sae_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "execution_id"
+          ]
+        },
+        "ind_agsvc_sae_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_sae_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "process_id"
+          ]
+        },
+        "ind_agsvc_sae_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "sandbox_session_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_sae_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "trace_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_sae_i6": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "sandbox_audit_events_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "sandbox_audit_events_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_sandbox_executions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "completed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "error_code": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "execution_fence_token": {
+          "type": "bigint",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "execution_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "exit_code": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "kind": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "request_hash": {
+          "type": "char(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "request_hash_version": {
+          "type": "smallint unsigned",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "result_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sandbox_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "started_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_call_id": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_execution_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "execution_id"
+          ]
+        },
+        "ind_agsvc_se_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "tool_call_id"
+          ]
+        },
+        "ind_agsvc_se_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "tool_execution_id"
+          ]
+        },
+        "ind_agsvc_se_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
+          ]
+        },
+        "ind_agsvc_se_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_se_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_se_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "sandbox_session_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_se_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_se_i6": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "fk_sandbox_execution_tool_execution": {
+          "columns": [
+            "tool_execution_id"
+          ],
+          "referencedTable": "tbl_agsvc_tool_executions",
+          "referencedColumns": [
+            "tool_execution_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "sandbox_executions_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "sandbox_executions_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "sandbox_executions_sandbox_session_id_foreign": {
+          "columns": [
+            "sandbox_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_sandbox_sessions",
+          "referencedColumns": [
+            "sandbox_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "sandbox_executions_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_sandbox_sessions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "closed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sandbox_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "workspace_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "sandbox_session_id"
+          ]
+        },
+        "ind_agsvc_ss_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
+          ]
+        },
+        "ind_agsvc_ss_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
+          ]
+        },
+        "ind_agsvc_ss_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "updated_at"
+          ]
+        },
+        "ind_agsvc_ss_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "status",
+            "updated_at"
+          ]
+        },
+        "ind_agsvc_ss_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "sandbox_sessions_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "sandbox_sessions_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_task_memories": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "content": {
+          "type": "text",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "memory_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "memory_key": {
+          "type": "varchar(191)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "memory_id"
+          ]
+        },
+        "ind_agsvc_tm_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "memory_key"
+          ]
+        },
+        "ind_agsvc_tm_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_tm_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "task_memories_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "task_memories_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_task_todos": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "content": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "position": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "todo_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "todo_id"
+          ]
+        },
+        "ind_agsvc_tt_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id",
+            "position"
+          ]
+        },
+        "ind_agsvc_tt_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "agent_session_id",
+            "position"
+          ]
+        },
+        "ind_agsvc_tt_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "task_todos_agent_session_id_foreign": {
+          "columns": [
+            "agent_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_sessions",
+          "referencedColumns": [
+            "agent_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "task_todos_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "task_todos_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_tool_executions": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "arguments_json": {
+          "type": "json",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "completed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "error_code": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "execution_fence_token": {
+          "type": "bigint",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "request_hash": {
+          "type": "char(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "request_hash_version": {
+          "type": "smallint unsigned",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "result_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "risk_level": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "started_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_call_id": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_execution_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_name": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "tool_source": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "tool_execution_id"
+          ]
+        },
+        "ind_agsvc_te_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "tool_call_id"
+          ]
+        },
+        "ind_agsvc_te_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "agent_session_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "tool_executions_agent_session_id_foreign": {
+          "columns": [
+            "agent_session_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_sessions",
+          "referencedColumns": [
+            "agent_session_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "tool_executions_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_trace_spans": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "artifact_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "attributes_json": {
+          "type": "json",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "cost": {
+          "type": "decimal(20,8)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "duration_ms": {
+          "type": "bigint",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "execution_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "finished_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "kind": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "parent_span_id": {
+          "type": "char(16)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sandbox_session_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "span_id": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "started_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "token_count": {
+          "type": "bigint",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "tool_execution_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "trace_id": {
+          "type": "char(32)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "ascii",
+          "collation": "ascii_bin",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "trace_id",
+            "span_id"
+          ]
+        },
+        "ind_agsvc_ts_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "trace_id",
+            "started_at"
+          ]
+        },
+        "ind_agsvc_ts_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "trace_id",
+            "parent_span_id"
+          ]
+        },
+        "ind_agsvc_ts_i3": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "run_id",
+            "started_at"
+          ]
+        },
+        "ind_agsvc_ts_i4": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_ts_i5": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "trace_spans_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "trace_spans_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "trace_spans_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_user_skill_enablements": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "content_digest": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "enabled_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "enabled_by_user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "enablement_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "file_count": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "skill_name": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "total_bytes": {
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "enablement_id"
+          ]
+        },
+        "ind_agsvc_use_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "skill_name"
+          ]
+        },
+        "ind_agsvc_use_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "enabled_at"
+          ]
+        },
+        "ind_agsvc_use_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "user_skill_enablements_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "user_skill_enablements_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_users": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "display_name": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "email": {
+          "type": "varchar(320)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "external_subject": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        },
+        "ind_agsvc_usr_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "external_subject"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_workspace_quota_reservations": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "bytes": {
+          "type": "bigint unsigned",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "reservation_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "on update current_timestamp(3)",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "workspace_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id",
+            "reservation_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    }
+  },
+  "triggers": {
+    "trg_agent_session_snapshots_forbid_delete": {
+      "table": "tbl_agsvc_agent_session_snapshots",
+      "event": "DELETE",
+      "timing": "BEFORE",
+      "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'agent_session_snapshots is append-only: DELETE is forbidden'"
+    },
+    "trg_agent_session_snapshots_forbid_update": {
+      "table": "tbl_agsvc_agent_session_snapshots",
+      "event": "UPDATE",
+      "timing": "BEFORE",
+      "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'agent_session_snapshots is append-only: UPDATE is forbidden'"
+    },
+    "trg_messages_forbid_delete": {
+      "table": "tbl_agsvc_messages",
+      "event": "DELETE",
+      "timing": "BEFORE",
+      "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'messages is append-only: DELETE is forbidden'"
+    },
+    "trg_messages_forbid_update": {
+      "table": "tbl_agsvc_messages",
+      "event": "UPDATE",
+      "timing": "BEFORE",
+      "body": "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'messages is append-only: UPDATE is forbidden'"
+    }
+  }
+}

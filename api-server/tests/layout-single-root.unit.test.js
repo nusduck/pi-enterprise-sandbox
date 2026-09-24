@@ -19,18 +19,20 @@ describe('api-server single production source root', () => {
       );
     }
     assert.equal(fs.existsSync(path.join(root, 'config.js')), false);
+    assert.equal(fs.existsSync(path.join(root, 'config.ts')), false);
   });
 
-  it('exposes production modules under src/ and thin server.js', () => {
+  it('exposes production modules under src/ and thin server.ts', () => {
     for (const rel of [
-      'server.js',
-      'src/config.js',
-      'src/routes/runs.js',
-      'src/services/agent-client.js',
-      'src/application/run-access-service.js',
-      'src/http/response.js',
+      'server.ts',
+      'src/config.ts',
+      'src/routes/runs.ts',
+      'src/services/agent-client.ts',
+      'src/application/run-access-service.ts',
+      'src/http/response.ts',
     ]) {
       assert.ok(fs.existsSync(path.join(root, rel)), `missing ${rel}`);
     }
   });
 });
+

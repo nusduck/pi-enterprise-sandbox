@@ -39,7 +39,7 @@ const VER = '01K0G2PAV8FPMVC9QHJG7JPN5E';
 const WSP = '01K0G2PAV8FPMVC9QHJG7JPN5G';
 
 function seedWorld(state) {
-  state.tables.runs = [
+  state.tables.tbl_agsvc_runs = [
     {
       run_id: RUN,
       org_id: ORG,
@@ -63,7 +63,7 @@ function seedWorld(state) {
       updated_at: '2026-07-18 00:00:00.000',
     },
   ];
-  state.tables.agent_sessions = [
+  state.tables.tbl_agsvc_agent_sessions = [
     {
       agent_session_id: SESS,
       org_id: ORG,
@@ -73,7 +73,7 @@ function seedWorld(state) {
       sandbox_session_id: SBX,
       workspace_id: WSP,
       status: 'ACTIVE',
-      pi_session_version: 0,
+      session_version: 0,
       last_run_id: RUN,
       execution_fence_token: 3,
       recovery_reason_code: null,
@@ -82,11 +82,11 @@ function seedWorld(state) {
       closed_at: null,
     },
   ];
-  state.tables.tool_executions = [];
-  state.tables.approvals = [];
-  state.tables.sandbox_audit_events = [];
-  state.tables.run_events = [];
-  state.tables.domain_outbox = [];
+  state.tables.tbl_agsvc_tool_executions = [];
+  state.tables.tbl_agsvc_approvals = [];
+  state.tables.tbl_agsvc_sandbox_audit_events = [];
+  state.tables.tbl_agsvc_run_events = [];
+  state.tables.tbl_agsvc_domain_outbox = [];
 }
 
 describe('PR-14 approval decide CAS + tenant isolation', () => {
@@ -170,8 +170,8 @@ describe('PR-14 approval decide CAS + tenant isolation', () => {
         }),
       ConflictError,
     );
-    assert.equal(state.tables.approvals.length, 1);
-    assert.equal(state.tables.approvals[0].status, APPROVAL_STATUS.APPROVED);
+    assert.equal(state.tables.tbl_agsvc_approvals.length, 1);
+    assert.equal(state.tables.tbl_agsvc_approvals[0].status, APPROVAL_STATUS.APPROVED);
   });
 
   it('getOrCreatePending twice returns same approval; no second row', async () => {
@@ -214,7 +214,7 @@ describe('PR-14 approval decide CAS + tenant isolation', () => {
     assert.equal(a1.created, true);
     assert.equal(a2.created, false);
     assert.equal(a1.approval.approvalId, a2.approval.approvalId);
-    assert.equal(state.tables.approvals.length, 1);
+    assert.equal(state.tables.tbl_agsvc_approvals.length, 1);
   });
 
   it('foreign user cannot get/decide approval', async () => {
@@ -286,10 +286,10 @@ describe('PR-14 MySQL / queue failure fail-closed (CreateRun authority)', () => 
     });
     assert.equal(created.status, 'ACCEPTED');
     assert.equal(created.queueWarning, QUEUE_WARNING.ENQUEUE_FAILED);
-    assert.equal(world.tables.runs[0].status, 'ACCEPTED');
+    assert.equal(world.tables.tbl_agsvc_runs[0].status, 'ACCEPTED');
     assert.equal(world.enqueuedJobs.length, 0);
     assert.equal(
-      world.tables.run_events.filter((e) => e.event_type === 'run.queued')
+      world.tables.tbl_agsvc_run_events.filter((e) => e.event_type === 'run.queued')
         .length,
       0,
     );
@@ -310,9 +310,9 @@ describe('PR-14 MySQL / queue failure fail-closed (CreateRun authority)', () => 
       traceId: TRACE,
       idempotencyKey: 'pr14-ok-first',
     });
-    const snapRuns = world.tables.runs.length;
-    const snapEvents = world.tables.run_events.length;
-    const snapOutbox = world.tables.domain_outbox.length;
+    const snapRuns = world.tables.tbl_agsvc_runs.length;
+    const snapEvents = world.tables.tbl_agsvc_run_events.length;
+    const snapOutbox = world.tables.tbl_agsvc_domain_outbox.length;
 
     world.failNextTransaction();
     await assert.rejects(
@@ -328,9 +328,9 @@ describe('PR-14 MySQL / queue failure fail-closed (CreateRun authority)', () => 
         }),
       /simulated transaction failure/,
     );
-    assert.equal(world.tables.runs.length, snapRuns);
-    assert.equal(world.tables.run_events.length, snapEvents);
-    assert.equal(world.tables.domain_outbox.length, snapOutbox);
+    assert.equal(world.tables.tbl_agsvc_runs.length, snapRuns);
+    assert.equal(world.tables.tbl_agsvc_run_events.length, snapEvents);
+    assert.equal(world.tables.tbl_agsvc_domain_outbox.length, snapOutbox);
     assert.ok(world.rollbackCount >= 1);
   });
 });

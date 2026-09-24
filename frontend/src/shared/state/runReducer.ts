@@ -38,6 +38,8 @@ import {
   capSeenEventIds,
   inferToolSource,
   isExternalRiskApproval,
+  latestAssistantId,
+  latestStreamingAssistantId,
   normalizeToRuntimeEvent,
 } from './platformEventNormalize';
 
@@ -65,7 +67,7 @@ function str(v: unknown, fallback = ''): string {
 
 /**
  * Roles that belong in the chat transcript EntityStore.
- * Pi emits `toolResult` / `tool` as message.completed after sandbox tools;
+ * DSH emits `toolResult` / `tool` as message.completed after sandbox tools;
  * those must never become assistant bubbles (raw exitCode/stdout JSON).
  */
 function normalizeChatMessageRole(
@@ -345,8 +347,13 @@ export function reduceRuntimeEvent(
       if (run) {
         for (const mid of run.messageIds) {
           const msg = next.messagesById[mid];
-          if (msg && msg.status === 'streaming') {
-            next = upsertMessage(next, { ...msg, status: 'complete', updatedAt: ts });
+          if (msg && (msg.status === 'streaming' || msg.thinkingStatus === 'streaming')) {
+            next = upsertMessage(next, {
+              ...msg,
+              status: msg.status === 'streaming' ? 'complete' : msg.status,
+              thinkingStatus: msg.thinkingStatus === 'streaming' ? 'complete' : msg.thinkingStatus,
+              updatedAt: ts,
+            });
           }
         }
       }
@@ -404,14 +411,7 @@ export function reduceRuntimeEvent(
       let messageId = str(payload.message_id || payload.id);
       const delta = str(payload.text || payload.delta);
       if (!messageId) {
-        const run = next.runsById[runId];
-        for (const id of [...(run?.messageIds || [])].reverse()) {
-          const candidate = next.messagesById[id];
-          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
-            messageId = id;
-            break;
-          }
-        }
+        messageId = latestStreamingAssistantId(next.runsById[runId], next.messagesById);
       }
       if (messageId && next.messagesById[messageId]) {
         const msg = next.messagesById[messageId];
@@ -448,13 +448,8 @@ export function reduceRuntimeEvent(
       let messageId = str(payload.message_id || payload.id);
       if (!messageId) {
         const run = next.runsById[runId];
-        for (const id of [...(run?.messageIds || [])].reverse()) {
-          const candidate = next.messagesById[id];
-          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
-            messageId = id;
-            break;
-          }
-        }
+        messageId = latestStreamingAssistantId(run, next.messagesById)
+          || latestAssistantId(run, next.messagesById);
       }
       const id = messageId || `msg_${runId}_thinking_${ev.sequence}`;
       const existing = next.messagesById[id];
@@ -491,19 +486,12 @@ export function reduceRuntimeEvent(
       const completedRole = normalizeChatMessageRole(
         payload.role == null || payload.role === '' ? 'assistant' : payload.role,
       );
-      // Pi toolResult / tool messages: handled via tool.* events only.
+      // DSH toolResult / tool messages: handled via tool.* events only.
       if (!completedRole) break;
 
       let messageId = str(payload.message_id || payload.id);
       if (!messageId && completedRole === 'assistant') {
-        const run = next.runsById[runId];
-        for (const id of [...(run?.messageIds || [])].reverse()) {
-          const candidate = next.messagesById[id];
-          if (candidate?.role === 'assistant' && candidate.status === 'streaming') {
-            messageId = id;
-            break;
-          }
-        }
+        messageId = latestStreamingAssistantId(next.runsById[runId], next.messagesById);
       }
       if (messageId && next.messagesById[messageId]) {
         const msg = next.messagesById[messageId];
@@ -514,14 +502,20 @@ export function reduceRuntimeEvent(
         // A message.completed event is a bounded, redacted observability
         // projection. It must not replace a complete live token buffer with
         // its shortened preview.
+        const previewStr = payload.text != null ? str(payload.text) : '';
+        const isTruncated =
+          payload.text_truncated === true ||
+          payload.textTruncated === true ||
+          (Boolean(msg.text) && Boolean(previewStr) && msg.text.length > previewStr.length && previewStr.endsWith('…'));
         const finalText =
-          payload.text != null && payload.text_truncated !== true
-            ? str(payload.text)
+          payload.text != null && !isTruncated
+            ? previewStr
             : msg.text;
         next = upsertMessage(next, {
           ...msg,
           text: finalText,
           status: 'complete',
+          thinkingStatus: msg.thinkingStatus === 'streaming' ? 'complete' : msg.thinkingStatus,
           updatedAt: ts,
         });
       } else {

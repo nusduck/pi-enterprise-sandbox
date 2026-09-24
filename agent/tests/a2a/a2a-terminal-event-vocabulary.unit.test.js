@@ -12,7 +12,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { listSources } from '../support/read-source.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
@@ -146,9 +147,8 @@ describe('A2A projector understands the emitted RunEvent vocabulary', () => {
     const appDir = path.resolve(here, '../../src/application');
     /** @type {Set<string>} */
     const emitted = new Set();
-    for (const name of readdirSync(appDir)) {
-      if (!name.endsWith('.js')) continue;
-      const source = readFileSync(path.join(appDir, name), 'utf8');
+    for (const file of listSources(appDir)) {
+      const source = readFileSync(file, 'utf8');
       for (const m of source.matchAll(/eventType\s*[:=]\s*'(run\.[a-z_.]+)'/g)) {
         emitted.add(m[1]);
       }

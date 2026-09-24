@@ -54,7 +54,7 @@ describe('durable steer and separate follow-up Run', () => {
       traceId: TRACE,
       idempotencyKey: 'create-first',
     });
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
   });
 
   it('atomically persists instruction, requested event, Outbox and response', async () => {
@@ -68,26 +68,26 @@ describe('durable steer and separate follow-up Run', () => {
 
     assert.equal(response.status, 'ACCEPTED');
     assert.equal(response.runId, first.runId);
-    const message = world.tables.messages.find(
+    const message = world.tables.tbl_agsvc_messages.find(
       (row) => row.message_id === response.messageId,
     );
     assert.equal(message.message_type, 'steer_instruction');
     assert.deepEqual(JSON.parse(message.content_json), {
       text: 'focus on the second column',
     });
-    const event = world.tables.run_events.find(
+    const event = world.tables.tbl_agsvc_run_events.find(
       (row) => row.event_id === response.steerId,
     );
     assert.equal(event.event_type, STEER_REQUESTED_EVENT);
     assert.equal(JSON.parse(event.payload_json).messageId, response.messageId);
     assert.ok(
-      world.tables.domain_outbox.some(
+      world.tables.tbl_agsvc_domain_outbox.some(
         (row) =>
           row.aggregate_id === first.runId &&
           row.event_type === STEER_REQUESTED_EVENT,
       ),
     );
-    const idempotency = world.tables.idempotency_records.find(
+    const idempotency = world.tables.tbl_agsvc_idempotency_records.find(
       (row) => row.operation === 'steer_run',
     );
     assert.equal(idempotency.resource_id, response.steerId);
@@ -104,18 +104,18 @@ describe('durable steer and separate follow-up Run', () => {
     };
     const firstResponse = await services.steer.execute(input);
     const counts = {
-      messages: world.tables.messages.length,
-      events: world.tables.run_events.length,
-      outbox: world.tables.domain_outbox.length,
+      messages: world.tables.tbl_agsvc_messages.length,
+      events: world.tables.tbl_agsvc_run_events.length,
+      outbox: world.tables.tbl_agsvc_domain_outbox.length,
     };
     const replay = await services.steer.execute(input);
     assert.equal(replay.steerId, firstResponse.steerId);
     assert.equal(replay.replayed, true);
     assert.deepEqual(
       {
-        messages: world.tables.messages.length,
-        events: world.tables.run_events.length,
-        outbox: world.tables.domain_outbox.length,
+        messages: world.tables.tbl_agsvc_messages.length,
+        events: world.tables.tbl_agsvc_run_events.length,
+        outbox: world.tables.tbl_agsvc_domain_outbox.length,
       },
       counts,
     );
@@ -128,10 +128,10 @@ describe('durable steer and separate follow-up Run', () => {
 
   it('rejects non-running and foreign-owner admission without writes', async () => {
     const counts = {
-      messages: world.tables.messages.length,
-      events: world.tables.run_events.length,
+      messages: world.tables.tbl_agsvc_messages.length,
+      events: world.tables.tbl_agsvc_run_events.length,
     };
-    world.tables.runs[0].status = RUN_STATUS.SUCCEEDED;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.SUCCEEDED;
     await assert.rejects(
       services.steer.execute({
         runId: first.runId,
@@ -143,7 +143,7 @@ describe('durable steer and separate follow-up Run', () => {
       /not accepting steer/i,
     );
 
-    world.tables.runs[0].status = RUN_STATUS.RUNNING;
+    world.tables.tbl_agsvc_runs[0].status = RUN_STATUS.RUNNING;
     await assert.rejects(
       services.steer.execute({
         runId: first.runId,
@@ -154,8 +154,8 @@ describe('durable steer and separate follow-up Run', () => {
       }),
       OwnerScopedNotFoundError,
     );
-    assert.equal(world.tables.messages.length, counts.messages);
-    assert.equal(world.tables.run_events.length, counts.events);
+    assert.equal(world.tables.tbl_agsvc_messages.length, counts.messages);
+    assert.equal(world.tables.tbl_agsvc_run_events.length, counts.events);
   });
 
   it('creates follow-up as a new Run on the same Conversation and Session', async () => {
@@ -170,10 +170,10 @@ describe('durable steer and separate follow-up Run', () => {
     assert.notEqual(result.runId, first.runId);
     assert.equal(result.conversationId, first.conversationId);
     assert.equal(result.agentSessionId, first.agentSessionId);
-    assert.equal(world.tables.runs.length, 2);
-    assert.equal(world.tables.agent_sessions.length, 1);
-    const followRun = world.tables.runs.find((row) => row.run_id === result.runId);
-    const trigger = world.tables.messages.find(
+    assert.equal(world.tables.tbl_agsvc_runs.length, 2);
+    assert.equal(world.tables.tbl_agsvc_agent_sessions.length, 1);
+    const followRun = world.tables.tbl_agsvc_runs.find((row) => row.run_id === result.runId);
+    const trigger = world.tables.tbl_agsvc_messages.find(
       (row) => row.message_id === followRun.triggering_message_id,
     );
     assert.equal(trigger.run_id, result.runId);

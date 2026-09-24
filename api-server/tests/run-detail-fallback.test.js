@@ -145,11 +145,11 @@ test('presentRunDetail maps the durable Agent failure reason to the public error
     {
       run_id: 'r3',
       status: 'failed',
-      status_reason: 'Pi runtime completed with assistant stopReason=error: quota exhausted',
+      status_reason: 'DSH runtime completed with assistant stopReason=error: quota exhausted',
     },
     true,
   );
-  assert.equal(detail.error, 'Pi runtime completed with assistant stopReason=error: quota exhausted');
+  assert.equal(detail.error, 'DSH runtime completed with assistant stopReason=error: quota exhausted');
 });
 
 test('presentRunDetail does not map parked wait status_reason to error', () => {

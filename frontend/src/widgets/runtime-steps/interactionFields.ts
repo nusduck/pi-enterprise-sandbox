@@ -98,5 +98,8 @@ export function summarizeInteractionResult(result: unknown): string | null {
 }
 
 export function isAskUserToolName(name: string | null | undefined): boolean {
-  return String(name || '').trim() === 'ask_user';
+  const n = String(name || '').trim();
+  // 出厂 `dsh-tool-ask-user` 注册的是 `ask_user_question`（ADR 0009 D4）。
+  // 旧名留着只为历史会话——过去的 Run 里有 `ask_user` 的记录。
+  return n === 'ask_user_question' || n === 'ask_user';
 }

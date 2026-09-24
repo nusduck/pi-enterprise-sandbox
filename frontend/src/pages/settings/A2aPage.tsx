@@ -9,8 +9,6 @@ import {
 import {
   IconRefresh,
   IconSparkles,
-  IconA2a,
-  IconClose,
   IconCopy,
   IconCheck,
 } from '../../shared/ui/Icons';

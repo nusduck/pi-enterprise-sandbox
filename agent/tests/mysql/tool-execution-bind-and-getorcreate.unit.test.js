@@ -81,9 +81,9 @@ function seed(state, overrides = {}) {
     created_at: '2026-07-18 00:00:00.000',
     ...(overrides.tool || {}),
   };
-  state.tables.runs = [run];
-  state.tables.agent_sessions = [session];
-  state.tables.tool_executions = overrides.noTool ? [] : [tool];
+  state.tables.tbl_agsvc_runs = [run];
+  state.tables.tbl_agsvc_agent_sessions = [session];
+  state.tables.tbl_agsvc_tool_executions = overrides.noTool ? [] : [tool];
 }
 
 function baseBind(extra = {}) {
@@ -132,14 +132,14 @@ describe('ToolExecutionRepository.getOrCreate run ownership', () => {
   });
 
   it('conflicts when run.agent_session_id mismatches before insert', async () => {
-    state.tables.runs[0].agent_session_id = SESS2;
+    state.tables.tbl_agsvc_runs[0].agent_session_id = SESS2;
     await assert.rejects(
       () => repo.getOrCreate(createInput()),
       (err) =>
         err instanceof ConflictError &&
         /agent_session_id does not match/i.test(err.message),
     );
-    assert.equal(state.tables.tool_executions.length, 0);
+    assert.equal(state.tables.tbl_agsvc_tool_executions.length, 0);
   });
 
   it('conflicts when optional conversationId mismatches before insert', async () => {
@@ -149,7 +149,7 @@ describe('ToolExecutionRepository.getOrCreate run ownership', () => {
         err instanceof ConflictError &&
         /conversation_id does not match/i.test(err.message),
     );
-    assert.equal(state.tables.tool_executions.length, 0);
+    assert.equal(state.tables.tbl_agsvc_tool_executions.length, 0);
   });
 
   it('succeeds when conversationId matches owned run', async () => {
@@ -163,7 +163,7 @@ describe('ToolExecutionRepository.getOrCreate run ownership', () => {
 
   it('replay still requires matching agent_session_id', async () => {
     await repo.getOrCreate(createInput());
-    state.tables.runs[0].agent_session_id = SESS2;
+    state.tables.tbl_agsvc_runs[0].agent_session_id = SESS2;
     await assert.rejects(
       () =>
         repo.getOrCreate(
@@ -200,7 +200,7 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
     assert.equal(r.toolExecution.requestHash, HASH);
     assert.equal(r.toolExecution.requestHashVersion, 1);
     assert.equal(r.toolExecution.executionFenceToken, FENCE);
-    assert.equal(state.tables.tool_executions[0].request_hash, HASH);
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].request_hash, HASH);
   });
 
   it('binds via runId+toolCallId', async () => {
@@ -219,17 +219,17 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
   });
 
   it('rejects partial/different binding', async () => {
-    state.tables.tool_executions[0].request_hash = HASH;
-    state.tables.tool_executions[0].request_hash_version = null;
-    state.tables.tool_executions[0].execution_fence_token = null;
+    state.tables.tbl_agsvc_tool_executions[0].request_hash = HASH;
+    state.tables.tbl_agsvc_tool_executions[0].request_hash_version = null;
+    state.tables.tbl_agsvc_tool_executions[0].execution_fence_token = null;
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /binding conflict|partial/i,
     );
 
-    state.tables.tool_executions[0].request_hash = HASH;
-    state.tables.tool_executions[0].request_hash_version = 1;
-    state.tables.tool_executions[0].execution_fence_token = FENCE;
+    state.tables.tbl_agsvc_tool_executions[0].request_hash = HASH;
+    state.tables.tbl_agsvc_tool_executions[0].request_hash_version = 1;
+    state.tables.tbl_agsvc_tool_executions[0].execution_fence_token = FENCE;
     await assert.rejects(
       () =>
         repo.bindSandboxRequest(
@@ -247,7 +247,7 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
         ),
       /stale execution fence/i,
     );
-    state.tables.agent_sessions[0].status = 'SUSPENDED';
+    state.tables.tbl_agsvc_agent_sessions[0].status = 'SUSPENDED';
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /ACTIVE session/i,
@@ -255,21 +255,21 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
   });
 
   it('rejects non-RUNNING run / conversation mismatch / session mismatch', async () => {
-    state.tables.runs[0].status = 'SUCCEEDED';
+    state.tables.tbl_agsvc_runs[0].status = 'SUCCEEDED';
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /Run must be RUNNING/i,
     );
-    state.tables.runs[0].status = 'RUNNING';
+    state.tables.tbl_agsvc_runs[0].status = 'RUNNING';
 
-    state.tables.runs[0].conversation_id = CONV2;
+    state.tables.tbl_agsvc_runs[0].conversation_id = CONV2;
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /conversation_id does not match/i,
     );
-    state.tables.runs[0].conversation_id = CONV;
+    state.tables.tbl_agsvc_runs[0].conversation_id = CONV;
 
-    state.tables.runs[0].agent_session_id = SESS2;
+    state.tables.tbl_agsvc_runs[0].agent_session_id = SESS2;
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /not bound to agentSessionId/i,
@@ -311,9 +311,9 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
     const locks = state.lockCalls;
     assert.ok(locks.length >= 3, JSON.stringify(locks));
     // First agent_sessions share, then runs share, then tool_executions update
-    const sessionLock = locks.find((l) => l.table === 'agent_sessions');
-    const runLock = locks.find((l) => l.table === 'runs');
-    const toolLock = locks.find((l) => l.table === 'tool_executions');
+    const sessionLock = locks.find((l) => l.table === 'tbl_agsvc_agent_sessions');
+    const runLock = locks.find((l) => l.table === 'tbl_agsvc_runs');
+    const toolLock = locks.find((l) => l.table === 'tbl_agsvc_tool_executions');
     assert.ok(sessionLock, 'session lock recorded');
     assert.ok(runLock, 'run lock recorded');
     assert.ok(toolLock, 'tool lock recorded');
@@ -323,11 +323,11 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
     assert.equal(toolLock.joined, false);
     // No exclusive lock on parent rows
     assert.equal(
-      locks.some((l) => l.table === 'agent_sessions' && l.mode === 'update'),
+      locks.some((l) => l.table === 'tbl_agsvc_agent_sessions' && l.mode === 'update'),
       false,
     );
     assert.equal(
-      locks.some((l) => l.table === 'runs' && l.mode === 'update'),
+      locks.some((l) => l.table === 'tbl_agsvc_runs' && l.mode === 'update'),
       false,
     );
   });
@@ -361,35 +361,35 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
   });
 
   it('rejects wrong tool source/status/session/run', async () => {
-    state.tables.tool_executions[0].tool_source = 'mcp';
+    state.tables.tbl_agsvc_tool_executions[0].tool_source = 'mcp';
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /tool_source=sandbox/i,
     );
-    state.tables.tool_executions[0].tool_source = 'sandbox';
+    state.tables.tbl_agsvc_tool_executions[0].tool_source = 'sandbox';
 
-    state.tables.tool_executions[0].status = TOOL_EXECUTION_STATUS.SUCCEEDED;
+    state.tables.tbl_agsvc_tool_executions[0].status = TOOL_EXECUTION_STATUS.SUCCEEDED;
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /only RUNNING may bind/i,
     );
-    state.tables.tool_executions[0].status = TOOL_EXECUTION_STATUS.UNKNOWN;
+    state.tables.tbl_agsvc_tool_executions[0].status = TOOL_EXECUTION_STATUS.UNKNOWN;
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /only RUNNING may bind/i,
     );
-    state.tables.tool_executions[0].status = TOOL_EXECUTION_STATUS.RUNNING;
+    state.tables.tbl_agsvc_tool_executions[0].status = TOOL_EXECUTION_STATUS.RUNNING;
 
-    state.tables.tool_executions[0].agent_session_id = SESS2;
+    state.tables.tbl_agsvc_tool_executions[0].agent_session_id = SESS2;
     await assert.rejects(
       () => repo.bindSandboxRequest(baseBind({ toolExecutionId: TE })),
       /agentSessionId mismatch/i,
     );
-    state.tables.tool_executions[0].agent_session_id = SESS;
+    state.tables.tbl_agsvc_tool_executions[0].agent_session_id = SESS;
 
-    state.tables.tool_executions[0].run_id = RUN2;
+    state.tables.tbl_agsvc_tool_executions[0].run_id = RUN2;
     // run lookup uses peek run_id; seed second run so requireOwnedRun fails or mismatch
-    state.tables.runs.push({
+    state.tables.tbl_agsvc_runs.push({
       run_id: RUN2,
       org_id: ORG,
       user_id: USER,
@@ -401,7 +401,7 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
       updated_at: '2026-07-18 00:00:00.000',
     });
     // tool row under RUN2 but bind with runId+toolCallId for RUN conflicts
-    state.tables.tool_executions[0].run_id = RUN;
+    state.tables.tbl_agsvc_tool_executions[0].run_id = RUN;
     await assert.rejects(
       () =>
         repo.bindSandboxRequest(
@@ -477,8 +477,8 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
         self.db = (table) => {
           const q = orig(table);
           if (
-            (table === 'tool_executions' ||
-              String(table).startsWith('tool_executions')) &&
+            (table === 'tbl_agsvc_tool_executions' ||
+              String(table).startsWith('tbl_agsvc_tool_executions')) &&
             typeof q.update === 'function'
           ) {
             const u = q.update.bind(q);
@@ -505,7 +505,7 @@ describe('ToolExecutionRepository.bindSandboxRequest', () => {
       /CAS lost race|binding conflict/i,
     );
     // Original row remains unbound (no blind update applied).
-    assert.equal(state.tables.tool_executions[0].request_hash, null);
+    assert.equal(state.tables.tbl_agsvc_tool_executions[0].request_hash, null);
   });
 
   it('requires toolExecutionId or runId+toolCallId', async () => {
@@ -569,7 +569,7 @@ describe('ToolExecutionRepository.transitionStatus UNKNOWN', () => {
   });
 
   it('PROPOSED cannot go directly to UNKNOWN', async () => {
-    state.tables.tool_executions[0].status = TOOL_EXECUTION_STATUS.PROPOSED;
+    state.tables.tbl_agsvc_tool_executions[0].status = TOOL_EXECUTION_STATUS.PROPOSED;
     await assert.rejects(
       () =>
         repo.transitionStatus({
