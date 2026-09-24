@@ -279,6 +279,7 @@ jobs:
           npm run build --prefix contract
           npm run build --prefix exec
           npm run build --prefix agent
+          npm run build --prefix api-server
 
       # docker-compose.yml gives its MySQL `--log-bin-trust-function-creators=1`
       # because Agent migrations create triggers as a non-SUPER application

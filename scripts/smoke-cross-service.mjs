@@ -498,7 +498,8 @@ async function main() {
         LLMIO_BASE_URL: fake.baseUrl,
         LLMIO_API_KEY: 'fake-test-key',
         MODEL_ID: 'deepseek-v4-flash',
-        AGENT_WORKER_CONCURRENCY: String(Math.min(20, Math.max(1, concurrentRuns))),
+        // 分层队列要求每个子任务深度（默认 0..2）各留一个消费槽，下限 3（ADR 0012）。
+        AGENT_WORKER_CONCURRENCY: String(Math.min(20, Math.max(3, concurrentRuns))),
         AGENT_RECOVERY_INTERVAL_MS: '1000',
         AGENT_OUTBOX_IDLE_MS: '100',
       },
@@ -509,7 +510,7 @@ async function main() {
 
   spawnProc(
     process.execPath,
-    ['server.js'],
+    ['dist/server.js'],
     {
       PORT: String(bffPort),
       NODE_ENV: 'test',
