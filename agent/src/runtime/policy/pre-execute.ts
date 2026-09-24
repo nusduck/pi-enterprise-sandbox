@@ -9,7 +9,7 @@ import { makePolicyDecision, mergePolicyDecisions, type PolicyDecision } from '.
 import type { PolicyRiskLevel } from './decision.js';
 import { decideFromRiskTable } from './risk-table.js';
 import { digestArgs, rejectMismatchedDigest } from './source-digest.js';
-import { approvalIdOf } from './approval-id.js';
+import { approvalIdOf, callIdOfApprovalId } from './approval-id.js';
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED';
 
@@ -105,6 +105,14 @@ export interface PreExecuteResult {
   readonly decision: PolicyDecision;
   readonly approval: PendingApproval | null;
   readonly blocked: boolean;
+  /**
+   * 本次调用认领了一条已批准的决定时，**被批准的那次调用**的 callId。
+   *
+   * 续跑时模型以新 callId 重发，认领把被批准的那一行推到 RUNNING；执行的账本
+   * 必须记回那一行，否则它永远停在 RUNNING，结果却落在新 callId 另起的一行上
+   * （2026-09-24 真实链路复现）。
+   */
+  readonly replayOf?: string;
 }
 
 export async function evaluatePreExecute(
@@ -190,7 +198,9 @@ export async function evaluatePreExecute(
         args: input.args,
         argsIntegrity: resolved.argsIntegrity,
       });
+      const replayOf = resolved.toolCallId ?? callIdOfApprovalId(resolved.id);
       return {
+        ...(replayOf !== undefined ? { replayOf } : {}),
         decision: makePolicyDecision({
           decision: 'allow',
           reasonCode: 'APPROVAL_GRANTED_ONCE',

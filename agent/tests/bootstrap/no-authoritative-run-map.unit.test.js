@@ -211,6 +211,13 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'instance',
   },
   {
+    rel: 'runtime/policy/install.ts',
+    match: /const\s+replayOf\s*=\s*new\s+Map\s*(?:<[^;\n(){}]*>)?\s*\(/,
+    purpose:
+      "One Run's replayed callId -> claimed callId alias, so an approved replay's ledger lands on the claimed row; the durable approval claim in MySQL is authoritative",
+    scope: 'local',
+  },
+  {
     rel: 'runtime/policy/pre-execute.ts',
     match: /readonly\s+records\s*=\s*new\s+Map/,
     purpose:
@@ -470,9 +477,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // → BullMQ Queue **句柄**的索引（容器一份、装配函数里一份局部、构造器
     // 复位一次），随容器拆卸一起消失。路由权威仍是 MySQL 的 `subagent_depth`，
     // 这些 Map 里没有任何 Run 事实。
+    // 2026-09-25: 34 → 35。`runtime/policy/install.ts` 的 `replayOf`：一次 Run 内
+    // 「模型重发的 callId → 被认领的已批准 callId」，只用来把续跑执行的账本记回
+    // 被批准的那一行；一次性认领的权威是 MySQL 里的审批与 ToolExecution 行。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      34,
+      35,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

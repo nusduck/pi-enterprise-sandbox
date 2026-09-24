@@ -299,6 +299,9 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
   const budget = new RunBudget(resolveRunBudget(options.env ?? process.env, options.now?.() ?? Date.now()));
   // **每 Run 一个**。装在根 ctx 上会让一个 Run 的停泊把所有 Run 一起锁死。
   const park = new RunPark();
+  // 续跑认领：模型重发调用的 callId → 被批准的那次调用的 callId（见 PreExecuteResult.replayOf）。
+  // 认领已把那一行推到 RUNNING；执行的账本两端必须记回那一行，而不是按新 callId 另起一行。
+  const replayOf = new Map<string, string>();
   const disposers: Array<() => void> = [];
 
   const resolveInstalledPolicy = (
@@ -333,6 +336,9 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
         options.riskOverrides ?? {},
         resolveInstalledPolicy,
       );
+      if (outcome.replayOf !== undefined && outcome.replayOf !== callIdOf(exec)) {
+        replayOf.set(callIdOf(exec), outcome.replayOf);
+      }
       // allow 时把决定权交回瀑布——我们只加约束，不抢走别人的拒绝权。
       if (!outcome.blocked) return await next();
       // 铸出 PENDING 的同一刻停泊本 Run（ADR 0009 D5 的实测修正形状，见 park.ts）：
@@ -389,11 +395,12 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
         async () => {
           const ledger = options.toolLedger;
           if (ledger === undefined) return await wrapExecute(budget, next);
+          const ledgerCallId = replayOf.get(toolCallId) ?? toolCallId;
 
           // `started` 是**派发边界**：它返回时账本已是 RUNNING、sandbox 工具已绑定请求
           // 指纹与 fence（2026-09-17）。它失败就不派发——常见原因是 fence 已被别的
           // Worker 接管，照样执行等于旧 Worker 在别人的 lease 下落副作用。
-          await ledger.started({ toolCallId, toolName, args });
+          await ledger.started({ toolCallId: ledgerCallId, toolName, args });
 
           // 结束记账失败**不得**打死一次已执行的调用（副作用已发生），但必须留痕——
           // 静默吞掉会留下永远 RUNNING 的行而没人知道为什么（2026-08-31 compose 端到端）。
@@ -407,12 +414,12 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
             const reason = toolOutcomeUnknownReason(execution);
             if (reason !== undefined && ledger.unknown !== undefined) {
               await ledger
-                .unknown({ toolCallId, toolName, reason, result, args })
+                .unknown({ toolCallId: ledgerCallId, toolName, reason, result, args })
                 .catch((e) => note(`unknown${phase}`, e));
               return;
             }
             await ledger
-              .ended({ toolCallId, toolName, isError, result, args })
+              .ended({ toolCallId: ledgerCallId, toolName, isError, result, args })
               .catch((e) => note(`ended${phase}`, e));
           };
           try {

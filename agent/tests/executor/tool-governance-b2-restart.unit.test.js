@@ -307,6 +307,37 @@ describe('restart-safe MySQL-authoritative idempotency', () => {
     );
   });
 
+  it('the claimed row is where the replayed execution starts and ends (no second row, never stuck RUNNING)', async () => {
+    const { gov } = makeGov(knex, nextId);
+    const decision = {
+      decision: 'require_approval',
+      reasonCode: 'EXTERNAL_HIGH_RISK',
+      reason: 'needs approval',
+      policyId: 'p',
+      riskLevel: 'high',
+    };
+    const call = { toolCallId: 'tc-replay-row', toolName: 'mcp__crm__delete', args: { id: '7' } };
+    await gov.recordPolicyDecision({ ...call, decision });
+    const pending = await gov.requestApproval({ ...call, decision });
+    state.tables.tbl_agsvc_approvals.find(
+      (row) => row.approval_id === pending.approval.approvalId,
+    ).status = APPROVAL_STATUS.APPROVED;
+
+    // Claim (tools/pre-execute consume), then the execution ledger re-targeted
+    // onto the claimed call id (runtime/policy/install.ts replayOf).
+    await gov.recordToolStarted({ ...call, approvalId: pending.approval.approvalId });
+    const started = await gov.recordToolStarted(call);
+    assert.equal(started.statusChanged, false, 'the claim already moved the row to RUNNING');
+    const ended = await gov.recordToolEnded({ ...call, isError: false, result: { ok: true } });
+    assert.equal(ended.toolExecution.status, TOOL_EXECUTION_STATUS.SUCCEEDED);
+
+    const rows = state.tables.tbl_agsvc_tool_executions.filter((row) => row.tool_name === 'mcp__crm__delete' && row.tool_call_id === 'tc-replay-row');
+    assert.equal(rows.length, 1);
+    const events = state.tables.tbl_agsvc_run_events.map((row) => row.event_type);
+    assert.equal(events.filter((t) => t === 'tool.execution.started').length, 1);
+    assert.equal(events.filter((t) => t === 'tool.execution.completed').length, 1);
+  });
+
   it('approved replay cannot create a ToolExecution when its binding is missing', async () => {
     const { gov } = makeGov(knex, nextId);
     await assert.rejects(

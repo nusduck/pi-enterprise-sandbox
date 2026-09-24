@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   由 AgentVersion 配置 `delegation.remoteAgents` 授权，缺省不可调用；出站只发往卡片同源、有超时与响应上限。
   见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。
 
+### Fixed
+
+- **审批通过后的续跑不再留下永远 `RUNNING` 的工具执行行**：模型以新 callId 重发被批准的调用时，执行结果
+  此前落在按新 callId 另起的一行上，被批准的那一行停在 `RUNNING`、没有结果。现在执行的账本记回被批准的
+  那一行，一次被批准的执行只有一行。
+
 ### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
 
 - **产品与部署标识统一改为 `dsh`**：镜像 / 容器 `dsh-enterprise-*`，包名 `@dsh/contract`、`@dsh/exec`，VM 上的

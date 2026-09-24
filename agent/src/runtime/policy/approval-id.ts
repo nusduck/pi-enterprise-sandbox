@@ -8,3 +8,8 @@
 export function approvalIdOf(callId: string): string {
   return `appr_${callId}`;
 }
+
+/** `approvalIdOf` 的逆运算；不是本规则铸出的 id 返回 `undefined`。 */
+export function callIdOfApprovalId(approvalId: string): string | undefined {
+  return approvalId.startsWith('appr_') && approvalId.length > 5 ? approvalId.slice(5) : undefined;
+}
