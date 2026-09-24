@@ -497,7 +497,7 @@ async function main() {
         SANDBOX_INTERNAL_HMAC_ACTIVE_KID: internalHmacActiveKid,
         LLMIO_BASE_URL: fake.baseUrl,
         LLMIO_API_KEY: 'fake-test-key',
-        MODEL_ID: 'deepseek-v4-flash',
+        MODEL_ID: 'deepseek-flash',
         // 分层队列要求每个子任务深度（默认 0..2）各留一个消费槽，下限 3（ADR 0012）。
         AGENT_WORKER_CONCURRENCY: String(Math.min(20, Math.max(3, concurrentRuns))),
         AGENT_RECOVERY_INTERVAL_MS: '1000',
