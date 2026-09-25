@@ -56,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   运行中 Enter 的默认动作）与我的 Skills（草稿上传、启用、停用），不再跳到部署配置页。
 - **路由**：会话可用 `/c/<id>` 直接打开并随会话切换更新；管理页面迁到独立的管理控制台 `/admin/*`
   （运行、审批、智能体、能力、A2A 接入），旧的 `/settings/*`、`/runs`、`/approvals` 自动重定向。
+- **能力页**：大卡片改为可搜索的表格（Skills / MCP 服务 / 工具 / 模型），移除已不存在的 Extension 诊断；
+  个人 Skill 的上传与启用移到设置弹窗。
 
 ### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
 

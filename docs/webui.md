@@ -188,6 +188,10 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 当前会话时更新地址。启动时若地址是 `/c/<id>`，`main.tsx` 先把它写成「上次打开的会话」，由启动恢复加载，
 避免与恢复逻辑竞争。
 
+**能力页**（`/admin/capabilities`）：Skills / MCP 服务 / 工具 / 模型 四个 tab，均为可搜索的只读表格；
+Skills 可按系统 / 用户筛选，MCP 状态以服务端的 `status` 为准（`capabilityFormat.ts`），模型标注目录默认模型
+与看图 / 思考 / 工具调用能力。Extension 诊断已移除；个人 Skill 的上传与启用在设置弹窗里。
+
 **管理控制台**（`app/layout/AdminShell.tsx`）是独立的全屏布局：左侧「返回对话」与分组导航（运维：运行、
 审批；配置：智能体、能力、A2A 接入），不显示会话侧栏。非管理员访问时只显示「需要管理员权限」；服务端对
 管理接口有同样的角色校验。

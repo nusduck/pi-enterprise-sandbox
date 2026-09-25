@@ -1,527 +1,103 @@
-/**
- * Capability management — /settings/capabilities (F5 / ADR 0003 §11).
- * Tabs: Skills · MCP Servers · Tools · Models · Extension Diagnostics
- * Soft-fails when registry BFF endpoints are incomplete.
- */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   listMcpServers,
   listModels,
   listSkills,
-  setSkillEnabled,
-  uploadSkillDraft,
   listTools,
-  getExtensionDiagnostics,
-  type ExtensionDiagnostics,
   type McpServerItem,
   type ModelItem,
   type SkillItem,
   type SoftListResult,
   type ToolRegistryItem,
 } from '../../shared/api/capabilities';
-import { IconRefresh, IconSparkles, IconPuzzle, IconTerminal, IconCode, IconLayers, IconPlus } from '../../shared/ui/Icons';
-import {
-  isDraftSkill,
-  isUserSkill,
-  skillSourceLabel,
-  splitSkillTiers,
-} from './skillHelpers';
+import { mcpStatus, toolStatus } from './capabilityFormat';
+import s from './adminPage.module.css';
 
-const TABS = [
-  { id: 'skills', label: 'Skills' },
-  { id: 'mcp', label: 'MCP Servers' },
-  { id: 'tools', label: 'Tools' },
-  { id: 'models', label: 'Models' },
-  { id: 'diagnostics', label: 'Extension diagnostics' },
-] as const;
+type Tab = 'skills' | 'mcp' | 'tools' | 'models';
 
-type TabId = (typeof TABS)[number]['id'];
+const EMPTY: SoftListResult<never> = { items: [], available: true };
 
-function EmptyRegistry({
-  label,
-  available,
-  error,
-}: {
-  label: string;
-  available: boolean | null;
-  error?: string | null;
-}) {
-  return (
-    <div className="mgmt-empty">
-      <p className="mgmt-empty-title">No {label} registered</p>
-      <p className="mgmt-empty-body">
-        {available === false
-          ? `The ${label} registry API is not exposed on the BFF yet. When backend MCP/model registry routes are proxied under /api, they will appear here automatically.`
-          : available === null
-            ? 'Loading…'
-            : error
-              ? `Registry returned an error: ${error}`
-              : `Registry is reachable but returned no ${label}.`}
-      </p>
-    </div>
-  );
+const STATUS_ZH: Record<string, [string, string]> = {
+  connected: ['已连接', s.ok],
+  configured: ['已配置', s.ok],
+  enabled: ['可用', s.ok],
+  ready: ['可用', s.ok],
+  disabled: ['已停用', s.mute],
+  error: ['异常', s.err],
+  failed: ['异常', s.err],
+  disconnected: ['未连接', s.warn],
+};
+
+function Status({ value }: { value: string }) {
+  const [label, cls] = STATUS_ZH[value.toLowerCase()] || [value, s.mute];
+  return <span className={`${s.pill} ${cls}`}>{label}</span>;
 }
 
-function statusLabel(item: {
-  status?: string | null;
-  enabled?: boolean;
-  connection_status?: string | null;
-}): string {
-  if (item.status) return item.status;
-  if (item.connection_status) return item.connection_status;
-  return item.enabled === false ? 'disabled' : 'configured';
+function skillSource(item: SkillItem): [string, string] {
+  if (item.source === 'user-skill-root') return ['用户', s.info];
+  if (item.source === 'draft-skill-root') return ['草稿', s.mute];
+  return ['系统', s.mute];
 }
 
-function SkillDraftUpload({
-  onSuccess,
-}: {
-  onSuccess: () => void;
-}) {
-  const [dragOver, setDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+const RISK_ZH: Record<string, [string, string]> = {
+  low: ['低', s.ok],
+  medium: ['中', s.warn],
+  high: ['高', s.err],
+  critical: ['极高', s.err],
+};
 
-  const handleUpload = async (file: File) => {
-    const lower = file.name.toLowerCase();
-    if (!lower.endsWith('.zip') && !lower.endsWith('.skill')) {
-      setError('Please select a .zip or .skill file');
-      return;
-    }
-    if (file.size > 50 * 1024 * 1024) {
-      setError('Skill package exceeds the 50MB limit');
-      return;
-    }
+const APPROVAL_ZH: Record<string, string> = {
+  allow: '直接执行',
+  auto: '直接执行',
+  require_approval: '需要审批',
+  deny: '禁止',
+};
 
-    setUploading(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      const res = await uploadSkillDraft(file);
-      setSuccess(`Draft package "${res.name}" uploaded. Review and click Enable below to activate.`);
-      onSuccess();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      setUploading(false);
-    }
-  };
+function formatTokens(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
+}
 
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    if (e.dataTransfer.files?.length) {
-      const file = e.dataTransfer.files[0];
-      if (file) void handleUpload(file);
-    }
-  };
+function Unavailable({ result, noun, loading }: { result: SoftListResult<unknown>; noun: string; loading: boolean }) {
+  const text = loading
+    ? '正在读取…'
+    : result.available === false
+      ? `${noun}目录接口暂不可用。`
+      : result.error
+        ? `读取${noun}失败：${result.error}`
+        : `当前部署没有${noun}。`;
+  return <div className={s.empty}>{text}</div>;
+}
 
-  return (
-    <div className="mgmt-upload-card">
-      <div
-        className={`mgmt-upload-dropzone${dragOver ? ' drag-over' : ''}${uploading ? ' uploading' : ''}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-        onClick={() => !uploading && fileInputRef.current?.click()}
-        role="button"
-        tabIndex={0}
-        aria-label="Upload Skill package (.zip or .skill)"
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            fileInputRef.current?.click();
-          }
-        }}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".zip,.skill,application/zip"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            if (e.target.files?.length) {
-              const file = e.target.files[0];
-              if (file) void handleUpload(file);
-              e.target.value = '';
-            }
-          }}
-        />
-        <div className="mgmt-upload-icon">
-          {uploading ? (
-            <IconRefresh size={22} className="icon-spin" />
-          ) : (
-            <IconPlus size={22} />
-          )}
-        </div>
-        <div className="mgmt-upload-content">
-          <div className="mgmt-upload-title">
-            {uploading ? 'Extracting and verifying draft package…' : 'Upload Skill Package'}
-          </div>
-          <div className="mgmt-upload-desc">
-            Drag and drop a <strong>.zip</strong> or <strong>.skill</strong> package here, or click to browse (Max 50MB).
-          </div>
-        </div>
-      </div>
-
-      {error ? (
-        <div className="mgmt-upload-banner error" role="alert">
-          <span>{error}</span>
-          <button
-            type="button"
-            className="mgmt-upload-banner-close"
-            onClick={() => setError(null)}
-            aria-label="Dismiss error"
-          >
-            &times;
-          </button>
-        </div>
-      ) : null}
-
-      {success ? (
-        <div className="mgmt-upload-banner success" role="status">
-          <span>{success}</span>
-          <button
-            type="button"
-            className="mgmt-upload-banner-close"
-            onClick={() => setSuccess(null)}
-            aria-label="Dismiss message"
-          >
-            &times;
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
+function matches(query: string, ...fields: Array<string | null | undefined>): boolean {
+  const q = query.trim().toLowerCase();
+  return !q || fields.some((f) => String(f || '').toLowerCase().includes(q));
 }
 
 /**
- * Skills split by tier. Both sections always render when the tab has any
- * package, so an empty "My Skills" reads as "nothing installed" rather than as
- * a section that failed to load.
+ * Deployment capabilities, read-only: Skills, MCP servers, tools and models.
+ * A user's own Skills are managed in the settings dialog; which of these an
+ * agent may use is configured per agent version.
  */
-function SkillTiers({
-  items,
-  busy,
-  onMutate,
-  onUploadSuccess,
-}: {
-  items: SkillItem[];
-  busy: string | null;
-  onMutate: (name: string, enabled: boolean) => void;
-  onUploadSuccess: () => void;
-}) {
-  const { drafts, user, system, publishedFromDraft } = splitSkillTiers(items);
-  return (
-    <>
-      <section className="mgmt-section">
-        <h3 className="mgmt-section-title">Drafts ({drafts.length})</h3>
-        <SkillDraftUpload onSuccess={onUploadSuccess} />
-        {drafts.length === 0 ? (
-          <p className="mgmt-empty-body">No Skill drafts waiting for enablement.</p>
-        ) : (
-          <SkillCards items={drafts} busy={busy} onMutate={onMutate} />
-        )}
-      </section>
-      <section className="mgmt-section">
-        <h3 className="mgmt-section-title">My Skills ({user.length})</h3>
-        {user.length === 0 ? (
-          <p className="mgmt-empty-body">
-            No enabled Skills for your account. Upload a Skill package to Drafts above and click Enable.
-          </p>
-        ) : (
-          <SkillCards
-            items={user}
-            busy={busy}
-            onMutate={onMutate}
-            fromDraft={publishedFromDraft}
-          />
-        )}
-      </section>
-      <section className="mgmt-section">
-        <h3 className="mgmt-section-title">System Skills ({system.length})</h3>
-        {system.length === 0 ? (
-          <p className="mgmt-empty-body">No bundled Skills.</p>
-        ) : (
-          <SkillCards items={system} busy={busy} onMutate={onMutate} />
-        )}
-      </section>
-    </>
-  );
-}
-
-function SkillCards({
-  items,
-  busy,
-  onMutate,
-  fromDraft,
-}: {
-  items: SkillItem[];
-  busy: string | null;
-  onMutate: (name: string, enabled: boolean) => void;
-  fromDraft?: Set<string | undefined>;
-}) {
-  return (
-    <ul className="mgmt-card-list">
-      {items.map((s, i) => {
-        const name = s.name || s.id || `skill-${i}`;
-        const status = statusLabel(s);
-        const draft = isDraftSkill(s);
-        const actionable = draft || isUserSkill(s);
-        return (
-          <li key={name} className="mgmt-card">
-            <header className="mgmt-card-head">
-              <div className="mgmt-card-title-row">
-                <IconPuzzle size={16} className="mgmt-card-icon" />
-                <h3 className="mgmt-card-title">{name}</h3>
-                {fromDraft?.has(s.name) ? (
-                  <span className="mgmt-tag">from draft</span>
-                ) : null}
-              </div>
-              <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
-            </header>
-            {s.description ? (
-              <p className="mgmt-card-reason">{s.description}</p>
-            ) : null}
-            {/* 三层用同一张 meta 表，卡片高度和字段位置才对得齐。 */}
-            <dl className="mgmt-meta-grid">
-              <div>
-                <dt>Source</dt>
-                <dd>{skillSourceLabel(s)}</dd>
-              </div>
-              <div>
-                <dt>Enabled</dt>
-                <dd>{s.enabled === false ? 'No' : 'Yes'}</dd>
-              </div>
-              <div>
-                <dt>Dynamic</dt>
-                <dd>{s.dynamic ? 'Yes' : 'No'}</dd>
-              </div>
-            </dl>
-            {/* 动作区固定在卡片底部并右对齐。直接把 button 放进 flex-column 的
-                卡片里会被拉成整行宽的大色块，草稿卡因此和 System 卡长得完全不一样。 */}
-            {actionable ? (
-              <div className="mgmt-card-actions">
-                <button
-                  type="button"
-                  className={`mgmt-btn sm ${draft ? 'primary' : 'secondary'}`}
-                  disabled={busy === name}
-                  onClick={() => onMutate(name, draft)}
-                >
-                  {busy === name ? '…' : draft ? 'Enable' : 'Disable'}
-                </button>
-              </div>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function McpCards({ items }: { items: McpServerItem[] }) {
-  return (
-    <ul className="mgmt-card-list">
-      {items.map((s, i) => {
-        const id = s.server_id || s.id || s.name || `mcp-${i}`;
-        const status =
-          s.status ||
-          (s.enabled === false ? 'disabled' : s.connection_status || 'configured');
-        const toolsCount = s.tools_count ?? s.tool_count ?? null;
-        return (
-          <li key={id} className="mgmt-card">
-            <header className="mgmt-card-head">
-              <div className="mgmt-card-title-row">
-                <IconLayers size={16} className="mgmt-card-icon" />
-                <h3 className="mgmt-card-title">{s.name || id}</h3>
-              </div>
-              <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
-            </header>
-            <dl className="mgmt-meta-grid">
-              <div>
-                <dt>Server ID</dt>
-                <dd>
-                  <code className="mgmt-id-code">{id}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>Tools</dt>
-                <dd>{toolsCount != null ? toolsCount : '—'}</dd>
-              </div>
-              <div>
-                <dt>Authorization</dt>
-                <dd>{s.authorization || '—'}</dd>
-              </div>
-              <div>
-                <dt>Last Refresh</dt>
-                <dd>{s.last_refresh || s.last_refreshed_at || '—'}</dd>
-              </div>
-            </dl>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function ToolCards({ items }: { items: ToolRegistryItem[] }) {
-  return (
-    <ul className="mgmt-card-list">
-      {items.map((t, i) => {
-        const name = t.name || t.id || `tool-${i}`;
-        const status = statusLabel(t);
-        return (
-          <li key={name} className="mgmt-card">
-            <header className="mgmt-card-head">
-              <div className="mgmt-card-title-row">
-                <IconTerminal size={16} className="mgmt-card-icon" />
-                <h3 className="mgmt-card-title">{name}</h3>
-              </div>
-              <span className={`mgmt-status status-${status}`}><span className="mgmt-status-dot" />{status}</span>
-              {t.risk_level ? (
-                <span className={`mgmt-risk risk-${t.risk_level}`}>risk: {t.risk_level}</span>
-              ) : null}
-            </header>
-            {t.description ? (
-              <p className="mgmt-card-reason">{t.description}</p>
-            ) : null}
-            <dl className="mgmt-meta-grid">
-              <div>
-                <dt>Category</dt>
-                <dd>{t.category || '—'}</dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>{t.source || '—'}</dd>
-              </div>
-              <div>
-                <dt>Approval</dt>
-                <dd>{t.approval_policy || '—'}</dd>
-              </div>
-              <div>
-                <dt>Risk Source</dt>
-                <dd>{t.risk_source || '—'}</dd>
-              </div>
-              <div>
-                <dt>Timeout</dt>
-                <dd>{t.timeout != null ? String(t.timeout) : '—'}</dd>
-              </div>
-              <div>
-                <dt>Enabled</dt>
-                <dd>{t.enabled === false ? 'No' : 'Yes'}</dd>
-              </div>
-              <div>
-                <dt>Dynamic</dt>
-                <dd>{t.dynamic ? 'Yes' : 'No'}</dd>
-              </div>
-            </dl>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function ModelCards({ items }: { items: ModelItem[] }) {
-  return (
-    <ul className="mgmt-card-list">
-      {items.map((m, i) => {
-        const id = m.model_id || m.id || `model-${i}`;
-        return (
-          <li key={id} className="mgmt-card">
-            <header className="mgmt-card-head">
-              <div className="mgmt-card-title-row">
-                <IconCode size={16} className="mgmt-card-icon" />
-                <h3 className="mgmt-card-title">{id}</h3>
-              </div>
-              <span
-                className={`mgmt-status status-${m.enabled === false ? 'disabled' : 'enabled'}`}
-              >
-                <span className="mgmt-status-dot" />
-                {m.enabled === false ? 'disabled' : 'enabled'}
-              </span>
-            </header>
-            <dl className="mgmt-meta-grid">
-              <div>
-                <dt>Provider</dt>
-                <dd>{m.provider || '—'}</dd>
-              </div>
-              <div>
-                <dt>Protocol</dt>
-                <dd>{m.api_protocol || '—'}</dd>
-              </div>
-              <div>
-                <dt>Context Window</dt>
-                <dd>{m.context_window ?? '—'}</dd>
-              </div>
-              <div>
-                <dt>Max Output</dt>
-                <dd>{m.max_output_tokens ?? '—'}</dd>
-              </div>
-              <div>
-                <dt>Tool Calls</dt>
-                <dd>{m.supports_tool_call ? 'Yes' : m.supports_tool_call === false ? 'No' : '—'}</dd>
-              </div>
-              <div>
-                <dt>Reasoning</dt>
-                <dd>
-                  {m.supports_reasoning
-                    ? 'Yes'
-                    : m.supports_reasoning === false
-                      ? 'No'
-                      : '—'}
-                </dd>
-              </div>
-            </dl>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 export function CapabilitiesPage() {
-  const [tab, setTab] = useState<TabId>('skills');
+  const [tab, setTab] = useState<Tab>('skills');
+  const [query, setQuery] = useState('');
+  const [skillScope, setSkillScope] = useState<'all' | 'system' | 'user'>('all');
+  const [skills, setSkills] = useState<SoftListResult<SkillItem>>(EMPTY);
+  const [mcp, setMcp] = useState<SoftListResult<McpServerItem>>(EMPTY);
+  const [tools, setTools] = useState<SoftListResult<ToolRegistryItem>>(EMPTY);
+  const [models, setModels] = useState<SoftListResult<ModelItem>>(EMPTY);
+
   const [loading, setLoading] = useState(true);
-  const [skills, setSkills] = useState<SoftListResult<SkillItem>>({
-    items: [],
-    available: false,
-  });
-  const [mcp, setMcp] = useState<SoftListResult<McpServerItem>>({
-    items: [],
-    available: false,
-  });
-  const [tools, setTools] = useState<SoftListResult<ToolRegistryItem>>({
-    items: [],
-    available: false,
-  });
-  const [models, setModels] = useState<SoftListResult<ModelItem>>({
-    items: [],
-    available: false,
-  });
-  const [diagnostics, setDiagnostics] = useState<ExtensionDiagnostics | null>(null);
-  const [skillBusy, setSkillBusy] = useState<string | null>(null);
-  const [skillError, setSkillError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, m, t, mod, diag] = await Promise.all([
-        listSkills(),
-        listMcpServers(),
-        listTools(),
-        listModels(),
-        getExtensionDiagnostics(),
-      ]);
-      setSkills(s);
+      const [sk, m, t, mod] = await Promise.all([listSkills(), listMcpServers(), listTools(), listModels()]);
+      setSkills(sk);
       setMcp(m);
       setTools(t);
       setModels(mod);
-      setDiagnostics(diag);
     } finally {
       setLoading(false);
     }
@@ -531,218 +107,153 @@ export function CapabilitiesPage() {
     void refresh();
   }, [refresh]);
 
-  const mutateSkill = useCallback(async (name: string, enabled: boolean) => {
-    setSkillBusy(name);
-    setSkillError(null);
-    try {
-      await setSkillEnabled(name, enabled);
-      await refresh();
-    } catch (error) {
-      setSkillError(error instanceof Error ? error.message : 'Skill mutation failed');
-    } finally {
-      setSkillBusy(null);
-    }
-  }, [refresh]);
+  const skillRows = useMemo(
+    () =>
+      skills.items.filter((item) => {
+        const src = item.source === 'user-skill-root' || item.source === 'draft-skill-root' ? 'user' : 'system';
+        return (skillScope === 'all' || skillScope === src) && matches(query, item.name, item.description);
+      }),
+    [skills.items, skillScope, query],
+  );
 
-  let body: ReactNode = null;
-  if (loading) {
-    body = <div className="mgmt-empty"><IconSparkles size={24} className="icon-pulse" /><p>Loading capability registry…</p></div>;
-  } else if (tab === 'skills') {
-    body =
-      skills.items.length === 0 ? (
-        <EmptyRegistry
-          label="skills"
-          available={skills.available}
-          error={skills.error}
-        />
-      ) : (
-        <>
-          {skillError ? <p className="mgmt-error" role="alert">{skillError}</p> : null}
-          <SkillTiers
-            items={skills.items}
-            busy={skillBusy}
-            onMutate={(name, enabled) => void mutateSkill(name, enabled)}
-            onUploadSuccess={() => void refresh()}
-          />
-        </>
-      );
+  const tabs: Array<[Tab, string, number]> = [
+    ['skills', 'Skills', skills.items.length],
+    ['mcp', 'MCP 服务', mcp.items.length],
+    ['tools', '工具', tools.items.length],
+    ['models', '模型', models.items.length],
+  ];
+
+  let body: ReactNode;
+  if (tab === 'skills') {
+    body = skills.items.length === 0 ? <Unavailable result={skills} noun=" Skill " loading={loading} /> : (
+      <table className={s.table}>
+        <thead><tr><th>名称</th><th>说明</th><th>来源</th><th>状态</th></tr></thead>
+        <tbody>
+          {skillRows.map((item, i) => {
+            const [label, cls] = skillSource(item);
+            return (
+              <tr key={`${item.source}-${item.name || i}`}>
+                <td className={s.mono}>{item.name || item.id || '—'}</td>
+                <td className={s.desc}><span className={s.clamp}>{item.description || '—'}</span></td>
+                <td><span className={`${s.pill} ${cls}`}>{label}</span></td>
+                <td>
+                  {item.source === 'draft-skill-root'
+                    ? <span className={`${s.pill} ${s.mute}`}>{item.published ? '已发布' : '草稿'}</span>
+                    : <span className={`${s.pill} ${item.enabled === false ? s.mute : s.ok}`}>{item.enabled === false ? '已停用' : '可用'}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
   } else if (tab === 'mcp') {
-    body =
-      mcp.items.length === 0 ? (
-        <EmptyRegistry
-          label="MCP servers"
-          available={mcp.available}
-          error={mcp.error}
-        />
-      ) : (
-        <McpCards items={mcp.items} />
-      );
+    body = mcp.items.length === 0 ? <Unavailable result={mcp} noun=" MCP 服务" loading={loading} /> : (
+      <table className={s.table}>
+        <thead><tr><th>服务</th><th>状态</th><th className={s.right}>工具数</th><th>授权方式</th><th>最近刷新</th></tr></thead>
+        <tbody>
+          {mcp.items.filter((m) => matches(query, m.name, m.server_id, m.id)).map((m, i) => {
+            const id = m.server_id || m.id || m.name || `mcp-${i}`;
+            const count = m.tools_count ?? m.tool_count ?? null;
+            return (
+              <tr key={id}>
+                <td><b>{m.name || id}</b>{m.name && m.name !== id ? <div className={`${s.mono} ${s.muted}`}>{id}</div> : null}</td>
+                <td><Status value={mcpStatus(m)} /></td>
+                <td className={`${s.right} ${s.num}`}>{count ?? '—'}</td>
+                <td>{m.authorization || '—'}</td>
+                <td className={s.num}>{m.last_refresh || m.last_refreshed_at || '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
   } else if (tab === 'tools') {
-    body =
-      tools.items.length === 0 ? (
-        <EmptyRegistry
-          label="tools"
-          available={tools.available}
-          error={tools.error}
-        />
-      ) : (
-        <ToolCards items={tools.items} />
-      );
-  } else if (tab === 'models') {
-    body =
-      models.items.length === 0 ? (
-        <EmptyRegistry
-          label="models"
-          available={models.available}
-          error={models.error}
-        />
-      ) : (
-        <ModelCards items={models.items} />
-      );
+    // The registry often carries no descriptions; an all-dash column is noise.
+    const described = tools.items.some((t) => t.description);
+    body = tools.items.length === 0 ? <Unavailable result={tools} noun="工具" loading={loading} /> : (
+      <table className={s.table}>
+        <thead><tr><th>工具</th>{described ? <th>说明</th> : null}<th>类别</th><th>风险</th><th>默认审批</th><th>状态</th></tr></thead>
+        <tbody>
+          {tools.items.filter((t) => matches(query, t.name, t.id, t.description, t.category)).map((t, i) => {
+            const name = t.name || t.id || `tool-${i}`;
+            const [risk, riskCls] = RISK_ZH[String(t.risk_level || '').toLowerCase()] || [t.risk_level || '—', s.mute];
+            return (
+              <tr key={name}>
+                <td className={s.mono}>{name}</td>
+                {described ? <td className={s.desc}><span className={s.clamp}>{t.description || '—'}</span></td> : null}
+                <td>{t.category || '—'}</td>
+                <td>{t.risk_level ? <span className={`${s.pill} ${riskCls}`} title={t.risk_source || undefined}>{risk}</span> : '—'}</td>
+                <td>{APPROVAL_ZH[String(t.approval_policy || '')] || t.approval_policy || '—'}</td>
+                <td><Status value={toolStatus(t)} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
   } else {
-    body = diagnostics ? (
-      <div className="mgmt-diagnostics">
-        <div className="mgmt-card">
-          <h3 className="mgmt-card-title">
-            {diagnostics.package.package}@{diagnostics.package.version}
-          </h3>
-          <dl className="mgmt-meta-grid">
-            <div>
-              <dt>Profile</dt>
-              <dd>
-                {diagnostics.profile.id}@{diagnostics.profile.version}
-              </dd>
-            </div>
-            <div>
-              <dt>View</dt>
-              <dd>
-                {diagnostics.view || (diagnostics.registry?.live ? 'live' : 'configured')}
-              </dd>
-            </div>
-            <div>
-              <dt>Registry version</dt>
-              <dd>{diagnostics.registry?.registry_version ?? '—'}</dd>
-            </div>
-            <div>
-              <dt>Run ID</dt>
-              <dd>{diagnostics.registry?.run_id || '—'}</dd>
-            </div>
-            <div>
-              <dt>Conversation ID</dt>
-              <dd>{diagnostics.registry?.conversation_id || '—'}</dd>
-            </div>
-            <div>
-              <dt>Session ID</dt>
-              <dd>{diagnostics.registry?.session_id || '—'}</dd>
-            </div>
-            <div>
-              <dt>Audit</dt>
-              <dd>{diagnostics.package.audit?.status || '—'}</dd>
-            </div>
-            <div>
-              <dt>Allowed Tools</dt>
-              <dd>{diagnostics.profile.allowed_tools.length}</dd>
-            </div>
-            <div>
-              <dt>Shared Skills Policy</dt>
-              <dd>{diagnostics.profile.shared_skills?.mode || '—'}</dd>
-            </div>
-            <div>
-              <dt>Generated At</dt>
-              <dd>{diagnostics.generated_at}</dd>
-            </div>
-          </dl>
-          {!diagnostics.registry?.live && diagnostics.registry?.note ? (
-            <p className="mgmt-card-reason">{diagnostics.registry.note}</p>
-          ) : null}
-        </div>
-
-        <section className="mgmt-section">
-          <h3 className="mgmt-section-title">Extensions</h3>
-          <ul className="mgmt-card-list">
-            {(diagnostics.extensions ?? []).map((ext) => (
-              <li key={ext.name} className="mgmt-card">
-                <header className="mgmt-card-head">
-                  <h4 className="mgmt-card-title">{ext.name}</h4>
-                  <span className={`mgmt-status status-${statusLabel(ext)}`}>
-                    <span className="mgmt-status-dot" />
-                    {statusLabel(ext)}
+    body = models.items.length === 0 ? <Unavailable result={models} noun="模型" loading={loading} /> : (
+      <table className={s.table}>
+        <thead><tr><th>模型</th><th>提供方</th><th className={s.right}>上下文</th><th className={s.right}>最大输出</th><th>能力</th><th>状态</th></tr></thead>
+        <tbody>
+          {models.items.filter((m) => matches(query, m.name, m.model_id, m.id, m.provider)).map((m, i) => {
+            const id = m.model_id || m.id || `model-${i}`;
+            const vision = Array.isArray(m.input_modalities) && m.input_modalities.map(String).includes('image');
+            return (
+              <tr key={id}>
+                <td>
+                  <b>{m.name || id}</b>
+                  {m.default ? <span className={`${s.pill} ${s.info}`} style={{ marginLeft: 6 }}>默认</span> : null}
+                  <div className={`${s.mono} ${s.muted}`}>{id}</div>
+                </td>
+                <td>{m.provider || '—'}<div className={s.muted}>{m.api_protocol || ''}</div></td>
+                <td className={`${s.right} ${s.num}`}>{formatTokens(m.context_window)}</td>
+                <td className={`${s.right} ${s.num}`}>{formatTokens(m.max_output_tokens)}</td>
+                <td>
+                  <span className={s.tags}>
+                    {vision ? <span className={`${s.pill} ${s.mute}`}>看图</span> : null}
+                    {m.supports_reasoning ? <span className={`${s.pill} ${s.mute}`}>思考</span> : null}
+                    {m.supports_tool_call ? <span className={`${s.pill} ${s.mute}`}>工具调用</span> : null}
                   </span>
-                </header>
-                {ext.reason ? <p className="mgmt-card-reason">{ext.reason}</p> : null}
-                <dl className="mgmt-meta-grid">
-                  <div>
-                    <dt>Source</dt>
-                    <dd>{ext.source || '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Dynamic</dt>
-                    <dd>{ext.dynamic ? 'Yes' : 'No'}</dd>
-                  </div>
-                  {ext.registry_id ? (
-                    <div>
-                      <dt>Registry ID</dt>
-                      <dd>
-                        <code>{ext.registry_id}</code>
-                      </dd>
-                    </div>
-                  ) : null}
-                </dl>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
-    ) : (
-      <EmptyRegistry label="extension diagnostics" available={false} />
+                </td>
+                <td><span className={`${s.pill} ${m.enabled === false ? s.mute : s.ok}`}>{m.enabled === false ? '已停用' : '可用'}</span></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     );
   }
 
   return (
-    <div className="mgmt-page">
-      <header className="mgmt-header">
+    <div className={s.page}>
+      <div className={s.head}>
         <div>
-          <h2 className="mgmt-title">Capabilities</h2>
-          <p className="mgmt-subtitle">
-            Skills, MCP servers, tools, and models configured for your workspace. Upload packages to Drafts and enable them below.
-          </p>
+          <h1>能力</h1>
+          <p>当前部署提供的 Skills、MCP 服务、工具和模型。智能体可以使用哪些，在各自的版本配置里设置；个人 Skill 在「设置」里管理。</p>
         </div>
-        <button
-          type="button"
-          className="mgmt-btn"
-          onClick={() => void refresh()}
-          disabled={loading}
-        >
-          <IconRefresh size={14} className={loading ? 'icon-spin' : ''} />
-          <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
-        </button>
-      </header>
-
-      <div className="mgmt-filters" role="tablist" aria-label="Capability sections">
-        {TABS.map((t) => {
-          let count: number | null = null;
-          if (t.id === 'skills' && skills.available) count = skills.items.length;
-          else if (t.id === 'mcp' && mcp.available) count = mcp.items.length;
-          else if (t.id === 'tools' && tools.available) count = tools.items.length;
-          else if (t.id === 'models' && models.available) count = models.items.length;
-
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === t.id}
-              className={`mgmt-chip${tab === t.id ? ' active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
-              <span>{t.label}</span>
-              {count !== null ? <span className="mgmt-chip-count">{count}</span> : null}
-            </button>
-          );
-        })}
+        <span className={s.sp} />
+        <button type="button" className={s.btn} onClick={() => void refresh()}>刷新</button>
       </div>
-
-      {body}
+      <div className={s.tabs} role="tablist" aria-label="能力分类">
+        {tabs.map(([id, label, count]) => (
+          <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
+            {label}<small>{count}</small>
+          </button>
+        ))}
+      </div>
+      <div className={s.toolbar}>
+        <input className={s.search} id="cap-search" placeholder="搜索名称或说明" aria-label="搜索" value={query} onChange={(e) => setQuery(e.target.value)} />
+        {tab === 'skills' ? (
+          <div className={s.seg} role="group" aria-label="Skill 来源">
+            {([['all', '全部'], ['system', '系统'], ['user', '用户']] as const).map(([v, label]) => (
+              <button key={v} type="button" aria-pressed={skillScope === v} onClick={() => setSkillScope(v)}>{label}</button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className={s.tableWrap}>{body}</div>
     </div>
   );
 }

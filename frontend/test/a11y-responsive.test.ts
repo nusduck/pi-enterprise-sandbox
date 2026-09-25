@@ -108,7 +108,7 @@ describe('F6 a11y attributes on key surfaces', () => {
 
     const caps = readSrc('pages', 'settings', 'CapabilitiesPage.tsx');
     assert.match(caps, /role=["']tablist["']/);
-    assert.match(caps, /aria-selected=\{tab === t\.id\}/);
+    assert.match(caps, /aria-selected=\{tab === id\}/);
   });
 
   it('BudgetBar + ConversationHeader: status/region labels', () => {
