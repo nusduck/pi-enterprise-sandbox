@@ -1,6 +1,6 @@
 # 前端重设计：线性对话流与管理控制台
 
-- 状态：设计定稿，待实施
+- 状态：第 1、2 期已实施（分支 `feat/frontend-redesign`），第 3 期待实施
 - 日期：2026-09-25
 - 原型：<https://claude.ai/artifact/Gwf3xxP65CaJWjtkGT2iCz>（第 3 版，私有链接，需由作者共享后他人可见）
 - 范围：`frontend/` 全部表现层；第 3 期涉及 `agent/` 与 `api-server/` 新增接口
