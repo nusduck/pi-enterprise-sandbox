@@ -161,6 +161,14 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   智能体版本固定的模型 → 用户所选 → 目录默认），选择器显示「<模型名>（默认）」。附带图片而当前模型不支持
   看图时，输入框直接提示并禁用发送。
 
+- **定时任务**（`/schedules`，`pages/schedules/`）：顶部「定时任务 / 运行」两个 tab 与「新建定时任务」；
+  最近 30 天运行条一天一根（成功 / 有失败 / 无运行），由各任务的 `/api/cron-jobs/{id}/runs` 汇总；
+  表格列为任务、日程、下次运行、状态，立即运行 / 编辑 / 暂停 / 删除收在 ⋯ 菜单（删除需二次确认）。
+  「运行」tab 列出所有任务的执行记录，可打开该次运行产生的会话。新建 / 编辑对话框用频率构造器
+  （仅一次 / 每天 / 每周 / 每月 / 自定义 cron）拼出表达式，按任务自己的时区实时预览接下来 3 次
+  触发；预览与 Agent 的 cron 语义一致（`scheduleModel.ts`，测试直接对照 Agent 的 `nextCronOccurrence`）。
+  一次性任务按所选时区换算成带偏移的 `run_at`。
+
 Settings 页面（`/settings/*`）暂未重做：从账户菜单进入，左侧分类导航提供 Capabilities、Approvals、
 Runs、Agents（admin）与 A2A Access（admin）。旧路径 `/runs` 与 `/approvals` 重定向到对应
 `/settings/*` 路径。

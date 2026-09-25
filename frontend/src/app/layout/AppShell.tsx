@@ -21,18 +21,17 @@ import { useTheme } from '../../shared/ui/theme';
  *   processes), opened from the conversation header; closed by default
  */
 function isManagementPath(pathname: string): boolean {
-  return (
-    pathname === '/runs' ||
-    pathname === '/approvals' ||
-    pathname === '/schedules' ||
-    pathname.startsWith('/settings')
-  );
+  return pathname === '/runs' || pathname === '/approvals' || pathname.startsWith('/settings');
+}
+
+/** User pages that own their full width and have no conversation drawer. */
+function isUserPage(pathname: string): boolean {
+  return pathname === '/schedules';
 }
 
 function managementTitle(pathname: string): string {
   if (pathname.startsWith('/settings/runs') || pathname === '/runs') return 'Active Runs';
   if (pathname.startsWith('/settings/approvals') || pathname === '/approvals') return 'Approval Center';
-  if (pathname === '/schedules') return 'Scheduled Runs';
   if (pathname.startsWith('/settings/agents')) return 'Agents';
   if (pathname.startsWith('/settings/a2a')) return 'A2A Access';
   if (pathname.startsWith('/settings/capabilities') || pathname === '/settings') return 'Capabilities';
@@ -137,7 +136,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         </div>
 
-        {!management ? (
+        {!management && !isUserPage(location.pathname) ? (
           <ContextInspector
             open={inspectorOpen}
             onClose={() => setInspectorOpen(false)}

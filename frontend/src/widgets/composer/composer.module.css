@@ -150,6 +150,8 @@
 
 /* import dialog */
 .dialog {
+  /* app.css resets every margin to 0; <dialog> centres itself with auto margins. */
+  margin: auto;
   border: 1px solid var(--color-border);
   border-radius: 14px;
   background: var(--color-bg-card);
