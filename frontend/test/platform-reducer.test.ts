@@ -835,7 +835,7 @@ describe('approval.resolved tool/run status', () => {
 });
 
 describe('refresh recovery', () => {
-  it('rehydrateRun + missed events restore tools and resume sequence', () => {
+  it('rehydrateRun + replayed events restore tools and the sequence', () => {
     let s = rehydrateRun(createEntityStore(), {
       run_id: 'run_rh',
       conversation_id: 'c1',
@@ -844,7 +844,10 @@ describe('refresh recovery', () => {
       last_event_id: 'e2',
       session_id: 'sess1',
     });
+    // The snapshot does not move the cursor; the missed events replay from 1.
     s = reducePlatformEventBatch(s, [
+      makeRuntimeEvent({ event_id: 'e1', sequence: 1, run_id: 'run_rh', type: 'run.started', payload: {} }),
+      makeRuntimeEvent({ event_id: 'e2', sequence: 2, run_id: 'run_rh', type: 'message.delta', payload: { text: 'hi' } }),
       makeRuntimeEvent({
         event_id: 'e3',
         sequence: 3,

@@ -425,7 +425,10 @@ describe('run event reducer', () => {
     assert.equal(s.runsById.run_model.modelId, 'claude-opus-5');
   });
 
-  it('rehydrates in-progress run and resumes sequence', () => {
+  it('rehydrates an in-progress run without skipping its history', () => {
+    // The snapshot's last_sequence is the server's write cursor, not what this
+    // client has applied. Adopting it skipped events 1..10 for good; the run
+    // now resumes from its applied cursor and the stream replays the rest.
     let s = createEntityStore();
     s = rehydrateRun(s, {
       run_id: 'run_rh',
@@ -434,36 +437,25 @@ describe('run event reducer', () => {
       last_sequence: 10,
       last_event_id: 'evt_10',
     });
-    assert.equal(s.runsById.run_rh.lastSequence, 10);
+    assert.equal(s.runsById.run_rh.lastSequence, 0);
+    assert.equal(s.runsById.run_rh.lastEventId, null);
     assert.equal(s.runsById.run_rh.status, 'running');
 
-    // Events at or below last_sequence are duplicates
-    const dup = reduceRuntimeEvent(
+    // Jumping straight to 11 is a gap, not a resume point.
+    const skipped = reduceRuntimeEvent(
       s,
-      ev({
-        event_id: 'evt_10',
-        sequence: 10,
-        run_id: 'run_rh',
-        type: 'message.delta',
-        payload: { text: 'skip' },
-      }),
+      ev({ event_id: 'evt_11', sequence: 11, run_id: 'run_rh', type: 'message.delta', payload: { text: 'x' } }),
     );
-    assert.equal(dup.outcome, 'duplicate');
+    assert.equal(skipped.outcome, 'gap');
 
-    // Resume from 11
-    const next = reduceRuntimeEvent(
+    // Replay from the start applies.
+    const first = reduceRuntimeEvent(
       s,
-      ev({
-        event_id: 'evt_11',
-        sequence: 11,
-        run_id: 'run_rh',
-        type: 'message.delta',
-        payload: { message_id: 'm_rh', text: 'resumed' },
-      }),
+      ev({ event_id: 'evt_1', sequence: 1, run_id: 'run_rh', type: 'message.delta', payload: { message_id: 'm_rh', text: 'from start' } }),
     );
-    assert.equal(next.outcome, 'applied');
-    assert.equal(next.store.runsById.run_rh.lastSequence, 11);
-    assert.equal(next.store.messagesById.m_rh.text, 'resumed');
+    assert.equal(first.outcome, 'applied');
+    assert.equal(first.store.runsById.run_rh.lastSequence, 1);
+    assert.equal(first.store.messagesById.m_rh.text, 'from start');
   });
 });
 

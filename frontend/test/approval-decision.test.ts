@@ -173,3 +173,25 @@ describe('approval decision UX', () => {
     assert.match(src, /flashError/);
   });
 });
+
+describe('approval decision resumes the live stream', () => {
+  // A run parked at an approval gate may have no live stream (the page was
+  // refreshed while waiting). Without re-attaching one after the decision,
+  // everything the resumed run does stays invisible until the next refresh.
+  it('follows the run after an accepted decision', async () => {
+    let followed = 0;
+    const { deps } = createDeps({ followRun: () => { followed += 1; } });
+    assert.equal(await resolveApprovalDecision('appr_1', 'approve', deps), true);
+    assert.equal(followed, 1);
+  });
+
+  it('does not follow the run when the decision failed', async () => {
+    let followed = 0;
+    const { deps } = createDeps({
+      decide: async () => { throw new Error('409 already decided'); },
+      followRun: () => { followed += 1; },
+    });
+    assert.equal(await resolveApprovalDecision('appr_1', 'approve', deps), false);
+    assert.equal(followed, 0);
+  });
+});

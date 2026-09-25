@@ -1214,8 +1214,8 @@ export function rehydrateRun(
       pendingInput,
       // The Agent Run row is the authority for which model served the turn.
       modelId: detail.model_id ?? existing?.modelId ?? null,
-      lastSequence: detail.last_sequence ?? existing?.lastSequence ?? 0,
-      lastEventId: detail.last_event_id ?? existing?.lastEventId ?? null,
+      lastSequence: existing?.lastSequence ?? 0, // applied cursor only; never adopt detail.last_sequence
+      lastEventId: existing?.lastEventId ?? null, // pairs with lastSequence
       // Drop parked wait reasons that BFF may still send as `error`.
       error:
         status === 'waiting_approval' || status === 'waiting_input'

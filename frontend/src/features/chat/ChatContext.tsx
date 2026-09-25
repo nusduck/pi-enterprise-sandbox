@@ -1125,10 +1125,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const resolveApproval = useCallback(
     async (approvalId: string, decision: 'approve' | 'reject') => {
       return resolveApprovalDecision(approvalId, decision, {
-        decide: decideApproval,
-        markApproval: (id, status) => bridge.markApproval(id, status),
+        decide: decideApproval, markApproval: (id, status) => bridge.markApproval(id, status),
         setStatus,
         flashError,
+        followRun: () => void bridge.rehydrateInProgress(stateRef.current.conversationId).catch(() => {}),
       });
     },
     [bridge, setStatus, flashError],

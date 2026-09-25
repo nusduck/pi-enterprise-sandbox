@@ -10,8 +10,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityStore } from '../src/entities/index.ts';
 import type { EntityStore } from '../src/entities/types.ts';
-import { reducePlatformEventBatch } from '../src/shared/state/runReducer.ts';
-import { projectTurnItems } from '../src/features/chat/projections/turnItems.ts';
+import { reducePlatformEventBatch, rehydrateRun } from '../src/shared/state/runReducer.ts';
+import { projectTurnItems, runHasTurnEntities } from '../src/features/chat/projections/turnItems.ts';
 
 const RUN = '01M2X8NG3Y81BMWSQ3SM7HVV60';
 
@@ -187,5 +187,53 @@ describe('projectTurnItems', () => {
     const shape = (s: EntityStore) =>
       projectTurnItems(s, RUN).map((i) => `${i.kind}@${i.seq}`);
     assert.deepEqual(shape(live), shape(history));
+  });
+});
+
+describe('runHasTurnEntities', () => {
+  it('renders a turn that is only a tool call parked at an approval gate', () => {
+    // Real Run shape: message.completed with no text (the content was a tool
+    // call), then approval.requested before the tool starts. No assistant
+    // message and no tool entity exist, only the approval.
+    const events = [
+      ev(1, 'run.accepted', { status: 'ACCEPTED' }),
+      ev(2, 'run.status.changed', { to: 'RUNNING', status: 'RUNNING' }),
+      ev(3, 'message.completed', { role: 'assistant', text: '' }),
+      ev(4, 'approval.requested', {
+        status: 'PENDING', toolName: 'mcp__exa__web_search_exa', riskLevel: 'high',
+        approvalId: '01M3BDN2APPROVAL0000000000', toolCallId: 'call_exa',
+      }),
+      ev(5, 'run.status.changed', { to: 'WAITING_APPROVAL', status: 'WAITING_APPROVAL' }),
+    ];
+    const store = replay(events);
+    assert.equal(store.runsById[RUN].toolExecutionIds.length, 0);
+    assert.equal(runHasTurnEntities(store, RUN), true);
+  });
+
+  it('stays hidden for a finished run with nothing to show', () => {
+    const store = replay([
+      ev(1, 'run.accepted', { status: 'ACCEPTED' }),
+      ev(2, 'run.completed', { to: 'SUCCEEDED', status: 'SUCCEEDED' }),
+    ]);
+    assert.equal(runHasTurnEntities(store, RUN), false);
+  });
+});
+
+describe('rehydrateRun cursor', () => {
+  it('never moves the cursor past events the store has applied', () => {
+    // The run row's last_sequence is how far the server has written, not how
+    // far this client has applied. Adopting it skipped every event in between
+    // when a live stream was re-attached after an approval.
+    const applied = replay([
+      ev(1, 'run.accepted', { status: 'ACCEPTED' }),
+      ev(2, 'run.status.changed', { to: 'WAITING_APPROVAL', status: 'WAITING_APPROVAL' }),
+    ]);
+    const next = rehydrateRun(applied, { run_id: RUN, status: 'RUNNING', last_sequence: 15 } as never);
+    assert.equal(next.runsById[RUN].lastSequence, 2);
+  });
+
+  it('starts an unseen run from the beginning so the stream replays it', () => {
+    const next = rehydrateRun(createEntityStore(), { run_id: RUN, status: 'RUNNING', last_sequence: 15 } as never);
+    assert.equal(next.runsById[RUN].lastSequence, 0);
   });
 });

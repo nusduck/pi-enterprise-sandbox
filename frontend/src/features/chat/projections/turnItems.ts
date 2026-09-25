@@ -7,6 +7,7 @@
  * list. Entities without a sequence (snapshot-only rows) sort after sequenced
  * ones by creation time.
  */
+import { isTerminalRunStatus } from '../../../entities/store';
 import type {
   EntityStore,
   MessageEntity,
@@ -195,4 +196,20 @@ function isOrdinaryTool(tool: ToolExecutionEntity): boolean {
     && !isTodoToolName(tool.name)
     && !JOB_FOLLOW_UP.has(tool.name)
     && backgroundJobId(tool) == null;
+}
+
+/**
+ * True when this Run should render as a turn stream: it has replayed or live
+ * entities, or it is still running. A turn can consist of nothing but a tool
+ * call parked at an approval gate (no text, tool not started yet), so pending
+ * approvals count too — otherwise the approval card would have no host.
+ */
+export function runHasTurnEntities(store: EntityStore, runId: string | null): boolean {
+  if (!runId) return false;
+  const run = store.runsById[runId];
+  if (!run) return false;
+  return run.messageIds.some((id) => store.messagesById[id]?.role === 'assistant')
+    || run.toolExecutionIds.length > 0
+    || run.approvalIds.length > 0
+    || !isTerminalRunStatus(String(run.status));
 }

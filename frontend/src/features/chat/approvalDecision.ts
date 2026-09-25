@@ -8,6 +8,12 @@ export type ApprovalDecisionDeps = {
   markApproval: (approvalId: string, status: 'approved' | 'rejected') => void;
   setStatus: (text: string, color: string) => void;
   flashError: (message: string) => void;
+  /**
+   * Re-attach a live event stream once the decision is accepted. The run may
+   * have none (page refreshed while it waited), and the resumed run would
+   * otherwise finish unseen.
+   */
+  followRun?: () => void;
 };
 
 /** Apply one approval decision and report whether the durable API accepted it. */
@@ -27,6 +33,7 @@ export async function resolveApprovalDecision(
       decision === 'approve' ? 'Approved' : 'Rejected',
       decision === 'approve' ? '#22c55e' : '#ef4444',
     );
+    deps.followRun?.();
     if (result.agent_resume_status === 'pending') {
       deps.flashError(
         'Decision saved; Agent resume is pending. Use Resume to retry.',

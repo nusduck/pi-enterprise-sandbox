@@ -7,14 +7,15 @@ import { useMemo, useState } from 'react';
 import type {
   ApprovalEntity,
   ArtifactEntity,
-  EntityStore,
   ProcessEntity,
   ToolExecutionEntity,
 } from '../../entities/types';
 import { isTerminalRunStatus } from '../../entities';
 import { useChat } from '../../features/chat/ChatContext';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
-import { projectTurnItems, type TurnItem } from '../../features/chat/projections/turnItems';
+import { projectTurnItems, runHasTurnEntities, type TurnItem } from '../../features/chat/projections/turnItems';
+
+export { runHasTurnEntities };
 import { MarkdownBody } from '../markdown/Markdown';
 import {
   ApprovalCard,
@@ -27,15 +28,6 @@ import {
   ToolGroupItem,
 } from './TurnCards';
 import s from './turnStream.module.css';
-
-/** True when the store holds live or replayed entities for this Run. */
-export function runHasTurnEntities(store: EntityStore, runId: string | null): boolean {
-  if (!runId) return false;
-  const run = store.runsById[runId];
-  if (!run) return false;
-  return run.messageIds.some((id) => store.messagesById[id]?.role === 'assistant')
-    || run.toolExecutionIds.length > 0;
-}
 
 function itemTools(item: TurnItem): ToolExecutionEntity[] {
   switch (item.kind) {
@@ -220,7 +212,7 @@ export function TurnStream({ runId }: { runId: string }) {
         </div>
       ))}
       {loneApprovals.length ? <div className={s.item}>{approvalCards(loneApprovals)}</div> : null}
-      {run?.status === 'waiting_approval' && !related.approvals.some((a) => a.status === 'pending') ? (
+      {run?.status === 'waiting_approval' && related.approvals.length === 0 ? (
         <div className={s.item}>
           <div className={`${s.card} ${s.approval}`} role="status">
             <div className={s.cardH}><b>等待审批</b></div>
