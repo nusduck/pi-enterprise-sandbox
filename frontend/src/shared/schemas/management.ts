@@ -180,6 +180,8 @@ export const ModelItemSchema = z
     output_modalities: z.array(z.string()).optional(),
     thinking_levels: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
+    /** The model the server uses when a turn names none. */
+    default: z.boolean().optional(),
     pricing: z.record(z.string(), z.unknown()).optional().nullable(),
   })
   .passthrough();

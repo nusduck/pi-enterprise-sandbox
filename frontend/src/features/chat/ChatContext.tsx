@@ -65,6 +65,7 @@ import { runUploadQueue } from './uploads/runUploadQueue';
 import { useRunControls } from './controllers/useRunControls';
 import { useModelSelection } from './useModelSelection';
 import { fixedModelIdOf, mergeConversation } from './conversationProjection';
+import { effectiveModel, supportsImages } from './effectiveModel';
 import { useAgentSelection } from './useAgentSelection';
 import { resolveApprovalDecision } from './approvalDecision';
 
@@ -562,17 +563,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const uploaded = uploadedAttachments(cur.attachments);
       const trimmed = (text ?? draftText).trim();
       if (!trimmed && uploaded.length === 0) return;
-      const selectedModel = models.find(
-        (model) => (model.model_id || model.id) === selectedModelId,
-      );
       const hasImage = uploaded.some((attachment) =>
         String(attachment.mimeType || '').toLowerCase().startsWith('image/'),
       );
-      const modalities = Array.isArray(selectedModel?.input_modalities)
-        ? selectedModel.input_modalities.map(String)
-        : [];
-      if (hasImage && (!selectedModel || !modalities.includes('image'))) {
-        flashError('Choose a vision-capable model before sending image attachments');
+      // No selection means the catalog default serves the turn, not "no model".
+      if (hasImage && !supportsImages(effectiveModel(models, selectedModelId, fixedModelId))) {
+        flashError('当前模型不支持图片，请在模型菜单里换一个支持看图的模型');
         return;
       }
 
@@ -849,8 +845,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       bridge,
       currentSessionId,
       currentTraceId,
-      models,
-      selectedModelId,
+      models, selectedModelId, fixedModelId,
       selectedAgentId,
     ],
   );

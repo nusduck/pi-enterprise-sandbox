@@ -85,9 +85,11 @@ export function ModelPicker({
     [models, selectedModelId],
   );
 
+  const fallback = models.find((m) => m.default === true) ?? null;
   const selectedLabel = selected
     ? modelNameOf(selected)
-    : fixedModelId || selectedModelId || (models.length ? '默认模型' : '暂无模型');
+    : fixedModelId || selectedModelId
+      || (fallback ? `${modelNameOf(fallback)}（默认）` : models.length ? '默认模型' : '暂无模型');
 
   const limits = modelLimitsLine(selected);
 

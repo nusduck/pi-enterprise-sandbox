@@ -19,6 +19,7 @@ import { canFollowUp, canSteer, canStop, resolveComposerMode } from './composerM
 import { ModelPicker } from './ModelPicker';
 import { AgentPicker } from './AgentPicker';
 import { AttachmentChips } from './AttachmentChips';
+import { effectiveModel, supportsImages } from '../../features/chat/effectiveModel';
 import { ImportArtifactDialog } from './ImportArtifactDialog';
 import { getActiveRunEntity } from '../runtime-timeline/buildTimeline';
 import { IconPlus, IconSend, IconStop, IconUpload } from '../../shared/ui/Icons';
@@ -220,14 +221,18 @@ export function Composer() {
     stopRun();
   }
 
+  // Image attachments need a model that reads images; say so before sending
+  // rather than flashing an error after the click.
+  const needsVision = uploadedAttachments(state.attachments).some((a) => (a.mimeType || '').startsWith('image/'))
+    && !supportsImages(effectiveModel(models, selectedModelId, fixedModelId));
   const primaryDisabled =
-    submitting || (mode === 'idle' ? idleSendDisabled || textEmpty : !draftText.trim());
+    submitting || needsVision || (mode === 'idle' ? idleSendDisabled || textEmpty : !draftText.trim());
   const primaryLabel = mode === 'idle' ? '发送' : mode === 'waiting_input' ? '回答' : '排队追问';
   const placeholder =
     mode === 'idle'
       ? state.conversationId ? '继续对话…' : '描述你要完成的任务…'
       : mode === 'waiting_input' ? '输入你的回答…' : '补充要求，Enter 排队，⌘Enter 立即改向…';
-  const note = MODE_NOTE[mode] || (!gateOk ? (uploading ? '等待附件上传完成' : '有附件上传失败，请重试或移除') : '');
+  const note = needsVision ? '当前模型不支持图片，请换一个支持看图的模型' : MODE_NOTE[mode] || (!gateOk ? (uploading ? '等待附件上传完成' : '有附件上传失败，请重试或移除') : '');
 
   return (
     <>

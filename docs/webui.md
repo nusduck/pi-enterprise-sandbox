@@ -155,7 +155,11 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   进程。会话内不再显示 Trace 与工具明细（工具已在对话流内联）。
 - **输入框**（`widgets/composer/`）：见下文「键盘快捷键」；「＋」菜单可上传文件或图片，或引用其他
   会话的产物（先选会话再选产物，`POST /api/conversations/{id}/artifact-imports`，会话开始后可用）；
-  待上传图片用本地 blob URL 显示缩略图。审批与提问在对话流内处理，输入框只提示当前状态。
+  待上传图片用本地 blob URL 显示缩略图；历史消息里的图片附件经 `/api/files/download` 显示缩略图（不含 SVG）。
+  审批与提问在对话流内处理，输入框只提示当前状态。
+- **模型选择**：未选择时按模型目录里标记 `default` 的模型处理（`features/chat/effectiveModel.ts`，优先级：
+  智能体版本固定的模型 → 用户所选 → 目录默认），选择器显示「<模型名>（默认）」。附带图片而当前模型不支持
+  看图时，输入框直接提示并禁用发送。
 
 Settings 页面（`/settings/*`）暂未重做：从账户菜单进入，左侧分类导航提供 Capabilities、Approvals、
 Runs、Agents（admin）与 A2A Access（admin）。旧路径 `/runs` 与 `/approvals` 重定向到对应

@@ -10,6 +10,8 @@ import {
   splitAttachmentDisplay,
 } from '../../shared/state';
 import { MarkdownBody, SafeDownloadLink } from '../markdown/Markdown';
+import { safeApiUrl } from '../../shared/security/url';
+import { getWorkspaceFileUrl } from '../../shared/api/client';
 import { TurnStream } from '../turn-stream/TurnStream';
 import { messageFingerprint, messagePlainText } from './messageActions';
 import {
@@ -56,35 +58,60 @@ function formatFileSize(n?: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const PREVIEWABLE_IMAGE = /^image\/(png|jpe?g|gif|webp|bmp)$/;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+
+function isPreviewableImage(attachment: AttachmentManifestItem, name: string): boolean {
+  // SVG is excluded on purpose: it is a document, not an inert image.
+  return attachment.mime_type
+    ? PREVIEWABLE_IMAGE.test(attachment.mime_type)
+    : IMAGE_EXT.test(name);
+}
+
 function AttachmentCards({
   attachments,
+  sessionId,
 }: {
   attachments: AttachmentManifestItem[];
+  sessionId: string | null;
 }) {
   if (!attachments.length) return null;
+  const images: Array<{ key: string; name: string; url: string }> = [];
+  const files: Array<{ key: string; attachment: AttachmentManifestItem; name: string }> = [];
+  attachments.forEach((attachment, index) => {
+    const name = attachment.filename || attachment.name || attachment.path || '文件';
+    const key = String(attachment.attachment_id || attachment.path || `${name}-${index}`);
+    const path = attachment.workspace_path || attachment.path;
+    const url = sessionId && path && isPreviewableImage(attachment, name)
+      ? safeApiUrl(getWorkspaceFileUrl(sessionId, path))
+      : null;
+    if (url) images.push({ key, name, url });
+    else files.push({ key, attachment, name });
+  });
   return (
     <div
       className="message-attachments"
-      aria-label={`${attachments.length} attached file${attachments.length === 1 ? '' : 's'}`}
+      aria-label={`${attachments.length} 个附件`}
     >
-      {attachments.map((attachment, index) => {
-        const name =
-          attachment.filename || attachment.name || attachment.path || 'File';
+      {images.length ? (
+        <div className="message-images">
+          {images.map((image) => (
+            <a key={image.key} className="message-image" href={image.url} target="_blank" rel="noopener noreferrer" title={image.name}>
+              <img src={image.url} alt={image.name} loading="lazy" />
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {files.map(({ key, attachment, name }) => {
         const size = formatFileSize(attachment.size);
         return (
-          <div
-            className="message-attachment"
-            key={String(attachment.attachment_id || attachment.path || `${name}-${index}`)}
-            title={name}
-          >
+          <div className="message-attachment" key={key} title={name}>
             <span className="file-type-tile" aria-hidden="true">
               {fileTypeLabel(name, attachment.mime_type)}
             </span>
             <span className="message-attachment-copy">
               <span className="message-attachment-name">{name}</span>
-              <span className="message-attachment-meta">
-                {size || 'Attached file'}
-              </span>
+              <span className="message-attachment-meta">{size || '附件'}</span>
             </span>
           </div>
         );
@@ -92,7 +119,6 @@ function AttachmentCards({
     </div>
   );
 }
-
 function ThinkingBlock({
   thinking,
   isStreaming,
@@ -132,6 +158,7 @@ function MessageBubbleBase({
   canRegenerate = false,
   regenerateSource = null,
   onRegenerate,
+  sessionId = null,
 }: {
   msg: ChatMessage;
   idx: number;
@@ -145,6 +172,8 @@ function MessageBubbleBase({
   regenerateSource?: string | null;
   /** Stable callback from MessageList; identity must not change per render. */
   onRegenerate?: (text: string) => void;
+  /** Sandbox session of this conversation; image attachments load from it. */
+  sessionId?: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   const role = msg.role || 'assistant';
@@ -204,6 +233,7 @@ function MessageBubbleBase({
       <AttachmentCards
         key="message-attachments"
         attachments={visibleAttachments}
+        sessionId={sessionId}
       />,
     );
     hasContent = true;
@@ -316,6 +346,7 @@ export const MessageBubble = memo(
     prev.canRegenerate === next.canRegenerate &&
     prev.regenerateSource === next.regenerateSource &&
     prev.onRegenerate === next.onRegenerate &&
+    prev.sessionId === next.sessionId &&
     (prev.msg === next.msg ||
       messageFingerprint(prev.msg) === messageFingerprint(next.msg)),
 );

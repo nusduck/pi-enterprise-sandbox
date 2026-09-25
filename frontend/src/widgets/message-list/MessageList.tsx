@@ -12,7 +12,7 @@ import { IconChevronDown } from '../../shared/ui/Icons';
 import s from './messageList.module.css';
 
 export function MessageList() {
-  const { state, displayMessages, sendMessage, entityStore, activeRunId } = useChat();
+  const { state, displayMessages, sendMessage, entityStore, activeRunId, activeSessionId } = useChat();
   const ref = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -152,6 +152,7 @@ export function MessageList() {
               canRegenerate={canRegenerate}
               regenerateSource={regenerateSource}
               onRegenerate={handleRegenerate}
+              sessionId={activeSessionId}
             />
           );
         })
