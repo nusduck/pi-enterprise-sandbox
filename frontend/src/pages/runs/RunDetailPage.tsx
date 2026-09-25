@@ -5,10 +5,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
-import { getConversation, getConversationEvents } from '../../shared/api/client';
-import { cancelRun, getRun, listRunTools } from '../../shared/api/runs';
+import { cancelRun, getRun } from '../../shared/api/runs';
+import { getAdminRun, listAdminRunEvents, listAdminRunTools, type AdminRun } from '../../shared/api/adminRuns';
 import { getProcessLogs, listProcesses, type ManagedProcess } from '../../shared/api/processes';
-import type { PersistedAgentEvent, RunDetail, ToolExecutionSnapshot } from '../../shared/schemas/events';
+import type { PersistedAgentEvent, ToolExecutionSnapshot } from '../../shared/schemas/events';
 import { canCancelRun, formatRunDuration } from './runHelpers';
 import { buildRunTimeline, formatSpan, type TimelineNode } from './runTimeline';
 import { RunStatus, formatClock } from './RunsPage';
@@ -29,16 +29,6 @@ const NODE_STATUS: Record<TimelineNode['status'], [string, string]> = {
   rejected: ['已拒绝', a.err],
 };
 
-function userText(content: unknown): string | null {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return null;
-  const text = content
-    .map((p) => (p && typeof p === 'object' && typeof (p as { text?: unknown }).text === 'string' ? (p as { text: string }).text : ''))
-    .filter(Boolean)
-    .join('\n');
-  return text || null;
-}
-
 function pretty(value: unknown): string {
   try {
     return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -50,12 +40,12 @@ function pretty(value: unknown): string {
 export function RunDetailPage() {
   const { runId = '' } = useParams();
   const navigate = useNavigate();
-  const { state, agentNameById } = useChat();
-  const [run, setRun] = useState<RunDetail | null>(null);
+  const { state } = useChat();
+  const [run, setRun] = useState<AdminRun | null>(null);
+  /** Sandbox session of the run; only readable by its owner (exec is owner-scoped). */
+  const [sandboxSessionId, setSandboxSessionId] = useState<string | null>(null);
   const [events, setEvents] = useState<PersistedAgentEvent[]>([]);
   const [tools, setTools] = useState<ToolExecutionSnapshot[]>([]);
-  const [input, setInput] = useState<string | null>(null);
-  const [title, setTitle] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('timeline');
@@ -67,22 +57,20 @@ export function RunDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const detail = await getRun(runId);
-      setRun(detail);
-      const conversationId = detail.conversation_id;
-      const [evs, ledger, conv] = await Promise.all([
-        conversationId ? getConversationEvents(conversationId).then((r) => r.events) : Promise.resolve([]),
-        listRunTools(runId).catch(() => []),
-        conversationId ? getConversation(conversationId).catch(() => null) : Promise.resolve(null),
+      const [detail, evs, ledger] = await Promise.all([
+        getAdminRun(runId),
+        listAdminRunEvents(runId),
+        listAdminRunTools(runId),
       ]);
-      setEvents(evs.filter((e) => e.run_id === runId));
+      setRun(detail);
+      setEvents(evs);
       setTools(ledger);
-      setTitle(conv?.title || null);
-      const messages = Array.isArray(conv?.messages) ? (conv!.messages as Array<Record<string, unknown>>) : [];
-      const mine = messages.find((m) => m.run_id === runId && m.role === 'user');
-      setInput(mine ? userText(mine.content) : null);
+      // The owner-scoped run read succeeds only for the admin's own runs.
+      const own = (await getRun(runId).catch(() => null)) as Record<string, unknown> | null;
+      setSandboxSessionId(own ? String(own.sandbox_session_id || own.session_id || '') || null : null);
     } catch (err) {
-      setError((err as Error).message || '读取运行失败');
+      const status = (err as { status?: number }).status;
+      setError(status === 404 ? '找不到这次运行（不存在，或不属于本组织）。' : status === 403 ? '需要管理员权限。' : (err as Error).message || '读取运行失败');
     } finally {
       setLoading(false);
     }
@@ -92,31 +80,30 @@ export function RunDetailPage() {
     void load();
   }, [load]);
 
-  const conv = run?.conversation_id ? (state.conversations || []).find((c) => c.id === run.conversation_id) : null;
-  const agentName = conv?.agent_id ? agentNameById(conv.agent_id) : null;
-  const agentText = agentName ? `${agentName}${conv?.agent_version_no ? ` · v${conv.agent_version_no}` : ''}` : '—';
-  const detailRecord = run as (RunDetail & Record<string, unknown>) | null;
+  const isOwn = Boolean(run?.conversation_id && (state.conversations || []).some((c) => c.id === run.conversation_id));
+  const agentText = run?.agent_name ? `${run.agent_name}${run.agent_version_no ? ` · v${run.agent_version_no}` : ''}` : '—';
 
   const timeline = useMemo(() => buildRunTimeline({
     runId,
     events,
     tools,
-    userInput: input,
+    userInput: run?.user_input ?? null,
     runLabel: `运行 · ${agentText === '—' ? '智能体' : agentText}`,
     runKv: [
       ['Run ID', runId],
-      ['Trace ID', String(detailRecord?.trace_id || '—')],
-      ['尝试次数', String(detailRecord?.attempt ?? 1)],
+      ['Trace ID', run?.trace_id || '—'],
+      ...(run?.parent_run_id ? [['父运行', run.parent_run_id] as [string, string]] : []),
     ],
     startedAt: run?.started_at || null,
-    finishedAt: (detailRecord?.completed_at as string | null) || run?.finished_at || null,
-  }), [runId, events, tools, input, agentText, run, detailRecord]);
+    finishedAt: run?.completed_at || null,
+  }), [runId, events, tools, agentText, run]);
 
   const current = timeline.nodes.find((n) => n.id === selected) ?? timeline.nodes.find((n) => n.kind === 'model') ?? timeline.nodes[0];
   const total = Math.max(1, timeline.end - timeline.start);
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => formatSpan(total * f));
   const status = String(run?.status || '');
-  const cancellable = canCancelRun(status);
+  // Cancel goes through the owner-scoped run API, so it is offered on own runs only.
+  const cancellable = isOwn && canCancelRun(status);
 
   async function copyId() {
     try {
@@ -148,11 +135,11 @@ export function RunDetailPage() {
         <Link to="/admin/runs">运行</Link> / <span className={a.mono}>{runId.slice(0, 10)}</span>
       </div>
       <div className={a.head}>
-        <div><h1>{title || '（无标题会话）'}</h1></div>
+        <div><h1>{run?.conversation_title || '（无标题会话）'}</h1></div>
         {run ? <RunStatus status={status} /> : null}
         <span className={a.sp} />
         {cancellable ? <button type="button" className={a.btn} onClick={() => void cancel()}>{confirmCancel ? '确认取消运行' : '取消运行'}</button> : null}
-        {run?.conversation_id ? (
+        {run?.conversation_id && isOwn ? (
           <button type="button" className={a.btn} onClick={() => navigate(`/c/${encodeURIComponent(run.conversation_id!)}`)}>打开会话</button>
         ) : null}
         <button type="button" className={a.btn} onClick={() => void copyId()}>复制 Run ID</button>
@@ -163,17 +150,17 @@ export function RunDetailPage() {
 
       {run ? (
         <div className={s.meta}>
-          <span><b>用户</b>{String(state.authUser?.display_name || state.authUser?.username || '—')}</span>
+          <span><b>用户</b>{run.user_name || '—'}</span>
           <span><b>智能体</b>{agentText}</span>
-          <span><b>模型</b>{String(detailRecord?.model_id || '') || '平台默认'}</span>
+          <span><b>模型</b>{run.model_id || '平台默认'}</span>
           <span className={a.num}><b>开始</b>{formatClock(run.started_at)}</span>
-          <span className={a.num}><b>耗时</b>{formatRunDuration(run.started_at || null, (detailRecord?.completed_at as string | null) || run.finished_at || null)}</span>
-          <span><b>Tokens</b>—</span>
+          <span className={a.num}><b>耗时</b>{formatRunDuration(run.started_at || null, run.completed_at || null)}</span>
+          <span title="token 用量尚未采集"><b>Tokens</b>—</span>
           <span><b>工具</b>{timeline.toolCalls} 次{timeline.approvals ? ` · ${timeline.approvals} 次审批` : ''}</span>
           <span><b>模型轮次</b>{timeline.modelRounds}</span>
         </div>
       ) : null}
-      {run?.error ? <pre className={s.runError}>{String(run.error)}</pre> : null}
+      {run?.status_reason ? <pre className={s.runError}>{run.status_reason}</pre> : null}
 
       <div className={a.tabs} role="tablist" aria-label="运行详情">
         <button type="button" role="tab" aria-selected={tab === 'timeline'} onClick={() => setTab('timeline')}>时间线</button>
@@ -248,7 +235,9 @@ export function RunDetailPage() {
 
       {run && tab === 'tools' ? <ToolLedger tools={tools} /> : null}
       {run && tab === 'processes' ? (
-        <ProcessLogs runId={runId} sessionId={String((detailRecord?.sandbox_session_id as string | null) || run.session_id || '')} />
+        sandboxSessionId ? <ProcessLogs runId={runId} sessionId={sandboxSessionId} /> : (
+          <div className={`${a.tableWrap} ${a.empty}`}>进程日志存放在运行所有者的沙箱里，沙箱按用户隔离，这里只能查看你自己的运行。</div>
+        )
       ) : null}
     </div>
   );

@@ -12,17 +12,9 @@ import {
 } from '../src/entities/index.ts';
 import {
   canCancelRun,
-  filterRunsByStatus,
-  formatRunDuration,
-  mergeRunRows,
-  normalizeRunStatus,
-  runRowFromApi,
-  runRowFromEntity,
-  shortId,
-  inRange,
-  runStats,
   formatLongDuration,
-  type RunRow,
+  formatRunDuration,
+  normalizeRunStatus,
 } from '../src/pages/runs/runHelpers.ts';
 import {
   canDecideApproval,
@@ -43,131 +35,19 @@ import {
 import { parseApi } from '../src/shared/schemas/api.ts';
 
 describe('run helpers', () => {
-  it('filters by status chip including completed aliases', () => {
-    const rows = [
-      runRowFromEntity(createRun({ id: 'r1', status: 'running' })),
-      runRowFromEntity(createRun({ id: 'r2', status: 'waiting_approval' })),
-      runRowFromEntity(createRun({ id: 'r3', status: 'succeeded' })),
-      runRowFromEntity(createRun({ id: 'r4', status: 'failed' })),
-    ];
-    assert.equal(filterRunsByStatus(rows, 'running').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'waiting_approval')[0]?.id, 'r2');
-    assert.equal(filterRunsByStatus(rows, 'completed').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'failed')[0]?.id, 'r4');
-    assert.equal(filterRunsByStatus(rows, 'all').length, 4);
-  });
-
-  it('normalizes durable Agent status values before filtering', () => {
-    const rows = [
-      runRowFromApi({ run_id: 'r1', status: 'RUNNING' }),
-      runRowFromApi({ run_id: 'r2', status: 'SUCCEEDED' }),
-      runRowFromApi({ run_id: 'r3', status: 'WAITING_INPUT' }),
-    ].filter(Boolean);
+  it('normalizes durable Agent statuses and decides cancel eligibility', () => {
     assert.equal(normalizeRunStatus('WAITING_APPROVAL'), 'waiting_approval');
-    assert.equal(filterRunsByStatus(rows, 'running').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'completed').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'waiting_input').length, 1);
-  });
-
-  it('merges API rows with entity store without dropping either', () => {
-    let store = createEntityStore();
-    store = upsertRun(
-      store,
-      createRun({
-        id: 'run_local',
-        conversationId: 'c1',
-        status: 'running',
-      }),
-    );
-    const api = [
-      {
-        run_id: 'run_api',
-        conversation_id: 'c2',
-        status: 'failed',
-        error: 'boom',
-        model_id: 'gpt-test',
-      },
-      {
-        run_id: 'run_local',
-        conversation_id: 'c1',
-        status: 'running',
-        model_id: 'from-api',
-      },
-    ];
-    const merged = mergeRunRows(api, store);
-    assert.equal(merged.length, 2);
-    const local = merged.find((r) => r.id === 'run_local');
-    assert.ok(local);
-    assert.equal(local?.model, 'from-api');
-    assert.ok(merged.some((r) => r.id === 'run_api' && r.error === 'boom'));
-  });
-
-  it('parses API run row and cancel eligibility', () => {
-    const row = runRowFromApi({
-      run_id: 'abc1234567890',
-      status: 'running',
-      current_tool: 'bash',
-      usage: { total_tokens: 42 },
-    });
-    assert.ok(row);
-    assert.equal(row?.currentTool, 'bash');
-    assert.equal(row?.tokenUsage, '42 tokens');
-    assert.equal(canCancelRun('running'), true);
-    assert.equal(canCancelRun('succeeded'), false);
-    assert.equal(shortId('abcdefghijklmnop', 8), 'abcdefgh…');
-  });
-
-  it('uses Agent completed_at as the terminal duration timestamp', () => {
-    const row = runRowFromApi({
-      run_id: 'abc1234567890',
-      status: 'SUCCEEDED',
-      started_at: '2026-07-12T00:00:00.000Z',
-      completed_at: '2026-07-12T00:01:05.000Z',
-    });
-    assert.ok(row);
-    assert.equal(row.finishedAt, '2026-07-12T00:01:05.000Z');
-    assert.equal(formatRunDuration(row.startedAt, row.finishedAt), '01:05');
     assert.equal(canCancelRun('RUNNING'), true);
+    assert.equal(canCancelRun('SUCCEEDED'), false);
   });
 
-  it('formats duration', () => {
+  it('formats durations', () => {
     const start = '2026-07-12T00:00:00.000Z';
     const end = '2026-07-12T00:01:05.000Z';
     assert.equal(formatRunDuration(start, end), '01:05');
     assert.equal(formatRunDuration(null, null), '—');
-  });
-});
-
-describe('run list stats', () => {
-  const NOW = new Date(2026, 8, 25, 15, 0, 0).getTime();
-  const at = (daysAgo: number, h = 10) => new Date(2026, 8, 25 - daysAgo, h, 0, 0).toISOString();
-  const row = (over: Partial<RunRow>): RunRow => ({
-    id: Math.random().toString(36), conversationId: null, status: 'succeeded', currentStep: null, currentTool: null,
-    model: null, runner: null, error: null, startedAt: null, finishedAt: null, createdAt: null, updatedAt: null,
-    tokenUsage: null, source: 'api', ...over,
-  });
-
-  it('counts today / yesterday, failures, waiting runs and the 7-day series', () => {
-    const rows = [
-      row({ startedAt: at(0), finishedAt: new Date(Date.parse(at(0)) + 30_000).toISOString() }),
-      row({ startedAt: at(0, 11), status: 'failed', finishedAt: new Date(Date.parse(at(0, 11)) + 10_000).toISOString() }),
-      row({ startedAt: at(0, 14), status: 'WAITING_APPROVAL', updatedAt: at(0, 14) }),
-      row({ startedAt: at(1) }),
-      row({ startedAt: at(6) }),
-      row({ startedAt: at(9) }),
-    ];
-    const s = runStats(rows, NOW);
-    assert.equal(s.today, 3);
-    assert.equal(s.yesterday, 1);
-    assert.equal(s.failedToday, 1);
-    assert.equal(s.waiting, 1);
-    assert.equal(s.longestWaitMs, 3_600_000);
-    assert.deepEqual(s.last7, [1, 0, 0, 0, 0, 1, 3]);
-    assert.equal(s.medianMs, 10_000);
-    assert.equal(s.p95Ms, 30_000);
-    assert.equal(rows.filter((r) => inRange(r, 'today', NOW)).length, 3);
-    assert.equal(rows.filter((r) => inRange(r, '7d', NOW)).length, 5);
     assert.equal(formatLongDuration(250_000), '4 分 10 秒');
+    assert.equal(formatLongDuration(null), '—');
   });
 });
 

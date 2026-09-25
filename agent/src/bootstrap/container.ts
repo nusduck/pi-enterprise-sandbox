@@ -26,6 +26,7 @@ import { SteerRunService } from '../application/steer-run-service.js';
 import { FollowUpService } from '../application/follow-up-service.js';
 import { CronJobService } from '../application/cron-job-service.js';
 import { AgentCatalogService } from '../application/agent-catalog-service.js';
+import { AdminRunQueryService } from '../application/admin-run-query-service.js';
 import { AgentConfigValidator } from '../application/agent-config-validator.js';
 import { A2aCredentialService } from '../application/a2a/credential-service.js';
 import { A2aTaskService } from '../application/a2a/task-service.js';
@@ -725,6 +726,8 @@ export class ServiceContainer {
         mcpDiscovery: this.#mcp.inventory(),
       }),
     });
+    // 管理端全组织只读查询；角色 fail-closed、org 作用域在服务内判定。
+    const adminRunQueryService = new AdminRunQueryService({ db: this.knex, createRepositories });
     const getRunService = new GetRunService({
       createRepositories,
       db: this.knex,
@@ -865,6 +868,7 @@ export class ServiceContainer {
       createRunService,
       cronJobService,
       agentCatalogService,
+      adminRunQueryService,
       getRunService,
       cancelRunService,
       steerRunService,

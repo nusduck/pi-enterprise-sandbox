@@ -46,6 +46,7 @@ import {
 } from '../presentation/http/run-presenters.js';
 import { handleCronRoute } from '../presentation/http/cron-routes.js';
 import { handleAgentCatalogRoute } from '../presentation/http/agents-routes.js';
+import { handleAdminRunRoute } from '../presentation/http/admin-run-routes.js';
 import { handleSkillRoute } from '../presentation/http/skill-routes.js';
 import { handleAuthRoute } from '../presentation/http/auth-routes.js';
 
@@ -104,6 +105,7 @@ export interface AgentHttpServerDeps {
   listToolExecutions?: Loose;
   cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null;
   agentCatalogService?: import('../presentation/http/agents-routes.js').AgentCatalogServiceLike | null;
+  adminRunQueryService?: import('../presentation/http/admin-run-routes.js').AdminRunQueryServiceLike | null;
   activeRunHint?: () => number;
   eventPollIntervalMs?: number;
   eventHeartbeatMs?: number;
@@ -130,6 +132,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
   const traceQueryService = deps.traceQueryService || null;
   const cronJobService = deps.cronJobService || null;
   const agentCatalogService = deps.agentCatalogService || null;
+  const adminRunQueryService = deps.adminRunQueryService || null;
 
   const server = http.createServer(async (req, res) => {
     const requestId = resolveRequestId(req);
@@ -214,6 +217,10 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           agentCatalogService,
         })
       ) {
+        return;
+      }
+
+      if (await handleAdminRunRoute({ req, res, parsedUrl, path, adminRunQueryService })) {
         return;
       }
 

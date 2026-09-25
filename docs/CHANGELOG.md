@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **管理端全组织运行查询**（前端重设计第 3 期）：新增 `GET /api/admin/runs`（状态 / 智能体 / 用户 / 时间 /
+  关键字筛选，游标分页）、`/api/admin/runs/stats`、`/api/admin/runs/{id}` 与其 `/events`、`/tools`。
+  只读、只限本 org；非 admin 403、别的 org 的运行 404，判定在 Agent。管理控制台的运行页与运行详情改用这组接口，
+  可以看到组织内所有用户的运行、用户与智能体版本、工具与审批数，以及触发运行的用户输入。
 - **Agent 间委派**：新工具 `delegate_to_agent` 让一个 Agent 把自包含任务交给同 org 的另一个 Agent，
   子 Run 以目标 Agent 的活跃版本执行并把结果交回父 Run。由 AgentVersion 配置
   `delegation.agents` 显式授权，缺省不可委派；复用子 Run 的深度 / 并发上限、分层队列与级联取消。

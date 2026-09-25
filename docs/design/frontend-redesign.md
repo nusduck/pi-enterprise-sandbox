@@ -92,8 +92,8 @@
 - **运行**：统计条（今日运行、失败、等待审批、耗时中位数、7 天趋势）+ 筛选 + 整行可点的表格（状态、会话标题、用户、智能体、模型、工具数、tokens、耗时、开始时间）。
 - **Run 详情 = Trace**：左侧 span 瀑布图（模型轮次、工具、子任务、审批等待），右侧选中节点的内容。
   持久 trace 按设计只存元数据（`trace-span-projections.ts` 的属性白名单），**内容由前端从事件回放与工具台账按 `toolCallId` 拼接**，不改 trace 契约。
-  实施说明（2026-09-25）：现有 trace 没有模型 span，瀑布图的模型轮次由持久事件的时间戳推出；列表与统计基于
-  owner 作用域的 `/api/runs`（最多 50 条），用户列、全组织统计与 Tokens 待第 3 期管理接口。
+  实施说明（2026-09-25）：现有 trace 没有模型 span，瀑布图的模型轮次由持久事件的时间戳推出。列表、统计与详情
+  已接第 3 期的 `/api/admin/runs*`；Tokens 仍缺——Run 账本没有采集 usage，需另行设计采集点。
 - **智能体**：左列表右编辑器；顶栏固定显示“编辑基于 vN”、未保存修改数、放弃 / 仅保存 / 保存并启用；tab 为基本信息、模型、工具权限、MCP、版本历史、JSON。
   工具权限按类别分组，每行“继承 / 允许 / 审批 / 禁止”四档分段控件，已覆盖行高亮，可只看覆盖项。版本历史带与活跃版本的差异。
 - **能力**：Skills / MCP / 工具 / 模型 四个 tab，表格呈现，去掉 Extension。
@@ -155,7 +155,7 @@
 
 | 能力 | 现状 | 需要新增 | 约束 |
 |---|---|---|---|
-| 管理员运行列表与统计 | `/api/runs`、`/trace`、`/events`、`/tools` 均按 owner 过滤 | `GET /api/admin/runs`（筛选：状态、智能体、用户、时间；游标分页）、`GET /api/admin/runs/stats`、按 runId 的 admin 作用域详情 / 事件 / 工具台账 / trace | 角色判定 fail-closed；只限本 org，跨 org 一律 404；BFF 只转发 |
+| 管理员运行列表与统计（**已实施**：`/api/admin/runs*`，trace 端点未做，前端不依赖） | `/api/runs`、`/trace`、`/events`、`/tools` 均按 owner 过滤 | `GET /api/admin/runs`（筛选：状态、智能体、用户、时间；游标分页）、`GET /api/admin/runs/stats`、按 runId 的 admin 作用域详情 / 事件 / 工具台账 / trace | 角色判定 fail-closed；只限本 org，跨 org 一律 404；BFF 只转发 |
 | 账户编辑 | `users` 有 `display_name`、`email`、`status`，`/api/auth/me` 只返回 `username`、`display_name` | `me` 返回邮箱、机构名、角色、状态；`PATCH /api/auth/me` 仅允许改显示名称与邮箱 | 邮箱格式校验；与 `run-completion-email.md` 的收件人来源一致 |
 | 产物库 | `/api/artifacts` 必须带 `session_id` | 按当前用户跨会话列产物（类型筛选、搜索、分页） | owner-scoped |
 | 定时任务 30 天汇总 | 只能逐任务取 `/runs` | 可选：按用户的每日运行汇总 | 任务数量少时可不做 |

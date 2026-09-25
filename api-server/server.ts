@@ -85,6 +85,7 @@ import {
   handleListAgents,
   handleSetAgentActiveVersion,
 } from './src/routes/agents.js';
+import { handleAdminRunsRoute } from './src/routes/admin-runs.js';
 import { authFromRequest, checkSandboxReady } from './src/services/sandbox-client.js';
 import { checkAgentReady } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
@@ -359,6 +360,9 @@ const server = http.createServer(async (rawReq, res) => {
         }
       }
     }
+
+    // ── 管理端 Run 查询（只读；角色与 org 作用域由 agent/ 判定） ──
+    if (await handleAdminRunsRoute(req.method || 'GET', path, parsedUrl, res, req)) return;
 
     // ── Agent catalog（目录事实归 agent/，这里只转发 + 身份投影） ──
     if (req.method === 'GET' && path === '/api/agents') {

@@ -217,6 +217,9 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/agents/{id}/active-version` | 切活跃版本，也是回滚（**admin**） |
 | `GET` | `/api/agents/config/options` | 配置 schema、字段支持情况、平台约束与 capability revision（**admin**） |
 | `POST` | `/api/agents/config/validate` | 只解析不落库的配置校验（**admin**） |
+| `GET` | `/api/admin/runs` | 全组织运行列表（**admin**）；见下文「管理端运行查询」 |
+| `GET` | `/api/admin/runs/stats` | 运行统计条（**admin**） |
+| `GET` | `/api/admin/runs/{id}` `/events` `/tools` | 单次运行详情 / 全部持久事件 / 工具台账（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
@@ -345,6 +348,40 @@ admin，已存在的账号在下次 login 或 `/auth/me` 时提升，移出名�
 认证数据与 token 的唯一权威是 Agent：BFF 的四条 `/api/auth/*` 适配器调用
 Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不保存密码、
 不签发或验证浏览器 JWT，也没有 `/auth/*` 路由。
+
+#### 管理端运行查询
+
+只读，全组织范围。BFF 只转发与写入服务端解析的 `X-Acting-*`（含角色），判定都在 Agent
+（`application/admin-run-query-service.ts`）：
+
+- 角色不是 `admin`（含角色缺失）→ 403 `ADMIN_REQUIRED`；
+- runId 属于别的 org 或不存在 → 同一个 404 `NOT_FOUND`；所有查询都以调用者的 org 为作用域；
+- 参数非法 → 400 `VALIDATION_ERROR`，不会带着坏参数查库。
+
+`GET /api/admin/runs` 查询参数（BFF 只转发这些键）：
+
+| 参数 | 说明 |
+|---|---|
+| `status` | 分组 `running` / `waiting` / `failed` / `completed`，或 plan §10 状态，逗号分隔 |
+| `agent_id` `user_id` | ULID |
+| `from` `to` | ISO-8601，按 `created_at` 过滤（`to` 不含） |
+| `q` | 会话标题 / 用户显示名模糊匹配，或精确 Run ID |
+| `cursor` `limit` | 键集分页（按 `created_at`、`run_id` 倒序）；`limit` 1–200，默认 50 |
+
+返回 `{ runs, next_cursor }`；每行含 `run_id`、`status`、`user_id`、`user_name`、`conversation_id`、
+`conversation_title`、`agent_id`、`agent_name`、`agent_version_no`、`model_id`（取自版本配置
+`modelPolicy.modelId`，未固定为 `null`）、`parent_run_id`、`trace_id`、`tool_count`、`approval_count`
+与各时间戳。**不含 token 用量**：Run 账本目前没有采集 usage。
+
+`GET /api/admin/runs/stats?day_start=<ISO>`：`day_start` 为调用方本地零点（须在最近两天内），
+返回 `today`、`yesterday`、`failed_today`、`failure_rate`、`waiting`（等待审批 / 回答，不限时间）、
+`longest_wait_ms`、`median_ms`、`p95_ms`（近 7 天已结束运行的耗时）、`last_7_days`（每日运行数，
+旧→新）、`truncated`（近 7 天超过 2 万行时为 true，数值为下限）。
+
+`GET /api/admin/runs/{id}` 在列表行之外多一个 `user_input`（触发这次运行的用户消息文本）。
+`/events` 返回 `{ events, truncated }`，形状同会话事件回放（`run_id`、`sequence`、`event_id`、`type`、
+`payload`、`created_at`），BFF 分页拉齐（上限 2 万条）；`/tools` 形状同 `/api/runs/{id}/tools`。
+沙箱进程与日志仍按所有者隔离，管理端不提供跨用户的进程读取。
 
 ### BFF 健康检查
 
