@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   任务所选时区，现在按任务时区换算。
 - **设置弹窗**：账户菜单的「设置」改为弹窗，包含账户信息、通用偏好（外观可选跟随系统、对话显示紧凑 / 展开、
   运行中 Enter 的默认动作）与我的 Skills（草稿上传、启用、停用），不再跳到部署配置页。
+- **路由**：会话可用 `/c/<id>` 直接打开并随会话切换更新；管理页面迁到独立的管理控制台 `/admin/*`
+  （运行、审批、智能体、能力、A2A 接入），旧的 `/settings/*`、`/runs`、`/approvals` 自动重定向。
 
 ### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
 

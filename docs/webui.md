@@ -147,7 +147,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 - **侧栏**（`widgets/conversation-sidebar/`）：品牌行 → 图标导航（新建会话 ⌘L、定时任务）→ 搜索框
   （输入即过滤，⌘K 聚焦）→ 可折叠的「会话」分组，按今天 / 昨天 / 近 7 天 / 更早分组。会话行标注
   所属智能体（组织默认智能体不打标签，颜色按 `agentTone` 固定），运行中蓝点、等待审批黄点，
-  分组标题右侧可按智能体筛选。底部账户菜单：设置（打开设置弹窗）、管理控制台（admin）、主题切换、退出登录。
+  分组标题右侧可按智能体筛选。底部账户菜单：设置（打开设置弹窗）、管理控制台（admin，`/admin/*`）、主题切换、退出登录。
   分组、过滤与标签颜色是 `sidebarModel.ts` 里的纯函数。
 - **标题栏**（`widgets/conversation-header/`）：会话标题 + 绑定的智能体与版本；运行中或等待审批时
   显示状态与耗时，中断时给「继续运行」；右侧「资料」按钮开关资料抽屉。
@@ -175,9 +175,22 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   浏览器（`shared/ui/preferences.ts`，`usePreference` 跨组件实时同步，读不到时用默认值）。我的 Skills：
   上传草稿（.zip / .skill，50 MB）、启用、停用，分层规则复用 `skillHelpers.splitSkillTiers`。
 
-部署级配置（能力、智能体、A2A、运行与审批）仍在 `/settings/*` 页面，暂未重做：从账户菜单的「管理控制台」进入，左侧分类导航提供 Capabilities、Approvals、
-Runs、Agents（admin）与 A2A Access（admin）。旧路径 `/runs` 与 `/approvals` 重定向到对应
-`/settings/*` 路径。
+### 路由
+
+| 路径 | 页面 |
+|------|------|
+| `/`、`/c/:conversationId` | 会话工作台；`/c/<id>` 可直接打开某个会话，新会话发出首条消息后地址自动变为 `/c/<id>` |
+| `/schedules` | 定时任务 |
+| `/admin/runs`、`/admin/approvals`、`/admin/agents`、`/admin/capabilities`、`/admin/a2a` | 管理控制台（admin） |
+| `/settings/*`、`/runs`、`/approvals` | 旧地址，重定向到对应的 `/admin/*` |
+
+地址与当前会话双向同步（`pages/workbench/WorkbenchPage.tsx`）：地址变化时选中对应会话，建会话、删除
+当前会话时更新地址。启动时若地址是 `/c/<id>`，`main.tsx` 先把它写成「上次打开的会话」，由启动恢复加载，
+避免与恢复逻辑竞争。
+
+**管理控制台**（`app/layout/AdminShell.tsx`）是独立的全屏布局：左侧「返回对话」与分组导航（运维：运行、
+审批；配置：智能体、能力、A2A 接入），不显示会话侧栏。非管理员访问时只显示「需要管理员权限」；服务端对
+管理接口有同样的角色校验。
 
 ### 消息格式
 

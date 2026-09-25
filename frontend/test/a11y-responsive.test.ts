@@ -49,8 +49,7 @@ describe('F6 a11y attributes on key surfaces', () => {
       'conversation-header',
       'ConversationHeader.tsx',
     );
-    // Management chrome keeps sidebar toggle; chat toolbar owns both toggles.
-    assert.match(shell, /aria-label=["']Toggle sidebar["']/);
+    // The workbench shell announces page changes; the title bar owns the toggles.
     assert.match(shell, /aria-live=["']polite["']/);
     assert.match(toolbar, /aria-label=["']Toggle sidebar["']/);
     assert.match(toolbar, /aria-label=["']Toggle context inspector["']/);

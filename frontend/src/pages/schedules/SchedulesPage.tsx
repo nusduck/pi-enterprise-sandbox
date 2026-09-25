@@ -35,7 +35,7 @@ const OUTCOME: Record<RunOutcome, [string, string]> = {
  */
 export function SchedulesPage() {
   const navigate = useNavigate();
-  const { agents, agentNameById, selectConversation } = useChat();
+  const { agents, agentNameById } = useChat();
   const [tab, setTab] = useState<Tab>('jobs');
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -122,8 +122,7 @@ export function SchedulesPage() {
       const detail = await getRun(run.run_id);
       const conversationId = detail?.conversation_id;
       if (!conversationId) throw new Error('找不到这次运行对应的会话');
-      await selectConversation(conversationId);
-      navigate('/');
+      navigate(`/c/${encodeURIComponent(conversationId)}`);
     } catch (err) {
       setError((err as Error).message || '打开会话失败');
     }

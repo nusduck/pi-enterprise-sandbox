@@ -89,15 +89,16 @@ describe('CapabilitiesPage diagnostics and MCP status contracts', () => {
     assert.match(pageSrc, /mgmt-chip-count/);
   });
 
-  it('provides SettingsSubnav with secondary navigation for settings pages', () => {
-    const subnavSrc = readFileSync(
-      join(__dirname, '../src/app/layout/SettingsSubnav.tsx'),
-      'utf8',
-    );
-    assert.match(subnavSrc, /\/settings\/capabilities/);
-    assert.match(subnavSrc, /\/settings\/approvals/);
-    assert.match(subnavSrc, /\/settings\/runs/);
-    assert.match(subnavSrc, /settings-subnav/);
+  it('lists admin pages in the admin console and keeps /settings links working', () => {
+    const shell = readFileSync(join(__dirname, '../src/app/layout/AdminShell.tsx'), 'utf8');
+    for (const path of ['/admin/runs', '/admin/approvals', '/admin/agents', '/admin/capabilities', '/admin/a2a']) {
+      assert.match(shell, new RegExp(path.replace(/\//g, '\\/')));
+    }
+    assert.match(shell, /需要管理员权限/);
+    const router = readFileSync(join(__dirname, '../src/app/router/index.tsx'), 'utf8');
+    assert.match(router, /path="\/settings\/:tab"/);
+    assert.match(router, /path="\/c\/:conversationId"/);
+    assert.match(router, /Navigate to="\/admin\/runs"/);
   });
 });
 

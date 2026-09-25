@@ -35,7 +35,6 @@ export function ConversationSidebar() {
     entityStore,
     agents,
     agentNameById,
-    selectConversation,
     startNewChat,
     removeConversation,
     closeSidebar,
@@ -110,8 +109,8 @@ export function ConversationSidebar() {
   }
 
   function onSelectConv(convId: string) {
-    void selectConversation(convId);
-    go('/');
+    // The workbench selects the conversation named by /c/<id>.
+    go(`/c/${encodeURIComponent(convId)}`);
   }
 
   async function onLogin(e: FormEvent) {
@@ -148,7 +147,7 @@ export function ConversationSidebar() {
   const rootClass = [s.side, !isMobile && !open ? s.collapsed : '', isMobile && open ? s.mobileOpen : '']
     .filter(Boolean)
     .join(' ');
-  const onChat = location.pathname === '/';
+  const onChat = location.pathname === '/' || location.pathname.startsWith('/c/');
 
   return (
     <>
@@ -293,7 +292,7 @@ export function ConversationSidebar() {
                 <div className={s.menu} role="menu" style={{ bottom: 58, left: 8, right: 8 }}>
                   <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setSettingsOpen(true); }}>设置</button>
                   {isAdmin ? (
-                    <button type="button" role="menuitem" onClick={() => go('/settings/runs')}>
+                    <button type="button" role="menuitem" onClick={() => go('/admin/runs')}>
                       管理控制台
                       {pendingApprovals.length ? <span className={s.badge}>{pendingApprovals.length} 待审批</span> : null}
                     </button>
