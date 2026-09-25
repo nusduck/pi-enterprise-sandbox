@@ -56,4 +56,14 @@ export function authMe(
   });
 }
 
-
+/** GET / PATCH the caller's own profile (account page). */
+export function authProfile(
+  auth: { authorization?: string | null } | null = null,
+  options: Omit<AgentAuthOptions, 'authorization'> = {},
+): Promise<any> {
+  return requestAgentAuth('profile', {
+    method: 'GET',
+    ...options,
+    authorization: auth?.authorization || null,
+  });
+}

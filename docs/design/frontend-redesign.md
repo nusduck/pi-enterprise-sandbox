@@ -156,7 +156,7 @@
 | 能力 | 现状 | 需要新增 | 约束 |
 |---|---|---|---|
 | 管理员运行列表与统计（**已实施**：`/api/admin/runs*`，trace 端点未做，前端不依赖） | `/api/runs`、`/trace`、`/events`、`/tools` 均按 owner 过滤 | `GET /api/admin/runs`（筛选：状态、智能体、用户、时间；游标分页）、`GET /api/admin/runs/stats`、按 runId 的 admin 作用域详情 / 事件 / 工具台账 / trace | 角色判定 fail-closed；只限本 org，跨 org 一律 404；BFF 只转发 |
-| 账户编辑 | `users` 有 `display_name`、`email`、`status`，`/api/auth/me` 只返回 `username`、`display_name` | `me` 返回邮箱、机构名、角色、状态；`PATCH /api/auth/me` 仅允许改显示名称与邮箱 | 邮箱格式校验；与 `run-completion-email.md` 的收件人来源一致 |
+| 账户编辑（**已实施**：`/api/auth/profile`，与 `me` 分开以免加重每请求鉴权） | `users` 有 `display_name`、`email`、`status`，`/api/auth/me` 只返回 `username`、`display_name` | `me` 返回邮箱、机构名、角色、状态；`PATCH /api/auth/me` 仅允许改显示名称与邮箱 | 邮箱格式校验；与 `run-completion-email.md` 的收件人来源一致 |
 | 产物库 | `/api/artifacts` 必须带 `session_id` | 按当前用户跨会话列产物（类型筛选、搜索、分页） | owner-scoped |
 | 定时任务 30 天汇总 | 只能逐任务取 `/runs` | 可选：按用户的每日运行汇总 | 任务数量少时可不做 |
 | 能力调用统计 | 无 | 可选：Skill 近 7 天调用次数 | 没有就不显示该列 |

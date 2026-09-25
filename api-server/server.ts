@@ -46,7 +46,7 @@ import {
   handleListRuns,
   handleRunEvents,
 } from './src/routes/runs.js';
-import { handleRegister, handleLogin, handleLogout, handleMe } from './src/routes/auth.js';
+import { handleRegister, handleLogin, handleLogout, handleMe, handleProfile } from './src/routes/auth.js';
 import { handleEnsureSession } from './src/routes/sessions.js';
 import {
   handleGetProcess,
@@ -243,6 +243,13 @@ const server = http.createServer(async (rawReq, res) => {
     }
     if (req.method === 'GET' && path === '/api/auth/me') {
       await handleMe(res, req);
+      return;
+    }
+    if (path === '/api/auth/profile' && (req.method === 'GET' || req.method === 'PATCH')) {
+      const parsed = req.method === 'PATCH'
+        ? await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES })
+        : null;
+      await handleProfile(req.method, parsed, res, req);
       return;
     }
     if (req.method === 'POST' && path === '/api/auth/logout') {

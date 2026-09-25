@@ -172,8 +172,10 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   触发；预览与 Agent 的 cron 语义一致（`scheduleModel.ts`，测试直接对照 Agent 的 `nextCronOccurrence`）。
   一次性任务按所选时区换算成带偏移的 `run_at`。
 
-- **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：用户名、显示名称、
-  用户类型（只读，来自 `/api/auth/me`）与退出登录。通用：外观（浅色 / 深色 / 跟随系统）、对话显示
+- **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：显示名称与邮箱可编辑
+  （`/api/auth/profile`，前端先校验、服务端为准，失败时保留草稿），用户名、机构、用户类型、账户状态、注册时间、
+  最近登录只读；另有退出登录。保存后侧栏里的名称要到下次加载页面才更新（`ChatContext` 已贴着行数预算，
+  没有加刷新 `authUser` 的入口）。通用：外观（浅色 / 深色 / 跟随系统）、对话显示
   （紧凑 / 展开：已完成轮次的工具组是否默认展开）、运行中按 Enter（排队追问 / 立即改向）。偏好存在本机
   浏览器（`shared/ui/preferences.ts`，`usePreference` 跨组件实时同步，读不到时用默认值）。我的 Skills：
   上传草稿（.zip / .skill，50 MB）、启用、停用，分层规则复用 `skillHelpers.splitSkillTiers`。

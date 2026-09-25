@@ -1,4 +1,4 @@
-import { toMysqlDateTime } from '../row-mappers.js';
+import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 
 type Loose = any;
 
@@ -13,6 +13,8 @@ function mapCredential(row: Record<string, unknown> | undefined) {
     role: String(row.role || 'user'),
     organizationId: String(row.external_org_id || 'org_bootstrap'),
     isActive: Boolean(row.is_active),
+    createdAt: formatDateTime(row.created_at),
+    lastLoginAt: formatDateTime(row.last_login_at),
   };
 }
 
@@ -79,5 +81,31 @@ export class AuthCredentialRepository {
       .where({ external_user_id: externalUserId })
       .update({ last_login_at: now, updated_at: now });
   }
-}
 
+  /**
+   * 修改本人的显示名称 / 邮箱。`auth_credentials` 与 `users` 各存一份（后者是
+   * 运行账本与通知收件人的来源），同一事务里一起改，不留下一半的状态。
+   * `patch` 里没出现的键保持不变。
+   */
+  async updateProfile(
+    externalUserId: string,
+    userExternalSubject: string,
+    patch: { displayName?: string; email?: string | null },
+  ) {
+    const now = toMysqlDateTime(this.now());
+    const fields: Record<string, unknown> = {};
+    if (patch.displayName !== undefined) fields.display_name = patch.displayName;
+    if (patch.email !== undefined) fields.email = patch.email;
+    if (Object.keys(fields).length) {
+      await this.db.transaction(async (trx: Loose) => {
+        await trx('tbl_agsvc_auth_credentials')
+          .where({ external_user_id: externalUserId })
+          .update({ ...fields, updated_at: now });
+        await trx('tbl_agsvc_users')
+          .where({ external_subject: userExternalSubject })
+          .update({ ...fields, updated_at: now });
+      });
+    }
+    return this.getByExternalUserId(externalUserId);
+  }
+}

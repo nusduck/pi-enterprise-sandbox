@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **账户资料可编辑**（前端重设计第 3 期）：设置 → 账户里可以修改显示名称与邮箱，并显示机构、账户状态、
+  注册时间与最近登录。新增 `GET` / `PATCH /api/auth/profile`；只允许改这两个字段，其余字段返回 422；
+  修改同时写入登录凭据与用户表，管理端的用户列与后续的运行完成通知都用新值。
 - **管理端全组织运行查询**（前端重设计第 3 期）：新增 `GET /api/admin/runs`（状态 / 智能体 / 用户 / 时间 /
   关键字筛选，游标分页）、`/api/admin/runs/stats`、`/api/admin/runs/{id}` 与其 `/events`、`/tools`。
   只读、只限本 org；非 admin 403、别的 org 的运行 404，判定在 Agent。管理控制台的运行页与运行详情改用这组接口，

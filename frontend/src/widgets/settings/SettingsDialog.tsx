@@ -3,6 +3,7 @@ import { useChat } from '../../features/chat/ChatContext';
 import { listSkills, setSkillEnabled, uploadSkillDraft, type SkillItem } from '../../shared/api/capabilities';
 import { splitSkillTiers } from '../../pages/settings/skillHelpers';
 import { usePreference, type Preferences } from '../../shared/ui/preferences';
+import { getProfile, updateProfile, type Profile } from '../../shared/api/account';
 import s from './settings.module.css';
 
 type Tab = 'account' | 'general' | 'skills';
@@ -33,13 +34,68 @@ function Row({ title, hint, children }: { title: string; hint?: string; children
   );
 }
 
-function AccountPane({ onLogout }: { onLogout: () => void }) {
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '—';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString('zh-CN', { hour12: false });
+}
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => void }) {
   const { state } = useChat();
-  const user = state.authUser;
-  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
-  const username = String(user?.username || '');
-  const displayName = typeof user?.display_name === 'string' ? user.display_name : '';
-  const name = displayName || username;
+  const fallback = state.authUser;
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ display_name: '', email: '' });
+  const [fieldError, setFieldError] = useState<{ display_name?: string; email?: string }>({});
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const adopt = useCallback((p: Profile) => {
+    setProfile(p);
+    setDraft({ display_name: p.display_name || '', email: p.email || '' });
+  }, []);
+
+  useEffect(() => {
+    if (!active || profile) return;
+    getProfile().then(adopt).catch((err: Error) => setLoadError(err.message || '读取账户信息失败'));
+  }, [active, profile, adopt]);
+
+  const username = profile?.username || String(fallback?.username || '');
+  const isAdmin = String(profile?.role || fallback?.role || '').toLowerCase() === 'admin';
+  const name = (profile?.display_name || '') || username;
+  const editable = new Set(profile?.editable_fields || []);
+  const dirty = Boolean(profile) && (
+    draft.display_name.trim() !== (profile?.display_name || '') || draft.email.trim() !== (profile?.email || '')
+  );
+
+  async function save() {
+    if (!profile) return;
+    const errors: { display_name?: string; email?: string } = {};
+    const displayName = draft.display_name.trim();
+    const email = draft.email.trim();
+    if (!displayName) errors.display_name = '显示名称不能为空';
+    else if (displayName.length > 255) errors.display_name = '最多 255 个字符';
+    if (email && (email.length > 320 || !EMAIL.test(email))) errors.email = '邮箱格式不正确';
+    setFieldError(errors);
+    if (Object.keys(errors).length) return;
+    const patch: { display_name?: string; email?: string | null } = {};
+    if (displayName !== (profile.display_name || '')) patch.display_name = displayName;
+    if (email !== (profile.email || '')) patch.email = email || null;
+    setSaving(true);
+    setNotice(null);
+    try {
+      adopt(await updateProfile(patch));
+      setNotice('已保存。侧栏里的名称在下次打开页面时更新。');
+    } catch (err) {
+      // The server re-validates; keep the draft so nothing typed is lost.
+      setNotice((err as Error).message || '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section>
       <div className={s.profile}>
@@ -50,10 +106,50 @@ function AccountPane({ onLogout }: { onLogout: () => void }) {
         </div>
         <button type="button" className={s.btn} onClick={onLogout}>退出登录</button>
       </div>
+      {loadError ? <p className={s.error} role="alert">{loadError}</p> : null}
+      <form
+        className={s.form}
+        onSubmit={(e) => { e.preventDefault(); void save(); }}
+        aria-label="账户资料"
+      >
+        <label className={s.field}>
+          <span>显示名称</span>
+          <input
+            value={draft.display_name}
+            maxLength={255}
+            disabled={!profile || !editable.has('display_name') || saving}
+            onChange={(e) => setDraft((d) => ({ ...d, display_name: e.target.value }))}
+            aria-invalid={Boolean(fieldError.display_name)}
+          />
+          {fieldError.display_name ? <small className={s.fieldError}>{fieldError.display_name}</small> : null}
+        </label>
+        <label className={s.field}>
+          <span>邮箱</span>
+          <input
+            type="email"
+            value={draft.email}
+            maxLength={320}
+            placeholder="用于运行完成通知"
+            disabled={!profile || !editable.has('email') || saving}
+            onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
+            aria-invalid={Boolean(fieldError.email)}
+          />
+          {fieldError.email ? <small className={s.fieldError}>{fieldError.email}</small> : <small>留空表示不设置</small>}
+        </label>
+        <div className={s.formActions}>
+          {notice ? <span className={s.muted} role="status">{notice}</span> : null}
+          <span className={s.sp} />
+          <button type="button" className={s.btn} disabled={!dirty || saving} onClick={() => profile && adopt(profile)}>还原</button>
+          <button type="submit" className={s.btnPri} disabled={!dirty || saving}>{saving ? '保存中…' : '保存'}</button>
+        </div>
+      </form>
       <dl className={s.kv}>
         <dt>用户名</dt><dd>{username || '—'}</dd>
-        <dt>显示名称</dt><dd>{displayName || '—'}</dd>
+        <dt>机构</dt><dd>{profile?.organization_name || '—'}</dd>
         <dt>用户类型</dt><dd>{isAdmin ? '管理员' : '普通用户'}<span className={s.muted}> · 由管理员设置</span></dd>
+        <dt>账户状态</dt><dd>{profile ? (profile.status === 'active' ? '正常' : '已停用') : '—'}</dd>
+        <dt>注册时间</dt><dd>{formatDate(profile?.created_at)}</dd>
+        <dt>最近登录</dt><dd>{formatDate(profile?.last_login_at)}</dd>
       </dl>
     </section>
   );
@@ -201,7 +297,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <div className={s.close}>
             <button type="button" className={s.btn} onClick={onClose}>关闭</button>
           </div>
-          <div hidden={tab !== 'account'}><AccountPane onLogout={() => { onClose(); void logout(); }} /></div>
+          <div hidden={tab !== 'account'}><AccountPane active={open && tab === 'account'} onLogout={() => { onClose(); void logout(); }} /></div>
           <div hidden={tab !== 'general'}><GeneralPane /></div>
           <div hidden={tab !== 'skills'}><SkillsPane active={open && tab === 'skills'} /></div>
         </div>

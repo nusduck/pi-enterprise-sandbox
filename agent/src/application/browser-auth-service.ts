@@ -9,6 +9,8 @@ import { formatUserExternalSubject } from '../infrastructure/mysql/repositories/
 import { ulid } from '../domain/shared/ulid.js';
 
 const pbkdf2 = promisify(pbkdf2Callback);
+/** Pragmatic shape check; deliverability is the mail gateway's business. */
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME = /^[A-Za-z0-9_./@+-]{2,64}$/;
 const BOOTSTRAP_ORG_ID = 'org_bootstrap';
 const PASSWORD_ITERATIONS = 120_000;
@@ -22,6 +24,8 @@ type Credential = {
   role: string;
   organizationId: string;
   isActive: boolean;
+  createdAt?: string | null;
+  lastLoginAt?: string | null;
 };
 
 /**
@@ -50,6 +54,8 @@ type OrganizationStore = {
     role: string;
     status: string;
   }): Promise<unknown>;
+  /** Only the profile page reads it; optional so older test doubles still fit. */
+  getOrganization?(orgId: string): Promise<{ name: string } | null>;
 };
 
 type ExternalRefStore = {
@@ -68,6 +74,11 @@ type CredentialStore = {
   create(input: Record<string, unknown>): Promise<Credential | null>;
   getByUsername(username: string): Promise<Credential | null>;
   getByExternalUserId(id: string): Promise<Credential | null>;
+  updateProfile?(
+    externalUserId: string,
+    userExternalSubject: string,
+    patch: { displayName?: string; email?: string | null },
+  ): Promise<Credential | null>;
   setRole(id: string, role: string): Promise<void>;
   touchLogin(id: string): Promise<void>;
 };
@@ -372,7 +383,8 @@ export class BrowserAuthService {
     return { token: this.createToken(entry), user: this.publicUser(entry) };
   }
 
-  async me(authorization: string | undefined) {
+  /** Verified, active credential behind a bearer token, or 401. */
+  private async authenticated(authorization: string | undefined): Promise<Credential> {
     const match = /^Bearer\s+(.+)$/i.exec(String(authorization || ''));
     const payload = match ? this.verifyToken(match[1] as string) : null;
     if (!payload) {
@@ -388,8 +400,88 @@ export class BrowserAuthService {
     if (!entry?.isActive) {
       throw new BrowserAuthError(401, 'INVALID_TOKEN', 'Invalid or expired token');
     }
+    return entry;
+  }
+
+  async me(authorization: string | undefined) {
+    const entry = await this.authenticated(authorization);
     await this.ensureUserProvisioned(entry);
     return this.publicUser(entry);
   }
-}
 
+  /**
+   * The account page's view: `me` plus organisation name, status and dates.
+   * Kept off `me()`, which runs on every BFF request and must stay cheap.
+   */
+  async profile(authorization: string | undefined) {
+    const entry = await this.authenticated(authorization);
+    return this.presentProfile(entry);
+  }
+
+  private async presentProfile(entry: Credential) {
+    let organizationName: string | null = null;
+    try {
+      const ref = await this.externalRefs?.getOrganizationRef('bff', entry.organizationId || BOOTSTRAP_ORG_ID);
+      const org = ref?.orgId && this.organizations?.getOrganization
+        ? await this.organizations.getOrganization(ref.orgId)
+        : null;
+      organizationName = org?.name ?? null;
+    } catch {
+      organizationName = null;
+    }
+    return {
+      ...this.publicUser(entry),
+      organization_name: organizationName,
+      status: entry.isActive ? 'active' : 'disabled',
+      created_at: entry.createdAt ?? null,
+      last_login_at: entry.lastLoginAt ?? null,
+      editable_fields: ['display_name', 'email'],
+    };
+  }
+
+  /**
+   * Self-service edit: only the display name and the email. Username, role,
+   * organisation and status belong to the deployment / an administrator, so
+   * any other key is refused rather than silently ignored.
+   */
+  async updateProfile(authorization: string | undefined, body: Record<string, unknown>) {
+    const entry = await this.authenticated(authorization);
+    const unknown = Object.keys(body || {}).filter((k) => k !== 'display_name' && k !== 'email');
+    if (unknown.length) {
+      throw new BrowserAuthError(422, 'PROFILE_FIELD_NOT_EDITABLE', `Not editable: ${unknown.join(', ')}`);
+    }
+    const patch: { displayName?: string; email?: string | null } = {};
+    if (Object.hasOwn(body, 'display_name')) {
+      const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
+      if (!name || name.length > 255) {
+        throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', 'display_name must be 1–255 characters');
+      }
+      patch.displayName = name;
+    }
+    if (Object.hasOwn(body, 'email')) {
+      const raw = body.email;
+      if (raw === null || raw === '') {
+        patch.email = null;
+      } else {
+        const email = typeof raw === 'string' ? raw.trim() : '';
+        if (!email || email.length > 320 || !EMAIL.test(email)) {
+          throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', 'email is not a valid address');
+        }
+        patch.email = email;
+      }
+    }
+    if (!Object.keys(patch).length) {
+      throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', 'Nothing to update');
+    }
+    if (!this.credentials.updateProfile) {
+      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+    }
+    let updated: Credential | null;
+    try {
+      updated = await this.credentials.updateProfile(entry.id, formatUserExternalSubject('bff', entry.id), patch);
+    } catch {
+      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+    }
+    return this.presentProfile(updated ?? entry);
+  }
+}

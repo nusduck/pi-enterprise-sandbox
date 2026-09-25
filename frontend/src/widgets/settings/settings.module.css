@@ -105,3 +105,23 @@
   .nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--color-border); }
   .nav h2 { display: none; }
 }
+
+/* account form */
+.form { display: flex; flex-direction: column; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--color-border); }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.field > span { font-weight: 500; }
+.field > small { color: var(--color-text-muted); font-size: 12px; }
+.field input {
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font: inherit;
+}
+.field input[aria-invalid='true'] { border-color: var(--color-danger-text); }
+.field input:disabled { opacity: 0.6; }
+.field .fieldError { color: var(--color-danger-text); }
+.formActions { display: flex; align-items: center; gap: 8px; }
+.sp { flex: 1; }
+.error { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--color-danger-soft); color: var(--color-danger-text); font-size: 12.5px; }
