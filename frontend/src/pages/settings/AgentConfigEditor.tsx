@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AgentConfigOptions, ConfigDiagnostic } from '../../shared/api/agents';
+import type { Agent, AgentConfigOptions, ConfigDiagnostic } from '../../shared/api/agents';
 import type { McpServerItem, ModelItem, ToolRegistryItem } from '../../shared/api/capabilities';
 import {
   capabilityId,
@@ -22,12 +22,21 @@ import {
   type CatalogState,
   type ToolDecision,
 } from './agentHelpers';
+import { DelegationFields } from './DelegationFields';
+import {
+  delegationMaxItems,
+  delegationOf,
+  delegationStructureIssues,
+  localDelegationCandidates,
+  remoteDelegationCandidates,
+  setDelegationList,
+} from './delegationHelpers';
 import s from './agents.module.css';
 
 export type { CatalogState };
 
 /** Which part of the configuration the editor shows (one tab at a time). */
-export type EditorSection = 'basic' | 'model' | 'tools' | 'mcp' | 'json';
+export type EditorSection = 'basic' | 'model' | 'tools' | 'mcp' | 'delegation' | 'json';
 
 export type AgentConfigEditorProps = {
   section: EditorSection;
@@ -36,6 +45,10 @@ export type AgentConfigEditorProps = {
   models: CatalogState<ModelItem>;
   tools: CatalogState<ToolRegistryItem>;
   mcpServers: CatalogState<McpServerItem>;
+  /** Same-org agents: the delegation candidates. */
+  agents: CatalogState<Agent>;
+  /** Name of the agent being edited; excluded from its own delegation candidates. */
+  selfName: string;
   options: AgentConfigOptions | null;
   errors: ConfigDiagnostic[];
   disabled?: boolean;
@@ -364,10 +377,10 @@ function McpFields({ config, value, onChange, errors, disabled, mcpServers }: Se
  * Every section writes into the same JSON draft; a section only touches the
  * fields it owns, so unknown and legacy fields survive in the JSON tab.
  */
-export function AgentConfigEditor({ section, value, onChange, models, tools, mcpServers, options, errors, disabled = false }: AgentConfigEditorProps) {
+export function AgentConfigEditor({ section, value, onChange, models, tools, mcpServers, agents, selfName, options, errors, disabled = false }: AgentConfigEditorProps) {
   const parsed = parseAgentConfigDraft(value);
   const config = parsed.ok ? parsed.config : null;
-  const issues = config ? structuredEditorIssues(config) : [];
+  const issues = config ? [...structuredEditorIssues(config), ...delegationStructureIssues(config)] : [];
   const paused = (prefix: string) => disabled || issues.some((issue) => issue.startsWith(prefix));
 
   if (section === 'json') {
@@ -409,6 +422,23 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
       {section === 'model' ? <ModelFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('modelPolicy')} models={models} /> : null}
       {section === 'tools' ? <ToolPolicyFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('toolPolicy')} tools={tools} /> : null}
       {section === 'mcp' ? <McpFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('mcpServers')} mcpServers={mcpServers} /> : null}
+      {section === 'delegation' ? (
+        <DelegationFields
+          {...delegationOf(config)}
+          localCandidates={{ ...agents, items: localDelegationCandidates(agents.items, selfName) }}
+          remoteCandidates={{
+            items: remoteDelegationCandidates(options?.platformConstraints),
+            available: options != null,
+            error: options ? null : '配置能力读取失败',
+          }}
+          maxAgents={delegationMaxItems(options?.fieldSupport, 'agents')}
+          maxRemoteAgents={delegationMaxItems(options?.fieldSupport, 'remoteAgents')}
+          selfName={selfName}
+          errors={errors}
+          disabled={paused('delegation')}
+          onChange={(field, next) => commitConfig(value, onChange, (current) => setDelegationList(current, field, next))}
+        />
+      ) : null}
     </div>
   );
 }
