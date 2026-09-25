@@ -92,6 +92,8 @@
 - **运行**：统计条（今日运行、失败、等待审批、耗时中位数、7 天趋势）+ 筛选 + 整行可点的表格（状态、会话标题、用户、智能体、模型、工具数、tokens、耗时、开始时间）。
 - **Run 详情 = Trace**：左侧 span 瀑布图（模型轮次、工具、子任务、审批等待），右侧选中节点的内容。
   持久 trace 按设计只存元数据（`trace-span-projections.ts` 的属性白名单），**内容由前端从事件回放与工具台账按 `toolCallId` 拼接**，不改 trace 契约。
+  实施说明（2026-09-25）：现有 trace 没有模型 span，瀑布图的模型轮次由持久事件的时间戳推出；列表与统计基于
+  owner 作用域的 `/api/runs`（最多 50 条），用户列、全组织统计与 Tokens 待第 3 期管理接口。
 - **智能体**：左列表右编辑器；顶栏固定显示“编辑基于 vN”、未保存修改数、放弃 / 仅保存 / 保存并启用；tab 为基本信息、模型、工具权限、MCP、版本历史、JSON。
   工具权限按类别分组，每行“继承 / 允许 / 审批 / 禁止”四档分段控件，已覆盖行高亮，可只看覆盖项。版本历史带与活跃版本的差异。
 - **能力**：Skills / MCP / 工具 / 模型 四个 tab，表格呈现，去掉 Extension。
@@ -104,7 +106,9 @@
 **重写**：`app/`（路由与布局壳）、`widgets/`、`pages/`、`shared/styles/`、`shared/ui/`。
 
 **删除**：`widgets/runtime-steps/InlineRuntimeSteps.tsx`、`widgets/context-inspector/`、`widgets/trace-panel/`（逻辑迁入管理端 Trace）、`widgets/tool-call-panel/`、`app/layout/SettingsSubnav.tsx`、`pages/settings/`（拆入 `pages/admin/` 与设置模态框）。
-其中可复用的纯函数（`subagentFields.ts`、`taskStateFields.ts`、`interactionFields.ts`、`formatToolDisplay.ts`、`agentHelpers.ts`、`skillHelpers.ts`）迁移保留，连同其测试。
+其中可复用的纯函数（`formatToolDisplay.ts`、`agentHelpers.ts`、`skillHelpers.ts`）迁移保留，连同其测试。
+`subagentFields.ts`、`taskStateFields.ts`、`interactionFields.ts` 原计划保留，实施时因存量历史已清理而改为删除：
+线性流仍需的工具判定与 todo 解析并入 `features/chat/projections/turnFields.ts`（带测试），旧引擎名与 memory 解析不再保留。
 
 ## 4. 技术约束
 

@@ -4,6 +4,7 @@ import { AppShell } from '../layout/AppShell';
 import { AdminShell } from '../layout/AdminShell';
 import { WorkbenchPage } from '../../pages/workbench/WorkbenchPage';
 import { RunsPage } from '../../pages/runs/RunsPage';
+import { RunDetailPage } from '../../pages/runs/RunDetailPage';
 import { ApprovalsPage } from '../../pages/approvals/ApprovalsPage';
 import { CapabilitiesPage } from '../../pages/settings/CapabilitiesPage';
 import { A2aPage } from '../../pages/settings/A2aPage';
@@ -29,6 +30,7 @@ export function AppRouter() {
 
         <Route path="/admin" element={<Navigate to="/admin/runs" replace />} />
         <Route path="/admin/runs" element={admin(<RunsPage />)} />
+        <Route path="/admin/runs/:runId" element={admin(<RunDetailPage />)} />
         <Route path="/admin/approvals" element={admin(<ApprovalsPage />)} />
         <Route path="/admin/agents" element={admin(<AgentsPage />)} />
         <Route path="/admin/capabilities" element={admin(<CapabilitiesPage />)} />

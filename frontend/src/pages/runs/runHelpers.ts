@@ -2,18 +2,8 @@
  * Pure helpers for Active Runs page (F5 / ADR 0003 §10).
  * Unit-testable — no React / no I/O.
  */
-import {
-  createEntityStore,
-  createRun,
-  getRunTraceSpans,
-  upsertRun,
-  type RunEntity,
-  type EntityStore,
-  type ToolExecutionEntity,
-  type TraceSpanEntity,
-} from '../../entities';
-import { rehydrateTraceSpans } from '../../features/chat/entityBridge';
-import type { RunDetail, RunTraceResponse } from '../../shared/schemas/events';
+import type { RunEntity, EntityStore, ToolExecutionEntity } from '../../entities';
+import type { RunDetail } from '../../shared/schemas/events';
 import type { RunListItem as ApiRunItem } from '../../shared/schemas/management';
 
 /** Status filter chips shown on the Active Runs page. */
@@ -41,6 +31,7 @@ export type RunRow = {
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string | null;
+  updatedAt: string | null;
   tokenUsage: string | null;
   source: 'api' | 'store' | 'merged';
 };
@@ -116,6 +107,7 @@ export function runRowFromApi(item: ApiRunItem | RunDetail): RunRow | null {
       (any.completed_at as string | null | undefined) ??
       null,
     createdAt: (any.created_at as string | null | undefined) ?? null,
+    updatedAt: (any.updated_at as string | null | undefined) ?? null,
     tokenUsage: shortUsage(any.usage || any.token_usage),
     source: 'api',
   };
@@ -144,6 +136,7 @@ export function runRowFromEntity(
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     createdAt: run.createdAt,
+    updatedAt: null,
     tokenUsage: null,
     source: 'store',
   };
@@ -222,11 +215,100 @@ export function shortId(id: string, n = 10): string {
   return `${id.slice(0, n)}…`;
 }
 
-/**
- * Trace spans of one run from the durable trace projection, through the same
- * mapping the workbench uses (parentSpanId → tree, attributes → metadata).
- */
-export function traceSpansFromResponse(runId: string, response: RunTraceResponse): TraceSpanEntity[] {
-  const base = upsertRun(createEntityStore(), createRun({ id: runId }));
-  return getRunTraceSpans(rehydrateTraceSpans(base, runId, response), runId);
+// ── list page: range filter and headline numbers ────────────────────
+
+export type RunRange = 'today' | '7d' | '30d' | 'all';
+
+const DAY = 86_400_000;
+
+function startOfDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function rowTime(row: RunRow): number | null {
+  const t = Date.parse(row.startedAt || row.createdAt || '');
+  return Number.isNaN(t) ? null : t;
+}
+
+export function inRange(row: RunRow, range: RunRange, now = Date.now()): boolean {
+  if (range === 'all') return true;
+  const t = rowTime(row);
+  if (t == null) return false;
+  const from = range === 'today' ? startOfDay(now) : startOfDay(now) - (range === '7d' ? 6 : 29) * DAY;
+  return t >= from;
+}
+
+function percentile(sorted: number[], p: number): number | null {
+  if (!sorted.length) return null;
+  return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)];
+}
+
+export type RunStats = {
+  today: number;
+  yesterday: number;
+  failedToday: number;
+  failureRate: number | null;
+  waiting: number;
+  /** Longest current wait (ms) among runs waiting for approval or input. */
+  longestWaitMs: number | null;
+  medianMs: number | null;
+  p95Ms: number | null;
+  /** Runs per day, oldest first, ending today. */
+  last7: number[];
+};
+
+export function runStats(rows: readonly RunRow[], now = Date.now()): RunStats {
+  const today0 = startOfDay(now);
+  const yesterday0 = today0 - DAY;
+  let today = 0;
+  let yesterday = 0;
+  let failedToday = 0;
+  let waiting = 0;
+  let longestWaitMs: number | null = null;
+  const last7 = Array.from({ length: 7 }, () => 0);
+  const durations: number[] = [];
+  for (const row of rows) {
+    const t = rowTime(row);
+    const status = normalizeRunStatus(row.status);
+    if (t != null) {
+      if (t >= today0) {
+        today += 1;
+        if (status === 'failed') failedToday += 1;
+      } else if (t >= yesterday0) yesterday += 1;
+      const day = Math.floor((today0 - startOfDay(t)) / DAY);
+      if (day >= 0 && day < 7) last7[6 - day] += 1;
+    }
+    if (status === 'waiting_approval' || status === 'waiting_input') {
+      waiting += 1;
+      const since = Date.parse(row.updatedAt || row.startedAt || '');
+      if (!Number.isNaN(since)) longestWaitMs = Math.max(longestWaitMs ?? 0, now - since);
+    }
+    const start = Date.parse(row.startedAt || '');
+    const end = Date.parse(row.finishedAt || '');
+    if (!Number.isNaN(start) && !Number.isNaN(end) && end >= start) durations.push(end - start);
+  }
+  durations.sort((a, b) => a - b);
+  return {
+    today,
+    yesterday,
+    failedToday,
+    failureRate: today ? failedToday / today : null,
+    waiting,
+    longestWaitMs,
+    medianMs: percentile(durations, 50),
+    p95Ms: percentile(durations, 95),
+    last7,
+  };
+}
+
+/** Human duration for the stats strip: 38s, 4 分 10 秒, 1 小时 5 分. */
+export function formatLongDuration(ms: number | null): string {
+  if (ms == null) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${String(s % 60).padStart(2, '0')} 秒`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
 }

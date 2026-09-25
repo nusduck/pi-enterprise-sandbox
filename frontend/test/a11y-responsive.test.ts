@@ -100,7 +100,9 @@ describe('F6 a11y attributes on key surfaces', () => {
     const runs = readSrc('pages', 'runs', 'RunsPage.tsx');
     assert.match(runs, /role=["']tablist["']/);
     assert.match(runs, /aria-selected=\{filter === f\.id\}/);
-    assert.match(runs, /aria-label=["']Run detail["']/);
+    const runDetail = readSrc('pages', 'runs', 'RunDetailPage.tsx');
+    assert.match(runDetail, /aria-label=["']Run detail["']/);
+    assert.match(runDetail, /role=["']tablist["']/);
 
     const approvals = readSrc('pages', 'approvals', 'ApprovalsPage.tsx');
     assert.match(approvals, /role=["']tablist["']/);

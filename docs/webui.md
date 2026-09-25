@@ -199,10 +199,21 @@ Skills 可按系统 / 用户筛选，MCP 状态以服务端的 `status` 为准�
 审批；配置：智能体、能力、A2A 接入），不显示会话侧栏。非管理员访问时只显示「需要管理员权限」；服务端对
 管理接口有同样的角色校验。
 
-**运行**（`/admin/runs`）：按状态分 tab（带数量），表格列出开始时间、会话标题与所属智能体、状态、耗时；
-点一行在右侧打开详情，「概况」为状态 / 时间 / 会话等字段，「Trace」为 span 树（`traceSpansFromResponse`
-复用工作台的 trace 映射，按 `parentSpanId` 建树、`attributes` 作元数据）。取消需要第二次点击确认，
-「打开会话」跳到 `/c/<id>`。列表目前只含当前用户自己的运行，跨用户视图等服务端接口（第 3 期）。
+**运行**（`/admin/runs`）：统计条（今日运行与较昨日、今日失败与失败率、等待审批 / 回答的数量与最久等待、
+耗时中位数与 P95、近 7 天运行量）+ 筛选（搜索会话标题 / Run ID / 用户、状态、智能体、时间范围）+ 整行可点的表格
+（状态、会话、用户、智能体、模型、工具数、Tokens、耗时、开始）。统计由前端对已加载的列表计算（`runStats`）；
+工具数逐行读 `/api/runs/:id/tools`。目前 `/api/runs` 按 owner 过滤、最多 50 条，所以用户列就是当前用户，
+Tokens 在 `usage` 为空时显示「—」；全组织视图与服务端统计等管理接口（第 3 期）。
+
+**运行详情**（`/admin/runs/:runId`）就是 Trace：面包屑、标题与状态、取消 / 打开会话 / 复制 Run ID，元信息行，
+下分「时间线 / 工具台账 / 进程日志」。时间线左侧是 span 瀑布图（RUN / QUEUE / LLM / TOOL / SUB / WAIT），
+右侧是选中节点的内容：模型轮次的思考、输出与工具调用，工具的参数与结果（bash 分 stdout / stderr），
+子任务的完整 prompt 与结论，审批等待的决定与耗时。持久 trace 只有元数据且没有模型 span，所以时间线由
+`pages/runs/runTimeline.ts` 从会话持久事件（`/api/conversations/:id/events`）与工具台账按 `toolCallId`
+拼接：`message.completed` 结束一个模型轮次；思考取 `thinking.completed` 的全文（`message.completed` 里的
+reasoning 可能被截断）；tool-call 部件持久化后只剩 `type`，调用内容取自该轮的 `tool.execution.started`
+（DSH 在本轮 `message.completed` 之前发出它）。模型收到的完整 prompt 未持久化，页面上注明。
+进程日志列出该运行沙箱会话里的托管进程，可展开日志。
 
 **审批**（`/admin/approvals`）：默认显示待审批；每条一张卡片（工具、风险、状态、原因、命令，可展开参数），
 待审批的卡片可直接批准 / 拒绝，效果与对话内审批卡相同。

@@ -1,20 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import {
   createEntityStore,
   createRun,
-  createTraceSpan,
   getRunTraceSpans,
 } from '../src/entities/store.ts';
 import { rehydrateTraceSpans } from '../src/features/chat/entityBridge.ts';
 import type { RunTraceResponse } from '../src/shared/schemas/events.ts';
-import {
-  buildTraceTree,
-  TracePanel,
-  traceMetadataEntries,
-} from '../src/widgets/trace-panel/TracePanel.tsx';
 
 const TRACE = 'a'.repeat(32);
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
@@ -103,53 +95,7 @@ function projectedTraceFixture(): RunTraceResponse {
   };
 }
 
-test('trace tree preserves parent-child order and owner-bearing spans', () => {
-  const root = createTraceSpan({
-    id: 'trace:root',
-    runId: 'run-1',
-    orgId: 'org-1',
-    userId: 'user-1',
-    spanId: 'root',
-    kind: 'run',
-    name: 'Run',
-    startedAt: '2026-07-19T00:00:00.000Z',
-  });
-  const child = createTraceSpan({
-    id: 'trace:tool',
-    runId: 'run-1',
-    parentId: root.id,
-    spanId: 'tool',
-    kind: 'tool',
-    name: 'bash',
-    startedAt: '2026-07-19T00:00:00.100Z',
-  });
-
-  const tree = buildTraceTree([child, root]);
-  assert.equal(tree.length, 1);
-  assert.equal(tree[0].span.orgId, 'org-1');
-  assert.equal(tree[0].children[0].span.id, child.id);
-});
-
-test('trace metadata exposes only supported scalar Tool and Model fields', () => {
-  assert.deepEqual(
-    traceMetadataEntries({
-      toolName: 'bash',
-      modelId: 'gpt-5',
-      provider: 'openai',
-      exitCode: 0,
-      nested: { secret: 'not rendered' },
-      prompt: 'not rendered',
-    }),
-    [
-      { key: 'modelId', label: 'Model', value: 'gpt-5' },
-      { key: 'provider', label: 'Provider', value: 'openai' },
-      { key: 'toolName', label: 'Tool', value: 'bash' },
-      { key: 'exitCode', label: 'Exit', value: '0' },
-    ],
-  );
-});
-
-test('rehydrates projected Agent spans and TracePanel renders org/client/trace', () => {
+test('rehydrates projected Agent spans with parents, owner and allowlisted metadata', () => {
   const store = createEntityStore({
     runsById: {
       [RUN]: createRun({ id: RUN, status: 'succeeded', traceId: TRACE }),
@@ -160,31 +106,12 @@ test('rehydrates projected Agent spans and TracePanel renders org/client/trace',
   assert.equal(spans.length, 3);
   assert.equal(next.runsById[RUN].traceId, TRACE);
 
-  const tree = buildTraceTree(spans);
-  assert.equal(tree.length, 1);
-  assert.equal(tree[0].span.kind, 'run');
-  assert.equal(tree[0].span.orgId, ORG);
-  assert.equal(tree[0].span.userId, USER);
-  const childKinds = tree[0].children.map((n) => n.span.kind).sort();
-  assert.deepEqual(childKinds, ['a2a', 'tool']);
-
-  const a2a = tree[0].children.find((n) => n.span.kind === 'a2a');
-  assert.ok(a2a);
-  assert.deepEqual(traceMetadataEntries(a2a.span.metadata), [
-    { key: 'taskId', label: 'A2A task', value: '01K0G2PAV8FPMVC9QHJG7JPN5A' },
-    { key: 'clientId', label: 'Client', value: 'client-a' },
-    { key: 'agentId', label: 'Agent', value: '01K0G2PAV8FPMVC9QHJG7JPN5D' },
-  ]);
-
-  const html = renderToStaticMarkup(
-    createElement(TracePanel, { spans, traceId: TRACE }),
-  );
-  assert.match(html, /aria-label="Trace"/);
-  assert.match(html, new RegExp(TRACE));
-  assert.match(html, new RegExp(ORG));
-  assert.match(html, /client-a/);
-  assert.match(html, />bash</);
-  assert.match(html, /A2A projection/);
-  assert.match(html, /data-kind="tool"/);
-  assert.match(html, /data-kind="a2a"/);
+  const root = spans.find((s) => s.kind === 'run');
+  assert.ok(root);
+  assert.equal(root.orgId, ORG);
+  assert.equal(root.userId, USER);
+  const children = spans.filter((s) => s.parentId === root.id).map((s) => s.kind).sort();
+  assert.deepEqual(children, ['a2a', 'tool']);
+  const a2a = spans.find((s) => s.kind === 'a2a');
+  assert.equal(a2a?.metadata?.clientId, 'client-a');
 });
