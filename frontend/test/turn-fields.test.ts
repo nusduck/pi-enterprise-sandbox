@@ -6,12 +6,17 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatDurationMs,
+  isQuestionToolName,
+  isSubtaskToolName,
+  isTodoToolName,
   jobFields,
   questionFields,
   subtaskFields,
   summarizeToolGroup,
+  todoItems,
   toolVerb,
 } from '../src/features/chat/projections/turnFields.ts';
+import { inferToolSource } from '../src/shared/state/platformEventNormalize.ts';
 
 describe('summarizeToolGroup', () => {
   it('counts categories in order of first appearance', () => {
@@ -131,5 +136,49 @@ describe('formatDurationMs', () => {
     assert.equal(formatDurationMs(34_000), '34s');
     assert.equal(formatDurationMs(124_000), '2分04秒');
     assert.equal(formatDurationMs(null), '');
+  });
+});
+
+describe('tool kinds with their own cards', () => {
+  it('recognises only the current DSH tool names', () => {
+    assert.equal(isSubtaskToolName('subagent'), true);
+    assert.equal(isSubtaskToolName('delegate_to_agent'), true);
+    assert.equal(isQuestionToolName('ask_user_question'), true);
+    assert.equal(isTodoToolName('todo_write'), true);
+    // Old-engine names are gone with the history they came from.
+    assert.equal(isSubtaskToolName('spawn_subagent'), false);
+    assert.equal(isQuestionToolName('ask_user'), false);
+    assert.equal(isTodoToolName('memory_write'), false);
+  });
+
+  it('classifies the factory tool surface instead of leaving it unknown', () => {
+    for (const name of ['read', 'write', 'edit', 'bash', 'glob', 'grep', 'job_list', 'job_output', 'submit_artifact']) {
+      assert.equal(inferToolSource(name, {}), 'sandbox', name);
+    }
+    for (const name of ['skill', 'subagent', 'ask_user_question']) {
+      assert.equal(inferToolSource(name, {}), 'internal', name);
+    }
+  });
+});
+
+describe('todoItems', () => {
+  it('reads the plan from the arguments, ordered by position', () => {
+    const todos = todoItems({
+      todos: [
+        { position: 2, content: 'second', status: 'in_progress' },
+        { position: 1, content: 'first', status: 'completed' },
+        { position: 3, content: '   ' },
+      ],
+    });
+    assert.deepEqual(todos.map((t) => [t.position, t.content, t.status]), [
+      [1, 'first', 'completed'],
+      [2, 'second', 'in_progress'],
+    ]);
+  });
+
+  it('defaults position and status, and ignores non-list input', () => {
+    assert.deepEqual(todoItems({ todos: [{ content: 'a' }] }), [{ position: 1, content: 'a', status: 'pending' }]);
+    assert.deepEqual(todoItems({ items: [{ content: 'old engine shape' }] }), []);
+    assert.deepEqual(todoItems(null), []);
   });
 });

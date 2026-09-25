@@ -15,7 +15,6 @@ import { isDurableArtifactId } from '../../shared/state/runReducer';
 import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { summarizeToolInput } from '../runtime-timeline/buildTimeline';
 import { formatToolInputDisplay, formatToolResultDisplay } from '../message-list/formatToolDisplay';
-import { parseTodoFields } from '../runtime-steps/taskStateFields';
 import { MarkdownBody } from '../markdown/Markdown';
 import {
   formatDurationMs,
@@ -23,6 +22,7 @@ import {
   questionFields,
   subtaskFields,
   summarizeToolGroup,
+  todoItems,
   toolDurationMs,
   toolVerb,
 } from '../../features/chat/projections/turnFields';
@@ -303,7 +303,7 @@ export function SubtaskCard({ tools, remote }: { tools: ToolExecutionEntity[]; r
 // ── todo list ────────────────────────────────────────────────────────
 
 export function TodoCard({ tool }: { tool: ToolExecutionEntity }) {
-  const { todos } = parseTodoFields(tool.input, tool.result);
+  const todos = todoItems(tool.input);
   if (!todos.length) return null;
   const done = todos.filter((t) => t.status === 'completed').length;
   return (

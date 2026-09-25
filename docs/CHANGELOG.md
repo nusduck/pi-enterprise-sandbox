@@ -67,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **运行 / 审批 / A2A 接入页重做**：统一为管理控制台样式并改为中文。运行页点一行在右侧查看概况与 Trace，
   会话显示标题与所属智能体；审批页改为紧凑卡片；A2A 页分「凭据 / 调用记录 / 审计 / 接入示例」。
   取消运行、吊销凭据改为页面内二次确认，不再弹浏览器对话框。
+- **移除旧引擎工具名的识别**：`spawn_subagent`、`check_subagent`、`ask_user`、memory 工具与旧 todo 形状
+  不再有专门的卡片或分类（存量历史已清理），同时删除已无引用的工具明细面板（`widgets/tool-call-panel`、
+  `widgets/runtime-steps`）及其样式。
 
 ### Changed（破坏性：pi 命名全部改为 dsh，清理旧引擎遗留代码）
 

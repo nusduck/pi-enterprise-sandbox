@@ -343,7 +343,8 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 - DSH 的 `message.*` / `thinking.*` 不带 message_id：一轮是 thinking.delta… → message.delta… →
   thinking.completed → 工具 start → message.completed，下一轮以新的 thinking.delta 开始。没有流式
   消息时，thinking 开启新消息段，不追加到上一轮。
-- 旧工具名（`spawn_subagent`、`ask_user`）与 memory 卡片仍被识别，计划随存量历史清理一并移除。
+- 只识别 DSH 出厂工具名（判定与 todo 解析在 `features/chat/projections/turnFields.ts`）；旧引擎的
+  `spawn_subagent`、`ask_user` 与 memory 卡片已随存量历史清理移除，这类调用会按普通工具显示。
 - Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染（`widgets/markdown/Markdown.tsx`）；链接只允许
   http(s) 与同源 `/api/`。
 

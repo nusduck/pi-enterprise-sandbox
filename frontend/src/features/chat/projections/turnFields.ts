@@ -36,6 +36,47 @@ function resultValue(result: unknown): Record<string, unknown> | null {
   return record(outer?.value) || outer;
 }
 
+// ── tool kinds with their own cards ──────────────────────────────────
+
+/** Child runs: DSH `subagent`, and `delegate_to_agent` (same child run, other agent). */
+export function isSubtaskToolName(name: string | null | undefined): boolean {
+  const n = String(name || '').trim();
+  return n === 'subagent' || n === 'delegate_to_agent';
+}
+
+/** DSH `dsh-tool-ask-user` registers `ask_user_question`. */
+export function isQuestionToolName(name: string | null | undefined): boolean {
+  return String(name || '').trim() === 'ask_user_question';
+}
+
+export function isTodoToolName(name: string | null | undefined): boolean {
+  const n = String(name || '').trim();
+  return n === 'todo_write' || n === 'todo_read';
+}
+
+export type TodoItem = { position: number; content: string; status: string };
+
+/**
+ * The plan lives in `arguments.todos`: the factory `dsh-tool-todo` result only
+ * carries `{ counts }` and a summary line, never the list itself.
+ */
+export function todoItems(input: unknown): TodoItem[] {
+  const source = record(input)?.todos;
+  if (!Array.isArray(source)) return [];
+  const todos = source.flatMap((raw, index) => {
+    const item = record(raw);
+    const content = text(item?.content);
+    if (!item || !content) return [];
+    const position = Number(item.position);
+    return [{
+      position: Number.isFinite(position) && position > 0 ? position : index + 1,
+      content,
+      status: text(item.status) ?? 'pending',
+    }];
+  });
+  return todos.sort((x, y) => x.position - y.position);
+}
+
 // ── tool group summary ───────────────────────────────────────────────
 
 type Category = { verb: string; unit: string };

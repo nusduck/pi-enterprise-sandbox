@@ -13,9 +13,7 @@ import type {
   MessageEntity,
   ToolExecutionEntity,
 } from '../../../entities/types';
-import { isAskUserToolName } from '../../../widgets/runtime-steps/interactionFields';
-import { isSpawnSubagentToolName } from '../../../widgets/runtime-steps/subagentFields';
-import { isTodoToolName } from '../../../widgets/runtime-steps/taskStateFields';
+import { isQuestionToolName, isSubtaskToolName, isTodoToolName } from './turnFields';
 
 export type TurnItem =
   /** Back-to-back thinking with nothing in between collapses into one item. */
@@ -169,12 +167,12 @@ export function projectTurnItems(store: EntityStore, runId: string): TurnItem[] 
       continue;
     }
 
-    if (isSpawnSubagentToolName(tool.name)) {
+    if (isSubtaskToolName(tool.name)) {
       if (last?.kind === 'subtasks') last.tools.push(tool);
       else items.push({ kind: 'subtasks', seq: entry.seq, tools: [tool] });
     } else if (tool.name === REMOTE_DELEGATE) {
       items.push({ kind: 'remote', seq: entry.seq, tool });
-    } else if (isAskUserToolName(tool.name)) {
+    } else if (isQuestionToolName(tool.name)) {
       items.push({ kind: 'question', seq: entry.seq, tool });
     } else if (tool.name === ARTIFACT_TOOL) {
       items.push({ kind: 'artifact', seq: entry.seq, tool, artifactId: artifactId(tool) });
@@ -195,9 +193,9 @@ export function projectTurnItems(store: EntityStore, runId: string): TurnItem[] 
 }
 
 function isOrdinaryTool(tool: ToolExecutionEntity): boolean {
-  return !isSpawnSubagentToolName(tool.name)
+  return !isSubtaskToolName(tool.name)
     && tool.name !== REMOTE_DELEGATE
-    && !isAskUserToolName(tool.name)
+    && !isQuestionToolName(tool.name)
     && tool.name !== ARTIFACT_TOOL
     && !isTodoToolName(tool.name)
     && !JOB_FOLLOW_UP.has(tool.name)
