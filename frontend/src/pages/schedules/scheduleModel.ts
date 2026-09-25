@@ -263,3 +263,34 @@ export function dailyStrip(runs: readonly Pick<CronJobRun, 'status' | 'run_statu
   }
   return cells;
 }
+
+// ── "new results" dot in the sidebar ─────────────────────────────────
+
+const SEEN_KEY = 'schedules-seen-at';
+
+/** True when some job ran after the viewer last opened the schedules page. */
+export function hasUnseenRuns(jobs: readonly Pick<CronJob, 'last_run_at'>[], seenAt: string | null): boolean {
+  const seen = Date.parse(seenAt || '');
+  return jobs.some((job) => {
+    const ran = Date.parse(job.last_run_at || '');
+    return Number.isFinite(ran) && (!Number.isFinite(seen) || ran > seen);
+  });
+}
+
+/** Per-browser marker; storage can be unavailable (private mode), which reads as "never seen". */
+export function readSchedulesSeenAt(): string | null {
+  try {
+    return window.localStorage.getItem(SEEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function markSchedulesSeen(at = new Date()): void {
+  try {
+    window.localStorage.setItem(SEEN_KEY, at.toISOString());
+    window.dispatchEvent(new Event('schedules-seen'));
+  } catch {
+    /* per-viewer convenience only */
+  }
+}

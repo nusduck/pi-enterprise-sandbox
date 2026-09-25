@@ -276,3 +276,6 @@
   .side { transition: none; }
   .run { animation: none; }
 }
+
+.newDot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-primary); margin-left: 4px; }
+.kbdBtn { border: 0; background: none; padding: 0; color: inherit; cursor: pointer; }

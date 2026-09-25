@@ -14,7 +14,7 @@ import {
 } from '../../shared/api/cron-jobs';
 import { getRun } from '../../shared/api/runs';
 import { agentTone, isDefaultAgentName } from '../../widgets/conversation-sidebar/sidebarModel';
-import { dailyStrip, describeJob, formatInstant, runOutcome, type RunOutcome } from './scheduleModel';
+import { dailyStrip, describeJob, formatInstant, markSchedulesSeen, runOutcome, type RunOutcome } from './scheduleModel';
 import { ScheduleDialog } from './ScheduleDialog';
 import s from './schedules.module.css';
 
@@ -77,6 +77,11 @@ export function SchedulesPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Opening the page clears the sidebar's "new results" dot.
+  useEffect(() => {
+    markSchedulesSeen();
+  }, []);
 
   useEffect(() => {
     if (!menuFor) return;

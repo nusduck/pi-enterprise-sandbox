@@ -21,6 +21,9 @@ import {
   isDefaultAgentName,
 } from './sidebarModel';
 import { SettingsDialog } from '../settings/SettingsDialog';
+import { CommandPalette, type PaletteAction } from '../command-palette/CommandPalette';
+import { listCronJobs } from '../../shared/api/cron-jobs';
+import { hasUnseenRuns, readSchedulesSeenAt } from '../../pages/schedules/scheduleModel';
 import s from './sidebar.module.css';
 
 /**
@@ -52,6 +55,8 @@ export function ConversationSidebar() {
   const [listOpen, setListOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [schedulesDot, setSchedulesDot] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -82,12 +87,33 @@ export function ConversationSidebar() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        searchRef.current?.focus();
+        setPaletteOpen(true);
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
+
+  // "New results" dot on 定时任务: a job ran after the viewer last opened the page.
+  const signedInForDot = Boolean(state.authUser?.username);
+  useEffect(() => {
+    if (!signedInForDot) return;
+    let alive = true;
+    const check = () => {
+      listCronJobs()
+        .then((jobs) => { if (alive) setSchedulesDot(hasUnseenRuns(jobs, readSchedulesSeenAt())); })
+        .catch(() => { if (alive) setSchedulesDot(false); });
+    };
+    check();
+    const timer = window.setInterval(check, 5 * 60_000);
+    const onSeen = () => setSchedulesDot(false);
+    window.addEventListener('schedules-seen', onSeen);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener('schedules-seen', onSeen);
+    };
+  }, [signedInForDot]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -145,6 +171,19 @@ export function ConversationSidebar() {
     await logout();
   }
 
+  const paletteActions: PaletteAction[] = [
+    { id: 'act:new', group: '操作', label: '新建会话', hint: '⌘L', keywords: 'new chat', run: onNewChat },
+    { id: 'act:schedules', group: '操作', label: '打开定时任务', keywords: 'schedule cron', run: () => go('/schedules') },
+    { id: 'act:artifacts', group: '操作', label: '打开产物库', keywords: 'artifacts 文件', run: () => go('/artifacts') },
+    { id: 'act:settings', group: '操作', label: '打开设置', keywords: 'settings 账户 偏好', run: () => setSettingsOpen(true) },
+    ...(isAdmin ? [{ id: 'act:admin', group: '操作' as const, label: '打开管理控制台', keywords: 'admin 运行 审批 智能体', run: () => go('/admin/runs') }] : []),
+    { id: 'act:theme', group: '操作', label: theme === 'light' ? '切换到深色' : '切换到浅色', keywords: 'theme 主题', run: () => toggleTheme() },
+  ];
+  const paletteConversations = (state.conversations || []).map((c) => {
+    const name = c.agent_id ? agentNameById(c.agent_id) : null;
+    return { id: c.id, title: conversationTitle(c), hint: name && !isDefaultAgentName(name) ? name : undefined };
+  });
+
   const rootClass = [s.side, !isMobile && !open ? s.collapsed : '', isMobile && open ? s.mobileOpen : '']
     .filter(Boolean)
     .join(' ');
@@ -176,6 +215,7 @@ export function ConversationSidebar() {
           >
             <IconHistory size={18} />
             定时任务
+            {schedulesDot ? <span className={s.newDot} title="有新的运行结果" aria-label="有新的运行结果" /> : null}
           </button>
           <button
             type="button"
@@ -197,7 +237,9 @@ export function ConversationSidebar() {
             aria-label="搜索会话"
             onChange={(e) => setQuery(e.target.value)}
           />
-          <kbd>⌘K</kbd>
+          <button type="button" className={s.kbdBtn} onClick={() => setPaletteOpen(true)} title="打开命令面板" aria-label="打开命令面板">
+            <kbd>⌘K</kbd>
+          </button>
         </label>
 
         <div className={s.groupHead}>
@@ -355,6 +397,19 @@ export function ConversationSidebar() {
       </aside>
       <div id="sidebar-backdrop" className={s.backdrop} hidden={!isMobile || !open} onClick={closeSidebar} />
       {signedIn ? <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} /> : null}
+      {signedIn ? (
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          conversations={paletteConversations}
+          actions={paletteActions}
+          onOpenConversation={onSelectConv}
+          onOpenArtifact={(a) => {
+            const conv = (state.conversations || []).find((c) => String(c.sandbox_session_id || '') === a.session_id);
+            go(conv ? `/c/${encodeURIComponent(conv.id)}` : '/artifacts');
+          }}
+        />
+      ) : null}
     </>
   );
 }
