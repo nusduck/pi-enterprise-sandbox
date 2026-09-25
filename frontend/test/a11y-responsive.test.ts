@@ -27,10 +27,12 @@ describe('F6 responsive layout (CSS breakpoints)', () => {
   });
 
   it('defines mobile sidebar drawer breakpoint (max-width: 768px)', () => {
-    assert.match(css, /@media\s*\(max-width:\s*768px\)/);
-    assert.match(css, /\.sidebar\.open-mobile/);
-    assert.match(css, /\.sidebar-backdrop/);
-    assert.match(css, /\.sidebar-close-btn/);
+    // The sidebar owns its styles in a CSS Module since the redesign.
+    const side = readSrc('widgets', 'conversation-sidebar', 'sidebar.module.css');
+    assert.match(side, /@media\s*\(max-width:\s*768px\)/);
+    assert.match(side, /\.mobileOpen/);
+    assert.match(side, /\.backdrop/);
+    assert.match(side, /position:\s*fixed/);
   });
 
   it('keeps three-pane workbench shell classes', () => {

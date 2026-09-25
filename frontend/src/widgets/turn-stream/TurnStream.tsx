@@ -148,7 +148,12 @@ export function TurnStream({ runId }: { runId: string }) {
   function render(item: TurnItem, idx: number) {
     switch (item.kind) {
       case 'thinking':
-        return <ThinkingItem text={item.message.thinking} streaming={item.message.thinkingStatus === 'streaming'} />;
+        return (
+          <ThinkingItem
+            text={item.messages.map((m) => m.thinking).join('\n\n')}
+            streaming={item.messages.some((m) => m.thinkingStatus === 'streaming')}
+          />
+        );
       case 'text':
         return <MarkdownBody text={balanceMarkdown(item.message.text)} />;
       case 'tools':

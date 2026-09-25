@@ -45,7 +45,7 @@ export function ArtifactPanel({
   onSelect,
   /** When true, hide path-only workspace leftovers (default true). */
   submitOnly = true,
-  emptyHint = 'No submitted artifacts yet. Only submit_artifact deliverables appear here.',
+  emptyHint = '还没有产物。智能体提交的交付物会出现在这里。',
   conversations = [],
   currentConversationId = null,
   onImport,
@@ -134,14 +134,14 @@ export function ArtifactPanel({
                   Download
                 </a>
               ) : (
-                <span className="rtc-muted">Download unavailable</span>
+                <span className="rtc-muted">暂不可下载</span>
               )}
               {a.sha256 || a.runId ? (
                 <details
                   className="artifact-technical"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <summary>Details</summary>
+                  <summary>详情</summary>
                   <div className="artifact-technical-body">
                     {a.runId ? (
                       <span title={a.runId}>Run {a.runId.slice(0, 12)}…</span>
@@ -161,7 +161,7 @@ export function ArtifactPanel({
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
               >
-                <summary>Import to another conversation</summary>
+                <summary>复制到其他会话</summary>
                 {importTargets.length ? (
                   <div className="artifact-import-controls">
                     <select
@@ -175,7 +175,7 @@ export function ArtifactPanel({
                         }))
                       }
                     >
-                      <option value="">Import to conversation…</option>
+                      <option value="">选择目标会话…</option>
                       {importTargets.map((conversation) => (
                         <option key={conversation.id} value={conversation.id}>
                           {conversation.title?.trim() ||
@@ -197,14 +197,14 @@ export function ArtifactPanel({
                         } catch (err) {
                           setImportError((current) => ({
                             ...current,
-                            [a.id]: (err as Error).message || 'Import failed',
+                            [a.id]: (err as Error).message || '复制失败',
                           }));
                         } finally {
                           setImportingId(null);
                         }
                       }}
                     >
-                      {importingId === a.id ? 'Importing…' : 'Import'}
+                      {importingId === a.id ? '复制中…' : '复制'}
                     </button>
                   </div>
                 ) : (

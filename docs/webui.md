@@ -23,10 +23,12 @@ frontend/
 │   ├── shared/api/          ← /api fetch 与 URL 构造
 │   ├── shared/sse/          ← SSE parser/manager/Agent event adapter
 │   ├── shared/state/        ← UI state + run reducer
-│   ├── widgets/             ← 消息、时间线、审批、交付物、进程控制台等组件
+│   ├── widgets/             ← turn-stream（线性对话流与卡片）、conversation-sidebar、
+│   │                          conversation-header、composer、message-list、markdown、
+│   │                          context-inspector（资料抽屉）、process-console 等
 │   └── pages/
-│       ├── workbench/       ← 主工作台（聊天 + 实体检查器）
-│       ├── runs/            ← Run 列表与取消
+│       ├── workbench/       ← 主工作台（会话 + 线性对话流）
+│       ├── runs/            ← Run 列表与取消（admin 管理控制台入口）
 │       ├── approvals/       ← 待审批列表
 │       ├── schedules/       ← Cron 任务管理
 │       └── settings/        ← Capabilities、Agents 与 A2A 管理
@@ -50,7 +52,8 @@ frontend/
 | `entities/store.ts` | runtime 实体唯一 source of truth 与 selectors |
 | `shared/state/runReducer.ts` | RuntimeEvent 的唯一归约器 |
 | `features/chat/entityBridge.ts` | Agent SSE 适配、历史事件重放、per-run transport、UI projection |
-| `features/chat/projections/` | 按稳定 run/message id 合并服务端消息与 runtime 投影 |
+| `features/chat/projections/` | 会话消息投影；`turnItems.ts` 把一个 Run 投影为线性条目，`turnFields.ts` 解析各卡片字段 |
+| `shared/state/messageEvents.ts` | `message.*` / `thinking.*` 事件归约（从 runReducer 拆出），负责隐式分段与 `seq` |
 | `features/chat/uploads/` | 附件上传并发队列（最多 3 个） |
 | `shared/state/chatState.ts` | 非 runtime UI snapshot、上传草稿和 transport 控制 |
 | `shared/api/client.ts` / `runs.ts` | Run、upload/download、approval、conversation 协议 |
@@ -137,15 +140,26 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   仍会把同一份 config 再校验一遍，前端这层解析只是让用户在按下按钮之前看到语法
   与字段错误。
 
-### Settings 二级导航结构与 Grok 风格布局
+### 界面结构
 
-为优化系统功能架构，侧边栏一级主导航聚焦于核心工作流（Chat 与 Schedules）；侧边栏底部仅保留单一简洁的 **Settings** 入口与用户 Profile（当存在未决审批或运行中任务时统一展示聚合角标）。
-点击 Settings 进入 `/settings/*` 后，界面采用对标 **Grok Web** 的经典两栏式设置中心：
-- **左侧垂直分类导航（Settings Sidebar）**：常驻提供 `Capabilities`、`Approvals`（未决警告角标）、`Runs`（活跃角标）、`Agents`（管理员可见）与 `A2A Access`（管理员可见），顶部提供快捷返回聊天的「Chat」按钮。
-- **右侧配置面板（Settings Content）**：承载当前分类的内容。
-- **Runs 行内展开控制台**：在 `Runs` 表格中，点击单条记录的 `Logs` 或 `Trace` 直接在当前行下方平滑展开行内抽屉（`<tr className="mgmt-expand-row">`），提供终端日志查看、复制与分布式 Span 树检查，避免滚动到页面底部的体验断层。
-- **Workbench Details 精简化**：聊天主界面右侧 Details 抽屉对标 ChatGPT Canvas / Artifacts 模式，聚焦于「产物预览（Artifacts）」、「关联文件（Files）」与「执行概览（Overview）」，将研发向 Trace 链路跟踪全面收拢至 Runs 页面。
-旧路径 `/runs` 与 `/approvals` 自动重定向至对应 `/settings/*` 路径，保持外链与收藏兼容。
+设计与分期见 [design/frontend-redesign.md](design/frontend-redesign.md)。
+
+- **侧栏**（`widgets/conversation-sidebar/`）：品牌行 → 图标导航（新建会话 ⌘L、定时任务）→ 搜索框
+  （输入即过滤，⌘K 聚焦）→ 可折叠的「会话」分组，按今天 / 昨天 / 近 7 天 / 更早分组。会话行标注
+  所属智能体（组织默认智能体不打标签，颜色按 `agentTone` 固定），运行中蓝点、等待审批黄点，
+  分组标题右侧可按智能体筛选。底部账户菜单：设置、管理控制台（admin）、主题切换、退出登录。
+  分组、过滤与标签颜色是 `sidebarModel.ts` 里的纯函数。
+- **标题栏**（`widgets/conversation-header/`）：会话标题 + 绑定的智能体与版本；运行中或等待审批时
+  显示状态与耗时，中断时给「继续运行」；右侧「资料」按钮开关资料抽屉。
+- **资料抽屉**（`widgets/context-inspector/`）：右侧滑出，默认关闭，四个 tab：产物、文件、数据集、
+  进程。会话内不再显示 Trace 与工具明细（工具已在对话流内联）。
+- **输入框**（`widgets/composer/`）：见下文「键盘快捷键」；「＋」菜单可上传文件或图片，或引用其他
+  会话的产物（先选会话再选产物，`POST /api/conversations/{id}/artifact-imports`，会话开始后可用）；
+  待上传图片用本地 blob URL 显示缩略图。审批与提问在对话流内处理，输入框只提示当前状态。
+
+Settings 页面（`/settings/*`）暂未重做：从账户菜单进入，左侧分类导航提供 Capabilities、Approvals、
+Runs、Agents（admin）与 A2A Access（admin）。旧路径 `/runs` 与 `/approvals` 重定向到对应
+`/settings/*` 路径。
 
 ### 消息格式
 
@@ -235,46 +249,54 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 | 附件 | 按钮 / Ctrl+U / 拖拽 / Ctrl+V 粘贴 | `handleFilesSelected`（后台上传，不自动发送） |
 | 新对话 | 侧栏 New chat | `startNewChat` |
 | 切换会话 | 侧栏列表 | `selectConversation` |
-| 审批 | 横幅按钮 | `decideApproval` |
+| 审批 | 对话流内审批卡的「批准 / 拒绝」 | `resolveApproval`；成功后重新接上事件流 |
+| 回答提问 | 对话流内提问卡的选项或输入框 | `respondInteraction`；成功后重新接上事件流 |
+| 排队追问 / 改向 | 运行中 Enter / ⌘Enter | `followUpRun` / `steerRun` |
 | 复制消息 | 气泡下方 Copy（hover 显示） | 剪贴板写入 `messagePlainText(msg)` |
 | 重新生成 | 最后一条助手气泡的 Regenerate（仅 idle 时显示） | 取前一条用户回合文本重发 `sendMessage`（纯文本；不重建附件） |
 | 回到最新 | 右下角浮标（距底部 >120px 时出现） | smooth 滚动到底 |
 
 ## SSE 事件消费
 
-解析见 `frontend/src/shared/sse/parser.ts`；事件类型与 [API 文档](api.md#sse-事件协议) 及 `tests/fixtures/sse_events.json` 对齐：
+解析见 `frontend/src/shared/sse/parser.ts`。Agent 发出的是带点号的平台事件（`message.delta`、
+`thinking.delta`、`tool.execution.started`、`approval.requested`、`interaction.requested`、
+`run.status.changed` 等），经 `platformEventNormalize` 直接进入 reducer；旧的 `token` / `tool_start`
+等无点号事件仍由 `agentEventAdapter` 适配。事件契约见 [API 文档](api.md#sse-事件协议) 与
+`tests/fixtures/sse_events.json`。
 
-| 事件类型 | UI 行为 |
-|----------|---------|
-| `trace` | 记录 `traceId` |
-| `session` | 状态栏 session 后 8 位；可带 `conversation_id` / `session_reused` |
-| `token` | 增量追加文本到流式气泡 |
-| `tool_start` | 工具卡片 running |
-| `tool_end` | 工具卡片 complete / error |
-| `approval_required` | 审批横幅 |
-| `file_ready` | artifact 下载链接 / 交付物列表 |
-| `done` | 结束流式 |
-| `session_closed` | 状态栏 Session ended |
-| `error` | 错误文本 + flash |
+- **实时与刷新走同一个 reducer**：刷新后 `rehydrateConversation` 拉取会话全部持久事件并重放；重放前
+  写入 run 行时不带 `last_sequence`，否则持久事件会被判为重复而跳过。
+- **游标只记录已应用的位置**：`RunEntity.lastSequence` / `lastEventId` 是本地已应用的最高事件，
+  `rehydrateRun` 不采用服务端的 `last_sequence`；未见过的 run 从 0 开始由事件流重放。
+- **决定之后续连**：批准 / 拒绝或回答成功后，调用 `rehydrateInProgress` 把事件流重新接到仍在运行的
+  run 上（等待期间刷新过页面时原本没有流）；已有连接时 reducer 按序号去重。
 
 ## 渲染机制
 
-- React 组件通过 `ChatContext` 订阅规范化 `EntityStore` 与 UI snapshot
-- `agentEventAdapter -> runReducer` 是 RuntimeEvent 的唯一写入路径
-- `projectRunMessages` 从 Run/Message/Tool/Artifact 实体生成聊天投影
-- **一轮 Run = 一个助手气泡**：`projectConversationMessages` 末尾的 `mergeAssistantTurns`
-  把同一 Run 的相邻 assistant 行合并成一条消息（多个 text part 顺序渲染为连续
-  Markdown 块）。否则「出文本 → 调工具 → 再出文本」的一轮会摊成一叠各自带头像和
-  「UPRC Agent」抬头的碎片。身份字段（`_messageId` / `sequenceNo` / `createdAt`）取
-  首行以保持 React key 与回合起始时间稳定，存活状态（thinking 状态、中断横幅）取末行
-- 步骤树（`InlineRuntimeSteps`）挂在该 Run 的**第一个**助手气泡上，渲染在正文之前，
-  **默认折叠**——它在回合顶端，展开会把回答本身顶到屏幕外；折叠态的摘要行仍显示
-  步骤数与耗时
-- Timeline、Context Inspector、Approval 与 Deliverables widgets 按实体 id 更新，不维护第二份 runtime state
-- 子代理 fan-out：`subagent` 工具卡片渲染为结构化任务视图（子 Run 状态聚合），而不是裸 wire JSON；`todo_write` 同理。
+- React 组件通过 `ChatContext` 订阅规范化 `EntityStore` 与 UI snapshot；运行时实体只有一条写入路径。
+- **线性对话流**（`widgets/turn-stream/`）：助手行只要该 Run 在 store 里有消息、工具、审批或仍在运行，
+  就由 `TurnStream` 渲染，同一 Run 的其余助手行跳过。`projectTurnItems` 按实体的 `seq`（首次出现的
+  事件序号）交错输出：
 
-  **2026-08-31（ADR 0009 D4/D10）**：工具名换成 DSH 出厂的一套——`spawn_subagent` → `subagent`、`ask_user` → `ask_user_question`；旧名在前端仍被识别，**只为渲染历史会话**。`todo_write` 的清单在 **arguments** 与 `todo/write` 事件里，**不在 result 里**（出厂结果只有一句 `Updated todo list: …` 与 `{counts}`）——按 result 解析会让卡片静默退化成一行文本。`memory_write` / `memory_search` 本阶段不做（D10），新 Run 不会再产生它们，卡片保留只为历史会话。
-- Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染；下载链接仍经 URL allowlist 过滤
+  | 条目 | 来源 | 呈现 |
+  |------|------|------|
+  | 思考 | `message.thinking` | 折叠的一行；相邻多段合并 |
+  | 文字 | 助手文本段 | Markdown |
+  | 工具组 | 相邻的普通工具 | 「读取 1 个文件，运行 2 条命令 · 1.9s」，展开看每步参数与结果；只思考不出文字的中间轮次作为组内步骤并入 |
+  | 子任务 | `subagent`、`delegate_to_agent` | 相邻的合成一张卡，行内显示执行者、状态、耗时，展开看任务简述与结论 |
+  | 远程委派 | `delegate_to_remote_agent` | 带 A2A 标记的子任务卡 |
+  | 任务清单 | `todo_write` 的 arguments | 放在首次调用处，显示最新清单 |
+  | 提问 | `ask_user_question` | 选项卡片；答案来自工具台账，实时作答时卡片先记住本次提交 |
+  | 后台任务 | `bash`（`run_in_background`）及其 `job_output` / `job_kill` | 一张卡；按命令与沙箱进程配对，取真实状态与控制台 |
+  | 产物 | `submit_artifact` | 文件卡，图片直接预览，下载经 URL allowlist |
+  | 审批 | 审批实体 | 挂在对应工具条目后；审批先于工具到达时，工具名保留在 `approval.command` |
+
+- DSH 的 `message.*` / `thinking.*` 不带 message_id：一轮是 thinking.delta… → message.delta… →
+  thinking.completed → 工具 start → message.completed，下一轮以新的 thinking.delta 开始。没有流式
+  消息时，thinking 开启新消息段，不追加到上一轮。
+- 旧工具名（`spawn_subagent`、`ask_user`）与 memory 卡片仍被识别，计划随存量历史清理一并移除。
+- Markdown 通过 `react-markdown` + `rehype-sanitize` 渲染（`widgets/markdown/Markdown.tsx`）；链接只允许
+  http(s) 与同源 `/api/`。
 
 ## 测试
 
@@ -287,14 +309,18 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 
 ## 主题
 
-支持暗色（默认）和亮色主题：`ThemeProvider` 持久化用户偏好，通过 CSS `[data-theme]`
-切换；图标为内联 SVG 集合（`shared/ui/Icons.tsx`），不再使用 emoji 字形。
+暗色（默认）与亮色：`ThemeProvider` 持久化用户偏好，通过 `[data-theme]` 切换，切换入口在账户菜单。
+配色为中性灰加钴蓝（`shared/ui/tokens.css`），智能体标签用 `--agent-tone-0..5` 六个固定色槽。
+内网部署无法加载外部字体，只用系统字体栈。新组件样式用 CSS Modules（`*.module.css`），
+`shared/styles/app.css` 只保留仍被引用的旧样式。
 
 ## 键盘快捷键
 
 | 快捷键 | 操作 |
 |--------|------|
-| `Enter` | 发送消息（输入法组合期间不触发，回车先确认候选词） |
+| `Enter` | 空闲时发送；运行中排队追问；等待回答时提交回答（输入法组合期间不触发） |
+| `Ctrl+Enter` / `Cmd+Enter` | 运行中立即改向（steer）当前 Run |
+| `Ctrl+K` / `Cmd+K` | 聚焦侧栏搜索 |
 | `Shift+Enter` | 换行 |
 | `Ctrl+U` / `Cmd+U` | 打开文件选择器上传（Run 运行中与按钮一致被禁用） |
 | `Ctrl+V` / `Cmd+V` | 粘贴剪贴板里的图片/文件为附件（同一道 Run 运行中门禁）；剪贴板只有文本时不拦截，正常落进输入框 |

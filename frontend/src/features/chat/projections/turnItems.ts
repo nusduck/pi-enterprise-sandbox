@@ -18,7 +18,8 @@ import { isSpawnSubagentToolName } from '../../../widgets/runtime-steps/subagent
 import { isTodoToolName } from '../../../widgets/runtime-steps/taskStateFields';
 
 export type TurnItem =
-  | { kind: 'thinking'; seq: number | null; message: MessageEntity }
+  /** Back-to-back thinking with nothing in between collapses into one item. */
+  | { kind: 'thinking'; seq: number | null; messages: MessageEntity[] }
   | { kind: 'text'; seq: number | null; message: MessageEntity }
   /**
    * Adjacent ordinary tool calls (read, bash, grep, mcp__*, …) shown as one
@@ -114,8 +115,13 @@ export function projectTurnItems(store: EntityStore, runId: string): TurnItem[] 
   // A turn that only thought (no text yet) waits here: if ordinary tools follow
   // it joins their group as a step, otherwise it stands alone.
   let pending: { seq: number | null; message: MessageEntity } | null = null;
+  const pushThinking = (seq: number | null, message: MessageEntity) => {
+    const last = items[items.length - 1];
+    if (last?.kind === 'thinking') last.messages.push(message);
+    else items.push({ kind: 'thinking', seq, messages: [message] });
+  };
   const flush = () => {
-    if (pending) items.push({ kind: 'thinking', seq: pending.seq, message: pending.message });
+    if (pending) pushThinking(pending.seq, pending.message);
     pending = null;
   };
 
@@ -127,7 +133,7 @@ export function projectTurnItems(store: EntityStore, runId: string): TurnItem[] 
         pending = { seq: entry.seq, message };
         continue;
       }
-      if (message.thinking) items.push({ kind: 'thinking', seq: entry.seq, message });
+      if (message.thinking) pushThinking(entry.seq, message);
       if (message.text) items.push({ kind: 'text', seq: entry.seq, message });
       continue;
     }

@@ -27,17 +27,17 @@ export function AgentPicker({
   const selected = agents.find((agent) => agent.agent_id === selectedAgentId);
   return (
     <label className="agent-picker">
-      <span className="agent-picker-label">Agent</span>
+      <span className="agent-picker-label">智能体</span>
       <select
         className="agent-picker-select"
         value={selectedAgentId ?? ''}
         disabled={disabled}
-        title={selected?.description || 'Choose the agent for this new conversation'}
-        aria-label="Agent for this new conversation"
+        title={selected?.description || '新会话使用的智能体，会话开始后不可更改'}
+        aria-label="新会话使用的智能体"
         onChange={(event) => onSelect(event.target.value || null)}
       >
         {/* 空值 = 不传 agent_id，服务端用租户默认 Agent（向后兼容）。 */}
-        <option value="">Default</option>
+        <option value="">默认智能体</option>
         {agents.map((agent) => (
           <option key={agent.agent_id} value={agent.agent_id}>
             {agent.name}

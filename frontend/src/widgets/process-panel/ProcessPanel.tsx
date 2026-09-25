@@ -9,7 +9,7 @@ export function ProcessPanel({
   selectedId,
   onSelect,
   onOpenConsole,
-  emptyHint = 'No managed processes for this run.',
+  emptyHint = '这一轮没有后台进程。',
 }: {
   processes: ProcessEntity[];
   selectedId?: string | null;

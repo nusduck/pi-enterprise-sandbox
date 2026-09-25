@@ -237,3 +237,30 @@ describe('rehydrateRun cursor', () => {
     assert.equal(next.runsById[RUN].lastSequence, 0);
   });
 });
+
+describe('consecutive thinking', () => {
+  it('merges back-to-back thinking-only turns into one item', () => {
+    // Real shape: a turn that only thinks and then calls a non-ordinary tool
+    // (job, subagent) flushes its thinking alone; several such turns in a row
+    // rendered as a stack of identical "thinking" rows.
+    let q = 0;
+    const n = () => ++q;
+    const events = [
+      ev(n(), 'run.accepted', { status: 'ACCEPTED' }),
+      ev(n(), 'thinking.delta', { role: 'assistant', delta: 'first' }),
+      ev(n(), 'message.completed', { role: 'assistant', text: '' }),
+      ev(n(), 'thinking.delta', { role: 'assistant', delta: 'second' }),
+      ev(n(), 'message.completed', { role: 'assistant', text: '' }),
+      ev(n(), 'thinking.delta', { role: 'assistant', delta: 'third' }),
+      ev(n(), 'message.delta', { role: 'assistant', delta: 'Answer.' }),
+      ev(n(), 'message.completed', { role: 'assistant', text: 'Answer.' }),
+    ];
+    const items = projectTurnItems(replay(events), RUN);
+    assert.deepEqual(items.map((i) => i.kind), ['thinking', 'text']);
+    const thinking = items[0];
+    assert.equal(thinking.kind, 'thinking');
+    if (thinking.kind === 'thinking') {
+      assert.deepEqual(thinking.messages.map((m) => m.thinking), ['first', 'second', 'third']);
+    }
+  });
+});

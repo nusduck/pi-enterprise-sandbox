@@ -30,9 +30,9 @@ function modelTags(model: ModelItem): string[] {
   const modalities = Array.isArray(model.input_modalities)
     ? model.input_modalities.map(String)
     : [];
-  if (modalities.includes('image')) tags.push('Vision');
-  if (model.supports_reasoning) tags.push('Thinking');
-  if (model.supports_tool_call) tags.push('Tools');
+  if (modalities.includes('image')) tags.push('看图');
+  if (model.supports_reasoning) tags.push('思考');
+  if (model.supports_tool_call) tags.push('工具');
   return tags;
 }
 
@@ -41,8 +41,8 @@ function modelLimitsLine(model: ModelItem | null | undefined): string {
   const context = formatTokenK(model.context_window);
   const output = formatTokenK(model.max_output_tokens);
   return [
-    context ? `${context} context` : '',
-    output ? `${output} output` : '',
+    context ? `上下文 ${context}` : '',
+    output ? `输出 ${output}` : '',
   ]
     .filter(Boolean)
     .join(' · ');
@@ -55,7 +55,7 @@ function modelDescription(model: ModelItem): string {
   if (tags.length) return tags.join(' · ');
   if (limits) return limits;
   if (model.provider) return String(model.provider);
-  return 'Available model';
+  return '可用模型';
 }
 
 export type ModelPickerProps = {
@@ -87,7 +87,7 @@ export function ModelPicker({
 
   const selectedLabel = selected
     ? modelNameOf(selected)
-    : fixedModelId || selectedModelId || (models.length ? 'Select model' : 'No models');
+    : fixedModelId || selectedModelId || (models.length ? '默认模型' : '暂无模型');
 
   const limits = modelLimitsLine(selected);
 
@@ -202,14 +202,14 @@ export function ModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}
-        aria-label={fixedModelId ? 'Model fixed by Agent version' : 'Select model'}
-        title={fixedModelId ? `Model fixed by Agent version · ${fixedModelId}` : undefined}
+        aria-label={fixedModelId ? '模型由智能体版本固定' : '选择模型'}
+        title={fixedModelId ? `模型由智能体版本固定：${fixedModelId}` : selected ? undefined : '未选择时由智能体或平台决定使用哪个模型'}
         onClick={toggle}
         onKeyDown={onTriggerKeyDown}
       >
         <span className="model-picker-trigger-name">{selectedLabel}</span>
         {fixedModelId ? (
-          <span className="model-picker-badge model-picker-fixed-badge">Fixed</span>
+          <span className="model-picker-badge model-picker-fixed-badge">已固定</span>
         ) : selected?.context_window ? (
           <span className="model-picker-badge" title={limits}>
             {formatTokenK(selected.context_window)}
@@ -238,11 +238,11 @@ export function ModelPicker({
           className="model-picker-menu"
           id={listId}
           role="listbox"
-          aria-label="Models"
+          aria-label="模型"
           tabIndex={-1}
           onKeyDown={onListKeyDown}
         >
-          <div className="model-picker-menu-header">Models</div>
+          <div className="model-picker-menu-header">选择模型</div>
           <div className="model-picker-menu-list">
             {models.map((model, index) => {
               const id = modelIdOf(model);
