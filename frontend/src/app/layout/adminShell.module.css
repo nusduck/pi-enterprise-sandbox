@@ -1,4 +1,6 @@
-.shell {
+/* The shell also carries id="app"; app.css's `#app { display: flex }` would win
+   over a bare class, so the grid needs the id in its selector. */
+:global(#app).shell {
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
@@ -52,7 +54,7 @@
 .denied b { color: var(--color-text); font-size: 15px; font-weight: 600; }
 
 @media (max-width: 760px) {
-  .shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  :global(#app).shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .nav { flex-direction: row; align-items: center; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--color-border); padding: 8px; }
   .brand, .section h2 { display: none; }
   .section { flex-direction: row; }

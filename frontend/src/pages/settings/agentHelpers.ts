@@ -360,3 +360,53 @@ export function sortAgentsForDisplay(agents: Agent[]): Agent[] {
     return a.name.localeCompare(b.name);
   });
 }
+
+export type CatalogState<T> = {
+  items: T[];
+  available: boolean;
+  loading?: boolean;
+  error?: string | null;
+};
+
+export function catalogFromResult<T>(
+  result: { items: T[]; available: boolean; error?: string | null },
+  previous: CatalogState<T>,
+): CatalogState<T> {
+  // `softGet` marks a non-404 endpoint as available so older capability pages
+  // can distinguish "not implemented" from "temporarily failed". For an
+  // editor, an HTTP failure is still unusable: never turn it into an empty
+  // directory that could make a referenced capability look safe to publish.
+  const usable = result.available && !result.error;
+  if (usable) {
+    return { items: result.items, available: true, loading: false, error: result.error || null };
+  }
+  // A failed refresh must never replace a previously known directory with an
+  // empty list. Empty is a valid response only when the endpoint was reachable.
+  return { ...previous, loading: false, available: false, error: result.error || null };
+}
+
+const TOOL_GROUP_ORDER = ['文件', '命令与后台任务', '协作', '交互与产出', 'MCP', '其他'];
+
+/**
+ * Permission rows grouped for the editor: MCP tools by their `mcp__` prefix,
+ * the rest by what they do. Order inside a group follows the registry.
+ */
+export function groupToolsForPermissions<T extends { name?: string; id?: string; category?: string | null }>(
+  tools: readonly T[],
+): Array<{ group: string; tools: T[] }> {
+  const groupOf = (tool: T): string => {
+    const name = String(tool.name || tool.id || '');
+    if (name.startsWith('mcp__')) return 'MCP';
+    if (['read', 'write', 'edit', 'glob', 'grep', 'read_image'].includes(name)) return '文件';
+    if (name === 'bash' || name.startsWith('job_')) return '命令与后台任务';
+    if (['subagent', 'delegate_to_agent', 'delegate_to_remote_agent'].includes(name)) return '协作';
+    if (['ask_user_question', 'todo_write', 'skill', 'submit_artifact'].includes(name)) return '交互与产出';
+    return '其他';
+  };
+  const groups = new Map<string, T[]>();
+  for (const tool of tools) {
+    const g = groupOf(tool);
+    groups.set(g, [...(groups.get(g) || []), tool]);
+  }
+  return TOOL_GROUP_ORDER.filter((g) => groups.has(g)).map((group) => ({ group, tools: groups.get(group)! }));
+}

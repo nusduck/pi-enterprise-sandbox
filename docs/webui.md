@@ -99,17 +99,20 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 - 同一次拆分把模型选择挪进了 `features/chat/useModelSelection.ts`：`ChatContext.tsx`
   贴着结构棘轮的行数预算，新增能力要先按职责拆分而不是把它继续撑大。
 
-**`/settings/agents`（仅 admin）** — `pages/settings/AgentsPage.tsx`，与 A2A Access
-一样只在 `actingRole === 'admin'` 时出现在二级导航里。四块：org 内的智能体列表、
-新建、配置编辑、版本历史。
+**`/admin/agents`（仅 admin）** — `pages/settings/AgentsPage.tsx`，管理控制台的「智能体」。
+左侧是 org 内的智能体列表（有未保存草稿的显示黄点）与「新建智能体」，右侧是一个编辑器：
+顶部固定栏显示「编辑基于 vN」、未保存标记、校验状态和「放弃修改 / 仅保存为新版本 / 保存并启用」，
+下方按「基本信息 / 模型 / 工具权限 / MCP / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
+参数一次只渲染一类，样式在 `agents.module.css`）。工具权限按类别分组（`groupToolsForPermissions`），
+每个工具是「继承 / 允许 / 审批 / 禁止」四段选择，可只看已覆盖项；新建智能体复用同一个编辑器。
 
 - 页面反复说明的一件事是**保存 = 建新版本**：`agent_versions` 不可变，编辑配置
   产生下一个版本，旧版本保留；切换活跃版本**只影响新建的会话**，正在跑的 Run 与
   已存在的会话继续用它们钉住的版本。只写"保存"而不解释，用户会以为是原地修改，
   然后困惑于"为什么改了配置老会话没变"。两个按钮因此分开：
-  *Save as new active version* 与 *Save without activating*。
+  「保存并启用」与「仅保存为新版本」。
 - 「回滚」不是一个单独功能，就是在版本历史里激活一个旧版本——无需数据修复。
-- 配置编辑器同时提供常用字段和 Advanced JSON：两者写入同一份草稿，结构化控件
+- 配置编辑器的结构化分页和「JSON」页写入同一份草稿，结构化控件
   只修改它负责的字段，未知字段、旧字段和旧格式仍留在 JSON 中。`modelPolicy`、
   `toolPolicy` 与 `mcpServers` 的形状不合法时，结构化控件暂停，避免一次点击把
   无法理解的配置覆盖掉；当前能力目录不可达时保留已知草稿值，并阻止依赖该目录
@@ -119,17 +122,17 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   `schemaVersion`、`fieldSupport`、`platformConstraints`、`capabilityRevision`，
   校验结果必须带 `valid`、字段级 `errors`/`warnings`；有效结果还带
   `normalizedConfig` 与 `effectiveSummary`。警告只提示，不会被当作错误；服务端
-  归一化差异会在发布前展开显示。前端仍把写入即校验作为最终权威。
+  归一化差异在发布前以可展开的对比显示。前端仍把写入即校验作为最终权威。
 - 前端为目录、版本请求和草稿校验做了请求代次保护；React StrictMode 的开发期重复
   effect 不会把页面留在 Loading。切换 Agent 或刷新期间，晚到的响应不会覆盖当前
   选择；未提交的草稿按 Agent 暂存。发布和激活携带当前活跃版本的期望值，遇到
   `409` 并发冲突时刷新版本线、保留草稿并要求重新检查。
 - 「读不到」和「是空的」在界面上是两件事：MCP 目录 `unknown` 时明说不可用并挡住
   依赖它的修改，不渲染成"零授权"。草稿里启用了、但当前目录已经没有的 MCP 工具仍
-  会渲染成一行并标注「not in the current directory」，否则那条
+  会渲染成一行并标注「当前目录中已没有」，否则那条
   `mcpServers[i].enabledTools[j]` 的错误就没有可以落脚的控件。
 - Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
-  是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为 unsupported，
+  是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为「不支持」，
   要求改掉后才能发布，不静默降级到别的档位。
 - legacy 配置升级到 `schemaVersion: 1` 时，无法映射的模型引用和非空的
   `skills`/`extensions`/`sandboxPolicy`/`a2a` 会阻止发布并列出待处理字段：

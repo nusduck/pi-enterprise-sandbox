@@ -16,7 +16,7 @@ import {
   validateAgentConfig,
 } from '../src/shared/api/agents.ts';
 import { ApiError } from '../src/shared/api/client.ts';
-import { catalogFromResult } from '../src/pages/settings/AgentsPage.tsx';
+import { catalogFromResult, groupToolsForPermissions } from '../src/pages/settings/agentHelpers.ts';
 import {
   activeVersionOf,
   jsonSemanticallyEqual,
@@ -490,5 +490,24 @@ describe('optimistic activation and the config plane wire contract', () => {
     });
     // The path is what anchors the error to a checkbox row in the editor.
     assert.equal(result.errors[0]?.path, 'mcpServers[0].enabledTools[1]');
+  });
+});
+
+describe('groupToolsForPermissions', () => {
+  it('groups registry tools by purpose and keeps MCP tools together', () => {
+    const tools = ['read', 'bash', 'job_output', 'subagent', 'delegate_to_remote_agent', 'todo_write', 'mcp__exa__web_search_exa', 'write', 'new_tool']
+      .map((name) => ({ name }));
+    const groups = groupToolsForPermissions(tools);
+    assert.deepEqual(
+      groups.map((g) => [g.group, g.tools.map((t) => t.name)]),
+      [
+        ['文件', ['read', 'write']],
+        ['命令与后台任务', ['bash', 'job_output']],
+        ['协作', ['subagent', 'delegate_to_remote_agent']],
+        ['交互与产出', ['todo_write']],
+        ['MCP', ['mcp__exa__web_search_exa']],
+        ['其他', ['new_tool']],
+      ],
+    );
   });
 });
