@@ -161,8 +161,8 @@ export function MessageList() {
         <button
           type="button"
           className="jump-to-bottom"
-          aria-label="Jump to latest messages"
-          title="Jump to latest messages"
+          aria-label="跳到最新消息"
+          title="跳到最新消息"
           onClick={scrollToBottom}
         >
           <IconChevronDown size={16} />

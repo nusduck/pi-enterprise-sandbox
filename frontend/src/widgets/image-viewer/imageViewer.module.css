@@ -1,0 +1,31 @@
+.viewer {
+  /* app.css resets every margin to 0; <dialog> centres itself with auto margins. */
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+}
+.viewer::backdrop { background: rgba(0, 0, 0, 0.72); }
+.figure { margin: 0; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.figure img {
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 110px);
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--color-bg-hover);
+}
+.figure figcaption { display: flex; align-items: center; gap: 8px; color: #fff; font-size: 13px; max-width: 100%; }
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
+.btn {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 7px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.18); }

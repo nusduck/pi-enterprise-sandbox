@@ -1661,6 +1661,8 @@ body {
 }
 .message-image {
   display: block;
+  padding: 0;
+  cursor: zoom-in;
   width: 168px;
   max-width: 100%;
   aspect-ratio: 4 / 3;

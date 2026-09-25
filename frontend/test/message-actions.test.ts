@@ -144,7 +144,7 @@ describe('chat UX surfaces (static structure)', () => {
   it('MessageList offers a labelled jump-to-latest control', () => {
     const list = readSrc('widgets', 'message-list', 'MessageList.tsx');
     assert.match(list, /className="jump-to-bottom"/);
-    assert.match(list, /aria-label=["']Jump to latest messages["']/);
+    assert.match(list, /aria-label=["']跳到最新消息["']/);
     assert.match(list, /shouldShowJumpToBottom\(/);
     const css = readSrc('shared', 'styles', 'app.css');
     assert.match(css, /\.jump-to-bottom/);
@@ -153,8 +153,8 @@ describe('chat UX surfaces (static structure)', () => {
 
   it('assistant bubbles expose copy + regenerate actions', () => {
     const bubble = readSrc('widgets', 'message-list', 'MessageBubble.tsx');
-    assert.match(bubble, /aria-label=["']Copy message text["']/);
-    assert.match(bubble, /aria-label=["']Regenerate answer["']/);
+    assert.match(bubble, /aria-label=["']复制回答文字["']/);
+    assert.match(bubble, /aria-label=["']重新生成回答["']/);
     assert.match(bubble, /messagePlainText\(msg\)/);
     // Copy is offered only when the turn actually has text to copy.
     assert.match(bubble, /copyText\.length > 0/);

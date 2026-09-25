@@ -1,0 +1,77 @@
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(460px, 100vw);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-card);
+  border-left: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sheet);
+}
+.head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); font-size: 13.5px; }
+.head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sp { flex: 1; }
+.btn {
+  border: 1px solid var(--color-border-hover);
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  border-radius: 7px;
+  padding: 3px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-decoration: none;
+  flex: none;
+}
+.btn:hover { background: var(--color-bg-hover); }
+.body { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.muted { margin: 0; color: var(--color-text-muted); font-size: 12.5px; }
+.img { max-width: 100%; border-radius: 8px; background: var(--color-bg-hover); }
+.doc { font-size: 13.5px; line-height: 1.65; overflow-wrap: anywhere; }
+.pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  font: 12px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tile {
+  height: 160px;
+  border-radius: 8px;
+  background: var(--color-bg-hover);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+}
+.tile span { font: 600 20px var(--font-mono); }
+.tile small { font-size: 12px; }
+.others { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--color-border); padding-top: 12px; }
+.others h5 { margin: 0 0 4px; font-size: 12px; font-weight: 500; color: var(--color-text-muted); }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  padding: 6px;
+  border-radius: 7px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.row:hover { background: var(--color-bg-hover); }
+.ic { font: 600 10.5px var(--font-mono); color: var(--color-text-muted); min-width: 36px; }
+.rowName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+@media (max-width: 760px) {
+  .drawer { width: 100vw; }
+}

@@ -3,7 +3,8 @@
  * event order (projectTurnItems). Replaces the collapsed step tree that used
  * to sit above a merged answer bubble.
  */
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type {
   ApprovalEntity,
   ArtifactEntity,
@@ -17,9 +18,12 @@ import { projectTurnItems, runHasTurnEntities, type TurnItem } from '../../featu
 
 export { runHasTurnEntities };
 import { MarkdownBody } from '../markdown/Markdown';
+import { turnSummary } from '../../features/chat/projections/turnFields';
+import { ArtifactDrawer, type DrawerArtifact } from './ArtifactDrawer';
 import {
   ApprovalCard,
   ArtifactCard,
+  artifactView,
   JobCard,
   QuestionCard,
   SubtaskCard,
@@ -54,9 +58,12 @@ function balanceMarkdown(text: string): string {
 }
 
 export function TurnStream({ runId }: { runId: string }) {
-  const { entityStore, resolveApproval, respondInteraction, activeSessionId } = useChat();
+  const { entityStore, resolveApproval, respondInteraction, activeSessionId, state } = useChat();
   const { openProcessConsole } = useWorkbenchSelection();
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const closePreview = useCallback(() => setPreviewId(null), []);
+  const isAdmin = String(state.authUser?.role || '').toLowerCase() === 'admin';
 
   const run = entityStore.runsById[runId];
   const runActive = Boolean(run && !isTerminalRunStatus(String(run.status)));
@@ -76,6 +83,29 @@ export function TurnStream({ runId }: { runId: string }) {
     for (const a of Object.values(entityStore.artifactsById)) if (a.runId === runId) artifacts.push(a);
     return { approvals, processesByTool, loneProcesses, artifacts };
   }, [entityStore, runId]);
+
+  // The drawer lists every artifact of this conversation, not just this turn's.
+  const conversationArtifacts = useMemo((): DrawerArtifact[] => {
+    if (!previewId) return [];
+    const conversationId = run?.conversationId;
+    const runIds = new Set(
+      Object.values(entityStore.runsById)
+        .filter((r) => r.id === runId || (conversationId && r.conversationId === conversationId))
+        .map((r) => r.id),
+    );
+    return Object.values(entityStore.artifactsById)
+      .filter((a) => a.runId && runIds.has(a.runId))
+      .map((artifact) => {
+        const view = artifactView(artifact, activeSessionId);
+        return { artifact, url: view.url, downloadName: view.downloadName, label: view.label };
+      });
+  }, [previewId, entityStore, run?.conversationId, runId, activeSessionId]);
+  const previewed = conversationArtifacts.find((d) => d.artifact.id === previewId) ?? null;
+
+  // Footer for a finished turn: duration, tool and sub-task counts; admins get the Trace.
+  const footer = !runActive && run && items.length
+    ? turnSummary(run, (run.toolExecutionIds || []).map((id) => entityStore.toolExecutionsById[id]).filter(Boolean) as ToolExecutionEntity[])
+    : '';
 
   async function decide(id: string, decision: 'approve' | 'reject') {
     setBusyApproval(id);
@@ -187,7 +217,7 @@ export function TurnStream({ runId }: { runId: string }) {
       case 'artifact': {
         const artifact = artifactByItem.get(idx);
         if (!artifact) return <ToolGroupItem tools={[item.tool]} processesByTool={related.processesByTool} />;
-        return <ArtifactCard artifact={artifact} sessionId={activeSessionId} />;
+        return <ArtifactCard artifact={artifact} sessionId={activeSessionId} onOpen={setPreviewId} />;
       }
       default:
         return null;
@@ -227,12 +257,19 @@ export function TurnStream({ runId }: { runId: string }) {
       ) : null}
       {trailingArtifacts.map((a) => (
         <div key={a.id} className={s.item}>
-          <ArtifactCard artifact={a} sessionId={activeSessionId} />
+          <ArtifactCard artifact={a} sessionId={activeSessionId} onOpen={setPreviewId} />
         </div>
       ))}
       {runActive && !items.length ? (
         <div className={s.live}><span className={s.spin} aria-hidden="true" />正在思考…</div>
       ) : null}
+      {footer || (isAdmin && run && !runActive) ? (
+        <div className={s.foot}>
+          {footer ? <span>{footer}</span> : null}
+          {isAdmin && run && !runActive ? <Link to={`/admin/runs/${encodeURIComponent(runId)}`}>在 Trace 中查看</Link> : null}
+        </div>
+      ) : null}
+      <ArtifactDrawer current={previewed} others={conversationArtifacts} onSelect={setPreviewId} onClose={closePreview} />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { MarkdownBody, SafeDownloadLink } from '../markdown/Markdown';
 import { safeApiUrl } from '../../shared/security/url';
 import { getWorkspaceFileUrl } from '../../shared/api/client';
 import { TurnStream } from '../turn-stream/TurnStream';
+import { ImageViewer } from '../image-viewer/ImageViewer';
 import { messageFingerprint, messagePlainText } from './messageActions';
 import {
   IconCopy,
@@ -75,6 +76,7 @@ function AttachmentCards({
   attachments: AttachmentManifestItem[];
   sessionId: string | null;
 }) {
+  const [viewing, setViewing] = useState<{ url: string; name: string } | null>(null);
   if (!attachments.length) return null;
   const images: Array<{ key: string; name: string; url: string }> = [];
   const files: Array<{ key: string; attachment: AttachmentManifestItem; name: string }> = [];
@@ -96,12 +98,20 @@ function AttachmentCards({
       {images.length ? (
         <div className="message-images">
           {images.map((image) => (
-            <a key={image.key} className="message-image" href={image.url} target="_blank" rel="noopener noreferrer" title={image.name}>
+            <button
+              key={image.key}
+              type="button"
+              className="message-image"
+              title={image.name}
+              aria-label={`查看图片：${image.name}`}
+              onClick={() => setViewing({ url: image.url, name: image.name })}
+            >
               <img src={image.url} alt={image.name} loading="lazy" />
-            </a>
+            </button>
           ))}
         </div>
       ) : null}
+      <ImageViewer image={viewing} onClose={() => setViewing(null)} />
       {files.map(({ key, attachment, name }) => {
         const size = formatFileSize(attachment.size);
         return (
@@ -137,7 +147,7 @@ function ThinkingBlock({
       >
         <IconBrain size={15} className="thinking-icon" />
         <span className="thinking-label">
-          {isStreaming ? 'Agent Reasoning…' : 'Thought Process'}
+          {isStreaming ? '正在思考…' : '思考过程'}
         </span>
         {isStreaming ? <span className="thinking-live-dot" /> : null}
         <span className="thinking-chevron">
@@ -289,26 +299,26 @@ function MessageBubbleBase({
         ) : null}
 
         <div className={`bubble${isUser ? '' : ' bubble-md'}`}>
-          {hasContent ? body : <em className="bubble-empty">(empty message)</em>}
+          {hasContent ? body : <em className="bubble-empty">（空消息）</em>}
           {!isUser && interrupted ? (
             <div className="msg-interrupted-banner" role="status">
               <IconAlertCircle size={14} />
-              <span>Execution interrupted</span>
+              <span>运行已中断</span>
             </div>
           ) : null}
         </div>
         {!isUser && (copyText.length > 0 || canRegenerate) ? (
-          <div className="msg-actions" aria-label="Message actions">
+          <div className="msg-actions" aria-label="消息操作">
             {copyText.length > 0 ? (
               <button
                 type="button"
                 className="msg-action-btn"
                 onClick={() => void handleCopy()}
-                title="Copy message text"
-                aria-label="Copy message text"
+                title="复制回答文字"
+                aria-label="复制回答文字"
               >
                 {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-                <span>{copied ? 'Copied' : 'Copy'}</span>
+                <span>{copied ? '已复制' : '复制'}</span>
               </button>
             ) : null}
             {canRegenerate && regenerateSource ? (
@@ -316,11 +326,11 @@ function MessageBubbleBase({
                 type="button"
                 className="msg-action-btn"
                 onClick={handleRegenerate}
-                title="Re-send the previous message and generate a new answer"
-                aria-label="Regenerate answer"
+                title="重新发送上一条消息，生成新的回答"
+                aria-label="重新生成回答"
               >
                 <IconRefresh size={13} />
-                <span>Regenerate</span>
+                <span>重新生成</span>
               </button>
             ) : null}
           </div>

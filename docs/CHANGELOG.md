@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **对话页与原型对齐**：已结束的轮次显示耗时、工具数与子任务数，管理员可一键跳到该轮的 Trace；产物卡片点开在右侧
+  抽屉预览（图片、Markdown、文本），并列出本会话的其他产物；图片附件在应用内看大图；远程委派的审批卡写明目标、
+  任务与会发出的内容；运行中输入框显示已运行时长；消息操作等残留英文改为中文。差距清单见
+  [reviews/2026-09-25-frontend-vs-prototype](reviews/2026-09-25-frontend-vs-prototype/README.md)。
 - **产物库**（前端重设计第 3 期）：侧栏新增「产物库」页，本人所有会话的产物按时间排成网格，可按类型筛选、
   搜索、预览、下载或回到所在会话；输入框「引用其他会话的产物」改为直接搜索全部产物。新增 `GET /api/artifacts`
   （不带 `session_id`）与 exec `GET /artifacts`，只列调用者自己的产物，归属由 Agent 解析，要求服务令牌。

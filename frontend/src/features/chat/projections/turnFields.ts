@@ -77,6 +77,36 @@ export function todoItems(input: unknown): TodoItem[] {
   return todos.sort((x, y) => x.position - y.position);
 }
 
+// ── turn footer ──────────────────────────────────────────────────────
+
+/** "1 分 12 秒" style elapsed time for the composer status line. */
+export function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${String(s % 60).padStart(2, '0')} 秒`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+
+/**
+ * One line under a finished turn: "2分04秒 · 14 个工具 · 3 个子任务".
+ * Sub-tasks are counted apart from the tools; job_* follow-ups count as tools.
+ */
+export function turnSummary(
+  run: { startedAt?: string | null; createdAt?: string | null; finishedAt?: string | null } | null | undefined,
+  tools: readonly Pick<ToolExecutionEntity, 'name'>[],
+): string {
+  const parts: string[] = [];
+  const start = Date.parse(String(run?.startedAt || run?.createdAt || ''));
+  const end = Date.parse(String(run?.finishedAt || ''));
+  if (Number.isFinite(start) && Number.isFinite(end) && end >= start) parts.push(formatDurationMs(end - start));
+  const subtasks = tools.filter((t) => isSubtaskToolName(t.name) || t.name === 'delegate_to_remote_agent').length;
+  const others = tools.length - subtasks;
+  if (others) parts.push(`${others} 个工具`);
+  if (subtasks) parts.push(`${subtasks} 个子任务`);
+  return parts.join(' · ');
+}
+
 // ── tool group summary ───────────────────────────────────────────────
 
 type Category = { verb: string; unit: string };

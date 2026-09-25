@@ -204,10 +204,40 @@ export function ApprovalCard({
     : command && /^[a-z][a-z0-9_]*$/i.test(command) ? toolVerb(command) : command || '工具调用';
   if (!pending) {
     const label = approval.status === 'approved' ? '已批准' : approval.status === 'rejected' ? '已拒绝' : '审批已失效';
+    const remoteDone = (tool?.name || command) === 'delegate_to_remote_agent';
     return (
       <div className={s.resolved}>
         <Pill tone={approval.status === 'approved' ? 'ok' : 'mute'}>{label}</Pill>
-        <span className={s.arg}>{what}</span>
+        <span className={s.arg}>{remoteDone ? `远程委派 ${(tool && subtaskFields(tool).agent) || ''}`.trim() : what}</span>
+      </div>
+    );
+  }
+  const remote = (tool?.name || approval.command) === 'delegate_to_remote_agent';
+  if (remote) {
+    const f = tool ? subtaskFields(tool) : null;
+    return (
+      <div className={`${s.card} ${s.approval}`} role="group" aria-label="需要你批准：远程委派">
+        <div className={s.cardH}>
+          <b>需要你批准：远程委派</b>
+          <span className={s.tag}>A2A</span>
+          <span className={s.sp} />
+          {approval.risk ? <Pill tone="warn">{approval.risk} 风险</Pill> : null}
+        </div>
+        <dl className={s.apKv}>
+          <dt>目标</dt><dd>{f?.agent || '外部智能体'}</dd>
+          <dt>任务</dt><dd>{f?.title || '—'}</dd>
+          {f?.prompt ? <><dt>发送内容</dt><dd><pre className={s.pre}>{clip(f.prompt, 2000)}</pre></dd></> : null}
+        </dl>
+        <div className={s.muted}>任务会离开本组织：只发送上面这段文字，不带附件、工作区文件或对话记录。</div>
+        <div className={s.actions}>
+          <button type="button" className={s.btnPri} disabled={busy} onClick={() => onDecide(approval.id, 'approve')}>
+            批准
+          </button>
+          <button type="button" className={s.btn} disabled={busy} onClick={() => onDecide(approval.id, 'reject')}>
+            拒绝
+          </button>
+          <span className={s.muted}>本轮会等你决定后继续</span>
+        </div>
       </div>
     );
   }
@@ -474,33 +504,55 @@ function extLabel(name: string, mime: string | null): string {
   return mime?.split('/')[1]?.slice(0, 4).toUpperCase() || 'FILE';
 }
 
-export function ArtifactCard({
-  artifact,
-  sessionId,
-}: {
-  artifact: ArtifactEntity;
-  sessionId: string | null;
-}) {
+/** Download URL and labels of an artifact card; shared with the preview drawer. */
+export function artifactView(artifact: ArtifactEntity, sessionId: string | null) {
   const sid = sessionId || artifact.sessionId;
   const durable = isDurableArtifactId(artifact.id, artifact.runId || '');
   const url = safeApiUrl(sid && durable ? getArtifactDownloadUrl(sid, artifact.id) : null);
   const name = artifact.name || artifact.path || '产物';
-  const isImage = Boolean(url && artifact.mimeType?.startsWith('image/') && artifact.mimeType !== 'image/svg+xml');
+  return {
+    url,
+    name,
+    label: extLabel(name, artifact.mimeType),
+    downloadName: downloadAttrName(artifact.name, artifact.path),
+    isImage: Boolean(url && artifact.mimeType?.startsWith('image/') && artifact.mimeType !== 'image/svg+xml'),
+  };
+}
+
+export function ArtifactCard({
+  artifact,
+  sessionId,
+  onOpen,
+}: {
+  artifact: ArtifactEntity;
+  sessionId: string | null;
+  /** Opens the preview drawer; without it the card only offers a download. */
+  onOpen?: (artifactId: string) => void;
+}) {
+  const { url, name, label, downloadName, isImage } = artifactView(artifact, sessionId);
+  const open = onOpen ? () => onOpen(artifact.id) : undefined;
   return (
     <div className={s.artWrap}>
       {isImage && url ? (
-        <a className={s.imgLink} href={url} target="_blank" rel="noopener noreferrer">
+        <button type="button" className={s.imgLink} onClick={open} aria-label={`预览 ${name}`}>
           <img src={url} alt={name} loading="lazy" />
-        </a>
+        </button>
       ) : null}
       <div className={s.art}>
-        <span className={s.artIc}>{extLabel(name, artifact.mimeType)}</span>
-        <span className={s.artName}>
-          {name}
-          <small>{[artifact.mimeType, formatSize(artifact.size)].filter(Boolean).join(' · ') || '交付物'}</small>
-        </span>
+        <span className={s.artIc}>{label}</span>
+        {open ? (
+          <button type="button" className={`${s.artName} ${s.artOpen}`} onClick={open}>
+            {name}
+            <small>{[artifact.mimeType, formatSize(artifact.size)].filter(Boolean).join(' · ') || '交付物'} · 点击预览</small>
+          </button>
+        ) : (
+          <span className={s.artName}>
+            {name}
+            <small>{[artifact.mimeType, formatSize(artifact.size)].filter(Boolean).join(' · ') || '交付物'}</small>
+          </span>
+        )}
         {url ? (
-          <a className={s.btn} href={url} download={downloadAttrName(artifact.name, artifact.path)}>
+          <a className={s.btn} href={url} download={downloadName}>
             下载
           </a>
         ) : null}

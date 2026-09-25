@@ -323,9 +323,16 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 | 审批 | 对话流内审批卡的「批准 / 拒绝」 | `resolveApproval`；成功后重新接上事件流 |
 | 回答提问 | 对话流内提问卡的选项或输入框 | `respondInteraction`；成功后重新接上事件流 |
 | 排队追问 / 改向 | 运行中 Enter / ⌘Enter | `followUpRun` / `steerRun` |
-| 复制消息 | 气泡下方 Copy（hover 显示） | 剪贴板写入 `messagePlainText(msg)` |
-| 重新生成 | 最后一条助手气泡的 Regenerate（仅 idle 时显示） | 取前一条用户回合文本重发 `sendMessage`（纯文本；不重建附件） |
+| 复制消息 | 气泡下方「复制」（hover 显示） | 剪贴板写入 `messagePlainText(msg)` |
+| 重新生成 | 最后一条助手气泡的「重新生成」（仅 idle 时显示） | 取前一条用户回合文本重发 `sendMessage`（纯文本；不重建附件） |
 | 回到最新 | 右下角浮标（距底部 >120px 时出现） | smooth 滚动到底 |
+
+- **轮次页脚**：已结束的轮次在末尾显示「耗时 · N 个工具 · N 个子任务」（`turnSummary`），管理员另有
+  「在 Trace 中查看」跳到 `/admin/runs/:runId`；tokens 暂无数据来源，不显示。
+- **图片附件**：用户消息里的图片缩略图点开在应用内查看大图（`widgets/image-viewer/ImageViewer.tsx`，
+  Esc 或点背景关闭，可下载），不再新开标签页。
+- **输入框状态行**：运行中在输入框顶部显示「正在运行 / 正在等待审批 / 等待你的回答 · 已运行 N 分 N 秒」；
+  计时取运行的开始时间，刚创建还没有时间戳时取本地进入运行态的时刻。
 
 ## SSE 事件消费
 
@@ -355,11 +362,11 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
   | 文字 | 助手文本段 | Markdown |
   | 工具组 | 相邻的普通工具 | 「读取 1 个文件，运行 2 条命令 · 1.9s」，展开看每步参数与结果；只思考不出文字的中间轮次作为组内步骤并入 |
   | 子任务 | `subagent`、`delegate_to_agent` | 相邻的合成一张卡，行内显示执行者、状态、耗时，展开看任务简述与结论 |
-  | 远程委派 | `delegate_to_remote_agent` | 带 A2A 标记的子任务卡 |
+  | 远程委派 | `delegate_to_remote_agent` | 带 A2A 标记的子任务卡；待审批时是专门的审批卡：目标、任务、发送内容，并说明只发送这段文字（不带附件、工作区文件或对话记录，与 `a2a-remote-client` 只发一个文本 part 一致），批准后收起为「已批准 · 远程委派 <目标>」 |
   | 任务清单 | `todo_write` 的 arguments | 放在首次调用处，显示最新清单 |
   | 提问 | `ask_user_question` | 选项卡片；答案来自工具台账，实时作答时卡片先记住本次提交 |
   | 后台任务 | `bash`（`run_in_background`）及其 `job_output` / `job_kill` | 一张卡；按命令与沙箱进程配对，取真实状态与控制台 |
-  | 产物 | `submit_artifact` | 文件卡，图片直接预览，下载经 URL allowlist |
+  | 产物 | `submit_artifact` | 文件卡，图片产物在流里显示大图；点卡片或图片在右侧抽屉预览（图片、Markdown 渲染、其他文本前 200 KB，其余类型给下载），抽屉下方列出本会话的其他产物（`ArtifactDrawer.tsx`）；下载经 URL allowlist |
   | 审批 | 审批实体 | 挂在对应工具条目后；审批先于工具到达时，工具名保留在 `approval.command` |
 
 - DSH 的 `message.*` / `thinking.*` 不带 message_id：一轮是 thinking.delta… → message.delta… →

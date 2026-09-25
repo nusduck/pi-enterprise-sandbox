@@ -229,3 +229,16 @@
   font-size: 13px;
   margin-bottom: 6px;
 }
+
+/* in-flight status line */
+.status { display: flex; align-items: center; gap: 7px; padding: 2px 4px 6px; font-size: 12px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.spin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-hover);
+  border-top-color: var(--color-primary);
+  animation: composer-spin 0.9s linear infinite;
+}
+.statusDot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-warning, #d97706); }
+@keyframes composer-spin { to { transform: rotate(360deg); } }

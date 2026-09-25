@@ -353,3 +353,18 @@ details[open] > summary > .chev { transform: rotate(90deg); }
   .spin { animation: none; }
   .chev { transition: none; }
 }
+
+/* artifact card opens the preview drawer */
+button.imgLink { padding: 0; cursor: zoom-in; width: 100%; }
+.artOpen { border: 0; background: none; padding: 0; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.artOpen:hover { text-decoration: underline; }
+
+/* remote delegation approval */
+.apKv { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px 10px; margin: 8px 0; font-size: 13px; }
+.apKv dt { color: var(--color-text-muted); }
+.apKv dd { margin: 0; min-width: 0; }
+
+/* turn footer */
+.foot { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--color-text-muted); padding-top: 2px; }
+.foot a { color: var(--color-primary-tint); text-decoration: none; }
+.foot a:hover { text-decoration: underline; }

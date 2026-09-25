@@ -15,6 +15,8 @@ import {
   summarizeToolGroup,
   todoItems,
   toolVerb,
+  turnSummary,
+  formatElapsed,
 } from '../src/features/chat/projections/turnFields.ts';
 import { inferToolSource } from '../src/shared/state/platformEventNormalize.ts';
 
@@ -180,5 +182,27 @@ describe('todoItems', () => {
     assert.deepEqual(todoItems({ todos: [{ content: 'a' }] }), [{ position: 1, content: 'a', status: 'pending' }]);
     assert.deepEqual(todoItems({ items: [{ content: 'old engine shape' }] }), []);
     assert.deepEqual(todoItems(null), []);
+  });
+});
+
+describe('turnSummary', () => {
+  it('reports duration, tools and sub-tasks of a finished turn', () => {
+    const run = { startedAt: '2026-09-25T10:00:00.000Z', finishedAt: '2026-09-25T10:02:04.000Z' };
+    const tools = ['read', 'bash', 'job_output', 'subagent', 'delegate_to_agent'].map((name) => ({ name }));
+    assert.equal(turnSummary(run, tools), '2分04秒 · 3 个工具 · 2 个子任务');
+  });
+
+  it('omits what it does not know', () => {
+    assert.equal(turnSummary({ startedAt: '2026-09-25T10:00:00.000Z', finishedAt: null }, []), '');
+    assert.equal(turnSummary(null, [{ name: 'bash' }]), '1 个工具');
+  });
+});
+
+describe('formatElapsed', () => {
+  it('reads like the composer status line', () => {
+    assert.equal(formatElapsed(9_400), '9 秒');
+    assert.equal(formatElapsed(72_000), '1 分 12 秒');
+    assert.equal(formatElapsed(3_900_000), '1 小时 5 分');
+    assert.equal(formatElapsed(-5), '0 秒');
   });
 });

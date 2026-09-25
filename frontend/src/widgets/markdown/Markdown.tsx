@@ -61,10 +61,10 @@ function CodeBlock({
           type="button"
           className="md-code-copy"
           onClick={() => void handleCopy()}
-          title="Copy code"
+          title="复制代码"
         >
           {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-          <span>{copied ? 'Copied!' : 'Copy'}</span>
+          <span>{copied ? '已复制' : '复制'}</span>
         </button>
       </div>
       <pre className="md-pre">

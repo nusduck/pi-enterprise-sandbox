@@ -7,6 +7,7 @@ import {
   type ClipboardEvent,
 } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
+import { formatElapsed } from '../../features/chat/projections/turnFields';
 import {
   activeAttachments,
   canSendAttachments,
@@ -25,6 +26,12 @@ import { getActiveRunEntity } from '../runtime-timeline/buildTimeline';
 import { IconPlus, IconSend, IconStop, IconUpload } from '../../shared/ui/Icons';
 import { usePreference } from '../../shared/ui/preferences';
 import s from './composer.module.css';
+
+const STATUS_LINE: Record<string, string> = {
+  running: '正在运行',
+  waiting_approval: '正在等待审批',
+  waiting_input: '等待你的回答',
+};
 
 const MODE_NOTE: Record<string, string> = {
   waiting_approval: '等待审批：在上方卡片里批准或拒绝；这里输入的内容会排队',
@@ -235,6 +242,26 @@ export function Composer() {
     mode === 'idle'
       ? state.conversationId ? '继续对话…' : '描述你要完成的任务…'
       : mode === 'waiting_input' ? '输入你的回答…' : enterPref === 'steer' ? '补充要求，Enter 立即改向…' : '补充要求，Enter 排队追问…';
+  // Ticks once a second while a run is in flight, for the elapsed-time line.
+  const [now, setNow] = useState(() => Date.now());
+  // A freshly created run may not carry timestamps yet; fall back to when this
+  // composer saw it start.
+  const [seenStart, setSeenStart] = useState<number | null>(null);
+  const busy = mode !== 'idle';
+  useEffect(() => {
+    if (!busy) {
+      setSeenStart(null);
+      return;
+    }
+    setSeenStart(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy, runId]);
+  const stamped = Date.parse(String(run?.startedAt || run?.createdAt || ''));
+  const runStart = Number.isFinite(stamped) ? stamped : seenStart ?? NaN;
+  const statusLine = mode !== 'idle' && STATUS_LINE[mode]
+    ? `${STATUS_LINE[mode]}${Number.isFinite(runStart) ? ` · 已运行 ${formatElapsed(now - runStart)}` : ''}`
+    : '';
   const runningNote = enterPref === 'steer' ? 'Enter 立即改向 · ⌘Enter 排队追问' : 'Enter 排队追问 · ⌘Enter 立即改向';
   const note = needsVision
     ? '当前模型不支持图片，请换一个支持看图的模型'
@@ -268,6 +295,12 @@ export function Composer() {
 
       <div className={s.wrap}>
         <div className={s.box} data-mode={mode}>
+          {statusLine ? (
+            <div className={s.status} role="status">
+              {mode === 'running' ? <span className={s.spin} aria-hidden="true" /> : <span className={s.statusDot} aria-hidden="true" />}
+              {statusLine}
+            </div>
+          ) : null}
           <AttachmentChips
             attachments={attachments}
             onRemove={removeAttachmentDraft}
