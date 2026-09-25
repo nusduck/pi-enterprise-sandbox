@@ -1,6 +1,7 @@
 /**
  * 公共面产物路由——对 BFF `/api/artifacts` 与 Python `artifact/api/public.py` 对齐。
  *
+ * - GET  /artifacts?q=&kind=&cursor=&limit= → 200 {artifacts,next_cursor}（产物库：同一 owner 跨会话）
  * - GET  /sessions/:id/artifacts → 200 {artifacts,total}（owner 作用域，跨租户当作空）
  * - POST /sessions/:id/artifacts/register|submit → 201 ArtifactResponse
  * - POST /sessions/:id/artifacts/imports {artifact_id,target_filename?} → 201
@@ -25,7 +26,7 @@ import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { ArtifactService } from '../../artifact/service.js';
 import { ArtifactError, downloadMimeType } from '../../artifact/service.js';
-import type { ExecArtifactRecord } from '../../db/repositories/artifacts.js';
+import type { ArtifactKind, ExecArtifactRecord } from '../../db/repositories/artifacts.js';
 import { newUlid } from '../../mcp/ulid.js';
 
 export interface PublicArtifactDeps {
@@ -89,6 +90,7 @@ function toResponse(record: ExecArtifactRecord): Record<string, unknown> {
   return {
     artifact_id: record.artifactId,
     session_id: record.sessionId,
+    workspace_id: record.workspaceId,
     org_id: record.orgId,
     user_id: record.userId,
     path: record.sourcePath,
@@ -110,6 +112,44 @@ function mapError(err: unknown, roots: readonly string[]): HttpError {
 }
 
 export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps): void {
+  // 产物库：没有会话参数，归属只取可信的 acting 头；缺失即 404（与会话路由同一口径）。
+  app.get('/artifacts', async (c) => {
+    const acting = parseActingHeaders(actingFrom(c));
+    if (!acting.orgId || !acting.userId) {
+      return c.json(errorBody(notFound('Artifact not found'), []), 404 as never);
+    }
+    const kindRaw = c.req.query('kind') ?? '';
+    const kind: ArtifactKind | null = kindRaw === '' || kindRaw === 'all' ? null
+      : (['image', 'document', 'data'] as const).find((k) => k === kindRaw) ?? null;
+    if (kindRaw !== '' && kindRaw !== 'all' && !kind) {
+      return c.json(errorBody(badRequest('kind must be image, document or data'), []), 400 as never);
+    }
+    const limitRaw = c.req.query('limit');
+    const limit = limitRaw === undefined ? 60 : Number(limitRaw);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      return c.json(errorBody(badRequest('limit must be an integer between 1 and 200'), []), 400 as never);
+    }
+    const cursor = c.req.query('cursor') ?? '';
+    if (cursor !== '' && !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(cursor)) {
+      return c.json(errorBody(badRequest('cursor is invalid'), []), 400 as never);
+    }
+    const query = (c.req.query('q') ?? '').trim().slice(0, 200);
+    try {
+      const rows = await deps.artifactService.listByOwner(
+        { orgId: acting.orgId, userId: acting.userId },
+        { query: query || null, kind, beforeArtifactId: cursor || null, limit: limit + 1 },
+      );
+      const page = rows.slice(0, limit);
+      return c.json({
+        artifacts: page.map(toResponse),
+        next_cursor: rows.length > limit ? page[page.length - 1]?.artifactId ?? null : null,
+      });
+    } catch (err) {
+      const mapped = mapError(err, []);
+      return c.json(errorBody(mapped, []), mapped.status as never);
+    }
+  });
+
   app.get('/sessions/:sessionId/artifacts', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
     const acting = parseActingHeaders(actingFrom(c));

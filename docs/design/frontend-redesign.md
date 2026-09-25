@@ -141,7 +141,7 @@
 4. 对话流各条目组件（§2.3 全表），替换 `MessageBubble` 内的步骤树；删除 Inspector / 步骤树 / 会话内 Trace。
 5. 输入框：`＋` 菜单、附件缩略图与进度、排队 / 改向提示、智能体选择与标题栏只读标签。
 6. 图片预览：本地附件用 blob URL；历史附件与图片产物经 `/api/files/download` / `artifact-download` 渲染为 `<img>`（需真机确认 Content-Type 与大图加载；SVG 只以 `<img>` 方式展示）。
-7. 引用其他会话的产物：先选会话、再列该会话产物（`/api/artifacts?session_id=`），调用 `POST /api/conversations/{id}/artifact-imports`。
+7. 引用其他会话的产物：基于产物库列出全部会话的产物并可搜索（第 3 期起；此前先选会话再列该会话产物），调用 `POST /api/conversations/{id}/artifact-imports`。
 
 ### 第 2 期：定时任务、设置与普通用户页面（纯前端）
 
@@ -157,7 +157,7 @@
 |---|---|---|---|
 | 管理员运行列表与统计（**已实施**：`/api/admin/runs*`，trace 端点未做，前端不依赖） | `/api/runs`、`/trace`、`/events`、`/tools` 均按 owner 过滤 | `GET /api/admin/runs`（筛选：状态、智能体、用户、时间；游标分页）、`GET /api/admin/runs/stats`、按 runId 的 admin 作用域详情 / 事件 / 工具台账 / trace | 角色判定 fail-closed；只限本 org，跨 org 一律 404；BFF 只转发 |
 | 账户编辑（**已实施**：`/api/auth/profile`，与 `me` 分开以免加重每请求鉴权） | `users` 有 `display_name`、`email`、`status`，`/api/auth/me` 只返回 `username`、`display_name` | `me` 返回邮箱、机构名、角色、状态；`PATCH /api/auth/me` 仅允许改显示名称与邮箱 | 邮箱格式校验；与 `run-completion-email.md` 的收件人来源一致 |
-| 产物库 | `/api/artifacts` 必须带 `session_id` | 按当前用户跨会话列产物（类型筛选、搜索、分页） | owner-scoped |
+| 产物库（**已实施**：exec `GET /artifacts` + Agent `/internal/identity/owner` + BFF 组合） | `/api/artifacts` 必须带 `session_id` | 按当前用户跨会话列产物（类型筛选、搜索、分页） | owner-scoped |
 | 定时任务 30 天汇总 | 只能逐任务取 `/runs` | 可选：按用户的每日运行汇总 | 任务数量少时可不做 |
 | 能力调用统计 | 无 | 可选：Skill 近 7 天调用次数 | 没有就不显示该列 |
 

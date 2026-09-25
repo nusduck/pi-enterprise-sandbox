@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **产物库**（前端重设计第 3 期）：侧栏新增「产物库」页，本人所有会话的产物按时间排成网格，可按类型筛选、
+  搜索、预览、下载或回到所在会话；输入框「引用其他会话的产物」改为直接搜索全部产物。新增 `GET /api/artifacts`
+  （不带 `session_id`）与 exec `GET /artifacts`，只列调用者自己的产物，归属由 Agent 解析，要求服务令牌。
 - **账户资料可编辑**（前端重设计第 3 期）：设置 → 账户里可以修改显示名称与邮箱，并显示机构、账户状态、
   注册时间与最近登录。新增 `GET` / `PATCH /api/auth/profile`；只允许改这两个字段，其余字段返回 422；
   修改同时写入登录凭据与用户表，管理端的用户列与后续的运行完成通知都用新值。

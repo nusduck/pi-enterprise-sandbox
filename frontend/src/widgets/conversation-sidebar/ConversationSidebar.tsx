@@ -9,6 +9,7 @@ import {
   IconCompose,
   IconFilter,
   IconHistory,
+  IconLayers,
   IconPanel,
   IconSearch,
   IconTrash,
@@ -175,6 +176,14 @@ export function ConversationSidebar() {
           >
             <IconHistory size={18} />
             定时任务
+          </button>
+          <button
+            type="button"
+            onClick={() => go('/artifacts')}
+            aria-current={location.pathname.startsWith('/artifacts') ? 'page' : undefined}
+          >
+            <IconLayers size={18} />
+            产物库
           </button>
         </nav>
 

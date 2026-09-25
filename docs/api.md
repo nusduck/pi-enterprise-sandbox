@@ -206,7 +206,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/approvals` | 待审批列表 |
 | `GET` | `/api/approvals/{id}` | 审批详情 |
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
-| `GET` | `/api/artifacts` | Artifact 列表 |
+| `GET` | `/api/artifacts` | 带 `session_id`：该会话的产物；不带：产物库（本人所有会话，`q` / `kind` / `cursor` / `limit`） |
 | `GET` | `/api/datasets` | Dataset 列表 |
 | `GET` | `/api/processes` | 长进程列表；必传 `session_id`，可按 `run_id` / `status` 筛选 |
 | `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
@@ -687,11 +687,21 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `GET` | `/artifacts` | 产物库：同一 owner 跨会话的产物（见下） |
 | `GET` | `/sessions/{id}/artifacts` | 列举本工作区的产物 |
 | `POST` | `/sessions/{id}/artifacts/register` | 注册产物（旧端点） |
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
 | `POST` | `/sessions/{id}/artifacts/imports` | 将 owner-scoped Artifact 导入本 Session workspace（BFF 上游兼容端点） |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
+
+**产物库 `GET /artifacts`**：没有会话参数，归属只取 BFF 写入的 `X-Acting-Organization-Id` /
+`X-Acting-User-Id`（正式 ULID），缺失返回 404；与会话路由一样要求服务令牌（`X-API-Key`）。
+参数：`q`（文件名或源路径子串）、`kind`（`image` / `document` / `data`，按 MIME 分组，定义在
+`exec/src/db/repositories/artifacts.ts` 的 `ARTIFACT_KIND_MIME`）、`cursor`（上一页最后一个
+`artifact_id`；ID 是 ULID，按 ID 倒序即按创建时间倒序）、`limit`（1–200，默认 60）。返回
+`{ artifacts, next_cursor }`，每项多一个 `workspace_id`。BFF 的 `GET /api/artifacts`（不带
+`session_id`）先经 Agent `GET /internal/identity/owner` 取调用者的正式归属（取不到即失败，不回退到
+浏览器身份），再以 `X-Acting-Role: user` 调用这里，只转发上述四个参数。
 
 > **公共面这几条路由里的 `{id}` 是 `workspace_id`，不是 `sandbox_session_id`。**
 > exec 的 `requireOwnedSession()` 拿它派生物理工作区路径，产物的归属判定也按

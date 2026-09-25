@@ -157,7 +157,8 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 - **资料抽屉**（`widgets/context-inspector/`）：右侧滑出，默认关闭，四个 tab：产物、文件、数据集、
   进程。会话内不再显示 Trace 与工具明细（工具已在对话流内联）。
 - **输入框**（`widgets/composer/`）：见下文「键盘快捷键」；「＋」菜单可上传文件或图片，或引用其他
-  会话的产物（先选会话再选产物，`POST /api/conversations/{id}/artifact-imports`，会话开始后可用）；
+  会话的产物（对话框基于产物库：默认列出全部会话的产物并可按文件名搜索，左侧选会话只是缩小范围；
+  `POST /api/conversations/{id}/artifact-imports`，会话开始后可用）；
   待上传图片用本地 blob URL 显示缩略图；历史消息里的图片附件经 `/api/files/download` 显示缩略图（不含 SVG）。
   审批与提问在对话流内处理，输入框只提示当前状态。
 - **模型选择**：未选择时按模型目录里标记 `default` 的模型处理（`features/chat/effectiveModel.ts`，优先级：
@@ -171,6 +172,12 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   （仅一次 / 每天 / 每周 / 每月 / 自定义 cron）拼出表达式，按任务自己的时区实时预览接下来 3 次
   触发；预览与 Agent 的 cron 语义一致（`scheduleModel.ts`，测试直接对照 Agent 的 `nextCronOccurrence`）。
   一次性任务按所选时区换算成带偏移的 `run_at`。
+
+- **产物库**（`/artifacts`，`pages/artifact-library/`，侧栏「产物库」）：本人所有会话的产物按今天 / 本周 / 本月 /
+  更早分组排成网格，「全部 / 文档 / 图片 / 数据」与文件名搜索在服务端过滤（`GET /api/artifacts` 不带
+  `session_id`），「加载更多」按游标翻页。图片直接显示缩略图，其余显示类型标签；点开可预览、下载或打开所在会话。
+  产物按其记录的沙箱会话 ID 对应到会话标题；MCP facade 提交的产物记录的是 workspace ID，对不上会话时显示
+  「其他会话」，下载也可能不可用。
 
 - **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：显示名称与邮箱可编辑
   （`/api/auth/profile`，前端先校验、服务端为准，失败时保留草稿），用户名、机构、用户类型、账户状态、注册时间、
@@ -186,6 +193,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 |------|------|
 | `/`、`/c/:conversationId` | 会话工作台；`/c/<id>` 可直接打开某个会话，新会话发出首条消息后地址自动变为 `/c/<id>` |
 | `/schedules` | 定时任务 |
+| `/artifacts` | 产物库 |
 | `/admin/runs`、`/admin/approvals`、`/admin/agents`、`/admin/capabilities`、`/admin/a2a` | 管理控制台（admin） |
 | `/settings/*`、`/runs`、`/approvals` | 旧地址，重定向到对应的 `/admin/*` |
 

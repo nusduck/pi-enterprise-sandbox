@@ -10,6 +10,7 @@ import { CapabilitiesPage } from '../../pages/settings/CapabilitiesPage';
 import { A2aPage } from '../../pages/settings/A2aPage';
 import { AgentsPage } from '../../pages/settings/AgentsPage';
 import { SchedulesPage } from '../../pages/schedules/SchedulesPage';
+import { ArtifactsPage } from '../../pages/artifact-library/ArtifactsPage';
 
 /** /settings/<tab> moved to /admin/<tab>; keep old links and bookmarks working. */
 function LegacySettingsRedirect() {
@@ -27,6 +28,7 @@ export function AppRouter() {
         <Route path="/" element={<AppShell><WorkbenchPage /></AppShell>} />
         <Route path="/c/:conversationId" element={<AppShell><WorkbenchPage /></AppShell>} />
         <Route path="/schedules" element={<AppShell><SchedulesPage /></AppShell>} />
+        <Route path="/artifacts" element={<AppShell><ArtifactsPage /></AppShell>} />
 
         <Route path="/admin" element={<Navigate to="/admin/runs" replace />} />
         <Route path="/admin/runs" element={admin(<RunsPage />)} />

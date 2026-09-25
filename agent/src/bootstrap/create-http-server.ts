@@ -47,6 +47,7 @@ import {
 import { handleCronRoute } from '../presentation/http/cron-routes.js';
 import { handleAgentCatalogRoute } from '../presentation/http/agents-routes.js';
 import { handleAdminRunRoute } from '../presentation/http/admin-run-routes.js';
+import { handleIdentityRoute } from '../presentation/http/identity-routes.js';
 import { handleSkillRoute } from '../presentation/http/skill-routes.js';
 import { handleAuthRoute } from '../presentation/http/auth-routes.js';
 
@@ -106,6 +107,7 @@ export interface AgentHttpServerDeps {
   cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null;
   agentCatalogService?: import('../presentation/http/agents-routes.js').AgentCatalogServiceLike | null;
   adminRunQueryService?: import('../presentation/http/admin-run-routes.js').AdminRunQueryServiceLike | null;
+  ownerIdentityService?: import('../presentation/http/identity-routes.js').OwnerIdentityServiceLike | null;
   activeRunHint?: () => number;
   eventPollIntervalMs?: number;
   eventHeartbeatMs?: number;
@@ -221,6 +223,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
       }
 
       if (await handleAdminRunRoute({ req, res, parsedUrl, path, adminRunQueryService })) {
+        return;
+      }
+      if (await handleIdentityRoute({ req, res, path, ownerIdentityService: deps.ownerIdentityService || null })) {
         return;
       }
 

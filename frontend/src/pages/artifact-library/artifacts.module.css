@@ -1,0 +1,115 @@
+/* Artifact library: date-grouped grid with a preview dialog. */
+
+.page { flex: 1; overflow: auto; padding: 24px 28px 48px; min-width: 0; }
+.inner { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.sp { flex: 1; }
+.muted { color: var(--color-text-muted); font-size: 13px; }
+.mono { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+
+.top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; }
+.tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  cursor: pointer;
+}
+.tabs button[aria-selected='true'] { background: var(--color-bg-hover); color: var(--color-text); font-weight: 500; }
+.search {
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  border-radius: var(--radius-pill);
+  padding: 6px 14px;
+  font-size: 13px;
+  min-width: 200px;
+}
+
+.banner { margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13px; background: var(--color-danger-soft); color: var(--color-danger-text); }
+.empty { display: flex; flex-direction: column; gap: 6px; align-items: center; text-align: center; padding: 64px 16px; color: var(--color-text-muted); font-size: 13px; }
+.empty b { color: var(--color-text); font-size: 15px; font-weight: 600; }
+
+.group { display: flex; flex-direction: column; gap: 10px; }
+.group h2 { margin: 0; font-size: 12.5px; font-weight: 500; color: var(--color-text-muted); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-card);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+  color: var(--color-text);
+}
+.card:hover { border-color: var(--color-border-hover); }
+.card:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.preview {
+  aspect-ratio: 4 / 3;
+  max-width: 100%;
+  background: var(--color-bg-hover);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.preview img { width: 100%; height: 100%; object-fit: cover; }
+.type { font: 600 13px var(--font-mono); color: var(--color-text-muted); }
+.meta { padding: 9px 11px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; min-width: 0; }
+.meta b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta small { color: var(--color-text-muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.more {
+  align-self: center;
+  border: 1px solid var(--color-border-hover);
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  border-radius: var(--radius-pill);
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dialog {
+  /* app.css resets every margin to 0; <dialog> centres itself with auto margins. */
+  margin: auto;
+  padding: 0;
+  width: min(760px, calc(100% - 32px));
+  max-height: calc(100vh - 64px);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sheet);
+}
+.dialog::backdrop { background: var(--color-bg-scrim); }
+.dlgHead, .dlgFoot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13.5px; }
+.dlgHead { border-bottom: 1px solid var(--color-border); }
+.dlgHead b { overflow-wrap: anywhere; }
+.dlgFoot { border-top: 1px solid var(--color-border); flex-wrap: wrap; }
+.dlgBody { padding: 14px; display: flex; flex-direction: column; gap: 14px; overflow: auto; max-height: calc(100vh - 200px); }
+.big { max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 8px; align-self: center; background: var(--color-bg-hover); }
+.bigType { height: 160px; display: grid; place-items: center; border-radius: 8px; background: var(--color-bg-hover); font: 600 20px var(--font-mono); color: var(--color-text-muted); }
+.kv { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13px; }
+.kv dt { color: var(--color-text-muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.btn, .btnPri {
+  border: 1px solid var(--color-border-hover);
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  border-radius: 7px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn:hover { background: var(--color-bg-hover); }
+.btnPri { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+
+@media (max-width: 760px) {
+  .page { padding: 16px; }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -9,6 +9,7 @@ import {
   type ReqWithTrace,
 } from '../application/run-access-service.js';
 import { ensureAgentSession } from '../services/agent-client.js';
+import { resolveOwnerIdentity } from '../services/agent-identity-client.js';
 
 function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -16,13 +17,47 @@ function json(res: ServerResponse, status: number, data: unknown) {
 }
 
 
+/** Query keys the library forwards to exec; anything else is dropped. */
+const LIBRARY_KEYS = ['q', 'kind', 'cursor', 'limit'] as const;
+
 /**
- * GET /api/artifacts?session_id=
+ * GET /api/artifacts (no session_id) — the caller's artifact library across
+ * conversations. Owner ids come from the Agent, never from the browser; the
+ * exec hop uses the least-privileged role.
+ */
+async function listLibrary(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null): Promise<void> {
+  try {
+    const auth = await resolveTrustedAuth(req);
+    const owner = await resolveOwnerIdentity({ auth, traceId: req?.traceId || null });
+    const client = createSandboxClient({
+      auth: { actingUserId: owner.userId, actingOrganizationId: owner.orgId, actingRole: 'user' },
+      traceId: req?.traceId || null,
+      traceContext: req?.traceContext || null,
+    });
+    const query = new URLSearchParams();
+    for (const key of LIBRARY_KEYS) {
+      const value = parsedUrl.searchParams.get(key);
+      if (value != null && value !== '') query.set(key, value);
+    }
+    json(res, 200, await client.listLibraryArtifacts(query));
+  } catch (err: any) {
+    console.error('[artifacts] library:', err.message);
+    const status = Number(err?.status) || 500;
+    json(res, status, {
+      error: status >= 500 ? 'Artifact library unavailable' : err.message || 'Failed to list artifacts',
+      code: err?.code,
+    });
+  }
+}
+
+/**
+ * GET /api/artifacts?session_id=   — one conversation's artifacts
+ * GET /api/artifacts               — the library (see listLibrary)
  */
 export async function handleListArtifacts(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const sessionId = parsedUrl.searchParams.get('session_id');
   if (!sessionId) {
-    json(res, 400, { error: 'session_id is required' });
+    await listLibrary(parsedUrl, res, req);
     return;
   }
   try {

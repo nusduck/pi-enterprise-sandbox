@@ -92,6 +92,8 @@ export interface SandboxClientOptions {
 
 export interface SandboxClient {
   listArtifacts(sessionId: string): Promise<any>;
+  /** Owner-wide artifact library (no session); owner comes from the acting headers. */
+  listLibraryArtifacts(query: URLSearchParams): Promise<any>;
   importArtifact(sessionId: string, artifactId: string, targetFilename?: string | null): Promise<any>;
   listProcesses(sessionId: string, query?: Record<string, any>): Promise<any>;
   getProcess(sessionId: string, processId: string): Promise<any>;
@@ -215,6 +217,12 @@ export function createSandboxClient({
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/artifacts`,
       );
+      return resp.json();
+    },
+
+    async listLibraryArtifacts(query: URLSearchParams) {
+      const qs = query.toString();
+      const resp = await sbFetch(`/artifacts${qs ? `?${qs}` : ''}`);
       return resp.json();
     },
 
