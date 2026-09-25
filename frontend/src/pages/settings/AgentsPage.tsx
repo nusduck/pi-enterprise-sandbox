@@ -34,6 +34,10 @@ import {
 import {
   activeVersionOf,
   catalogFromResult,
+  configDiff,
+  formatDiffValue,
+  mcpEntriesOf,
+  toolDecisionsOf,
   configNeedsCapability,
   formatAgentConfig,
   isConfigDraftChanged,
@@ -522,11 +526,17 @@ export function AgentsPage() {
   const creating = mode === 'new';
   const canPublish = !mutating && configChanged && parsedDraft.ok && validation.status === 'valid';
   const [statusText, statusCls] = validationSummary(creating ? newValidation : validation);
-  const tabs: Array<[AgentTab, string]> = [
+  // What the draft changes relative to the active version (or the new-agent draft itself).
+  const draftConfig = creating ? parseAgentConfigDraft(newConfig) : parsedDraft;
+  const draftChanges = !creating && configChanged && parsedDraft.ok ? configDiff(activeVersion?.config ?? {}, parsedDraft.config) : [];
+  const nextVersionNo = Math.max(0, ...versions.map((v) => v.version_no)) + 1;
+  const overrideCount = draftConfig.ok ? Object.keys(toolDecisionsOf(draftConfig.config)).length : 0;
+  const mcpCount = draftConfig.ok ? mcpEntriesOf(draftConfig.config).length : 0;
+  const tabs: Array<[AgentTab, string, number?]> = [
     ['basic', '基本信息'],
     ['model', '模型'],
-    ['tools', '工具权限'],
-    ['mcp', 'MCP'],
+    ['tools', '工具权限', overrideCount],
+    ['mcp', 'MCP', mcpCount],
     ...(creating ? [] : [['versions', '版本历史'] as [AgentTab, string]]),
     ['json', 'JSON'],
   ];
@@ -606,7 +616,9 @@ export function AgentsPage() {
               </small>
             </div>
             <span className={s.sp} />
-            {!creating && configChanged ? <span className={s.unsaved}>未保存</span> : null}
+            {!creating && configChanged ? (
+              <span className={s.unsaved}>{draftChanges.length ? `${draftChanges.length} 处未保存修改` : '未保存修改'}</span>
+            ) : null}
             {statusText && (creating || configChanged) ? <span className={`${s.status} ${statusCls}`}>{statusText}</span> : null}
             {creating ? (
               <button type="submit" form="new-agent-form" className={s.btnPri} disabled={mutating || !newName.trim()}>
@@ -615,8 +627,8 @@ export function AgentsPage() {
             ) : (
               <>
                 <button type="button" className={s.btn} disabled={mutating || !configChanged} onClick={discardDraft}>放弃修改</button>
-                <button type="button" className={s.btn} disabled={!canPublish} onClick={() => void saveAsNewVersion(false)}>仅保存为新版本</button>
-                <button type="button" className={s.btnPri} disabled={!canPublish} onClick={() => void saveAsNewVersion(true)}>保存并启用</button>
+                <button type="button" className={s.btn} disabled={!canPublish} onClick={() => void saveAsNewVersion(false)}>仅保存为 v{nextVersionNo}</button>
+                <button type="button" className={s.btnPri} disabled={!canPublish} onClick={() => void saveAsNewVersion(true)}>保存并启用 v{nextVersionNo}</button>
               </>
             )}
           </div>
@@ -627,8 +639,10 @@ export function AgentsPage() {
 
         {creating || selectedAgent ? (
           <div className={s.tabs} role="tablist" aria-label="配置分类">
-            {tabs.map(([id, label]) => (
-              <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>
+            {tabs.map(([id, label, count]) => (
+              <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
+                {label}{count ? <span className={s.tabCount} title={id === 'tools' ? '已覆盖的工具数' : '已选的 MCP 服务数'}>{count}</span> : null}
+              </button>
             ))}
           </div>
         ) : null}
@@ -655,6 +669,20 @@ export function AgentsPage() {
             {tab === 'versions' ? (
               <>
                 <p className={s.hint}>回滚就是启用旧版本：不修复数据，也不影响正在进行的会话。只有新会话会用新启用的版本。</p>
+                {draftChanges.length ? (
+                  <div className={s.diff} aria-label="草稿与启用版本的差异">
+                    <div className={s.diffHead}>
+                      <b>v{activeVersion?.version_no ?? '—'} → 草稿（将保存为 v{nextVersionNo}）</b>
+                      <span className={s.hint}>{draftChanges.length} 处修改</span>
+                    </div>
+                    {draftChanges.map((c) => (
+                      <div key={c.path} className={s.diffRow}>
+                        <code className={s.diffDel}>- {c.path}: {formatDiffValue(c.before)}</code>
+                        <code className={s.diffAdd}>+ {c.path}: {formatDiffValue(c.after)}</code>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div className={s.versions}>
                   {versions.map((version) => {
                     const isActive = version.agent_version_id === selectedAgent.active_version_id;

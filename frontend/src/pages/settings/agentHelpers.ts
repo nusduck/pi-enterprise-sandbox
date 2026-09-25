@@ -410,3 +410,41 @@ export function groupToolsForPermissions<T extends { name?: string; id?: string;
   }
   return TOOL_GROUP_ORDER.filter((g) => groups.has(g)).map((group) => ({ group, tools: groups.get(group)! }));
 }
+
+// ── draft vs. active version ────────────────────────────────────────
+
+export type ConfigChange = { path: string; before: unknown; after: unknown };
+
+/**
+ * Leaf values by dotted path; arrays are compared whole (their order is
+ * meaningful). An empty object is not a leaf: `toolPolicy: {}` gaining a
+ * child is one change (the child), not also "toolPolicy removed".
+ */
+function flattenConfig(value: unknown, prefix = '', out = new Map<string, unknown>()): Map<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    for (const [key, child] of entries) flattenConfig(child, prefix ? `${prefix}.${key}` : key, out);
+  } else if (prefix) {
+    out.set(prefix, value);
+  }
+  return out;
+}
+
+/**
+ * Field-level differences between two configs, sorted by path. Key order does
+ * not count as a change; a field that disappears reports `after: undefined`.
+ */
+export function configDiff(before: unknown, after: unknown): ConfigChange[] {
+  const a = flattenConfig(before);
+  const b = flattenConfig(after);
+  const paths = [...new Set([...a.keys(), ...b.keys()])].sort();
+  return paths
+    .filter((p) => !jsonSemanticallyEqual(a.get(p), b.get(p)))
+    .map((path) => ({ path, before: a.get(path), after: b.get(path) }));
+}
+
+/** One diff side for display; `undefined` means the field is absent. */
+export function formatDiffValue(value: unknown): string {
+  if (value === undefined) return '（无）';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}

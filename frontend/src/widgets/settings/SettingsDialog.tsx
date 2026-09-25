@@ -147,6 +147,7 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
         <dt>用户名</dt><dd>{username || '—'}</dd>
         <dt>机构</dt><dd>{profile?.organization_name || '—'}</dd>
         <dt>用户类型</dt><dd>{isAdmin ? '管理员' : '普通用户'}<span className={s.muted}> · 由管理员设置</span></dd>
+        <dt>登录方式</dt><dd>账号密码</dd>
         <dt>账户状态</dt><dd>{profile ? (profile.status === 'active' ? '正常' : '已停用') : '—'}</dd>
         <dt>注册时间</dt><dd>{formatDate(profile?.created_at)}</dd>
         <dt>最近登录</dt><dd>{formatDate(profile?.last_login_at)}</dd>

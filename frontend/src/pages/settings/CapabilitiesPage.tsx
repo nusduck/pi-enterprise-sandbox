@@ -11,6 +11,7 @@ import {
   type ToolRegistryItem,
 } from '../../shared/api/capabilities';
 import { mcpStatus, toolStatus } from './capabilityFormat';
+import { useChat } from '../../features/chat/ChatContext';
 import s from './adminPage.module.css';
 
 type Tab = 'skills' | 'mcp' | 'tools' | 'models';
@@ -80,6 +81,8 @@ function matches(query: string, ...fields: Array<string | null | undefined>): bo
  * agent may use is configured per agent version.
  */
 export function CapabilitiesPage() {
+  const { state } = useChat();
+  const me = String(state.authUser?.display_name || state.authUser?.username || '');
   const [tab, setTab] = useState<Tab>('skills');
   const [query, setQuery] = useState('');
   const [skillScope, setSkillScope] = useState<'all' | 'system' | 'user'>('all');
@@ -127,7 +130,7 @@ export function CapabilitiesPage() {
   if (tab === 'skills') {
     body = skills.items.length === 0 ? <Unavailable result={skills} noun=" Skill " loading={loading} /> : (
       <table className={s.table}>
-        <thead><tr><th>名称</th><th>说明</th><th>来源</th><th>状态</th></tr></thead>
+        <thead><tr><th>名称</th><th>说明</th><th>来源</th><th title="用户 Skill 只列出你自己的">所有者</th><th>状态</th></tr></thead>
         <tbody>
           {skillRows.map((item, i) => {
             const [label, cls] = skillSource(item);
@@ -136,6 +139,7 @@ export function CapabilitiesPage() {
                 <td className={s.mono}>{item.name || item.id || '—'}</td>
                 <td className={s.desc}><span className={s.clamp}>{item.description || '—'}</span></td>
                 <td><span className={`${s.pill} ${cls}`}>{label}</span></td>
+                <td className={s.muted}>{item.source === 'user-skill-root' || item.source === 'draft-skill-root' ? me || '—' : '—'}</td>
                 <td>
                   {item.source === 'draft-skill-root'
                     ? <span className={`${s.pill} ${s.mute}`}>{item.published ? '已发布' : '草稿'}</span>

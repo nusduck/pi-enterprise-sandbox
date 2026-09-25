@@ -209,3 +209,13 @@
   .grid2, .diff { grid-template-columns: 1fr; }
   .perm { flex-wrap: wrap; }
 }
+
+/* tab counters and the draft-vs-active diff */
+.tabCount { margin-left: 5px; font: 11px var(--font-mono); padding: 0 6px; border-radius: var(--radius-pill); background: var(--color-primary-soft); color: var(--color-primary-tint); }
+.diff { border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-card); overflow: hidden; }
+.diffHead { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--color-border); font-size: 13px; }
+.diffRow { display: flex; flex-direction: column; padding: 6px 12px; border-bottom: 1px solid var(--color-border); }
+.diffRow:last-child { border-bottom: 0; }
+.diffRow code { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 1px 6px; border-radius: 4px; }
+.diffDel { background: var(--color-danger-soft); color: var(--color-danger-text); }
+.diffAdd { background: var(--color-success-soft); color: var(--color-success-text); }

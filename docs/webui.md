@@ -105,6 +105,9 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 下方按「基本信息 / 模型 / 工具权限 / MCP / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
 参数一次只渲染一类，样式在 `agents.module.css`）。工具权限按类别分组（`groupToolsForPermissions`），
 每个工具是「继承 / 允许 / 审批 / 禁止」四段选择，可只看已覆盖项；新建智能体复用同一个编辑器。
+顶栏显示「N 处未保存修改」（`configDiff`：草稿与启用版本逐字段比较，键顺序不算修改，空对象不算叶子），
+保存按钮写出目标版本号（「仅保存为 v4 / 保存并启用 v4」）；「工具权限」「MCP」tab 上显示覆盖工具数与所选服务数；
+版本历史顶部列出「vN → 草稿」的逐字段差异（− 旧值 / + 新值）。版本行显示创建时间；创建者接口未返回，暂不显示。
 
 - 页面反复说明的一件事是**保存 = 建新版本**：`agent_versions` 不可变，编辑配置
   产生下一个版本，旧版本保留；切换活跃版本**只影响新建的会话**，正在跑的 Run 与
@@ -183,7 +186,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   「其他会话」，下载也可能不可用。
 
 - **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：显示名称与邮箱可编辑
-  （`/api/auth/profile`，前端先校验、服务端为准，失败时保留草稿），用户名、机构、用户类型、账户状态、注册时间、
+  （`/api/auth/profile`，前端先校验、服务端为准，失败时保留草稿），用户名、机构、用户类型、登录方式、账户状态、注册时间、
   最近登录只读；另有退出登录。保存后侧栏里的名称要到下次加载页面才更新（`ChatContext` 已贴着行数预算，
   没有加刷新 `authUser` 的入口）。通用：外观（浅色 / 深色 / 跟随系统）、对话显示
   （紧凑 / 展开：已完成轮次的工具组是否默认展开）、运行中按 Enter（排队追问 / 立即改向）。偏好存在本机
@@ -205,7 +208,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 避免与恢复逻辑竞争。
 
 **能力页**（`/admin/capabilities`）：Skills / MCP 服务 / 工具 / 模型 四个 tab，均为可搜索的只读表格；
-Skills 可按系统 / 用户筛选，MCP 状态以服务端的 `status` 为准（`capabilityFormat.ts`），模型标注目录默认模型
+Skills 可按系统 / 用户筛选，有「所有者」列（接口只返回调用者自己的用户 Skill，所以用户 Skill 的所有者就是当前用户），MCP 状态以服务端的 `status` 为准（`capabilityFormat.ts`），模型标注目录默认模型
 与看图 / 思考 / 工具调用能力。Extension 诊断已移除；个人 Skill 的上传与启用在设置弹窗里。
 
 **管理控制台**（`app/layout/AdminShell.tsx`）是独立的全屏布局：左侧「返回对话」与分组导航（运维：运行、
