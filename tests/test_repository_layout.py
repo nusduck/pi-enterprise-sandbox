@@ -68,10 +68,15 @@ HOTSPOT_LINE_BUDGETS = {
     # unnoticed. Pinned at their current length — split, do not raise.
     # 2026-09-06 拆出 conversationProjection.ts（会话列表的两个纯投影），
     # 1_456 -> 1_454，预算收紧。
-    "frontend/src/features/chat/ChatContext.tsx": 1_454,
-    "frontend/src/features/chat/entityBridge.ts": 1_176,
-    "frontend/src/shared/state/runReducer.ts": 1_492,
-    "frontend/src/widgets/runtime-steps/InlineRuntimeSteps.tsx": 1_011,
+    # 2026-09-25 审批改为在对话流内就地处理，删掉 approvePending/rejectPending，
+    # 1_454 -> 1_404，预算收紧。
+    # 2026-09-25 图片发送改用 effectiveModel 判定（未选模型时用目录默认模型），1_404 -> 1_399。
+    "frontend/src/features/chat/ChatContext.tsx": 1_399,
+    # 2026-09-25 修历史回放游标（回放前不带 last_sequence）时合并注释，1_176 -> 1_175。
+    "frontend/src/features/chat/entityBridge.ts": 1_175,
+    # 2026-09-25 拆出 messageEvents.ts（message.* / thinking.* 分支，线性对话流
+    # 需要给消息段记录 seq），1_492 -> 1_309，预算收紧。
+    "frontend/src/shared/state/runReducer.ts": 1_309,
 }
 
 

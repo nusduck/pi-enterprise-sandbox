@@ -97,6 +97,61 @@ describe('conversation history rehydration', () => {
     }
   });
 
+  it('replays history even when the run row already reports last_sequence', async () => {
+    // The real BFF timeline row carries last_sequence (the run's final cursor).
+    // Seeding the store cursor from it before replay classified every durable
+    // event as a duplicate, so refreshed runs lost their text and thinking.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes('/datasets')) {
+        return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      }
+      if (url.includes('/tools')) {
+        return new Response(JSON.stringify({ tools: [] }), { status: 200 });
+      }
+      const context = { runId: 'run_cursor', conversationId: 'conv_cursor' };
+      const ev = (sequence: number, type: string, data: Record<string, unknown>) => ({
+        run_id: 'run_cursor', sequence, event_id: `evt-c-${sequence}`, type, payload: { data, context },
+      });
+      return new Response(
+        JSON.stringify({
+          runs: [{
+            run_id: 'run_cursor',
+            conversation_id: 'conv_cursor',
+            status: 'SUCCEEDED',
+            last_sequence: 6,
+          }],
+          events: [
+            ev(1, 'run.accepted', { status: 'ACCEPTED' }),
+            ev(2, 'thinking.delta', { role: 'assistant', delta: 'plan' }),
+            ev(3, 'message.delta', { role: 'assistant', delta: 'answer' }),
+            ev(4, 'thinking.completed', { role: 'assistant', text: 'plan' }),
+            ev(5, 'message.completed', { role: 'assistant', text: 'answer' }),
+            ev(6, 'run.completed', { status: 'SUCCEEDED' }),
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const bridge = createEntityBridge();
+      await bridge.rehydrateConversation('conv_cursor');
+      const store = bridge.getStore();
+      const assistant = store.runsById.run_cursor.messageIds
+        .map((id) => store.messagesById[id])
+        .filter((m) => m.role === 'assistant');
+      assert.deepEqual(
+        assistant.map((m) => [m.text, m.thinking, m.seq]),
+        [['answer', 'plan', 2]],
+      );
+      assert.equal(store.runsById.run_cursor.lastSequence, 6);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('loads durable tool ledger for terminal runs even when events omit tools', async () => {
     const originalFetch = globalThis.fetch;
     const toolUrls: string[] = [];

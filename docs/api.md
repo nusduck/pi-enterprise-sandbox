@@ -186,6 +186,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/auth/login` | 登录 |
 | `POST` | `/api/auth/logout` | 清理会话 |
 | `GET` | `/api/auth/me` | 当前用户 |
+| `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称与邮箱 |
 | `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation |
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
 | `GET` | `/api/conversations/{id}/events` | Conversation 维度 SSE |
@@ -205,7 +206,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/approvals` | 待审批列表 |
 | `GET` | `/api/approvals/{id}` | 审批详情 |
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
-| `GET` | `/api/artifacts` | Artifact 列表 |
+| `GET` | `/api/artifacts` | 带 `session_id`：该会话的产物；不带：产物库（本人所有会话，`q` / `kind` / `cursor` / `limit`） |
 | `GET` | `/api/datasets` | Dataset 列表 |
 | `GET` | `/api/processes` | 长进程列表；必传 `session_id`，可按 `run_id` / `status` 筛选 |
 | `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
@@ -217,8 +218,13 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/agents/{id}/active-version` | 切活跃版本，也是回滚（**admin**） |
 | `GET` | `/api/agents/config/options` | 配置 schema、字段支持情况、平台约束与 capability revision（**admin**） |
 | `POST` | `/api/agents/config/validate` | 只解析不落库的配置校验（**admin**） |
+| `GET` | `/api/admin/runs` | 全组织运行列表（**admin**）；见下文「管理端运行查询」 |
+| `GET` | `/api/admin/runs/stats` | 运行统计条（**admin**） |
+| `GET` | `/api/admin/runs/{id}` `/events` `/tools` | 单次运行详情 / 全部持久事件 / 工具台账（**admin**） |
+| `GET` | `/api/admin/skill-usage` | 近 N 天（`days` 1–90，默认 7）全组织各 Skill 的 `skill` 工具调用次数（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
+| `GET` | `/api/cron-jobs/runs` | 本人所有未删除任务的执行记录（`since` ISO，`limit` 1–1000，默认 500），每条带 `job_name` / `job_timezone` |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
 | `POST` | `/api/cron-jobs/{id}/run` | 立即触发一次 |
 | `GET` | `/api/capabilities/{skills,mcp,tools,models}` | 从 diagnostics 投影的能力清单 |
@@ -342,9 +348,56 @@ admin 只有一个来源：`SANDBOX_AUTH_ADMIN_USERNAMES`（逗号分隔，大�
 admin，已存在的账号在下次 login 或 `/auth/me` 时提升，移出名单则降级。
 `BFF_DEV_ACTING_ROLE` 只影响 `AUTH_ENABLED=false` 的开发身份，不会提升真实用户。
 
-认证数据与 token 的唯一权威是 Agent：BFF 的四条 `/api/auth/*` 适配器调用
+认证数据与 token 的唯一权威是 Agent：BFF 的 `/api/auth/*` 适配器调用
 Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不保存密码、
 不签发或验证浏览器 JWT，也没有 `/auth/*` 路由。
+
+`/api/auth/profile`（账户页）：`GET` 在 `me` 之外返回 `organization_name`、`status`（`active` /
+`disabled`）、`created_at`、`last_login_at` 与 `editable_fields`（目前是 `display_name`、`email`）。
+它与 `me` 分开，因为 `me` 挂在 BFF 每个请求的鉴权上，不能多查库。`PATCH` 请求体只允许这两个键：
+出现其他键返回 422 `PROFILE_FIELD_NOT_EDITABLE`（不静默忽略）；`display_name` 需 1–255 个字符；
+`email` 为 `null` 或空串表示清除，否则须是合法地址且不超过 320 个字符，不合法返回 422
+`AUTH_INPUT_INVALID`；token 无效返回 401。修改在同一事务里写 `auth_credentials` 与 `users` 两处——
+后者是运行账本、管理端用户列与运行完成通知收件人的来源。用户名、角色、机构、状态由部署或管理员决定。
+
+#### 管理端运行查询
+
+只读，全组织范围。BFF 只转发与写入服务端解析的 `X-Acting-*`（含角色），判定都在 Agent
+（`application/admin-run-query-service.ts`）：
+
+- 角色不是 `admin`（含角色缺失）→ 403 `ADMIN_REQUIRED`；
+- runId 属于别的 org 或不存在 → 同一个 404 `NOT_FOUND`；所有查询都以调用者的 org 为作用域；
+- 参数非法 → 400 `VALIDATION_ERROR`，不会带着坏参数查库。
+
+`GET /api/admin/runs` 查询参数（BFF 只转发这些键）：
+
+| 参数 | 说明 |
+|---|---|
+| `status` | 分组 `running` / `waiting` / `failed` / `completed`，或 plan §10 状态，逗号分隔 |
+| `agent_id` `user_id` | ULID |
+| `from` `to` | ISO-8601，按 `created_at` 过滤（`to` 不含） |
+| `q` | 会话标题 / 用户输入 / 用户显示名模糊匹配，或精确 Run ID |
+| `cursor` `limit` | 键集分页（按 `created_at`、`run_id` 倒序）；`limit` 1–200，默认 50 |
+
+返回 `{ runs, next_cursor }`；每行含 `run_id`、`status`、`user_id`、`user_name`、`conversation_id`、
+`conversation_title`、`agent_id`、`agent_name`、`agent_version_no`、`model_id`（取自版本配置
+`modelPolicy.modelId`，未固定为 `null`）、`parent_run_id`、`trace_id`、`tool_count`、`approval_count`、`user_input_excerpt`（触发这次运行的用户消息前 200 字）、
+`turn_no`（在会话顶层运行中的序号，子运行为 `null`）
+与各时间戳。**不含 token 用量**：Run 账本目前没有采集 usage。
+
+`GET /api/admin/runs/stats?day_start=<ISO>`：`day_start` 为调用方本地零点（须在最近两天内），
+返回 `today`、`yesterday`、`failed_today`、`failure_rate`、`waiting`（等待审批 / 回答，不限时间）、
+`longest_wait_ms`、`median_ms`、`p95_ms`（近 7 天已结束运行的耗时）、`last_7_days`（每日运行数，
+旧→新）、`truncated`（近 7 天超过 2 万行时为 true，数值为下限）。
+
+`GET /api/admin/runs/{id}` 在列表行之外多一个 `user_input`（触发这次运行的用户消息文本）。
+`/events` 返回 `{ events, truncated }`，形状同会话事件回放（`run_id`、`sequence`、`event_id`、`type`、
+`payload`、`created_at`），BFF 分页拉齐（上限 2 万条）；`/tools` 形状同 `/api/runs/{id}/tools`。
+沙箱进程与日志仍按所有者隔离，管理端不提供跨用户的进程读取。
+
+`GET /api/admin/skill-usage?days=7` 返回 `{ days, since, usage: [{ name, calls }] }`，按调用次数倒序。
+只统计名为 `skill` 的工具调用（名字取自参数信封 `$payload.name`，兼容旧的扁平参数）；模型直接读取 Skill 文件
+（例如 `read` 某个 `SKILL.md`）不计入。权限规则同上：非 admin 403，参数非法 400。
 
 ### BFF 健康检查
 
@@ -641,11 +694,21 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `GET` | `/artifacts` | 产物库：同一 owner 跨会话的产物（见下） |
 | `GET` | `/sessions/{id}/artifacts` | 列举本工作区的产物 |
 | `POST` | `/sessions/{id}/artifacts/register` | 注册产物（旧端点） |
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
 | `POST` | `/sessions/{id}/artifacts/imports` | 将 owner-scoped Artifact 导入本 Session workspace（BFF 上游兼容端点） |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
+
+**产物库 `GET /artifacts`**：没有会话参数，归属只取 BFF 写入的 `X-Acting-Organization-Id` /
+`X-Acting-User-Id`（正式 ULID），缺失返回 404；与会话路由一样要求服务令牌（`X-API-Key`）。
+参数：`q`（文件名或源路径子串）、`kind`（`image` / `document` / `data`，按 MIME 分组，定义在
+`exec/src/db/repositories/artifacts.ts` 的 `ARTIFACT_KIND_MIME`）、`cursor`（上一页最后一个
+`artifact_id`；ID 是 ULID，按 ID 倒序即按创建时间倒序）、`limit`（1–200，默认 60）。返回
+`{ artifacts, next_cursor }`，每项多一个 `workspace_id`。BFF 的 `GET /api/artifacts`（不带
+`session_id`）先经 Agent `GET /internal/identity/owner` 取调用者的正式归属（取不到即失败，不回退到
+浏览器身份），再以 `X-Acting-Role: user` 调用这里，只转发上述四个参数。
 
 > **公共面这几条路由里的 `{id}` 是 `workspace_id`，不是 `sandbox_session_id`。**
 > exec 的 `requireOwnedSession()` 拿它派生物理工作区路径，产物的归属判定也按

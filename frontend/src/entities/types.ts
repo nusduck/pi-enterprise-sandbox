@@ -169,6 +169,11 @@ export type MessageEntity = {
   thinking: string;
   thinkingStatus: 'idle' | 'streaming' | 'complete';
   status: MessageStatus;
+  /**
+   * Run event sequence at which this entity first appeared. Orders thinking,
+   * text segments and tool calls inside one turn; null for snapshot-only rows.
+   */
+  seq: number | null;
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -191,6 +196,11 @@ export type ToolExecutionEntity = {
   summary: string | null;
   /** Trace span for this tool when present. */
   spanId: string | null;
+  /**
+   * Run event sequence at which this entity first appeared. Orders thinking,
+   * text segments and tool calls inside one turn; null for snapshot-only rows.
+   */
+  seq: number | null;
   createdAt: string | null;
   updatedAt: string | null;
 };

@@ -1,53 +1,50 @@
-/* Design tokens — Modern Agentic Workbench
-   Dark default · Light via [data-theme="light"]
-   Principles: Slate/Zinc deep layers, sleek micro-borders, ambient indigo glows,
-   crystal clear visual tree hierarchy, high legibility typography.
+/* Design tokens — dark default, light via [data-theme="light"].
+   Neutral warm greys with a single cobalt accent (docs/design/frontend-redesign.md).
+   System font stacks only: the deployment is intranet and cannot fetch web fonts.
 */
 
 :root {
   color-scheme: dark;
 
   /* ── Surfaces (Layered Slate/Zinc Stack) ── */
-  --color-bg: #09090b;
-  --color-bg-canvas: #09090b;
-  --color-bg-sidebar: #0d0d11;
-  --color-bg-elevated: #131317;
-  --color-bg-panel: #131317;
-  --color-bg-card: #18181f;
-  --color-bg-card-hover: #1e1e26;
-  --color-bg-input: #121216;
+  --color-bg: #171717;
+  --color-bg-canvas: #171717;
+  --color-bg-sidebar: #111111;
+  --color-bg-elevated: #1f1f1f;
+  --color-bg-panel: #1f1f1f;
+  --color-bg-card: #1f1f1f;
+  --color-bg-card-hover: #262626;
+  --color-bg-input: #1f1f1f;
   --color-bg-hover: rgba(255, 255, 255, 0.045);
   --color-bg-active: rgba(255, 255, 255, 0.08);
   --color-bg-scrim: rgba(0, 0, 0, 0.68);
 
   /* Materials & Glassmorphism */
-  --material-chrome: rgba(13, 13, 17, 0.82);
-  --material-chrome-heavy: rgba(19, 19, 23, 0.94);
-  --material-sidebar: #0d0d11;
+  --material-chrome: rgba(23, 23, 23, 0.86);
+  --material-chrome-heavy: rgba(31, 31, 31, 0.96);
+  --material-sidebar: #111111;
   --material-fill: rgba(255, 255, 255, 0.07);
   --material-fill-secondary: rgba(255, 255, 255, 0.045);
   --material-fill-tertiary: rgba(255, 255, 255, 0.028);
 
   /* Ambient Glow & Focus Rings */
-  --glow-ambient:
-    radial-gradient(ellipse 80% 50% at 50% -12%, rgba(99, 102, 241, 0.12), transparent 58%),
-    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(6, 182, 212, 0.05), transparent 55%);
+  --glow-ambient: none;
   --glow-composer: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 16px 40px -8px rgba(0, 0, 0, 0.65);
-  --glow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px rgba(99, 102, 241, 0.45);
+  --glow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px rgba(111, 149, 242, 0.5);
   --glow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
 
   /* Tree & Timeline Connector Lines */
   --color-tree-line: rgba(255, 255, 255, 0.12);
-  --color-tree-line-active: #6366f1;
-  --color-tree-line-success: #10b981;
-  --color-tree-line-error: #f43f5e;
+  --color-tree-line-active: #6f95f2;
+  --color-tree-line-success: #4fc28a;
+  --color-tree-line-error: #ef7163;
 
   /* Text Hierarchy */
-  --color-text: #f4f4f6;
-  --color-text-secondary: #a1a1aa;
-  --color-text-muted: #71717a;
-  --color-text-dim: #52525b;
-  --color-text-inverse: #09090b;
+  --color-text: #e9e9e6;
+  --color-text-secondary: #b4b4ae;
+  --color-text-muted: #86867f;
+  --color-text-dim: #5f5f5a;
+  --color-text-inverse: #171717;
 
   /* Separators & Hairlines */
   --color-border: rgba(255, 255, 255, 0.09);
@@ -57,35 +54,43 @@
   --color-hairline: rgba(255, 255, 255, 0.07);
 
   /* Primary Brand — Indigo Electric & Crisp Neutral */
-  --color-primary: #6366f1;
-  --color-primary-hover: #4f46e5;
-  --color-primary-soft: rgba(99, 102, 241, 0.14);
-  --color-primary-border: rgba(99, 102, 241, 0.32);
-  --color-primary-tint: #818cf8;
+  --color-primary: #6f95f2;
+  --color-primary-hover: #5d84e6;
+  --color-primary-soft: rgba(111, 149, 242, 0.13);
+  --color-primary-border: rgba(111, 149, 242, 0.32);
+  --color-primary-tint: #8eabf5;
 
-  --color-accent: #6366f1;
-  --color-accent-soft: rgba(99, 102, 241, 0.12);
-  --color-accent-border: rgba(99, 102, 241, 0.3);
+  --color-accent: #6f95f2;
+  --color-accent-soft: rgba(111, 149, 242, 0.12);
+  --color-accent-border: rgba(111, 149, 242, 0.3);
 
   --color-cyan: #06b6d4;
   --color-cyan-soft: rgba(6, 182, 212, 0.12);
   --color-cyan-border: rgba(6, 182, 212, 0.3);
 
   /* Semantic Colors */
-  --color-success: #10b981;
-  --color-success-soft: rgba(16, 185, 129, 0.12);
-  --color-success-border: rgba(16, 185, 129, 0.28);
-  --color-success-text: #34d399;
+  --color-success: #4fc28a;
+  --color-success-soft: rgba(79, 194, 138, 0.12);
+  --color-success-border: rgba(79, 194, 138, 0.28);
+  --color-success-text: #4fc28a;
 
-  --color-danger: #f43f5e;
-  --color-danger-soft: rgba(244, 63, 94, 0.12);
-  --color-danger-border: rgba(244, 63, 94, 0.3);
-  --color-danger-text: #fb7185;
+  --color-danger: #ef7163;
+  --color-danger-soft: rgba(239, 113, 99, 0.12);
+  --color-danger-border: rgba(239, 113, 99, 0.3);
+  --color-danger-text: #ef7163;
 
-  --color-warning: #f59e0b;
-  --color-warning-soft: rgba(245, 158, 11, 0.12);
-  --color-warning-border: rgba(245, 158, 11, 0.3);
-  --color-warning-text: #fbbf24;
+  --color-warning: #e2a64d;
+  --color-warning-soft: rgba(226, 166, 77, 0.13);
+  --color-warning-border: rgba(226, 166, 77, 0.3);
+  --color-warning-text: #e2a64d;
+
+  /* Agent tag colours: one stable slot per agent (sidebarModel.agentTone) */
+  --agent-tone-0: #4a86dc;
+  --agent-tone-1: #c2803a;
+  --agent-tone-2: #9467d0;
+  --agent-tone-3: #3a9d7a;
+  --agent-tone-4: #cf5f7a;
+  --agent-tone-5: #6f8a2a;
 
   /* Layout dimensions */
   --sidebar-width: 272px;
@@ -116,8 +121,8 @@
   --space-12: 48px;
 
   /* Typography */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans SC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Cascadia Code', 'Consolas', monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Menlo', 'Cascadia Code', 'Consolas', monospace;
   --font-size-xs: 11px;
   --font-size-sm: 13px;
   --font-size-md: 14.5px;
@@ -161,41 +166,39 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --color-bg: #f8fafc;
-  --color-bg-canvas: #f8fafc;
-  --color-bg-sidebar: #f1f5f9;
+  --color-bg: #f6f6f3;
+  --color-bg-canvas: #f6f6f3;
+  --color-bg-sidebar: #ededea;
   --color-bg-elevated: #ffffff;
   --color-bg-panel: #ffffff;
   --color-bg-card: #ffffff;
-  --color-bg-card-hover: #f8fafc;
+  --color-bg-card-hover: #f0f0ec;
   --color-bg-input: #ffffff;
   --color-bg-hover: rgba(0, 0, 0, 0.04);
   --color-bg-active: rgba(0, 0, 0, 0.07);
   --color-bg-scrim: rgba(15, 23, 42, 0.38);
 
-  --material-chrome: rgba(248, 250, 252, 0.88);
-  --material-chrome-heavy: rgba(255, 255, 255, 0.95);
-  --material-sidebar: #f1f5f9;
+  --material-chrome: rgba(246, 246, 243, 0.9);
+  --material-chrome-heavy: rgba(255, 255, 255, 0.96);
+  --material-sidebar: #ededea;
   --material-fill: rgba(0, 0, 0, 0.055);
   --material-fill-secondary: rgba(0, 0, 0, 0.038);
   --material-fill-tertiary: rgba(0, 0, 0, 0.02);
 
-  --glow-ambient:
-    radial-gradient(ellipse 80% 50% at 50% -12%, rgba(99, 102, 241, 0.08), transparent 58%),
-    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(6, 182, 212, 0.04), transparent 55%);
+  --glow-ambient: none;
   --glow-composer: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 14px 36px -6px rgba(15, 23, 42, 0.1);
-  --glow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px rgba(99, 102, 241, 0.35);
+  --glow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px rgba(45, 91, 208, 0.4);
   --glow-card: 0 4px 16px -2px rgba(15, 23, 42, 0.06);
 
   --color-tree-line: rgba(0, 0, 0, 0.1);
-  --color-tree-line-active: #6366f1;
-  --color-tree-line-success: #10b981;
-  --color-tree-line-error: #f43f5e;
+  --color-tree-line-active: #2d5bd0;
+  --color-tree-line-success: #2c8a57;
+  --color-tree-line-error: #c4402f;
 
-  --color-text: #0f172a;
-  --color-text-secondary: #475569;
-  --color-text-muted: #64748b;
-  --color-text-dim: #94a3b8;
+  --color-text: #1c1c1a;
+  --color-text-secondary: #56564f;
+  --color-text-muted: #85857d;
+  --color-text-dim: #a3a39b;
   --color-text-inverse: #ffffff;
 
   --color-border: rgba(0, 0, 0, 0.08);
@@ -204,34 +207,34 @@
   --color-separator: rgba(0, 0, 0, 0.07);
   --color-hairline: rgba(0, 0, 0, 0.06);
 
-  --color-primary: #4f46e5;
-  --color-primary-hover: #4338ca;
-  --color-primary-soft: rgba(79, 70, 229, 0.08);
-  --color-primary-border: rgba(79, 70, 229, 0.24);
-  --color-primary-tint: #3730a3;
+  --color-primary: #2d5bd0;
+  --color-primary-hover: #2450be;
+  --color-primary-soft: rgba(45, 91, 208, 0.09);
+  --color-primary-border: rgba(45, 91, 208, 0.26);
+  --color-primary-tint: #2450be;
 
-  --color-accent: #4f46e5;
-  --color-accent-soft: rgba(79, 70, 229, 0.08);
-  --color-accent-border: rgba(79, 70, 229, 0.22);
+  --color-accent: #2d5bd0;
+  --color-accent-soft: rgba(45, 91, 208, 0.09);
+  --color-accent-border: rgba(45, 91, 208, 0.24);
 
   --color-cyan: #0891b2;
   --color-cyan-soft: rgba(8, 145, 178, 0.08);
   --color-cyan-border: rgba(8, 145, 178, 0.22);
 
-  --color-success: #059669;
-  --color-success-soft: rgba(5, 150, 105, 0.08);
-  --color-success-border: rgba(5, 150, 105, 0.22);
-  --color-success-text: #047857;
+  --color-success: #2c8a57;
+  --color-success-soft: rgba(44, 138, 87, 0.1);
+  --color-success-border: rgba(44, 138, 87, 0.24);
+  --color-success-text: #2c8a57;
 
-  --color-danger: #e11d48;
-  --color-danger-soft: rgba(225, 29, 72, 0.08);
-  --color-danger-border: rgba(225, 29, 72, 0.22);
-  --color-danger-text: #be123c;
+  --color-danger: #c4402f;
+  --color-danger-soft: rgba(196, 64, 47, 0.09);
+  --color-danger-border: rgba(196, 64, 47, 0.24);
+  --color-danger-text: #c4402f;
 
-  --color-warning: #d97706;
-  --color-warning-soft: rgba(217, 119, 6, 0.08);
-  --color-warning-border: rgba(217, 119, 6, 0.22);
-  --color-warning-text: #b45309;
+  --color-warning: #a86b12;
+  --color-warning-soft: rgba(190, 125, 20, 0.11);
+  --color-warning-border: rgba(190, 125, 20, 0.26);
+  --color-warning-text: #a86b12;
 
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
   --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.06);

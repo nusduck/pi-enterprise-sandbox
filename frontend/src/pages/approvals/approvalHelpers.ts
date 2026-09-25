@@ -5,12 +5,12 @@ import type { ApprovalEntity, EntityStore, RunEntity } from '../../entities';
 import type { ApprovalListItem } from '../../shared/schemas/management';
 
 export const APPROVAL_STATUS_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'pending', label: 'Pending' },
-  { id: 'approved', label: 'Approved' },
-  { id: 'rejected', label: 'Rejected' },
-  { id: 'expired', label: 'Expired' },
-  { id: 'cancelled', label: 'Cancelled' },
+  { id: 'all', label: '全部' },
+  { id: 'pending', label: '待审批' },
+  { id: 'approved', label: '已批准' },
+  { id: 'rejected', label: '已拒绝' },
+  { id: 'expired', label: '已过期' },
+  { id: 'cancelled', label: '已取消' },
 ] as const;
 
 export type ApprovalStatusFilterId =

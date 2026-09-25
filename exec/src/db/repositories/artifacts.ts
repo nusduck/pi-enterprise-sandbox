@@ -121,8 +121,50 @@ export interface OwnerScope {
   readonly userId: string;
 }
 
+/** Library kinds, by MIME type. Anything else only shows under "all". */
+export type ArtifactKind = 'image' | 'document' | 'data';
+
+export const ARTIFACT_KIND_MIME: Readonly<Record<ArtifactKind, readonly string[]>> = Object.freeze({
+  image: ['image/%'],
+  document: [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml%',
+    'application/vnd.openxmlformats-officedocument.presentationml%',
+    'application/vnd.ms-powerpoint',
+    'text/markdown',
+    'text/plain',
+    'text/html',
+  ],
+  data: [
+    'text/csv',
+    'application/json',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml%',
+    'application/x-parquet',
+    'application/vnd.apache.parquet',
+  ],
+});
+
+/** SQL-LIKE match used by the in-memory store so both stores agree. */
+export function mimeMatchesKind(mime: string, kind: ArtifactKind): boolean {
+  const m = mime.toLowerCase();
+  return ARTIFACT_KIND_MIME[kind].some((p) => (p.endsWith('%') ? m.startsWith(p.slice(0, -1)) : m === p));
+}
+
+export interface OwnerListQuery {
+  /** Case-insensitive substring of the display name or source path. */
+  readonly query?: string | null;
+  readonly kind?: ArtifactKind | null;
+  /** Keyset cursor: artifact ids are ULIDs, so id order is creation order. */
+  readonly beforeArtifactId?: string | null;
+  readonly limit: number;
+}
+
 export interface ArtifactStore {
   insert(rec: ExecArtifactInsert): Promise<void>;
+  /** Every artifact of one owner across sessions, newest first. */
+  listByOwner(scope: OwnerScope, q: OwnerListQuery): Promise<ExecArtifactRecord[]>;
   getOwned(artifactId: string, scope: OwnerScope): Promise<ExecArtifactRecord | null>;
   listBySession(sessionId: string, scope: OwnerScope, limit?: number): Promise<ExecArtifactRecord[]>;
   /**
@@ -189,6 +231,32 @@ export class MySqlArtifactStore implements ArtifactStore {
     return (rows as Row[]).map(mapRow);
   }
 
+  async listByOwner(scope: OwnerScope, q: OwnerListQuery): Promise<ExecArtifactRecord[]> {
+    const where = ['org_id = ?', 'user_id = ?'];
+    const args: string[] = [scope.orgId, scope.userId];
+    if (q.query) {
+      const like = `%${q.query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+      where.push('(name LIKE ? OR source_path LIKE ?)');
+      args.push(like, like);
+    }
+    if (q.kind) {
+      const patterns = ARTIFACT_KIND_MIME[q.kind];
+      where.push(`(${patterns.map(() => 'LOWER(mime_type) LIKE ?').join(' OR ')})`);
+      args.push(...patterns);
+    }
+    if (q.beforeArtifactId) {
+      where.push('artifact_id < ?');
+      args.push(q.beforeArtifactId);
+    }
+    const [rows] = await this.pool.execute<Row[]>(
+      `SELECT * FROM ${this.table}
+        WHERE ${where.join(' AND ')}
+        ORDER BY artifact_id DESC LIMIT ${sqlLimit(q.limit)}`,
+      args,
+    );
+    return (rows as Row[]).map(mapRow);
+  }
+
   async listByWorkspace(
     workspaceId: string,
     scope: OwnerScope,
@@ -234,6 +302,17 @@ export class InMemoryArtifactStore implements ArtifactStore {
     limit = 100,
   ): Promise<ExecArtifactRecord[]> {
     return this.#list((r) => r.workspaceId === workspaceId, scope, limit);
+  }
+
+  async listByOwner(scope: OwnerScope, q: OwnerListQuery): Promise<ExecArtifactRecord[]> {
+    const needle = q.query ? q.query.toLowerCase() : null;
+    return [...this.map.values()]
+      .filter((r) => r.orgId === scope.orgId && r.userId === scope.userId)
+      .filter((r) => !needle || r.name.toLowerCase().includes(needle) || r.sourcePath.toLowerCase().includes(needle))
+      .filter((r) => !q.kind || mimeMatchesKind(r.mimeType, q.kind))
+      .filter((r) => !q.beforeArtifactId || r.artifactId < q.beforeArtifactId)
+      .sort((a, b) => (a.artifactId < b.artifactId ? 1 : -1))
+      .slice(0, q.limit);
   }
 
   #list(

@@ -1,7 +1,4 @@
-import { memo, useState, isValidElement, type ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import { memo, useState, type ReactNode } from 'react';
 import type {
   AttachmentManifestItem,
   ChatMessage,
@@ -12,41 +9,21 @@ import {
   isInterruptedMessage,
   splitAttachmentDisplay,
 } from '../../shared/state';
-import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
-import {
-  InlineRuntimeSteps,
-} from '../runtime-steps/InlineRuntimeSteps';
+import { MarkdownBody, SafeDownloadLink } from '../markdown/Markdown';
+import { safeApiUrl } from '../../shared/security/url';
+import { getWorkspaceFileUrl } from '../../shared/api/client';
+import { TurnStream } from '../turn-stream/TurnStream';
+import { ImageViewer } from '../image-viewer/ImageViewer';
 import { messageFingerprint, messagePlainText } from './messageActions';
 import {
   IconCopy,
   IconCheck,
-  IconDownload,
   IconBrain,
   IconChevronDown,
   IconChevronRight,
   IconAlertCircle,
   IconRefresh,
 } from '../../shared/ui/Icons';
-
-function SafeDownloadLink({
-  url,
-  name,
-  path,
-  className = 'dl',
-}: {
-  url: string;
-  name: string;
-  path?: string;
-  className?: string;
-}) {
-  const safe = safeApiUrl(url);
-  if (!safe) return <span>{name}</span>;
-  return (
-    <a className={className} href={safe} download={downloadAttrName(name, path)}>
-      <IconDownload size={14} /> {name}
-    </a>
-  );
-}
 
 function formatTime(createdAt?: string): string {
   if (!createdAt || Number.isNaN(Date.parse(createdAt))) return '';
@@ -82,35 +59,69 @@ function formatFileSize(n?: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const PREVIEWABLE_IMAGE = /^image\/(png|jpe?g|gif|webp|bmp)$/;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+
+function isPreviewableImage(attachment: AttachmentManifestItem, name: string): boolean {
+  // SVG is excluded on purpose: it is a document, not an inert image.
+  return attachment.mime_type
+    ? PREVIEWABLE_IMAGE.test(attachment.mime_type)
+    : IMAGE_EXT.test(name);
+}
+
 function AttachmentCards({
   attachments,
+  sessionId,
 }: {
   attachments: AttachmentManifestItem[];
+  sessionId: string | null;
 }) {
+  const [viewing, setViewing] = useState<{ url: string; name: string } | null>(null);
   if (!attachments.length) return null;
+  const images: Array<{ key: string; name: string; url: string }> = [];
+  const files: Array<{ key: string; attachment: AttachmentManifestItem; name: string }> = [];
+  attachments.forEach((attachment, index) => {
+    const name = attachment.filename || attachment.name || attachment.path || '文件';
+    const key = String(attachment.attachment_id || attachment.path || `${name}-${index}`);
+    const path = attachment.workspace_path || attachment.path;
+    const url = sessionId && path && isPreviewableImage(attachment, name)
+      ? safeApiUrl(getWorkspaceFileUrl(sessionId, path))
+      : null;
+    if (url) images.push({ key, name, url });
+    else files.push({ key, attachment, name });
+  });
   return (
     <div
       className="message-attachments"
-      aria-label={`${attachments.length} attached file${attachments.length === 1 ? '' : 's'}`}
+      aria-label={`${attachments.length} 个附件`}
     >
-      {attachments.map((attachment, index) => {
-        const name =
-          attachment.filename || attachment.name || attachment.path || 'File';
+      {images.length ? (
+        <div className="message-images">
+          {images.map((image) => (
+            <button
+              key={image.key}
+              type="button"
+              className="message-image"
+              title={image.name}
+              aria-label={`查看图片：${image.name}`}
+              onClick={() => setViewing({ url: image.url, name: image.name })}
+            >
+              <img src={image.url} alt={image.name} loading="lazy" />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <ImageViewer image={viewing} onClose={() => setViewing(null)} />
+      {files.map(({ key, attachment, name }) => {
         const size = formatFileSize(attachment.size);
         return (
-          <div
-            className="message-attachment"
-            key={String(attachment.attachment_id || attachment.path || `${name}-${index}`)}
-            title={name}
-          >
+          <div className="message-attachment" key={key} title={name}>
             <span className="file-type-tile" aria-hidden="true">
               {fileTypeLabel(name, attachment.mime_type)}
             </span>
             <span className="message-attachment-copy">
               <span className="message-attachment-name">{name}</span>
-              <span className="message-attachment-meta">
-                {size || 'Attached file'}
-              </span>
+              <span className="message-attachment-meta">{size || '附件'}</span>
             </span>
           </div>
         );
@@ -118,126 +129,6 @@ function AttachmentCards({
     </div>
   );
 }
-
-function CodeBlock({
-  className,
-  children,
-}: {
-  className?: string;
-  children: ReactNode;
-}) {
-  const [copied, setCopied] = useState(false);
-  const match = /language-(\w+)/.exec(className || '');
-  const language = match ? match[1] : '';
-  const rawText = String(children).replace(/\n$/, '');
-
-  async function handleCopy() {
-    try {
-      if (!navigator.clipboard?.writeText) return;
-      await navigator.clipboard.writeText(rawText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  return (
-    <div className="md-code-container">
-      <div className="md-code-header">
-        <span className="md-code-lang">{language || 'code'}</span>
-        <button
-          type="button"
-          className="md-code-copy"
-          onClick={() => void handleCopy()}
-          title="Copy code"
-        >
-          {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-          <span>{copied ? 'Copied!' : 'Copy'}</span>
-        </button>
-      </div>
-      <pre className="md-pre">
-        <code className={className}>{children}</code>
-      </pre>
-    </div>
-  );
-}
-
-function MarkdownBody({ text }: { text: string }) {
-  const re = /📄 \*\*([^*]+)\*\* — \[Download\]\(([^)]+)\)\n?/g;
-  const links: { name: string; url: string }[] = [];
-  let m: RegExpExecArray | null;
-  let cleaned = text;
-  while ((m = re.exec(text)) !== null) {
-    links.push({ name: m[1], url: m[2] });
-  }
-  if (links.length) {
-    cleaned = text.replace(re, '').trimEnd();
-  }
-
-  return (
-    <>
-      <div className="md-body">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeSanitize]}
-          components={{
-            a: ({ href, children }) => {
-              const safe = href ? safeApiUrl(href) || href : undefined;
-              const ok =
-                safe &&
-                (safe.startsWith('http://') ||
-                  safe.startsWith('https://') ||
-                  safe.startsWith('/api/'));
-              if (!ok) return <span>{children}</span>;
-              return (
-                <a href={safe} target="_blank" rel="noopener noreferrer">
-                  {children}
-                </a>
-              );
-            },
-            pre: ({ children }) => {
-              if (isValidElement(children)) {
-                const codeProps = children.props as {
-                  className?: string;
-                  children?: ReactNode;
-                };
-                return (
-                  <CodeBlock className={codeProps.className}>
-                    {codeProps.children}
-                  </CodeBlock>
-                );
-              }
-              return <pre className="md-pre">{children}</pre>;
-            },
-            code: ({ children, ...props }) => {
-              return (
-                <code className="md-code-inline" {...props}>
-                  {children}
-                </code>
-              );
-            },
-            table: ({ children }) => (
-              <div className="md-table-wrap">
-                <table>{children}</table>
-              </div>
-            ),
-          }}
-        >
-          {cleaned}
-        </ReactMarkdown>
-      </div>
-      {links.map((fl) => (
-        <SafeDownloadLink
-          key={`dl-${fl.url}-${fl.name}`}
-          url={fl.url}
-          name={fl.name}
-        />
-      ))}
-    </>
-  );
-}
-
 function ThinkingBlock({
   thinking,
   isStreaming,
@@ -256,7 +147,7 @@ function ThinkingBlock({
       >
         <IconBrain size={15} className="thinking-icon" />
         <span className="thinking-label">
-          {isStreaming ? 'Agent Reasoning…' : 'Thought Process'}
+          {isStreaming ? '正在思考…' : '思考过程'}
         </span>
         {isStreaming ? <span className="thinking-live-dot" /> : null}
         <span className="thinking-chevron">
@@ -273,21 +164,26 @@ function ThinkingBlock({
 function MessageBubbleBase({
   msg,
   idx,
-  showRuntimeSteps = false,
-  useEntitySteps = false,
+  useTurnStream = false,
   canRegenerate = false,
   regenerateSource = null,
   onRegenerate,
+  sessionId = null,
 }: {
   msg: ChatMessage;
   idx: number;
-  showRuntimeSteps?: boolean;
-  /** Precomputed by MessageList — keeps this component off the chat context so React.memo holds. */
-  useEntitySteps?: boolean;
+  /**
+   * Render this assistant row as the Run's linear turn stream (thinking, text
+   * and tool activity in event order). Precomputed by MessageList so this
+   * component stays off the chat context and React.memo holds.
+   */
+  useTurnStream?: boolean;
   canRegenerate?: boolean;
   regenerateSource?: string | null;
   /** Stable callback from MessageList; identity must not change per render. */
   onRegenerate?: (text: string) => void;
+  /** Sandbox session of this conversation; image attachments load from it. */
+  sessionId?: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   const role = msg.role || 'assistant';
@@ -295,15 +191,19 @@ function MessageBubbleBase({
   const interrupted = isInterruptedMessage(msg);
   const parts = msg.content || [];
   const runId = msg._runId || null;
-  const useEntityStepsResolved =
-    Boolean(showRuntimeSteps) && useEntitySteps && !isUser && Boolean(runId);
+  const turnStream = useTurnStream && !isUser && Boolean(runId);
 
   let hasContent = false;
   const body: ReactNode[] = [];
   let visibleAttachments = msg.attachments || [];
 
-  // 1. Thinking / Reasoning Process first (Chronological execution flow)
-  if (!isUser && msg.thinking) {
+  if (turnStream && runId) {
+    body.push(<TurnStream key="turn-stream" runId={runId} />);
+    hasContent = true;
+  }
+
+  // Legacy rows (no Run entities in the store): thinking, then text parts.
+  if (!turnStream && !isUser && msg.thinking) {
     body.push(
       <ThinkingBlock
         key="thinking"
@@ -314,14 +214,8 @@ function MessageBubbleBase({
     hasContent = true;
   }
 
-  // 2. Inline Runtime Steps / Tool executions (Chronological before final output)
-  if (useEntityStepsResolved && runId) {
-    body.push(<InlineRuntimeSteps key="runtime-steps" runId={runId} />);
-    hasContent = true;
-  }
-
-  // 3. Main Text Content Parts
   parts.forEach((p: ContentPart, i) => {
+    if (turnStream) return;
     if (p.type === 'text' && 'text' in p && typeof p.text === 'string' && p.text) {
       if (isUser) {
         const display = splitAttachmentDisplay(p.text, visibleAttachments);
@@ -349,12 +243,13 @@ function MessageBubbleBase({
       <AttachmentCards
         key="message-attachments"
         attachments={visibleAttachments}
+        sessionId={sessionId}
       />,
     );
     hasContent = true;
   }
 
-  if (msg._fileLinks) {
+  if (msg._fileLinks && !turnStream) {
     for (const fl of msg._fileLinks) {
       body.push(
         <SafeDownloadLink
@@ -404,26 +299,26 @@ function MessageBubbleBase({
         ) : null}
 
         <div className={`bubble${isUser ? '' : ' bubble-md'}`}>
-          {hasContent ? body : <em className="bubble-empty">(empty message)</em>}
+          {hasContent ? body : <em className="bubble-empty">（空消息）</em>}
           {!isUser && interrupted ? (
             <div className="msg-interrupted-banner" role="status">
               <IconAlertCircle size={14} />
-              <span>Execution interrupted</span>
+              <span>运行已中断</span>
             </div>
           ) : null}
         </div>
         {!isUser && (copyText.length > 0 || canRegenerate) ? (
-          <div className="msg-actions" aria-label="Message actions">
+          <div className="msg-actions" aria-label="消息操作">
             {copyText.length > 0 ? (
               <button
                 type="button"
                 className="msg-action-btn"
                 onClick={() => void handleCopy()}
-                title="Copy message text"
-                aria-label="Copy message text"
+                title="复制回答文字"
+                aria-label="复制回答文字"
               >
                 {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
-                <span>{copied ? 'Copied' : 'Copy'}</span>
+                <span>{copied ? '已复制' : '复制'}</span>
               </button>
             ) : null}
             {canRegenerate && regenerateSource ? (
@@ -431,11 +326,11 @@ function MessageBubbleBase({
                 type="button"
                 className="msg-action-btn"
                 onClick={handleRegenerate}
-                title="Re-send the previous message and generate a new answer"
-                aria-label="Regenerate answer"
+                title="重新发送上一条消息，生成新的回答"
+                aria-label="重新生成回答"
               >
                 <IconRefresh size={13} />
-                <span>Regenerate</span>
+                <span>重新生成</span>
               </button>
             ) : null}
           </div>
@@ -457,11 +352,11 @@ export const MessageBubble = memo(
   MessageBubbleBase,
   (prev, next) =>
     prev.idx === next.idx &&
-    prev.showRuntimeSteps === next.showRuntimeSteps &&
-    prev.useEntitySteps === next.useEntitySteps &&
+    prev.useTurnStream === next.useTurnStream &&
     prev.canRegenerate === next.canRegenerate &&
     prev.regenerateSource === next.regenerateSource &&
     prev.onRegenerate === next.onRegenerate &&
+    prev.sessionId === next.sessionId &&
     (prev.msg === next.msg ||
       messageFingerprint(prev.msg) === messageFingerprint(next.msg)),
 );

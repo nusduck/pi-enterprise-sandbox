@@ -1,0 +1,33 @@
+/* Approvals admin page: one card per approval. */
+
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pending { border-left: 3px solid var(--color-warning, #d97706); }
+.head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.tool { font-size: 13.5px; font-weight: 600; }
+.reason { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
+.cmd {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 280px;
+  overflow: auto;
+}
+.foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.meta { font-size: 12.5px; color: var(--color-text-muted); min-width: 0; }
+.meta code { font-size: 11.5px; }
+.link { border: 0; background: transparent; padding: 0; color: var(--color-primary-tint); font-size: 12.5px; cursor: pointer; }
+.link:hover { text-decoration: underline; }

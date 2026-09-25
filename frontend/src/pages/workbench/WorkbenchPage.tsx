@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { FlashZone } from '../../widgets/flash/FlashZone';
 import { ConversationHeader } from '../../widgets/conversation-header/ConversationHeader';
 import { MessageList } from '../../widgets/message-list/MessageList';
@@ -16,8 +17,30 @@ import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContex
  * 4. Process console sheet for full log streaming
  */
 export function WorkbenchPage() {
-  const { setDropzoneVisible, handleFilesSelected, entityStore } = useChat();
+  const { state, selectConversation, setDropzoneVisible, handleFilesSelected, entityStore } = useChat();
   const { consoleProcessId, closeProcessConsole } = useWorkbenchSelection();
+  const { conversationId: routeId } = useParams();
+  const navigate = useNavigate();
+  const shownId = useRef<string | null>(null);
+
+  // URL → focus: /c/<id> (sidebar clicks, back / forward) selects that conversation.
+  useEffect(() => {
+    if (routeId && routeId !== state.conversationId) void selectConversation(routeId);
+    // Only a route change should select; state changes are handled below.
+  }, [routeId]);
+
+  // Focus → URL: a conversation created by the first message, restored at
+  // boot or deleted while open is reflected in the address bar.
+  useEffect(() => {
+    const current = state.conversationId;
+    const previous = shownId.current;
+    shownId.current = current;
+    if (current && current !== routeId) {
+      navigate(`/c/${encodeURIComponent(current)}`, { replace: !routeId });
+    } else if (!current && routeId && previous === routeId) {
+      navigate('/', { replace: true });
+    }
+  }, [state.conversationId]);
 
   useEffect(() => {
     const onDragEnter = (e: DragEvent) => {

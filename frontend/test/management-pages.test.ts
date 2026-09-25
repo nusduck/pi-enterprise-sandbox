@@ -12,13 +12,9 @@ import {
 } from '../src/entities/index.ts';
 import {
   canCancelRun,
-  filterRunsByStatus,
+  formatLongDuration,
   formatRunDuration,
-  mergeRunRows,
   normalizeRunStatus,
-  runRowFromApi,
-  runRowFromEntity,
-  shortId,
 } from '../src/pages/runs/runHelpers.ts';
 import {
   canDecideApproval,
@@ -36,102 +32,22 @@ import {
   SkillItemSchema,
   ToolRegistryItemSchema,
 } from '../src/shared/schemas/management.ts';
-import { hasSelectedSchedule } from '../src/pages/schedules/scheduleHelpers.ts';
 import { parseApi } from '../src/shared/schemas/api.ts';
 
 describe('run helpers', () => {
-  it('filters by status chip including completed aliases', () => {
-    const rows = [
-      runRowFromEntity(createRun({ id: 'r1', status: 'running' })),
-      runRowFromEntity(createRun({ id: 'r2', status: 'waiting_approval' })),
-      runRowFromEntity(createRun({ id: 'r3', status: 'succeeded' })),
-      runRowFromEntity(createRun({ id: 'r4', status: 'failed' })),
-    ];
-    assert.equal(filterRunsByStatus(rows, 'running').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'waiting_approval')[0]?.id, 'r2');
-    assert.equal(filterRunsByStatus(rows, 'completed').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'failed')[0]?.id, 'r4');
-    assert.equal(filterRunsByStatus(rows, 'all').length, 4);
-  });
-
-  it('normalizes durable Agent status values before filtering', () => {
-    const rows = [
-      runRowFromApi({ run_id: 'r1', status: 'RUNNING' }),
-      runRowFromApi({ run_id: 'r2', status: 'SUCCEEDED' }),
-      runRowFromApi({ run_id: 'r3', status: 'WAITING_INPUT' }),
-    ].filter(Boolean);
+  it('normalizes durable Agent statuses and decides cancel eligibility', () => {
     assert.equal(normalizeRunStatus('WAITING_APPROVAL'), 'waiting_approval');
-    assert.equal(filterRunsByStatus(rows, 'running').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'completed').length, 1);
-    assert.equal(filterRunsByStatus(rows, 'waiting_input').length, 1);
-  });
-
-  it('merges API rows with entity store without dropping either', () => {
-    let store = createEntityStore();
-    store = upsertRun(
-      store,
-      createRun({
-        id: 'run_local',
-        conversationId: 'c1',
-        status: 'running',
-      }),
-    );
-    const api = [
-      {
-        run_id: 'run_api',
-        conversation_id: 'c2',
-        status: 'failed',
-        error: 'boom',
-        model_id: 'gpt-test',
-      },
-      {
-        run_id: 'run_local',
-        conversation_id: 'c1',
-        status: 'running',
-        model_id: 'from-api',
-      },
-    ];
-    const merged = mergeRunRows(api, store);
-    assert.equal(merged.length, 2);
-    const local = merged.find((r) => r.id === 'run_local');
-    assert.ok(local);
-    assert.equal(local?.model, 'from-api');
-    assert.ok(merged.some((r) => r.id === 'run_api' && r.error === 'boom'));
-  });
-
-  it('parses API run row and cancel eligibility', () => {
-    const row = runRowFromApi({
-      run_id: 'abc1234567890',
-      status: 'running',
-      current_tool: 'bash',
-      usage: { total_tokens: 42 },
-    });
-    assert.ok(row);
-    assert.equal(row?.currentTool, 'bash');
-    assert.equal(row?.tokenUsage, '42 tokens');
-    assert.equal(canCancelRun('running'), true);
-    assert.equal(canCancelRun('succeeded'), false);
-    assert.equal(shortId('abcdefghijklmnop', 8), 'abcdefgh…');
-  });
-
-  it('uses Agent completed_at as the terminal duration timestamp', () => {
-    const row = runRowFromApi({
-      run_id: 'abc1234567890',
-      status: 'SUCCEEDED',
-      started_at: '2026-07-12T00:00:00.000Z',
-      completed_at: '2026-07-12T00:01:05.000Z',
-    });
-    assert.ok(row);
-    assert.equal(row.finishedAt, '2026-07-12T00:01:05.000Z');
-    assert.equal(formatRunDuration(row.startedAt, row.finishedAt), '01:05');
     assert.equal(canCancelRun('RUNNING'), true);
+    assert.equal(canCancelRun('SUCCEEDED'), false);
   });
 
-  it('formats duration', () => {
+  it('formats durations', () => {
     const start = '2026-07-12T00:00:00.000Z';
     const end = '2026-07-12T00:01:05.000Z';
     assert.equal(formatRunDuration(start, end), '01:05');
     assert.equal(formatRunDuration(null, null), '—');
+    assert.equal(formatLongDuration(250_000), '4 分 10 秒');
+    assert.equal(formatLongDuration(null), '—');
   });
 });
 
@@ -272,14 +188,13 @@ describe('management schemas', () => {
   });
 });
 
-describe('schedule helpers', () => {
-  it('keeps a selected schedule eligible for history refresh only while it exists', () => {
-    const job = {
-      cron_job_id: 'cron-1',
-    } as never;
-    assert.equal(hasSelectedSchedule([job], 'cron-1'), true);
-    assert.equal(hasSelectedSchedule([job], 'cron-2'), false);
-    assert.equal(hasSelectedSchedule([], 'cron-1'), false);
-    assert.equal(hasSelectedSchedule([job], null), false);
+describe('runInputLabel', () => {
+  it('keeps the words, drops the attachment manifest, folds whitespace', async () => {
+    const { runInputLabel } = await import('../src/pages/runs/runHelpers.ts');
+    assert.equal(runInputLabel('这张图片大概是什么颜色？\n\n[Attachments]\n- test-chart.png → datasets/x'), '这张图片大概是什么颜色？');
+    assert.equal(runInputLabel('  晚上好\n  你好  '), '晚上好 你好');
+    assert.equal(runInputLabel('\n\n[Attachments]\n- a.png'), '（仅附件）');
+    assert.equal(runInputLabel(null), null);
+    assert.equal(runInputLabel('a'.repeat(100), 10), `${'a'.repeat(10)}…`);
   });
 });

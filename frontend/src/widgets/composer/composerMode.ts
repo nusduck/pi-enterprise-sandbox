@@ -4,9 +4,6 @@
 
 export type ComposerMode = 'idle' | 'running' | 'waiting_approval' | 'waiting_input';
 
-/** Interaction sub-mode while the agent is running. */
-export type RunningAction = 'steer' | 'follow_up';
-
 export type ComposerModeInput = {
   isStreaming?: boolean;
   runStatus?: string | null;
@@ -35,48 +32,6 @@ export function resolveComposerMode(input: ComposerModeInput): ComposerMode {
     return 'running';
   }
   return 'idle';
-}
-
-/** Human labels for mode chips. */
-export function composerModeLabel(mode: ComposerMode): string {
-  switch (mode) {
-    case 'idle':
-      return 'New task';
-    case 'running':
-      return 'Agent running';
-    case 'waiting_approval':
-      return 'Waiting approval';
-    case 'waiting_input':
-      return 'Waiting for input';
-    default:
-      return mode;
-  }
-}
-
-/** Placeholder text for the composer textarea. */
-export function composerPlaceholder(
-  mode: ComposerMode,
-  action: RunningAction = 'steer',
-): string {
-  if (mode === 'idle') {
-    return 'Type a message… (Ctrl+L new chat)';
-  }
-  if (mode === 'waiting_approval') {
-    return 'Add a note, or approve/reject above…';
-  }
-  if (mode === 'waiting_input') return 'Answer the agent…';
-  if (action === 'follow_up') {
-    return 'Follow-up: runs after the current task finishes…';
-  }
-  return 'Steer: change direction of the current run…';
-}
-
-/** Short help under the mode switcher. */
-export function runningActionHint(action: RunningAction): string {
-  if (action === 'follow_up') {
-    return 'Follow-up queues work after the current run finishes.';
-  }
-  return 'Steer changes the current execution direction as soon as possible.';
 }
 
 /** True when the run can accept steer (must be actively running). */

@@ -532,6 +532,8 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     interactionResponseService: httpServices?.interactionResponseService ?? null,
     cronJobService: httpServices?.cronJobService ?? null,
     agentCatalogService: httpServices?.agentCatalogService ?? null,
+    adminRunQueryService: httpServices?.adminRunQueryService ?? null,
+    ownerIdentityService: httpServices?.ownerIdentityService ?? null,
     listRuns,
     listToolExecutions,
     browserAuthService,

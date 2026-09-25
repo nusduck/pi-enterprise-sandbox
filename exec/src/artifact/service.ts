@@ -30,6 +30,7 @@ import { sanitizeFilename } from '../attachment/sanitize.js';
 import type {
   ArtifactStore,
   ExecArtifactRecord,
+  OwnerListQuery,
   OwnerScope,
 } from '../db/repositories/artifacts.js';
 import { InMemoryArtifactStore } from '../db/repositories/artifacts.js';
@@ -242,6 +243,11 @@ export class ArtifactService {
     owner: OwnerScope,
   ): Promise<ExecArtifactRecord[]> {
     return await this.store.listByWorkspace(workspaceId, owner);
+  }
+
+  /** 同一 owner 跨会话的全部产物（产物库），新的在前。 */
+  async listByOwner(owner: OwnerScope, q: OwnerListQuery): Promise<ExecArtifactRecord[]> {
+    return await this.store.listByOwner(owner, q);
   }
 
   /** 取产物元数据；归属不符返回 null（调用方一律翻成 404，不泄漏存在性）。 */

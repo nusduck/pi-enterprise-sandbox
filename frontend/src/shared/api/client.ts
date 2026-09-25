@@ -284,3 +284,9 @@ export function getArtifactDownloadUrl(
   const url = `${BASE}/files/artifact-download?session_id=${encodeURIComponent(sessionId)}&artifact_id=${encodeURIComponent(artifactId)}`;
   return isAllowedApiUrl(url) ? url : null;
 }
+
+/** Build a URL for a workspace file (e.g. an uploaded attachment) of a session. */
+export function getWorkspaceFileUrl(sessionId: string, path: string): string | null {
+  const url = `${BASE}/files/download?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
+  return isAllowedApiUrl(url) ? url : null;
+}

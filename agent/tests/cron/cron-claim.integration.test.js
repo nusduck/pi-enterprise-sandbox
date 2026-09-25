@@ -325,4 +325,49 @@ describeLive('cron claim (TEST_MYSQL_URL)', () => {
     assert.equal(runs[1].status, 'SKIPPED');
     assert.equal(runs[1].error_message, 'CONCURRENCY_FORBID');
   });
+
+  it('listRunsForOwner：只列本人未删除任务的执行，按计划时间倒序，since 生效', async () => {
+    const OTHER_USER = '01K0CRJB000000000000000003';
+    const orgs = new mysql.OrganizationRepository(knex);
+    await orgs
+      .createUser({ userId: OTHER_USER, externalSubject: `sub-${OTHER_USER}`, status: 'active', displayName: 'Other' })
+      .catch(() => {});
+    const mine = await seedJob({ name: '日报' });
+    const deleted = await seedJob({ name: '已删', deleted_at: '2026-09-11 00:00:00.000' });
+    const theirs = await seedJob({ name: '别人的', user_id: OTHER_USER });
+    const addRun = (cronJobId, at, status = 'SUCCEEDED') =>
+      knex('tbl_agsvc_cron_job_runs').insert({
+        cron_job_run_id: ulidMod.ulid(),
+        cron_job_id: cronJobId,
+        scheduled_at: at,
+        claimed_at: at,
+        run_id: null,
+        status,
+        idempotency_key: `k-${ulidMod.ulid()}`,
+        error_message: null,
+        created_at: at,
+        updated_at: at,
+      });
+    await addRun(mine, '2026-09-01 08:00:00.000');
+    await addRun(mine, '2026-09-10 08:00:00.000', 'FAILED');
+    await addRun(deleted, '2026-09-10 09:00:00.000');
+    await addRun(theirs, '2026-09-10 10:00:00.000');
+
+    const repos = containerEnv.createRepositoryBundle(knex, { now: () => new Date(), generateId: ulidMod.ulid });
+    const all = await repos.cronJobs.listRunsForOwner({ orgId: ORG, userId: USER }, {});
+    assert.deepEqual(all.map((r) => [r.jobName, r.scheduledAt, r.status]), [
+      ['日报', '2026-09-10T08:00:00.000Z', 'FAILED'],
+      ['日报', '2026-09-01T08:00:00.000Z', 'SUCCEEDED'],
+    ]);
+    const recent = await repos.cronJobs.listRunsForOwner(
+      { orgId: ORG, userId: USER },
+      { since: new Date('2026-09-05T00:00:00.000Z') },
+    );
+    assert.deepEqual(recent.map((r) => r.scheduledAt), ['2026-09-10T08:00:00.000Z']);
+    assert.equal(recent[0].jobTimezone, 'UTC');
+
+    await knex('tbl_agsvc_cron_job_runs').where({ cron_job_id: theirs }).del();
+    await knex('tbl_agsvc_cron_jobs').where({ cron_job_id: theirs }).del();
+  });
 });
+

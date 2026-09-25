@@ -1,0 +1,39 @@
+.palette {
+  /* app.css resets every margin to 0; place the palette in the upper third. */
+  margin: 12vh auto auto;
+  padding: 0;
+  width: min(600px, calc(100% - 32px));
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sheet);
+}
+.palette::backdrop { background: var(--color-bg-scrim); }
+.input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  padding: 14px 16px;
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+}
+.list { max-height: min(420px, 60vh); overflow: auto; padding: 6px; }
+.group { padding: 8px 10px 4px; font-size: 11.5px; color: var(--color-text-muted); }
+.item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.item[aria-selected='true'] { background: var(--color-bg-hover); }
+.label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.item small { color: var(--color-text-muted); font-size: 11.5px; margin-left: auto; white-space: nowrap; }
+.empty { margin: 0; padding: 16px 10px; color: var(--color-text-muted); font-size: 13px; }
+.foot { border-top: 1px solid var(--color-border); padding: 8px 14px; font-size: 11.5px; color: var(--color-text-muted); }

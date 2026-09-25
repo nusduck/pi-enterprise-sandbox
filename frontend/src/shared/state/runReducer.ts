@@ -15,7 +15,6 @@ import {
   createAgentSession,
   createApproval,
   createArtifact,
-  createMessage,
   createProcess,
   createRun,
   createToolExecution,
@@ -23,9 +22,9 @@ import {
   isTerminalRunStatus,
   setActiveConversation,
   upsertApproval,
+  upsertMessage,
   upsertAgentSession,
   upsertArtifact,
-  upsertMessage,
   upsertProcess,
   upsertRun,
   upsertToolExecution,
@@ -38,10 +37,9 @@ import {
   capSeenEventIds,
   inferToolSource,
   isExternalRiskApproval,
-  latestAssistantId,
-  latestStreamingAssistantId,
   normalizeToRuntimeEvent,
 } from './platformEventNormalize';
+import { reduceMessageEvent } from './messageEvents';
 
 export type ReduceOutcome =
   | 'applied'
@@ -63,33 +61,6 @@ export type ReduceResult = {
 function str(v: unknown, fallback = ''): string {
   if (v == null) return fallback;
   return String(v);
-}
-
-/**
- * Roles that belong in the chat transcript EntityStore.
- * DSH emits `toolResult` / `tool` as message.completed after sandbox tools;
- * those must never become assistant bubbles (raw exitCode/stdout JSON).
- */
-function normalizeChatMessageRole(
-  raw: unknown,
-): 'user' | 'assistant' | null {
-  const role = String(raw ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]/g, '');
-  if (!role || role === 'assistant') return 'assistant';
-  if (role === 'user') return 'user';
-  // toolResult, tool, function, system, etc. — not chat transcript rows
-  if (
-    role === 'toolresult' ||
-    role === 'tool' ||
-    role === 'function' ||
-    role === 'system' ||
-    role === 'toolcall'
-  ) {
-    return null;
-  }
-  return null;
 }
 
 function ensureRun(
@@ -379,165 +350,14 @@ export function reduceRuntimeEvent(
       break;
     }
 
-    case 'message.started': {
-      // Default assistant only when role is omitted; never mint chat rows for toolResult.
-      const startedRole = normalizeChatMessageRole(
-        payload.role == null || payload.role === '' ? 'assistant' : payload.role,
-      );
-      if (!startedRole) break;
-      const messageId = str(payload.message_id || payload.id, `msg_${runId}_${ev.sequence}`);
-      next = upsertMessage(
-        next,
-        createMessage({
-          id: messageId,
-          runId,
-          conversationId: next.runsById[runId]?.conversationId || null,
-          role: startedRole,
-          text: str(payload.text),
-          status: 'streaming',
-          createdAt: ts,
-        }),
-      );
-      break;
-    }
-
-    case 'message.delta': {
-      // Deltas are model tokens only. toolResult never streams deltas, but if a
-      // bad envelope appears, do not append tool JSON onto an assistant bubble.
-      const deltaRole = normalizeChatMessageRole(
-        payload.role == null || payload.role === '' ? 'assistant' : payload.role,
-      );
-      if (!deltaRole || deltaRole === 'user') break;
-      let messageId = str(payload.message_id || payload.id);
-      const delta = str(payload.text || payload.delta);
-      if (!messageId) {
-        messageId = latestStreamingAssistantId(next.runsById[runId], next.messagesById);
-      }
-      if (messageId && next.messagesById[messageId]) {
-        const msg = next.messagesById[messageId];
-        next = upsertMessage(next, {
-          ...msg,
-          text: msg.text + delta,
-          status: 'streaming',
-          updatedAt: ts,
-        });
-      } else {
-        // Implicit start: create streaming message if missing
-        const id = messageId || `msg_${runId}_stream_${ev.sequence}`;
-        const existing = next.messagesById[id];
-        next = upsertMessage(
-          next,
-          createMessage({
-            id,
-            runId,
-            conversationId: next.runsById[runId]?.conversationId || null,
-            role: 'assistant',
-            text: (existing?.text || '') + delta,
-            status: 'streaming',
-            createdAt: existing?.createdAt || ts,
-            updatedAt: ts,
-          }),
-        );
-      }
-      break;
-    }
-
+    case 'message.started':
+    case 'message.delta':
     case 'thinking.started':
     case 'thinking.delta':
-    case 'thinking.completed': {
-      let messageId = str(payload.message_id || payload.id);
-      if (!messageId) {
-        const run = next.runsById[runId];
-        messageId = latestStreamingAssistantId(run, next.messagesById)
-          || latestAssistantId(run, next.messagesById);
-      }
-      const id = messageId || `msg_${runId}_thinking_${ev.sequence}`;
-      const existing = next.messagesById[id];
-      const delta = str(payload.text || payload.delta);
-      const completed = ev.type === 'thinking.completed';
-      const thinking = completed
-        ? payload.text != null && payload.text_truncated !== true
-          ? str(payload.text)
-          : existing?.thinking || delta
-        : ev.type === 'thinking.delta'
-          ? (existing?.thinking || '') + delta
-          : existing?.thinking || '';
-      next = upsertMessage(
-        next,
-        createMessage({
-          ...existing,
-          id,
-          runId,
-          conversationId:
-            existing?.conversationId || next.runsById[runId]?.conversationId || null,
-          role: 'assistant',
-          text: existing?.text || '',
-          thinking,
-          thinkingStatus: completed ? 'complete' : 'streaming',
-          status: existing?.status || 'streaming',
-          createdAt: existing?.createdAt || ts,
-          updatedAt: ts,
-        }),
-      );
+    case 'thinking.completed':
+    case 'message.completed':
+      next = reduceMessageEvent(next, ev, payload, ts);
       break;
-    }
-
-    case 'message.completed': {
-      const completedRole = normalizeChatMessageRole(
-        payload.role == null || payload.role === '' ? 'assistant' : payload.role,
-      );
-      // DSH toolResult / tool messages: handled via tool.* events only.
-      if (!completedRole) break;
-
-      let messageId = str(payload.message_id || payload.id);
-      if (!messageId && completedRole === 'assistant') {
-        messageId = latestStreamingAssistantId(next.runsById[runId], next.messagesById);
-      }
-      if (messageId && next.messagesById[messageId]) {
-        const msg = next.messagesById[messageId];
-        // Never overwrite a real assistant bubble with a mismatched role payload.
-        if (msg.role !== completedRole && completedRole !== 'assistant') {
-          break;
-        }
-        // A message.completed event is a bounded, redacted observability
-        // projection. It must not replace a complete live token buffer with
-        // its shortened preview.
-        const previewStr = payload.text != null ? str(payload.text) : '';
-        const isTruncated =
-          payload.text_truncated === true ||
-          payload.textTruncated === true ||
-          (Boolean(msg.text) && Boolean(previewStr) && msg.text.length > previewStr.length && previewStr.endsWith('…'));
-        const finalText =
-          payload.text != null && !isTruncated
-            ? previewStr
-            : msg.text;
-        next = upsertMessage(next, {
-          ...msg,
-          text: finalText,
-          status: 'complete',
-          thinkingStatus: msg.thinkingStatus === 'streaming' ? 'complete' : msg.thinkingStatus,
-          updatedAt: ts,
-        });
-      } else {
-        const text = str(payload.text);
-        if (text || completedRole === 'user') {
-          next = upsertMessage(
-            next,
-            createMessage({
-              id: messageId || `msg_${runId}_${ev.sequence}`,
-              runId,
-              conversationId: next.runsById[runId]?.conversationId || null,
-              role: completedRole,
-              text,
-              status: 'complete',
-              createdAt: ts,
-              updatedAt: ts,
-            }),
-          );
-        }
-      }
-      break;
-    }
 
     case 'tool.prepared':
     case 'tool.started':
@@ -575,6 +395,7 @@ export function reduceRuntimeEvent(
           processId: existing?.processId ?? null,
           result: existing?.result ?? null,
           isError: existing?.isError ?? false,
+          seq: existing?.seq ?? ev.sequence,
           createdAt: existing?.createdAt || ts,
           updatedAt: ts,
         }),
@@ -635,7 +456,7 @@ export function reduceRuntimeEvent(
           command:
             payload.command != null
               ? str(payload.command)
-              : existingAppr?.command ?? null,
+              : existingAppr?.command ?? (toolName || null),
           risk:
             payload.risk != null
               ? str(payload.risk)
@@ -770,6 +591,7 @@ export function reduceRuntimeEvent(
               ? str(payload.summary)
               : existing?.summary ?? null,
           spanId: existing?.spanId ?? (payload.span_id != null ? str(payload.span_id) : null),
+          seq: existing?.seq ?? ev.sequence,
           createdAt: existing?.createdAt || ts,
           updatedAt: ts,
         }),
@@ -1392,8 +1214,8 @@ export function rehydrateRun(
       pendingInput,
       // The Agent Run row is the authority for which model served the turn.
       modelId: detail.model_id ?? existing?.modelId ?? null,
-      lastSequence: detail.last_sequence ?? existing?.lastSequence ?? 0,
-      lastEventId: detail.last_event_id ?? existing?.lastEventId ?? null,
+      lastSequence: existing?.lastSequence ?? 0, // applied cursor only; never adopt detail.last_sequence
+      lastEventId: existing?.lastEventId ?? null, // pairs with lastSequence
       // Drop parked wait reasons that BFF may still send as `error`.
       error:
         status === 'waiting_approval' || status === 'waiting_input'
@@ -1477,6 +1299,7 @@ export function rehydrateToolExecutions(
         processId: existing?.processId ?? null,
         summary,
         spanId: existing?.spanId ?? null,
+        seq: existing?.seq ?? null,
         createdAt: snapshot.created_at || existing?.createdAt || null,
         updatedAt: snapshot.updated_at || snapshot.finished_at || existing?.updatedAt || null,
       }),

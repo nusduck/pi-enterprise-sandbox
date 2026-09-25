@@ -347,12 +347,14 @@ export function useRunControls({
     try {
       await requestInteractionResponse(runId, pending.interactionId, response);
       setStatus('Input submitted', '#3b82f6');
+      // Same as approvals: make sure the resumed run has a live stream.
+      void bridge.rehydrateInProgress(stateRef.current.conversationId).catch(() => {});
       return true;
     } catch (error) {
       flashError((error as Error).message || 'Input response failed');
       return false;
     }
-  }, [bridge, flashError, setStatus]);
+  }, [bridge, flashError, setStatus, stateRef]);
 
   return {
     cancelStream,

@@ -1,10 +1,8 @@
-import { useMemo, useState, useEffect, type ReactNode } from 'react';
+import { useMemo, useEffect, type ReactNode } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import {
-  getRunApprovals,
   getRunArtifacts,
   getRunToolExecutions,
-  getRunTraceSpans,
   listDatasetsForConversation,
   listProcessesForSession,
   type ArtifactEntity,
@@ -12,20 +10,14 @@ import {
 import { fileTypeLabel } from '../../shared/state';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
 import {
-  formatDuration,
-  formatRunStatusLabel,
-  getActiveRunEntity,
-  runStatusTone,
   type InspectorTabId,
   type SelectedEntity,
 } from '../runtime-timeline/buildTimeline';
 import { ArtifactPanel } from '../artifact-panel/ArtifactPanel';
 import { DatasetPanel } from '../dataset-panel/DatasetPanel';
-import { TracePanel } from '../trace-panel/TracePanel';
-import { ToolCallPanel } from '../tool-call-panel/ToolCallPanel';
 import { ProcessPanel } from '../process-panel/ProcessPanel';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
-import { IconClose, IconCopy, IconCheck, IconLayers } from '../../shared/ui/Icons';
+import { IconClose, IconLayers } from '../../shared/ui/Icons';
 
 type TabDef = {
   id: InspectorTabId;
@@ -124,81 +116,6 @@ export function collectReferencedFiles(
   return files;
 }
 
-function shortId(id: string | null | undefined, keep = 10): string {
-  if (!id) return '—';
-  if (id.length <= keep + 1) return id;
-  return `${id.slice(0, keep)}…`;
-}
-
-function MetaRow({
-  label,
-  value,
-  mono,
-  danger,
-  copyable,
-}: {
-  label: string;
-  value: ReactNode;
-  mono?: boolean;
-  danger?: boolean;
-  copyable?: string | null;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  async function handleCopy() {
-    if (!copyable) return;
-    try {
-      if (!navigator.clipboard?.writeText) return;
-      await navigator.clipboard.writeText(copyable);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  return (
-    <div className="insp-meta-row">
-      <span className="insp-meta-label">{label}</span>
-      <span
-        className={`insp-meta-value${mono ? ' mono' : ''}${danger ? ' danger' : ''}`}
-        title={typeof value === 'string' ? value : undefined}
-      >
-        <span className="insp-meta-text">{value}</span>
-        {copyable ? (
-          <button
-            type="button"
-            className="insp-copy"
-            title="Copy"
-            aria-label={`Copy ${label}`}
-            onClick={handleCopy}
-          >
-            {copied ? <IconCheck size={11} /> : <IconCopy size={11} />}
-            <span>{copied ? 'copied' : 'copy'}</span>
-          </button>
-        ) : null}
-      </span>
-    </div>
-  );
-}
-
-function StatPill({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  tone?: 'default' | 'active' | 'warn' | 'danger' | 'success';
-}) {
-  return (
-    <div className={`insp-stat tone-${tone || 'default'}`}>
-      <span className="insp-stat-value">{value}</span>
-      <span className="insp-stat-label">{label}</span>
-    </div>
-  );
-}
-
 function EmptyState({
   title,
   body,
@@ -236,13 +153,11 @@ export function ContextInspector({
     entityStore,
     activeRunId,
     activeSessionId,
-    activeTraceId,
     state,
     importArtifactToConversation,
   } = useChat();
   const { openProcessConsole } = useWorkbenchSelection();
   const runId = activeRunId;
-  const run = getActiveRunEntity(entityStore, runId);
 
   useEffect(() => {
     if (!open) return;
@@ -264,10 +179,6 @@ export function ContextInspector({
     () => listProcessesForSession(entityStore, activeSessionId),
     [entityStore, activeSessionId],
   );
-  const approvals = useMemo(
-    () => (runId ? getRunApprovals(entityStore, runId) : []),
-    [entityStore, runId],
-  );
   const artifacts = useMemo(
     () => (runId ? getRunArtifacts(entityStore, runId) : []),
     [entityStore, runId],
@@ -276,11 +187,6 @@ export function ContextInspector({
     () => listDatasetsForConversation(entityStore, state.conversationId),
     [entityStore, state.conversationId],
   );
-  const traceSpans = useMemo(
-    () => (runId ? getRunTraceSpans(entityStore, runId) : []),
-    [entityStore, runId],
-  );
-
   const listedArtifacts = state.artifacts || [];
 
   const importableArtifacts = useMemo((): ArtifactEntity[] => {
@@ -358,16 +264,6 @@ export function ContextInspector({
     activeSessionId,
   ]);
 
-  const agentSession =
-    (run?.agentSessionId &&
-      entityStore.agentSessionsById[run.agentSessionId]) ||
-    (state.conversationId &&
-      Object.values(entityStore.agentSessionsById).find(
-        (s) => s.conversationId === state.conversationId,
-      )) ||
-    null;
-
-  const pendingCount = approvals.filter((a) => a.status === 'pending').length;
   const referencedFiles = useMemo(
     () =>
       collectReferencedFiles(tools, [
@@ -380,20 +276,10 @@ export function ContextInspector({
   );
 
   const tabs: TabDef[] = [
-    {
-      id: 'artifacts',
-      label: 'Artifacts',
-      count: importableArtifacts.length || undefined,
-    },
-    {
-      id: 'files',
-      label: 'Files',
-      count: referencedFiles.length || undefined,
-    },
-    { id: 'tools', label: 'Tools', count: tools.length || undefined },
-    { id: 'processes', label: 'Processes', count: processes.length || undefined },
-    { id: 'datasets', label: 'Datasets', count: datasets.length || undefined },
-    { id: 'overview', label: 'Overview' },
+    { id: 'artifacts', label: '产物', count: importableArtifacts.length || undefined },
+    { id: 'files', label: '文件', count: referencedFiles.length || undefined },
+    { id: 'datasets', label: '数据集', count: datasets.length || undefined },
+    { id: 'processes', label: '进程', count: processes.length || undefined },
   ];
 
   const panelClass = [
@@ -403,36 +289,30 @@ export function ContextInspector({
     .filter(Boolean)
     .join(' ');
 
-  const tone = run ? runStatusTone(run.status) : 'idle';
-  const statusLabel = run ? formatRunStatusLabel(run.status) : 'Idle';
 
   return (
     <>
       <aside
         id="context-inspector"
         className={panelClass}
-        aria-label="Details"
+        aria-label="会话资料"
         aria-hidden={!open}
       >
         <div className="inspector-head">
           <div className="inspector-head-text">
             <div className="inspector-title-row">
               <IconLayers size={16} className="inspector-title-icon" />
-              <h2 className="inspector-title">Details</h2>
+              <h2 className="inspector-title">会话资料</h2>
             </div>
             <p className="inspector-subtitle">
-              {run
-                ? `Run · ${statusLabel}`
-                : state.conversationId
-                  ? 'Conversation Context'
-                  : 'No active run'}
+              产物、引用的文件、数据集与后台进程
             </p>
           </div>
           <button
             type="button"
             className="btn-icon inspector-close-desktop"
-            title="Close details"
-            aria-label="Close details"
+            title="关闭"
+            aria-label="关闭"
             onClick={onClose}
           >
             <IconClose size={16} />
@@ -440,33 +320,16 @@ export function ContextInspector({
           <button
             type="button"
             className="btn-icon inspector-close"
-            title="Close details"
-            aria-label="Close details"
+            title="关闭"
+            aria-label="关闭"
             onClick={onClose}
           >
             <IconClose size={16} />
           </button>
         </div>
 
-        {run || tools.length || processes.length ? (
-          <div className={`inspector-status-bar tone-${tone}`}>
-            <span className="inspector-status-dot" aria-hidden="true" />
-            <span className="inspector-status-label">{statusLabel}</span>
-            {run ? (
-              <span className="inspector-status-meta mono">
-                {formatDuration(run.startedAt || run.createdAt, run.finishedAt)}
-              </span>
-            ) : null}
-            {pendingCount > 0 ? (
-              <span className="inspector-status-chip warn">
-                {pendingCount} approval{pendingCount === 1 ? '' : 's'}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-
         <div className="inspector-tabs">
-          <div className="inspector-tabs-track" role="tablist" aria-label="Detail sections">
+          <div className="inspector-tabs-track" role="tablist" aria-label="会话资料分类">
             {tabs.map((t) => (
               <button
                 key={t.id}
@@ -486,20 +349,6 @@ export function ContextInspector({
         </div>
 
         <div className="inspector-body" role="tabpanel">
-          {tab === 'overview' ? (
-            <OverviewPanel
-              run={run}
-              agentSession={agentSession}
-              toolsCount={tools.length}
-              processesCount={processes.length}
-              artifactsCount={artifacts.length}
-              pendingApprovals={pendingCount}
-              sessionId={activeSessionId}
-              conversationId={state.conversationId}
-              traceId={activeTraceId}
-            />
-          ) : null}
-
           {tab === 'files' ? (
             <FilesPanel files={referencedFiles} />
           ) : null}
@@ -509,14 +358,7 @@ export function ContextInspector({
               processes={processes}
               selectedId={selected?.kind === 'process' ? selected.id : null}
               onOpenConsole={openProcessConsole}
-              emptyHint="No managed processes in this session."
-            />
-          ) : null}
-
-          {tab === 'tools' ? (
-            <ToolCallPanel
-              tools={tools}
-              selectedId={selected?.kind === 'tool' ? selected.id : null}
+              emptyHint="这个会话还没有后台进程。"
             />
           ) : null}
 
@@ -536,18 +378,6 @@ export function ContextInspector({
             <DatasetPanel datasets={datasets} />
           ) : null}
 
-          {tab === 'trace' ? (
-            <TracePanel spans={traceSpans} traceId={activeTraceId} />
-          ) : null}
-
-          {tab === 'session' ? (
-            <SessionPanel
-              run={run}
-              agentSession={agentSession}
-              sessionId={activeSessionId}
-              conversationId={state.conversationId}
-            />
-          ) : null}
         </div>
       </aside>
       <div
@@ -560,187 +390,6 @@ export function ContextInspector({
   );
 }
 
-function OverviewPanel({
-  run,
-  agentSession,
-  toolsCount,
-  processesCount,
-  artifactsCount,
-  pendingApprovals,
-  sessionId,
-  conversationId,
-  traceId,
-}: {
-  run: ReturnType<typeof getActiveRunEntity>;
-  agentSession: {
-    id: string;
-    status: string;
-    modelId: string | null;
-    workspaceId: string | null;
-  } | null;
-  toolsCount: number;
-  processesCount: number;
-  artifactsCount: number;
-  pendingApprovals: number;
-  sessionId: string | null;
-  conversationId: string | null;
-  traceId: string | null;
-}) {
-  if (!run && !agentSession && !conversationId) {
-    return (
-      <EmptyState
-        title="Nothing Selected"
-        body="Start a chat or select an execution step to inspect context."
-      />
-    );
-  }
-
-  const ctx = run?.contextUsage;
-  const ctxLabel = ctx
-    ? `${ctx.tokens ?? '—'} / ${ctx.contextWindow ?? '—'}${
-        ctx.percent != null
-          ? ` · ${typeof ctx.percent === 'number' && ctx.percent <= 1 ? Math.round(ctx.percent * 100) : ctx.percent}%`
-          : ''
-      }`
-    : '—';
-
-  return (
-    <div className="insp-stack">
-      <section className="insp-card">
-        <div className="insp-card-head">
-          <h3 className="insp-card-title">Execution Snapshot</h3>
-        </div>
-        <div className="insp-stat-grid">
-          <StatPill
-            label="Tools"
-            value={toolsCount}
-            tone={toolsCount ? 'active' : 'default'}
-          />
-          <StatPill
-            label="Processes"
-            value={processesCount}
-            tone={processesCount ? 'active' : 'default'}
-          />
-          <StatPill
-            label="Artifacts"
-            value={artifactsCount}
-            tone={artifactsCount ? 'success' : 'default'}
-          />
-          <StatPill
-            label="Approvals"
-            value={pendingApprovals}
-            tone={pendingApprovals ? 'warn' : 'default'}
-          />
-        </div>
-      </section>
-
-      <section className="insp-card">
-        <div className="insp-card-head">
-          <h3 className="insp-card-title">Run Details</h3>
-        </div>
-        <div className="insp-meta-list">
-          <MetaRow
-            label="Status"
-            value={run ? formatRunStatusLabel(run.status) : 'Idle'}
-          />
-          <MetaRow
-            label="Run ID"
-            value={shortId(run?.id, 14)}
-            mono
-            copyable={run?.id || null}
-          />
-          <MetaRow
-            label="Started"
-            value={run?.startedAt || run?.createdAt || '—'}
-            mono
-          />
-          <MetaRow
-            label="Duration"
-            value={
-              run
-                ? formatDuration(run.startedAt || run.createdAt, run.finishedAt)
-                : '—'
-            }
-            mono
-          />
-          <MetaRow label="Context Usage" value={ctxLabel} mono />
-          <MetaRow
-            label="Compaction"
-            value={
-              run?.compactionStatus
-                ? `${run.compactionStatus}${run.compactionError ? `: ${run.compactionError}` : ''}`
-                : 'idle'
-            }
-            danger={run?.compactionStatus === 'failed'}
-          />
-          {run?.error ? (
-            <MetaRow label="Error" value={run.error} danger />
-          ) : null}
-        </div>
-      </section>
-
-      <section className="insp-card">
-        <div className="insp-card-head">
-          <h3 className="insp-card-title">Identity & Tracing</h3>
-        </div>
-        <div className="insp-meta-list">
-          <MetaRow
-            label="Model"
-            value={run?.modelId || agentSession?.modelId || '—'}
-          />
-          <MetaRow
-            label="Agent Session"
-            value={
-              agentSession
-                ? `${shortId(agentSession.id, 12)} · ${agentSession.status}`
-                : '—'
-            }
-            mono
-            copyable={agentSession?.id || null}
-          />
-          <MetaRow
-            label="Workspace"
-            value={shortId(agentSession?.workspaceId || sessionId, 14)}
-            mono
-            copyable={agentSession?.workspaceId || sessionId}
-          />
-          <MetaRow
-            label="Conversation"
-            value={shortId(conversationId, 14)}
-            mono
-            copyable={conversationId}
-          />
-          <MetaRow
-            label="Trace ID"
-            value={shortId(traceId, 14)}
-            mono
-            copyable={traceId}
-          />
-        </div>
-      </section>
-
-      {run?.taskPlan?.length ? (
-        <section className="insp-card">
-          <div className="insp-card-head">
-            <h3 className="insp-card-title">Task Plan</h3>
-            <span className="insp-card-count">{run.taskPlan.length}</span>
-          </div>
-          <ul className="insp-task-list">
-            {run.taskPlan.map((task) => (
-              <li key={task.taskId} className="insp-task-item">
-                <span className={`insp-task-status status-${task.status}`}>
-                  {task.status}
-                </span>
-                <span className="insp-task-id mono">{task.taskId}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
 function FilesPanel({
   files,
 }: {
@@ -749,8 +398,8 @@ function FilesPanel({
   if (!files.length) {
     return (
       <EmptyState
-        title="No Referenced Files"
-        body="Files read or written by tools in this run will appear here. Final deliverables stay in Artifacts."
+        title="还没有引用文件"
+        body="本轮工具读写过的文件会列在这里；最终交付物在“产物”里。"
       />
     );
   }
@@ -758,7 +407,7 @@ function FilesPanel({
   return (
     <div className="insp-stack">
       <div className="insp-section-intro">
-        <span>Workspace References</span>
+        <span>工作区引用</span>
         <span>{files.length}</span>
       </div>
       <ul className="insp-file-list">
@@ -783,72 +432,3 @@ function FilesPanel({
   );
 }
 
-function SessionPanel({
-  run,
-  agentSession,
-  sessionId,
-  conversationId,
-}: {
-  run: ReturnType<typeof getActiveRunEntity>;
-  agentSession: {
-    id: string;
-    status: string;
-    modelId: string | null;
-    workspaceId: string | null;
-    sandboxSessionId: string | null;
-    createdAt: string | null;
-    updatedAt: string | null;
-  } | null;
-  sessionId: string | null;
-  conversationId: string | null;
-}) {
-  if (!run && !agentSession && !sessionId && !conversationId) {
-    return (
-      <EmptyState
-        title="No Active Session"
-        body="Session identity appears after the first run starts."
-      />
-    );
-  }
-
-  return (
-    <div className="insp-stack">
-      <section className="insp-card">
-        <div className="insp-card-head">
-          <h3 className="insp-card-title">Agent Session</h3>
-          {agentSession?.status ? (
-            <span className="insp-pill">{agentSession.status}</span>
-          ) : null}
-        </div>
-        <div className="insp-meta-list">
-          <MetaRow
-            label="Session ID"
-            value={shortId(agentSession?.id, 16)}
-            mono
-            copyable={agentSession?.id || null}
-          />
-          <MetaRow
-            label="Model"
-            value={run?.modelId || agentSession?.modelId || '—'}
-          />
-          <MetaRow
-            label="Workspace ID"
-            value={shortId(agentSession?.workspaceId || sessionId, 16)}
-            mono
-            copyable={agentSession?.workspaceId || sessionId}
-          />
-          <MetaRow
-            label="Created"
-            value={agentSession?.createdAt || '—'}
-            mono
-          />
-          <MetaRow
-            label="Updated"
-            value={agentSession?.updatedAt || '—'}
-            mono
-          />
-        </div>
-      </section>
-    </div>
-  );
-}

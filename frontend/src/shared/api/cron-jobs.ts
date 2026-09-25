@@ -101,10 +101,13 @@ export function runCronJobNow(id: string): Promise<CronJobRun> {
   });
 }
 
-export async function listCronJobRuns(id: string): Promise<CronJobRun[]> {
-  const result = await request<{ cron_job_runs?: CronJobRun[] }>(
-    `/${encodeURIComponent(id)}/runs`,
-    { method: 'GET' },
-  );
+/** A run of any of the caller's jobs, with the job's name and time zone. */
+export type CronJobRunWithJob = CronJobRun & { job_name: string; job_timezone: string };
+
+/** Executions of all the caller's jobs since `since`, newest first (one request instead of one per job). */
+export async function listAllCronJobRuns(since: Date, limit = 500): Promise<CronJobRunWithJob[]> {
+  const q = new URLSearchParams({ since: since.toISOString(), limit: String(limit) });
+  const result = await request<{ cron_job_runs?: CronJobRunWithJob[] }>(`/runs?${q}`, { method: 'GET' });
   return Array.isArray(result.cron_job_runs) ? result.cron_job_runs : [];
 }
+

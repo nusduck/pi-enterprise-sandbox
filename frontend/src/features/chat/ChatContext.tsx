@@ -65,6 +65,7 @@ import { runUploadQueue } from './uploads/runUploadQueue';
 import { useRunControls } from './controllers/useRunControls';
 import { useModelSelection } from './useModelSelection';
 import { fixedModelIdOf, mergeConversation } from './conversationProjection';
+import { effectiveModel, supportsImages } from './effectiveModel';
 import { useAgentSelection } from './useAgentSelection';
 import { resolveApprovalDecision } from './approvalDecision';
 
@@ -112,8 +113,6 @@ export type ChatController = {
   retryAttachmentDraft: (localId: string) => Promise<void>;
   setDropzoneVisible: (v: boolean) => void;
   // Approvals
-  approvePending: () => Promise<void>;
-  rejectPending: () => Promise<void>;
   /** Decide a specific approval by id (entity card or banner). */
   resolveApproval: (
     approvalId: string,
@@ -564,17 +563,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const uploaded = uploadedAttachments(cur.attachments);
       const trimmed = (text ?? draftText).trim();
       if (!trimmed && uploaded.length === 0) return;
-      const selectedModel = models.find(
-        (model) => (model.model_id || model.id) === selectedModelId,
-      );
       const hasImage = uploaded.some((attachment) =>
         String(attachment.mimeType || '').toLowerCase().startsWith('image/'),
       );
-      const modalities = Array.isArray(selectedModel?.input_modalities)
-        ? selectedModel.input_modalities.map(String)
-        : [];
-      if (hasImage && (!selectedModel || !modalities.includes('image'))) {
-        flashError('Choose a vision-capable model before sending image attachments');
+      // No selection means the catalog default serves the turn, not "no model".
+      if (hasImage && !supportsImages(effectiveModel(models, selectedModelId, fixedModelId))) {
+        flashError('当前模型不支持图片，请在模型菜单里换一个支持看图的模型');
         return;
       }
 
@@ -851,8 +845,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       bridge,
       currentSessionId,
       currentTraceId,
-      models,
-      selectedModelId,
+      models, selectedModelId, fixedModelId,
       selectedAgentId,
     ],
   );
@@ -1127,60 +1120,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const resolveApproval = useCallback(
     async (approvalId: string, decision: 'approve' | 'reject') => {
       return resolveApprovalDecision(approvalId, decision, {
-        decide: decideApproval,
-        markApproval: (id, status) => bridge.markApproval(id, status),
+        decide: decideApproval, markApproval: (id, status) => bridge.markApproval(id, status),
         setStatus,
         flashError,
+        followRun: () => void bridge.rehydrateInProgress(stateRef.current.conversationId).catch(() => {}),
       });
     },
     [bridge, setStatus, flashError],
   );
-
-  const approvePending = useCallback(async () => {
-    const store = bridge.getStore();
-    const runId = store.activeRunId;
-    const approval = Object.values(store.approvalsById).find(
-      (item) => item.runId === runId && item.status === 'pending',
-    );
-    if (!approval?.id) {
-      // Never silent no-op: banner can show waiting_approval from run.status alone
-      // while the approval entity was never rehydrated into the store.
-      flashError(
-        'No pending approval loaded for this run. Open Approval Center or refresh the conversation.',
-      );
-      if (runId) {
-        try {
-          await bridge.reconcileRun(runId);
-        } catch {
-          /* reconcile is best-effort */
-        }
-      }
-      return;
-    }
-    await resolveApproval(approval.id, 'approve');
-  }, [bridge, resolveApproval, flashError]);
-
-  const rejectPending = useCallback(async () => {
-    const store = bridge.getStore();
-    const runId = store.activeRunId;
-    const approval = Object.values(store.approvalsById).find(
-      (item) => item.runId === runId && item.status === 'pending',
-    );
-    if (!approval?.id) {
-      flashError(
-        'No pending approval loaded for this run. Open Approval Center or refresh the conversation.',
-      );
-      if (runId) {
-        try {
-          await bridge.reconcileRun(runId);
-        } catch {
-          /* reconcile is best-effort */
-        }
-      }
-      return;
-    }
-    await resolveApproval(approval.id, 'reject');
-  }, [bridge, resolveApproval, flashError]);
 
   const toggleInspector = useCallback(() => {
     setInspectorOpen((v) => !v);
@@ -1432,8 +1379,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     removeAttachmentDraft,
     retryAttachmentDraft,
     setDropzoneVisible,
-    approvePending,
-    rejectPending,
     resolveApproval,
     login,
     register,

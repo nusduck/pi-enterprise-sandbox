@@ -67,7 +67,7 @@ export function createPublicRouter(deps: PublicRouterDeps): Hono {
   // 这枚令牌只证明"你是 BFF"，不证明"这个会话是你的"。
   const apiToken = deps.apiToken;
   if (typeof apiToken === 'string' && apiToken !== '') {
-    for (const prefix of ['/sessions/*', '/conversations/*', '/datasets', '/datasets/*']) {
+    for (const prefix of ['/sessions/*', '/conversations/*', '/datasets', '/datasets/*', '/artifacts', '/artifacts/*']) {
       app.use(prefix, async (c, next) => {
         if (!tokenMatches(c.req.header('x-api-key'), apiToken)) {
           const wire = toWireError(new Error('service token required'), { physicalRoots: [] });

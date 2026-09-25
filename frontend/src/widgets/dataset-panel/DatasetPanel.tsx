@@ -31,7 +31,7 @@ export function DatasetPanel({
   datasets,
   selectedId,
   onSelect,
-  emptyHint = 'No datasets uploaded for this conversation.',
+  emptyHint = '这个会话还没有上传数据集。',
 }: {
   datasets: DatasetEntity[];
   selectedId?: string | null;

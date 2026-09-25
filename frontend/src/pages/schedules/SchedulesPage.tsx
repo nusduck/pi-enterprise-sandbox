@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useChat } from '../../features/chat/ChatContext';
 import {
   createCronJob,
   deleteCronJob,
-  listCronJobRuns,
+  listAllCronJobRuns,
   listCronJobs,
   runCronJobNow,
   updateCronJob,
@@ -10,374 +12,280 @@ import {
   type CronJobInput,
   type CronJobRun,
 } from '../../shared/api/cron-jobs';
-import {
-  IconRefresh,
-  IconClose,
-  IconClock,
-  IconSparkles,
-  IconAlertCircle,
-  IconRuns,
-} from '../../shared/ui/Icons';
-import { hasSelectedSchedule } from './scheduleHelpers';
+import { getRun } from '../../shared/api/runs';
+import { agentTone, isDefaultAgentName } from '../../widgets/conversation-sidebar/sidebarModel';
+import { dailyStrip, describeJob, formatInstant, markSchedulesSeen, runOutcome, type RunOutcome } from './scheduleModel';
+import { ScheduleDialog } from './ScheduleDialog';
+import s from './schedules.module.css';
 
-function defaultTimeZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
+type Tab = 'jobs' | 'runs';
+type HistoryRow = CronJobRun & { jobName: string; timezone: string };
 
-function blankDraft(): CronJobInput {
-  return {
-    name: '',
-    prompt: '',
-    agent_id: null,
-    schedule_type: 'cron',
-    cron_expression: '0 9 * * 1-5',
-    run_at: null,
-    timezone: defaultTimeZone(),
-    enabled: true,
-    misfire_policy: 'fire_once',
-    concurrency_policy: 'forbid',
-  };
-}
+const OUTCOME: Record<RunOutcome, [string, string]> = {
+  ok: ['成功', s.ok],
+  err: ['失败', s.fail],
+  skip: ['已跳过', s.mute],
+  live: ['进行中', s.live],
+};
 
-function toLocalInput(iso: string | null): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-}
-
-function displayTime(iso: string | null): string {
-  if (!iso) return '—';
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
-}
-
-function describeSchedule(job: CronJob): string {
-  if (job.schedule_type === 'once') return `Once · ${displayTime(job.run_at)}`;
-  return `${job.cron_expression || '—'} · ${job.timezone}`;
-}
-
+/**
+ * Scheduled tasks: the jobs table and the run history across all jobs, with a
+ * 30-day strip on top. Each job starts a conversation when it fires, so every
+ * run links back to the conversation it produced.
+ */
 export function SchedulesPage() {
+  const navigate = useNavigate();
+  const { agents, agentNameById } = useChat();
+  const [tab, setTab] = useState<Tab>('jobs');
   const [jobs, setJobs] = useState<CronJob[]>([]);
-  const [draft, setDraft] = useState<CronJobInput>(() => blankDraft());
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [banner, setBanner] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [runs, setRuns] = useState<CronJobRun[]>([]);
-  const [runsLoading, setRunsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ job: CronJob | null } | null>(null);
+  const generation = useRef(0);
 
-  // 只拉任务列表，**不带** selectedId 依赖：把执行历史塞进来会让 `refresh` 的
-  // 身份随选中项变化，于是"选中一条"就整表重拉一遍，删掉的那条还要再触发一轮。
   const refresh = useCallback(async () => {
+    const gen = ++generation.current;
     setLoading(true);
     try {
-      setJobs(await listCronJobs());
-    } catch (error) {
-      setBanner((error as Error).message || 'Unable to load scheduled runs.');
+      // The strip covers 30 days; one cross-job request replaces one per job.
+      const since = new Date();
+      since.setHours(0, 0, 0, 0);
+      since.setDate(since.getDate() - 30);
+      const [list, runs] = await Promise.all([listCronJobs(), listAllCronJobRuns(since)]);
+      if (gen !== generation.current) return;
+      setJobs(list);
+      setError(null);
+      setHistory(runs.map((r) => ({ ...r, jobName: r.job_name, timezone: r.job_timezone })));
+    } catch (err) {
+      if (gen === generation.current) setError((err as Error).message || '读取定时任务失败');
     } finally {
-      setLoading(false);
+      if (gen === generation.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  // 执行历史跟着「选中项 + 最新的任务列表」走：列表刷新后历史也刷新；选中的
-  // 任务如果已经不在列表里（别处删了），详情面板自己关掉。
   useEffect(() => {
-    if (!selectedId) return;
-    if (!hasSelectedSchedule(jobs, selectedId)) {
-      setSelectedId(null);
-      setRuns([]);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const history = await listCronJobRuns(selectedId);
-        if (!cancelled) setRuns(history);
-      } catch (error) {
-        if (!cancelled) setBanner((error as Error).message || 'Unable to load execution history.');
+    void refresh();
+  }, [refresh]);
+
+  // Opening the page clears the sidebar's "new results" dot.
+  useEffect(() => {
+    markSchedulesSeen();
+  }, []);
+
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest(`.${s.more}`)) {
+        setMenuFor(null);
+        setConfirmDelete(null);
       }
-    })();
-    return () => { cancelled = true; };
-  }, [jobs, selectedId]);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [menuFor]);
 
-  const selectedJob = useMemo(
-    () => jobs.find((job) => job.cron_job_id === selectedId) || null,
-    [jobs, selectedId],
-  );
+  const strip = useMemo(() => dailyStrip(history, 30), [history]);
+  const recent = strip.reduce((n, c) => n + c.count, 0);
+  const recentFailed = history.filter((r) => runOutcome(r) === 'err'
+    && r.scheduled_at && Date.now() - Date.parse(r.scheduled_at) < 30 * 86_400_000).length;
 
-  function resetForm() {
-    setEditingId(null);
-    setDraft(blankDraft());
-  }
-
-  function editJob(job: CronJob) {
-    setEditingId(job.cron_job_id);
-    setDraft({
-      name: job.name,
-      prompt: job.prompt,
-      agent_id: job.agent_id,
-      schedule_type: job.schedule_type,
-      cron_expression: job.cron_expression,
-      run_at: toLocalInput(job.run_at),
-      timezone: job.timezone,
-      enabled: job.enabled,
-      misfire_policy: job.misfire_policy,
-      concurrency_policy: job.concurrency_policy,
-    });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!draft.name.trim() || !draft.prompt.trim()) {
-      setBanner('A name and prompt are required.');
-      return;
-    }
-    if (draft.schedule_type === 'cron' && !draft.cron_expression?.trim()) {
-      setBanner('Enter a five-field cron expression.');
-      return;
-    }
-    if (draft.schedule_type === 'once' && !draft.run_at) {
-      setBanner('Choose the time for the one-time run.');
-      return;
-    }
-    setSaving(true);
+  async function act(label: string, fn: () => Promise<unknown>) {
+    setMenuFor(null);
+    setConfirmDelete(null);
     try {
-      const payload: CronJobInput = {
-        ...draft,
-        name: draft.name.trim(),
-        prompt: draft.prompt.trim(),
-        agent_id: draft.agent_id?.trim() || null,
-        cron_expression: draft.schedule_type === 'cron'
-          ? draft.cron_expression?.trim() || null
-          : null,
-        run_at: draft.schedule_type === 'once' && draft.run_at
-          ? new Date(draft.run_at).toISOString()
-          : null,
-      };
-      if (editingId) {
-        await updateCronJob(editingId, payload);
-        setBanner('Scheduled run updated.');
-      } else {
-        await createCronJob(payload);
-        setBanner('Scheduled run created.');
-      }
-      resetForm();
+      await fn();
+      setNotice(label);
       await refresh();
-    } catch (error) {
-      setBanner((error as Error).message || 'Unable to save scheduled run.');
-    } finally {
-      setSaving(false);
+    } catch (err) {
+      setError((err as Error).message || `${label}失败`);
     }
   }
 
-  async function toggleJob(job: CronJob) {
-    setBusyId(job.cron_job_id);
+  async function save(input: CronJobInput) {
+    const job = editing?.job;
+    if (job) await updateCronJob(job.cron_job_id, input);
+    else await createCronJob(input);
+    setEditing(null);
+    setNotice(job ? '已保存' : '已创建');
+    await refresh();
+  }
+
+  async function openRun(run: HistoryRow) {
+    if (!run.run_id) return;
     try {
-      await updateCronJob(job.cron_job_id, { enabled: !job.enabled });
-      setBanner(job.enabled ? 'Scheduled run paused.' : 'Scheduled run resumed.');
-      await refresh();
-    } catch (error) {
-      setBanner((error as Error).message || 'Unable to update scheduled run.');
-    } finally {
-      setBusyId(null);
+      const detail = await getRun(run.run_id);
+      const conversationId = detail?.conversation_id;
+      if (!conversationId) throw new Error('找不到这次运行对应的会话');
+      navigate(`/c/${encodeURIComponent(conversationId)}`);
+    } catch (err) {
+      setError((err as Error).message || '打开会话失败');
     }
   }
 
-  async function runNow(job: CronJob) {
-    setBusyId(job.cron_job_id);
-    try {
-      const run = await runCronJobNow(job.cron_job_id);
-      setBanner(run.run_id ? 'Run queued successfully.' : `Execution ${run.status.toLowerCase()}.`);
-      setSelectedId(job.cron_job_id);
-      setRuns(await listCronJobRuns(job.cron_job_id));
-    } catch (error) {
-      setBanner((error as Error).message || 'Unable to start run.');
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function remove(job: CronJob) {
-    if (!window.confirm(`Delete scheduled run “${job.name}”? Execution history will remain available.`)) return;
-    setBusyId(job.cron_job_id);
-    try {
-      await deleteCronJob(job.cron_job_id);
-      if (selectedId === job.cron_job_id) {
-        setSelectedId(null);
-        setRuns([]);
-      }
-      if (editingId === job.cron_job_id) resetForm();
-      setBanner('Scheduled run deleted.');
-      await refresh();
-    } catch (error) {
-      setBanner((error as Error).message || 'Unable to delete scheduled run.');
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function showRuns(job: CronJob) {
-    setSelectedId(job.cron_job_id);
-    setRunsLoading(true);
-    try {
-      setRuns(await listCronJobRuns(job.cron_job_id));
-    } catch (error) {
-      setBanner((error as Error).message || 'Unable to load execution history.');
-      setRuns([]);
-    } finally {
-      setRunsLoading(false);
-    }
-  }
+  const agentTag = (agentId: string | null) => {
+    const name = agentId ? agentNameById(agentId) : null;
+    return agentId && !isDefaultAgentName(name)
+      ? <span className={s.tag} style={{ ['--tag' as string]: `var(--agent-tone-${agentTone(agentId)})` }}>{name}</span>
+      : null;
+  };
 
   return (
-    <div className="mgmt-page schedules-page">
-      <header className="mgmt-header">
-        <div>
-          <h2 className="mgmt-title">Scheduled Runs</h2>
-          <p className="mgmt-subtitle">
-            Configure durable, server-side schedules. Each occurrence triggers an autonomous Agent run.
-          </p>
-        </div>
-        <button type="button" className="mgmt-btn" onClick={() => void refresh()} disabled={loading}>
-          <IconRefresh size={14} className={loading ? 'icon-spin' : ''} />
-          <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
-        </button>
-      </header>
-
-      {banner ? (
-        <div className="mgmt-banner" role="status">
-          <IconAlertCircle size={15} />
-          <span>{banner}</span>
-          <button
-            type="button"
-            className="mgmt-banner-close"
-            aria-label="Dismiss notification"
-            title="Dismiss notification"
-            onClick={() => setBanner(null)}
-          >
-            <IconClose size={13} />
-          </button>
-        </div>
-      ) : null}
-
-      <form className="mgmt-schedule-form" onSubmit={(event) => void submit(event)}>
-        <div className="mgmt-detail-head">
-          <div className="mgmt-form-title-row">
-            <IconClock size={16} />
-            <h3>{editingId ? 'Edit Scheduled Run' : 'Create New Scheduled Run'}</h3>
+    <div className={s.page}>
+      <div className={s.inner}>
+        <div className={s.top}>
+          <div className={s.tabs} role="tablist" aria-label="定时任务">
+            <button type="button" role="tab" aria-selected={tab === 'jobs'} onClick={() => setTab('jobs')}>定时任务</button>
+            <button type="button" role="tab" aria-selected={tab === 'runs'} onClick={() => setTab('runs')}>运行</button>
           </div>
-          {editingId ? <button type="button" className="mgmt-btn sm secondary" onClick={resetForm}>Cancel edit</button> : null}
+          <span className={s.sp} />
+          <button type="button" className={s.primaryPill} onClick={() => setEditing({ job: null })}>新建定时任务</button>
         </div>
-        <div className="mgmt-field-row">
-          <label className="mgmt-field">
-            <span>Name</span>
-            <input value={draft.name} maxLength={255} placeholder="Daily Risk Report" onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-          </label>
-          <label className="mgmt-field">
-            <span>Schedule Type</span>
-            <select value={draft.schedule_type} onChange={(e) => setDraft({ ...draft, schedule_type: e.target.value as 'cron' | 'once' })}>
-              <option value="cron">Recurring Cron Expression</option>
-              <option value="once">Run Once At Time</option>
-            </select>
-          </label>
-          <label className="mgmt-field">
-            <span>Timezone</span>
-            <input value={draft.timezone} maxLength={64} placeholder="Asia/Shanghai" onChange={(e) => setDraft({ ...draft, timezone: e.target.value })} />
-          </label>
-        </div>
-        <label className="mgmt-field mgmt-field-wide">
-          <span>Execution Prompt</span>
-          <textarea value={draft.prompt} maxLength={50000} placeholder="Generate yesterday's risk report and publish the findings." onChange={(e) => setDraft({ ...draft, prompt: e.target.value })} />
-        </label>
-        <div className="mgmt-field-row">
-          {draft.schedule_type === 'cron' ? (
-            <label className="mgmt-field mgmt-field-wide">
-              <span>Cron Expression</span>
-              <input value={draft.cron_expression || ''} placeholder="0 9 * * 1-5" onChange={(e) => setDraft({ ...draft, cron_expression: e.target.value })} />
-              <small>Standard 5-field expression: minute hour day-of-month month day-of-week.</small>
-            </label>
-          ) : (
-            <label className="mgmt-field">
-              <span>Run At</span>
-              <input type="datetime-local" value={draft.run_at || ''} onChange={(e) => setDraft({ ...draft, run_at: e.target.value })} />
-            </label>
-          )}
-          <label className="mgmt-field">
-            <span>Missed Schedule Policy</span>
-            <select value={draft.misfire_policy} onChange={(e) => setDraft({ ...draft, misfire_policy: e.target.value as 'skip' | 'fire_once' })}>
-              <option value="fire_once">Run once after recovery</option>
-              <option value="skip">Skip missed run</option>
-            </select>
-          </label>
-          <label className="mgmt-field">
-            <span>Concurrency Policy</span>
-            <select value={draft.concurrency_policy} onChange={(e) => setDraft({ ...draft, concurrency_policy: e.target.value as 'forbid' | 'allow' })}>
-              <option value="forbid">Skip while previous run is active</option>
-              <option value="allow">Allow parallel runs</option>
-            </select>
-          </label>
-          <label className="mgmt-field">
-            <span>Agent ID (Optional)</span>
-            <input value={draft.agent_id || ''} placeholder="Default tenant agent" onChange={(e) => setDraft({ ...draft, agent_id: e.target.value || null })} />
-          </label>
-        </div>
-        <div className="mgmt-form-actions">
-          <button type="submit" className="mgmt-btn" disabled={saving}>
-            {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create Schedule'}
-          </button>
-          {!editingId ? <button type="button" className="mgmt-btn secondary" onClick={resetForm}>Clear</button> : null}
-        </div>
-      </form>
 
-      <section className="mgmt-section" aria-label="Configured scheduled runs">
-        <h3 className="mgmt-section-title">Configured Schedules</h3>
-        {loading && jobs.length === 0 ? <div className="mgmt-empty"><IconSparkles size={24} className="icon-pulse" /><p>Loading scheduled runs…</p></div> : null}
-        {!loading && jobs.length === 0 ? <div className="mgmt-empty"><p className="mgmt-empty-title">No scheduled runs</p><p className="mgmt-empty-body">Create a Cron or one-time schedule above. The server will keep running it in the background.</p></div> : null}
-        {jobs.length > 0 ? (
-          <div className="mgmt-table-wrap">
-            <table className="mgmt-table">
-              <thead><tr><th>Name</th><th>Schedule</th><th>Next run</th><th>Status</th><th>Actions</th></tr></thead>
-              <tbody>{jobs.map((job) => (
-                <tr key={job.cron_job_id} className={selectedId === job.cron_job_id ? 'selected' : ''}>
-                  <td><strong>{job.name}</strong><div className="mgmt-muted mgmt-prompt-preview">{job.prompt}</div></td>
-                  <td className="mgmt-muted">{describeSchedule(job)}</td>
-                  <td>{displayTime(job.next_run_at)}</td>
-                  <td><span className={`mgmt-status status-${job.enabled ? 'enabled' : 'disabled'}`}><span className="mgmt-status-dot" />{job.enabled ? 'Enabled' : 'Paused'}</span></td>
-                  <td><div className="mgmt-row-actions">
-                    <button type="button" className="mgmt-btn sm" disabled={busyId === job.cron_job_id} onClick={() => void runNow(job)}><IconRuns size={12} /> Run now</button>
-                    <button type="button" className="mgmt-btn sm secondary" disabled={busyId === job.cron_job_id} onClick={() => void toggleJob(job)}>{job.enabled ? 'Pause' : 'Resume'}</button>
-                    <button type="button" className="mgmt-btn sm secondary" onClick={() => editJob(job)}>Edit</button>
-                    <button type="button" className="mgmt-btn sm secondary" onClick={() => void showRuns(job)}>History</button>
-                    <button type="button" className="mgmt-btn sm danger" disabled={busyId === job.cron_job_id} onClick={() => void remove(job)}>Delete</button>
-                  </div></td>
-                </tr>
-              ))}</tbody>
-            </table>
+        {error ? <p className={s.banner} role="alert" onClick={() => setError(null)}>{error}</p> : null}
+        {notice ? <p className={`${s.banner} ${s.bannerOk}`} role="status" onClick={() => setNotice(null)}>{notice}</p> : null}
+
+        <section className={`${s.panel} ${s.history}`} aria-label="最近 30 天运行">
+          <div className={s.historyHead}>
+            <b>运行历史记录</b>
+            <span className={s.muted}>最近 30 天</span>
+            <span className={s.sp} />
+            <button type="button" className={s.link} onClick={() => setTab('runs')}>
+              {recent} 次运行{recentFailed ? ` · ${recentFailed} 次失败` : ''} ›
+            </button>
           </div>
-        ) : null}
-      </section>
-
-      {selectedJob ? (
-        <section className="mgmt-section" aria-label={`Execution history for ${selectedJob.name}`}>
-          <div className="mgmt-detail-head"><h3 className="mgmt-section-title">Execution History · {selectedJob.name}</h3><button type="button" className="mgmt-btn sm secondary" onClick={() => { setSelectedId(null); setRuns([]); }}><IconClose size={13} /> Close</button></div>
-          {runsLoading ? <div className="mgmt-empty"><IconSparkles size={20} className="icon-pulse" /><p>Loading history…</p></div> : runs.length === 0 ? <div className="mgmt-empty">No executions recorded yet.</div> : (
-            <div className="mgmt-table-wrap"><table className="mgmt-table"><thead><tr><th>Scheduled Time</th><th>Result</th><th>Run ID</th><th>Detail</th></tr></thead><tbody>{runs.map((run) => (
-              <tr key={run.cron_job_run_id}><td>{displayTime(run.scheduled_at)}</td><td><span className={`mgmt-status status-${run.status.toLowerCase()}`}><span className="mgmt-status-dot" />{run.run_status || run.status}</span></td><td>{run.run_id ? <code className="mgmt-id-code">{run.run_id.slice(0, 12)}…</code> : '—'}</td><td className="mgmt-muted">{run.error_message || '—'}</td></tr>
-            ))}</tbody></table></div>
-          )}
+          <div className={s.bars} role="img" aria-label={`最近 30 天共 ${recent} 次运行，${recentFailed} 次失败`}>
+            {strip.map((c) => (
+              <i key={c.day} className={s[`bar_${c.outcome}`]} title={`${c.day} · ${c.count ? `${c.count} 次` : '无运行'}`} />
+            ))}
+          </div>
+          <div className={s.legend}>
+            <span><i className={s.bar_ok} />成功</span>
+            <span><i className={s.bar_err} />有失败</span>
+            <span><i className={s.bar_none} />无运行</span>
+          </div>
         </section>
-      ) : null}
+
+        {tab === 'jobs' ? (
+          <section className={`${s.panel} ${s.tableWrap}`}>
+            {loading && !jobs.length ? <p className={s.empty}>正在读取…</p> : null}
+            {!loading && !jobs.length ? (
+              <div className={s.empty}>
+                <b>还没有定时任务</b>
+                <span>定时任务会按计划自动发起一次对话，结果出现在会话列表里。</span>
+              </div>
+            ) : null}
+            {jobs.length ? (
+              <table className={s.table}>
+                <thead>
+                  <tr><th>定时任务</th><th>日程</th><th>下次运行</th><th>状态</th><th aria-label="操作" /></tr>
+                </thead>
+                <tbody>
+                  {jobs.map((job) => (
+                    <tr key={job.cron_job_id} onClick={() => setEditing({ job })}>
+                      <td>
+                        <span className={s.name}>
+                          <span className={s.icon} aria-hidden="true">
+                            <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M11 2.8 5 11h4.5L9 17.2 15 9h-4.5z" /></svg>
+                          </span>
+                          {job.name}
+                          {agentTag(job.agent_id)}
+                        </span>
+                      </td>
+                      <td className={s.muted}>{describeJob(job)}</td>
+                      <td className={s.num}>{job.enabled ? formatInstant(job.next_run_at, job.timezone) : '—'}</td>
+                      <td>
+                        <span className={s.state}>
+                          <i className={job.enabled ? s.dotOn : s.dotOff} aria-hidden="true" />
+                          {job.enabled ? '已启用' : '已暂停'}
+                        </span>
+                      </td>
+                      <td className={s.more} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className={s.ghost}
+                          aria-label={`${job.name} 的更多操作`}
+                          aria-expanded={menuFor === job.cron_job_id}
+                          onClick={() => setMenuFor(menuFor === job.cron_job_id ? null : job.cron_job_id)}
+                        >
+                          ⋯
+                        </button>
+                        {menuFor === job.cron_job_id ? (
+                          <div className={s.menu} role="menu">
+                            <button type="button" role="menuitem" onClick={() => void act('已开始运行', () => runCronJobNow(job.cron_job_id))}>立即运行</button>
+                            <button type="button" role="menuitem" onClick={() => { setMenuFor(null); setEditing({ job }); }}>编辑</button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => void act(job.enabled ? '已暂停' : '已启用', () => updateCronJob(job.cron_job_id, { enabled: !job.enabled }))}
+                            >
+                              {job.enabled ? '暂停' : '启用'}
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className={s.danger}
+                              onClick={() =>
+                                confirmDelete === job.cron_job_id
+                                  ? void act('已删除', () => deleteCronJob(job.cron_job_id))
+                                  : setConfirmDelete(job.cron_job_id)
+                              }
+                            >
+                              {confirmDelete === job.cron_job_id ? '确认删除（运行记录会保留）' : '删除'}
+                            </button>
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+          </section>
+        ) : (
+          <section className={`${s.panel} ${s.tableWrap}`}>
+            {!history.length ? <div className={s.empty}><b>还没有运行记录</b></div> : (
+              <table className={s.table}>
+                <thead>
+                  <tr><th>计划时间</th><th>定时任务</th><th>结果</th><th aria-label="操作" /></tr>
+                </thead>
+                <tbody>
+                  {history.map((run) => {
+                    const [label, cls] = OUTCOME[runOutcome(run)];
+                    return (
+                      <tr key={run.cron_job_run_id} className={s.static}>
+                        <td className={s.num}>{formatInstant(run.scheduled_at, run.timezone)}</td>
+                        <td>{run.jobName}</td>
+                        <td>
+                          <span className={`${s.pill} ${cls}`}>{label}</span>
+                          {run.error_message ? <span className={s.errText}> {run.error_message}</span> : null}
+                        </td>
+                        <td className={s.right}>
+                          {run.run_id ? (
+                            <button type="button" className={s.btn} onClick={() => void openRun(run)}>打开会话</button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+      </div>
+
+      <ScheduleDialog
+        open={editing != null}
+        job={editing?.job ?? null}
+        agents={agents}
+        onClose={() => setEditing(null)}
+        onSave={save}
+        onTryRun={editing?.job ? () => act('已开始运行', () => runCronJobNow(editing.job!.cron_job_id)) : undefined}
+      />
     </div>
   );
 }

@@ -11,6 +11,8 @@ type Loose = any;
 export const CRON_JOB_LIST_DEFAULT_LIMIT = 100;
 export const CRON_JOB_RUN_LIST_DEFAULT_LIMIT = 50;
 export const CRON_JOB_LIST_MAX_LIMIT = 200;
+/** Cross-job history (30-day strip + history tab) is one page, so it gets a larger cap. */
+export const CRON_OWNER_RUN_LIST_MAX_LIMIT = 1000;
 
 function requireLimit(value, fallback) {
   if (value == null) return fallback;
@@ -368,6 +370,33 @@ export class CronJobRepository {
       .orderBy('jr.scheduled_at', 'desc')
       .limit(limit);
     return rows.map(mapCronJobRun);
+  }
+
+  /**
+   * Executions of every live job of one owner, newest first — the schedules
+   * page's 30-day strip and history tab in one query instead of one per job.
+   * Deleted jobs are left out, as they are from the job list.
+   */
+  async listRunsForOwner(scope: OwnerScope, opts: { since?: Date | null; limit?: number } = {}) {
+    const owner = requireOwner(scope);
+    const limit = opts.limit == null ? 500 : Number(opts.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > CRON_OWNER_RUN_LIST_MAX_LIMIT) {
+      throw new Error(`limit must be an integer between 1 and ${CRON_OWNER_RUN_LIST_MAX_LIMIT}`);
+    }
+    let q = this.db('tbl_agsvc_cron_job_runs as jr')
+      .join('tbl_agsvc_cron_jobs as j', 'j.cron_job_id', 'jr.cron_job_id')
+      .leftJoin('tbl_agsvc_runs as r', 'r.run_id', 'jr.run_id')
+      .select('jr.*', 'r.status as run_status', 'j.name as job_name', 'j.timezone as job_timezone')
+      .where('j.org_id', owner.orgId)
+      .where('j.user_id', owner.userId)
+      .whereNull('j.deleted_at');
+    if (opts.since) q = q.where('jr.scheduled_at', '>=', toMysqlDateTime(opts.since));
+    const rows = await q.orderBy('jr.scheduled_at', 'desc').orderBy('jr.cron_job_run_id', 'desc').limit(limit);
+    return rows.map((row) => ({
+      ...mapCronJobRun(row),
+      jobName: String(row.job_name),
+      jobTimezone: String(row.job_timezone),
+    }));
   }
 
   async hasOpenExecution(cronJobId) {

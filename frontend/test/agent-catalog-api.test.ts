@@ -16,7 +16,7 @@ import {
   validateAgentConfig,
 } from '../src/shared/api/agents.ts';
 import { ApiError } from '../src/shared/api/client.ts';
-import { catalogFromResult } from '../src/pages/settings/AgentsPage.tsx';
+import { catalogFromResult, configDiff, formatDiffValue, groupToolsForPermissions } from '../src/pages/settings/agentHelpers.ts';
 import {
   activeVersionOf,
   jsonSemanticallyEqual,
@@ -490,5 +490,52 @@ describe('optimistic activation and the config plane wire contract', () => {
     });
     // The path is what anchors the error to a checkbox row in the editor.
     assert.equal(result.errors[0]?.path, 'mcpServers[0].enabledTools[1]');
+  });
+});
+
+describe('groupToolsForPermissions', () => {
+  it('groups registry tools by purpose and keeps MCP tools together', () => {
+    const tools = ['read', 'bash', 'job_output', 'subagent', 'delegate_to_remote_agent', 'todo_write', 'mcp__exa__web_search_exa', 'write', 'new_tool']
+      .map((name) => ({ name }));
+    const groups = groupToolsForPermissions(tools);
+    assert.deepEqual(
+      groups.map((g) => [g.group, g.tools.map((t) => t.name)]),
+      [
+        ['文件', ['read', 'write']],
+        ['命令与后台任务', ['bash', 'job_output']],
+        ['协作', ['subagent', 'delegate_to_remote_agent']],
+        ['交互与产出', ['todo_write']],
+        ['MCP', ['mcp__exa__web_search_exa']],
+        ['其他', ['new_tool']],
+      ],
+    );
+  });
+});
+
+describe('configDiff', () => {
+  it('lists changed, added and removed leaves; key order is not a change', () => {
+    const active = { schemaVersion: 1, modelPolicy: { modelId: 'a', thinkingLevel: 'low' }, toolPolicy: { tools: { bash: 'allow' } } };
+    const draft = { toolPolicy: { tools: { bash: 'require_approval', write: 'deny' } }, modelPolicy: { thinkingLevel: 'low' }, schemaVersion: 1 };
+    assert.deepEqual(configDiff(active, draft), [
+      { path: 'modelPolicy.modelId', before: 'a', after: undefined },
+      { path: 'toolPolicy.tools.bash', before: 'allow', after: 'require_approval' },
+      { path: 'toolPolicy.tools.write', before: undefined, after: 'deny' },
+    ]);
+    assert.deepEqual(configDiff(active, JSON.parse(JSON.stringify(active))), []);
+  });
+
+  it('does not report an empty object gaining children as a removal', () => {
+    assert.deepEqual(configDiff({ toolPolicy: {} }, { toolPolicy: { tools: { bash: 'deny' } } }), [
+      { path: 'toolPolicy.tools.bash', before: undefined, after: 'deny' },
+    ]);
+  });
+
+  it('compares arrays whole and formats absent values', () => {
+    const changes = configDiff({ mcpServers: [{ id: 'exa', enabledTools: ['a'] }] }, { mcpServers: [{ id: 'exa', enabledTools: ['a', 'b'] }] });
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].path, 'mcpServers');
+    assert.equal(formatDiffValue(undefined), '（无）');
+    assert.equal(formatDiffValue('deny'), 'deny');
+    assert.equal(formatDiffValue(['a']), '["a"]');
   });
 });

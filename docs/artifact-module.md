@@ -16,7 +16,7 @@ sandbox/artifact/
 New callers use `sandbox.artifact.application.facade.ArtifactFacade`:
 
 - `submit(...)`
-- `list(...)`
+- `list(...)`（按会话 / 工作区；产物库另有按 owner 跨会话的列表，见 `api.md` 的 `GET /artifacts`）
 - `resolve_download(...)`
 - `import_to_workspace(...)`
 

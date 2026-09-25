@@ -1,0 +1,208 @@
+/**
+ * 线性对话流的卡片字段。样例载荷取自 agent 工具台账的真实行
+ * （tbl_agsvc_tool_executions，去掉 $v/$integrity 外壳）。
+ */
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  formatDurationMs,
+  isQuestionToolName,
+  isSubtaskToolName,
+  isTodoToolName,
+  jobFields,
+  questionFields,
+  subtaskFields,
+  summarizeToolGroup,
+  todoItems,
+  toolVerb,
+  turnSummary,
+  formatElapsed,
+} from '../src/features/chat/projections/turnFields.ts';
+import { inferToolSource } from '../src/shared/state/platformEventNormalize.ts';
+
+describe('summarizeToolGroup', () => {
+  it('counts categories in order of first appearance', () => {
+    const tools = ['read', 'bash', 'bash', 'grep'].map((name) => ({ name }));
+    assert.equal(summarizeToolGroup(tools), '读取 1 个文件，运行 2 条命令，搜索 1 次内容');
+  });
+
+  it('names MCP and unknown tools without leaking wire names', () => {
+    const tools = [{ name: 'mcp__exa__web_search_exa' }, { name: 'custom_tool' }];
+    assert.equal(summarizeToolGroup(tools), '调用 1 次外部工具，调用 1 个工具');
+    assert.equal(toolVerb('mcp__exa__web_search_exa'), '调用 exa.web_search_exa');
+  });
+});
+
+describe('subtaskFields', () => {
+  it('reads the conclusion from a foreground subagent result', () => {
+    const f = subtaskFields({
+      input: { prompt: 'You are child agent B…', description: 'Inspect frontend entry' },
+      result: {
+        value: { kind: 'foreground', runId: 'sub_vtjt9ow1', output: [{ text: '- **VERDICT**: NOT_FOUND' }] },
+        content: [{ type: 'text', text: 'ignored' }],
+        isError: false,
+      },
+      isError: false,
+    });
+    assert.equal(f.title, 'Inspect frontend entry');
+    assert.equal(f.childRunId, 'sub_vtjt9ow1');
+    assert.equal(f.conclusion, '- **VERDICT**: NOT_FOUND');
+    assert.equal(f.agent, null);
+    assert.equal(f.error, null);
+  });
+
+  it('reports a delegation to another agent that was aborted', () => {
+    const f = subtaskFields({
+      input: { agent: 'deleg-analyst', prompt: 'Run sleep 120', description: 'Run sleep 120 then reply' },
+      result: {
+        error: { info: { code: 'ABORTED' }, message: 'tool call aborted' },
+        content: [{ text: 'Error: tool call aborted', type: 'text' }],
+        isError: true,
+      },
+      isError: true,
+    });
+    assert.equal(f.agent, 'deleg-analyst');
+    assert.equal(f.error, 'tool call aborted');
+    assert.equal(f.conclusion, null);
+  });
+
+  it('marks a remote delegation rejected at the approval gate', () => {
+    const f = subtaskFields({
+      input: { agent: 'loopback-analyst', prompt: 'What is 19 * 21?', description: 'multiply' },
+      result: { reason: null, decision: 'reject', approvalId: '01M39Z53CRVDDZ7JA0696V9DBX' },
+      isError: true,
+    });
+    assert.equal(f.rejected, true);
+    assert.equal(f.error, '审批被拒绝');
+  });
+});
+
+describe('questionFields', () => {
+  it('parses the DSH questions[] shape and the answer', () => {
+    const f = questionFields({
+      input: {
+        questions: [{
+          id: 'color_choice', header: 'Choose a Color', question: 'Which color do you choose?',
+          multi_select: false,
+          options: [{ label: 'red', description: 'Choose red.' }, { label: 'blue', description: 'Choose blue.' }],
+        }],
+      },
+      result: { response: 'blue', interactionId: '01M2X9ENFNJ5X6JEZQAHFVYXFZ' },
+    });
+    assert.equal(f.question, 'Which color do you choose?');
+    assert.equal(f.header, 'Choose a Color');
+    assert.deepEqual(f.options.map((o) => o.label), ['red', 'blue']);
+    assert.equal(f.answer, 'blue');
+  });
+
+  it('falls back to the pending interaction while the tool has no args yet', () => {
+    const f = questionFields({ input: null, result: null }, { title: 'Pick one', options: ['a', 'b'] });
+    assert.equal(f.question, 'Pick one');
+    assert.deepEqual(f.options.map((o) => o.label), ['a', 'b']);
+    assert.equal(f.answer, null);
+  });
+});
+
+describe('jobFields', () => {
+  it('shows the tail of the newest job_output and keeps running state', () => {
+    const f = jobFields(
+      { input: { command: 'for i in $(seq 1 300); do echo TICK-$i; sleep 1; done', run_in_background: true } },
+      [{
+        name: 'job_output',
+        isError: false,
+        result: {
+          value: { job: { id: 'bash-70f3', kind: 'bash', status: 'running' }, text: 'TICK-1\nTICK-2\n' },
+          content: [{ text: 'TICK-1\nTICK-2\n[status: running]', type: 'text' }],
+          isError: false,
+        },
+      }],
+    );
+    assert.equal(f.running, true);
+    assert.equal(f.outputTail, 'TICK-1\nTICK-2');
+  });
+
+  it('reports an unknown state before any job_output', () => {
+    assert.equal(jobFields({ input: { command: 'sleep 5' } }, []).running, null);
+  });
+
+  it('stops after a successful job_kill', () => {
+    const f = jobFields({ input: { command: 'sleep 120' } }, [{ name: 'job_kill', isError: false, result: {} }]);
+    assert.equal(f.running, false);
+  });
+});
+
+describe('formatDurationMs', () => {
+  it('formats short and long durations', () => {
+    assert.equal(formatDurationMs(420), '420ms');
+    assert.equal(formatDurationMs(1900), '1.9s');
+    assert.equal(formatDurationMs(34_000), '34s');
+    assert.equal(formatDurationMs(124_000), '2分04秒');
+    assert.equal(formatDurationMs(null), '');
+  });
+});
+
+describe('tool kinds with their own cards', () => {
+  it('recognises only the current DSH tool names', () => {
+    assert.equal(isSubtaskToolName('subagent'), true);
+    assert.equal(isSubtaskToolName('delegate_to_agent'), true);
+    assert.equal(isQuestionToolName('ask_user_question'), true);
+    assert.equal(isTodoToolName('todo_write'), true);
+    // Old-engine names are gone with the history they came from.
+    assert.equal(isSubtaskToolName('spawn_subagent'), false);
+    assert.equal(isQuestionToolName('ask_user'), false);
+    assert.equal(isTodoToolName('memory_write'), false);
+  });
+
+  it('classifies the factory tool surface instead of leaving it unknown', () => {
+    for (const name of ['read', 'write', 'edit', 'bash', 'glob', 'grep', 'job_list', 'job_output', 'submit_artifact']) {
+      assert.equal(inferToolSource(name, {}), 'sandbox', name);
+    }
+    for (const name of ['skill', 'subagent', 'ask_user_question']) {
+      assert.equal(inferToolSource(name, {}), 'internal', name);
+    }
+  });
+});
+
+describe('todoItems', () => {
+  it('reads the plan from the arguments, ordered by position', () => {
+    const todos = todoItems({
+      todos: [
+        { position: 2, content: 'second', status: 'in_progress' },
+        { position: 1, content: 'first', status: 'completed' },
+        { position: 3, content: '   ' },
+      ],
+    });
+    assert.deepEqual(todos.map((t) => [t.position, t.content, t.status]), [
+      [1, 'first', 'completed'],
+      [2, 'second', 'in_progress'],
+    ]);
+  });
+
+  it('defaults position and status, and ignores non-list input', () => {
+    assert.deepEqual(todoItems({ todos: [{ content: 'a' }] }), [{ position: 1, content: 'a', status: 'pending' }]);
+    assert.deepEqual(todoItems({ items: [{ content: 'old engine shape' }] }), []);
+    assert.deepEqual(todoItems(null), []);
+  });
+});
+
+describe('turnSummary', () => {
+  it('reports duration, tools and sub-tasks of a finished turn', () => {
+    const run = { startedAt: '2026-09-25T10:00:00.000Z', finishedAt: '2026-09-25T10:02:04.000Z' };
+    const tools = ['read', 'bash', 'job_output', 'subagent', 'delegate_to_agent'].map((name) => ({ name }));
+    assert.equal(turnSummary(run, tools), '2分04秒 · 3 个工具 · 2 个子任务');
+  });
+
+  it('omits what it does not know', () => {
+    assert.equal(turnSummary({ startedAt: '2026-09-25T10:00:00.000Z', finishedAt: null }, []), '');
+    assert.equal(turnSummary(null, [{ name: 'bash' }]), '1 个工具');
+  });
+});
+
+describe('formatElapsed', () => {
+  it('reads like the composer status line', () => {
+    assert.equal(formatElapsed(9_400), '9 秒');
+    assert.equal(formatElapsed(72_000), '1 分 12 秒');
+    assert.equal(formatElapsed(3_900_000), '1 小时 5 分');
+    assert.equal(formatElapsed(-5), '0 秒');
+  });
+});

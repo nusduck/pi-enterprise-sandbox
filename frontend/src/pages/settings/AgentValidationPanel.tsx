@@ -1,5 +1,6 @@
 import type { AgentConfigValidationState } from './agentHelpers';
 import { normalizedConfigChanged, parseAgentConfigDraft, warningMessage } from './agentHelpers';
+import s from './agents.module.css';
 
 function json(value: unknown): string {
   try {
@@ -7,6 +8,15 @@ function json(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+/** One-line validation status for the editor's top bar. */
+export function validationSummary(state: AgentConfigValidationState): [string, string] {
+  if (state.status === 'pending') return ['校验中…', s.stMute];
+  if (state.status === 'valid') return ['校验通过', s.stOk];
+  if (state.status === 'invalid') return [`${state.errors.length || 1} 处问题`, s.stErr];
+  if (state.status === 'unavailable') return ['无法校验', s.stWarn];
+  return ['', ''];
 }
 
 export function AgentValidationPanel({
@@ -18,41 +28,43 @@ export function AgentValidationPanel({
 }) {
   const parsed = parseAgentConfigDraft(draft);
   const hasNormalizationDiff = parsed.ok && normalizedConfigChanged(parsed.config, state.normalizedConfig);
+  const empty = state.status !== 'unavailable' && !state.errors.length && !state.warnings.length
+    && !hasNormalizationDiff && state.effectiveSummary === undefined;
+  if (empty) return null;
   return (
-    <div className="agent-validation-panel" aria-live="polite">
-      {state.status === 'pending' ? <p className="agent-validation-status pending">Checking this draft against the server…</p> : null}
-      {state.status === 'unavailable' ? <p className="agent-validation-status unavailable" role="status">Validation is unavailable{state.message ? `: ${state.message}` : ''}. Publishing is blocked.</p> : null}
-      {state.status === 'valid' ? <p className="agent-validation-status valid" role="status">Validated by the Agent service{state.capabilityRevision ? ` · capability revision ${state.capabilityRevision}` : ''}.</p> : null}
+    <div className={s.validation} aria-live="polite">
+      {state.status === 'unavailable' ? (
+        <p className={s.warnBox} role="status">无法校验{state.message ? `：${state.message}` : ''}。在校验通过前不能发布。</p>
+      ) : null}
       {state.errors.length ? (
-        <div className="agent-validation-errors" role="alert">
-          <strong>Fix {state.errors.length} field{state.errors.length === 1 ? '' : 's'} before publishing.</strong>
-          <ul>{state.errors.map((error) => <li key={`${error.path}:${error.code}`}><code>{error.path || '<root>'}</code> — {error.message}</li>)}</ul>
+        <div className={s.errBox} role="alert">
+          <b>发布前需要修正 {state.errors.length} 处：</b>
+          <ul>{state.errors.map((error) => <li key={`${error.path}:${error.code}`}><code>{error.path || '<根>'}</code> — {error.message}</li>)}</ul>
         </div>
       ) : null}
       {state.warnings.length ? (
-        <div className="agent-validation-warnings">
-          <strong>Review warnings</strong>
+        <div className={s.warnBox}>
+          <b>请留意</b>
           <ul>{state.warnings.map((warning, index) => <li key={`${warningMessage(warning)}:${index}`}>{warningMessage(warning)}</li>)}</ul>
         </div>
       ) : null}
       {hasNormalizationDiff ? (
-        <details className="agent-normalization-diff" open>
-          <summary>Server normalization changes this draft</summary>
-          <p className="mgmt-hint">The server will persist the normalized form. Review the semantic difference before publishing; the editor keeps your original draft until you choose to apply it.</p>
-          <div className="agent-diff-grid">
-            <div><span>Draft</span><pre>{json(parsed.ok ? parsed.config : draft)}</pre></div>
-            <div><span>Normalized</span><pre>{json(state.normalizedConfig)}</pre></div>
+        <details className={s.details}>
+          <summary>服务端会规范化这份草稿</summary>
+          <p className={s.hint}>保存的是规范化后的形式。发布前请核对差异；编辑器保留你的原始草稿。</p>
+          <div className={s.diff}>
+            <div><span>草稿</span><pre>{json(parsed.ok ? parsed.config : draft)}</pre></div>
+            <div><span>规范化后</span><pre>{json(state.normalizedConfig)}</pre></div>
           </div>
         </details>
       ) : null}
       {state.effectiveSummary !== undefined ? (
-        <details className="agent-effective-summary">
-          <summary>Effective configuration summary</summary>
-          <p className="mgmt-hint">This is a server projection under current platform constraints, not a complete future model context.</p>
+        <details className={s.details}>
+          <summary>生效配置摘要</summary>
+          <p className={s.hint}>这是服务端在当前平台约束下的投影，不是完整的模型上下文。</p>
           <pre>{json(state.effectiveSummary)}</pre>
         </details>
       ) : null}
     </div>
   );
 }
-

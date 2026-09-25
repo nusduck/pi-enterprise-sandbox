@@ -27,10 +27,12 @@ describe('F6 responsive layout (CSS breakpoints)', () => {
   });
 
   it('defines mobile sidebar drawer breakpoint (max-width: 768px)', () => {
-    assert.match(css, /@media\s*\(max-width:\s*768px\)/);
-    assert.match(css, /\.sidebar\.open-mobile/);
-    assert.match(css, /\.sidebar-backdrop/);
-    assert.match(css, /\.sidebar-close-btn/);
+    // The sidebar owns its styles in a CSS Module since the redesign.
+    const side = readSrc('widgets', 'conversation-sidebar', 'sidebar.module.css');
+    assert.match(side, /@media\s*\(max-width:\s*768px\)/);
+    assert.match(side, /\.mobileOpen/);
+    assert.match(side, /\.backdrop/);
+    assert.match(side, /position:\s*fixed/);
   });
 
   it('keeps three-pane workbench shell classes', () => {
@@ -47,8 +49,7 @@ describe('F6 a11y attributes on key surfaces', () => {
       'conversation-header',
       'ConversationHeader.tsx',
     );
-    // Management chrome keeps sidebar toggle; chat toolbar owns both toggles.
-    assert.match(shell, /aria-label=["']Toggle sidebar["']/);
+    // The workbench shell announces page changes; the title bar owns the toggles.
     assert.match(shell, /aria-live=["']polite["']/);
     assert.match(toolbar, /aria-label=["']Toggle sidebar["']/);
     assert.match(toolbar, /aria-label=["']Toggle context inspector["']/);
@@ -58,15 +59,16 @@ describe('F6 a11y attributes on key surfaces', () => {
 
   it('ConversationSidebar: primary nav + list semantics', () => {
     const side = readSrc('widgets', 'conversation-sidebar', 'ConversationSidebar.tsx');
-    assert.match(side, /aria-label=["']Primary["']/);
-    assert.match(side, /aria-label=["']Account["']/);
-    assert.match(side, /sidebar-nav-primary/);
-    assert.match(side, /sidebar-nav-footer/);
-    assert.match(side, /Settings/);
-    assert.match(side, /role=["']list["']/);
-    assert.match(side, /role=["']listitem["']/);
-    assert.match(side, /aria-label=["']Close sidebar["']/);
-    assert.match(side, /aria-label=["']Delete conversation["']/);
+    assert.match(side, /aria-label="主导航"/);
+    assert.match(side, /aria-label="搜索会话"/);
+    assert.match(side, /role="list"/);
+    assert.match(side, /role="listitem"/);
+    assert.match(side, /tabIndex=\{0\}/);
+    assert.match(side, /aria-label="收起侧栏"/);
+    assert.match(side, /aria-label="删除会话"/);
+    // Account actions live in a labelled menu, not bare links.
+    assert.match(side, /role="menu"/);
+    assert.match(side, /aria-expanded=\{menuOpen\}/);
   });
 
   it('Composer: status banners and running action group', () => {
@@ -78,13 +80,15 @@ describe('F6 a11y attributes on key surfaces', () => {
     assert.doesNotMatch(composer, /id=["']btn-install-skill["']/);
   });
 
-  it('Inline runtime steps: list region and expandable rows', () => {
-    const steps = readSrc('widgets', 'runtime-steps', 'InlineRuntimeSteps.tsx');
-    assert.match(steps, /aria-label=["']Runtime steps["']/);
-    assert.match(steps, /role=["']list["']/);
-    assert.match(steps, /aria-expanded=\{expandable \? open : undefined\}/);
-    assert.match(steps, /Approve/);
-    assert.match(steps, /Console/);
+  it('Turn stream: native disclosure rows and labelled action cards', () => {
+    const cards = readSrc('widgets', 'turn-stream', 'TurnCards.tsx');
+    // Tool groups, thinking and sub-tasks are <details>/<summary>: keyboard
+    // and screen-reader expansion come from the platform, not custom ARIA.
+    assert.match(cards, /<details className=\{s\.act\}/);
+    assert.match(cards, /<details className=\{s\.sub\}/);
+    assert.match(cards, /role="group" aria-label="需要你批准"/);
+    assert.match(cards, /批准/);
+    assert.match(cards, /打开进程控制台/);
 
     // Workbench no longer mounts the bottom Activity drawer.
     const workbench = readSrc('pages', 'workbench', 'WorkbenchPage.tsx');
@@ -96,7 +100,9 @@ describe('F6 a11y attributes on key surfaces', () => {
     const runs = readSrc('pages', 'runs', 'RunsPage.tsx');
     assert.match(runs, /role=["']tablist["']/);
     assert.match(runs, /aria-selected=\{filter === f\.id\}/);
-    assert.match(runs, /aria-label=["']Run detail["']/);
+    const runDetail = readSrc('pages', 'runs', 'RunDetailPage.tsx');
+    assert.match(runDetail, /aria-label=["']Run detail["']/);
+    assert.match(runDetail, /role=["']tablist["']/);
 
     const approvals = readSrc('pages', 'approvals', 'ApprovalsPage.tsx');
     assert.match(approvals, /role=["']tablist["']/);
@@ -104,7 +110,7 @@ describe('F6 a11y attributes on key surfaces', () => {
 
     const caps = readSrc('pages', 'settings', 'CapabilitiesPage.tsx');
     assert.match(caps, /role=["']tablist["']/);
-    assert.match(caps, /aria-selected=\{tab === t\.id\}/);
+    assert.match(caps, /aria-selected=\{tab === id\}/);
   });
 
   it('BudgetBar + ConversationHeader: status/region labels', () => {

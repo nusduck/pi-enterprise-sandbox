@@ -9,49 +9,32 @@ import {
   type SelectedEntity,
 } from '../../widgets/runtime-timeline/buildTimeline';
 import { WorkbenchSelectionContext } from './WorkbenchSelectionContext';
-import { SettingsLayout } from './SettingsSubnav';
-import { IconMenu, IconSun, IconMoon } from '../../shared/ui/Icons';
-import { useTheme } from '../../shared/ui/theme';
 
 /**
- * Shell interaction model:
+ * Workbench shell (conversations and user pages; the admin console has its
+ * own AdminShell):
  * - Left: navigation + conversations (drawer on mobile)
- * - Center: page content (workbench owns its own toolbar)
- * - Right: context inspector (workbench only; opens on entity select)
+ * - Center: page content (the workbench owns its title bar)
+ * - Right: conversation resources drawer (artifacts, files, datasets,
+ *   processes) on conversation pages, opened from the title bar
  */
-function isManagementPath(pathname: string): boolean {
-  return (
-    pathname === '/runs' ||
-    pathname === '/approvals' ||
-    pathname === '/schedules' ||
-    pathname.startsWith('/settings')
-  );
-}
-
-function managementTitle(pathname: string): string {
-  if (pathname.startsWith('/settings/runs') || pathname === '/runs') return 'Active Runs';
-  if (pathname.startsWith('/settings/approvals') || pathname === '/approvals') return 'Approval Center';
-  if (pathname === '/schedules') return 'Scheduled Runs';
-  if (pathname.startsWith('/settings/agents')) return 'Agents';
-  if (pathname.startsWith('/settings/a2a')) return 'A2A Access';
-  if (pathname.startsWith('/settings/capabilities') || pathname === '/settings') return 'Capabilities';
-  return 'UPRC Agent';
+function isConversationPath(pathname: string): boolean {
+  return pathname === '/' || pathname.startsWith('/c/');
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
   const location = useLocation();
-  const management = isManagementPath(location.pathname);
-  const { state, toggleSidebar, inspectorOpen, setInspectorOpen } = useChat();
-  const [theme, toggleTheme] = useTheme();
+  const onConversation = isConversationPath(location.pathname);
+  const { state, inspectorOpen, setInspectorOpen } = useChat();
 
-  const [inspectorTab, setInspectorTab] = useState<InspectorTabId>('overview');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTabId>('artifacts');
   const [selected, setSelected] = useState<SelectedEntity>(null);
   const [consoleProcessId, setConsoleProcessId] = useState<string | null>(null);
 
   if (!state.authReady) {
     return (
       <div id="app" className="app-shell session-bootstrap" role="status" aria-live="polite">
-        Restoring session…
+        正在恢复会话…
       </div>
     );
   }
@@ -65,10 +48,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   function openProcessConsole(processId: string) {
+    // The console is its own sheet; the resources drawer stays as the user left it.
     setConsoleProcessId(processId);
     setSelected({ kind: 'process', id: processId });
-    setInspectorTab('processes');
-    setInspectorOpen(true);
   }
 
   function closeProcessConsole() {
@@ -87,57 +69,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         closeProcessConsole,
       }}
     >
-      <div
-        id="app"
-        className={`app-shell workbench-shell${management ? ' mgmt-shell' : ' chat-shell'}`}
-      >
+      <div id="app" className="app-shell workbench-shell chat-shell">
         <ConversationSidebar />
-
-        <div className="main-col">
-          {management ? (
-            <header className="header header-mgmt">
-              <button
-                type="button"
-                className="btn-icon"
-                id="btn-sidebar-toggle"
-                title="Toggle sidebar"
-                aria-label="Toggle sidebar"
-                onClick={toggleSidebar}
-              >
-                <IconMenu size={18} />
-              </button>
-              <div className="logo" aria-hidden="true">
-                <img src="/brand/uprc-icon.png" alt="" width={26} height={26} />
-              </div>
-              <h1>{managementTitle(location.pathname)}</h1>
-              <div className="badge" aria-live="polite">
-                <span
-                  className="dot"
-                  aria-hidden="true"
-                  style={{ background: state.statusColor }}
-                />
-                <span id="status-label">{state.statusLabel}</span>
-              </div>
-              <button
-                type="button"
-                className="btn-icon"
-                title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-                aria-label="Toggle color theme"
-                onClick={() => toggleTheme()}
-              >
-                {theme === 'light' ? <IconMoon size={16} /> : <IconSun size={16} />}
-              </button>
-            </header>
-          ) : null}
-
-          {location.pathname.startsWith('/settings') ? (
-            <SettingsLayout>{children}</SettingsLayout>
-          ) : (
-            <div className="workbench-center">{children}</div>
-          )}
+        <div className="main-col" aria-live="polite">
+          <div className="workbench-center">{children}</div>
         </div>
-
-        {!management ? (
+        {onConversation ? (
           <ContextInspector
             open={inspectorOpen}
             onClose={() => setInspectorOpen(false)}

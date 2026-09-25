@@ -9,6 +9,7 @@
 import { randomBytes } from 'node:crypto';
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
+import { CRON_OWNER_RUN_LIST_MAX_LIMIT } from '../infrastructure/mysql/repositories/cron-job-repository.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import {
@@ -286,6 +287,24 @@ export class CronJobService {
     const owner = await this.#resolveOwner(auth, repos);
     const entries = await repos.cronJobs.listRunsForJob(cronJobId, owner, opts);
     return entries.map(presentCronJobRun);
+  }
+
+  /** Executions of all the caller's jobs since `since` (ISO), newest first. */
+  async listAllRuns(auth, opts: { since?: string | null; limit?: unknown } = {}) {
+    let since: Date | null = null;
+    if (opts.since) {
+      const ms = Date.parse(String(opts.since));
+      if (Number.isNaN(ms)) throw new ValidationError('since must be an ISO-8601 instant');
+      since = new Date(ms);
+    }
+    const limit = opts.limit == null || opts.limit === '' ? 500 : Number(opts.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > CRON_OWNER_RUN_LIST_MAX_LIMIT) {
+      throw new ValidationError(`limit must be an integer between 1 and ${CRON_OWNER_RUN_LIST_MAX_LIMIT}`);
+    }
+    const repos = this.createRepositories(this.db);
+    const owner = await this.#resolveOwner(auth, repos);
+    const entries = await repos.cronJobs.listRunsForOwner(owner, { since, limit });
+    return entries.map((e) => ({ ...presentCronJobRun(e), job_name: e.jobName, job_timezone: e.jobTimezone }));
   }
 
   #nextAfter(job, scheduledAt) {

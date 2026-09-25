@@ -1,478 +1,263 @@
 /**
- * Active Runs page — /runs (F5 / ADR 0003 §10).
- * Filter by status; open conversation, cancel, view logs/detail.
- * Soft-fails when list API is incomplete; falls back to entity store.
+ * 运行（admin）：全组织的运行。统计条 + 筛选 + 整行可点的表格，点进
+ * /admin/runs/:runId 看 Trace。数据来自 /api/admin/runs*（角色与 org 作用域由 agent/ 判定）。
  */
-import { useCallback, useEffect, useMemo, useState, Fragment } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
-import { listRuns, cancelRun, getRun, getRunTraceSpans } from '../../shared/api/runs';
 import {
-  createTraceSpan,
-  getRunTraceSpans as getStoreTraceSpans,
-  type TraceSpanEntity,
-} from '../../entities';
-import { formatRunStatusLabel } from '../../widgets/runtime-timeline/buildTimeline';
-import { TracePanel } from '../../widgets/trace-panel/TracePanel';
+  getAdminRunStats,
+  listAdminRuns,
+  type AdminRun,
+  type AdminRunStats,
+} from '../../shared/api/adminRuns';
 import {
   RUN_STATUS_FILTERS,
-  canCancelRun,
-  filterRunsByStatus,
+  formatLongDuration,
   formatRunDuration,
-  mergeRunRows,
-  shortId,
-  type RunRow,
+  normalizeRunStatus,
+  runInputLabel,
   type RunStatusFilterId,
 } from './runHelpers';
-import {
-  IconRefresh,
-  IconClose,
-  IconTerminal,
-  IconChat,
-  IconAlertCircle,
-  IconSparkles,
-  IconLayers,
-  IconCopy,
-  IconCheck,
-} from '../../shared/ui/Icons';
+import a from '../settings/adminPage.module.css';
+import s from './runs.module.css';
+
+const STATUS_ZH: Record<string, [string, string]> = {
+  accepted: ['排队中', a.mute],
+  queued: ['排队中', a.mute],
+  starting: ['启动中', a.info],
+  retrying: ['重试中', a.info],
+  restoring_session: ['恢复中', a.info],
+  running: ['运行中', a.info],
+  waiting_approval: ['等待审批', a.warn],
+  waiting_input: ['等待回答', a.warn],
+  cancelling: ['取消中', a.mute],
+  cancel_requested: ['取消中', a.mute],
+  succeeded: ['成功', a.ok],
+  completed: ['成功', a.ok],
+  failed: ['失败', a.err],
+  cancelled: ['已取消', a.mute],
+  interrupted: ['已中断', a.warn],
+};
+
+export function RunStatus({ status }: { status: string }) {
+  const key = normalizeRunStatus(status);
+  const [label, cls] = STATUS_ZH[key] || [key, a.mute];
+  return <span className={`${a.pill} ${cls}`}>{label}</span>;
+}
+
+export function formatClock(value: string | null | undefined): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const today = new Date().toDateString() === date.toDateString();
+  return date.toLocaleString('zh-CN', today
+    ? { hour: '2-digit', minute: '2-digit', hour12: false }
+    : { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const max = Math.max(1, ...values);
+  const pts = values.map((v, i) => [(i / (values.length - 1)) * 140, 24 - (v / max) * 22] as const);
+  const line = pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const last = pts[pts.length - 1];
+  return (
+    <svg className={s.spark} viewBox="0 0 140 26" preserveAspectRatio="none" role="img" aria-label={`近 7 天运行量：${values.join(', ')}`}>
+      <polygon points={`0,26 ${line} 140,26`} className={s.sparkFill} />
+      <polyline points={line} className={s.sparkLine} />
+      <circle cx={last[0]} cy={last[1]} r="2.2" className={s.sparkDot} />
+    </svg>
+  );
+}
+
+/** UI filter → the Agent's status parameter (groups or plan §10 statuses). */
+const STATUS_PARAM: Record<RunStatusFilterId, string | null> = {
+  all: null,
+  running: 'running',
+  waiting_approval: 'WAITING_APPROVAL',
+  waiting_input: 'WAITING_INPUT',
+  failed: 'failed',
+  completed: 'completed',
+};
+
+type RunRange = 'today' | '7d' | '30d' | 'all';
+const RANGES: Array<[RunRange, string]> = [['today', '今天'], ['7d', '近 7 天'], ['30d', '近 30 天'], ['all', '全部']];
+
+function localMidnight(daysAgo = 0): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  return d;
+}
+
+function rangeStart(range: RunRange): string | null {
+  if (range === 'all') return null;
+  return localMidnight(range === 'today' ? 0 : range === '7d' ? 6 : 29).toISOString();
+}
 
 export function RunsPage() {
-  const { entityStore, selectConversation } = useChat();
+  const { agents } = useChat();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<RunStatusFilterId>('all');
-  const [apiRows, setApiRows] = useState<Awaited<ReturnType<typeof listRuns>>>([]);
-  const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
+  const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [agentId, setAgentId] = useState('');
+  const [range, setRange] = useState<RunRange>('7d');
+  const [runs, setRuns] = useState<AdminRun[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [stats, setStats] = useState<AdminRunStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
-  const [expandedTab, setExpandedTab] = useState<'logs' | 'trace'>('logs');
-  const [detailLog, setDetailLog] = useState<string | null>(null);
-  const [traceSpans, setTraceSpans] = useState<TraceSpanEntity[]>([]);
-  const [traceId, setTraceId] = useState<string | null>(null);
-  const [traceLoading, setTraceLoading] = useState(false);
-  const [traceError, setTraceError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [banner, setBanner] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
 
-  const refresh = useCallback(async () => {
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(query.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  const load = useCallback(async (append: string | null = null) => {
+    const gen = ++generation.current;
     setLoading(true);
+    setError(null);
     try {
-      const list = await listRuns();
-      setApiRows(list);
-      setApiAvailable(true);
-    } catch {
-      setApiRows([]);
-      setApiAvailable(false);
+      const page = await listAdminRuns({
+        status: STATUS_PARAM[filter],
+        agentId: agentId || null,
+        from: rangeStart(range),
+        q: debounced || null,
+        cursor: append,
+      });
+      if (gen !== generation.current) return;
+      setRuns((cur) => (append ? [...cur, ...page.runs] : page.runs));
+      setCursor(page.next_cursor ?? null);
+    } catch (err) {
+      if (gen !== generation.current) return;
+      const status = (err as { status?: number }).status;
+      setError(status === 403 ? '需要管理员权限。' : (err as Error).message || '读取运行失败');
+      if (!append) setRuns([]);
     } finally {
-      setLoading(false);
+      if (gen === generation.current) setLoading(false);
+    }
+  }, [filter, agentId, range, debounced]);
+
+  const loadStats = useCallback(async () => {
+    try {
+      setStats(await getAdminRunStats(localMidnight()));
+    } catch {
+      setStats(null);
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void load();
+  }, [load]);
 
-  const rows = useMemo(() => {
-    const merged = mergeRunRows(apiRows, entityStore);
-    return filterRunsByStatus(merged, filter);
-  }, [apiRows, entityStore, filter]);
+  useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
 
-  async function onOpen(row: RunRow) {
-    if (row.conversationId) {
-      await selectConversation(row.conversationId);
-    }
-    navigate('/');
-  }
-
-  async function onCancel(row: RunRow) {
-    if (!canCancelRun(row.status)) return;
-    if (!window.confirm(`Cancel run ${shortId(row.id)}?`)) return;
-    setBusyId(row.id);
-    try {
-      const ok = await cancelRun(row.id);
-      if (!ok) {
-        setBanner('Cancel is not available yet (backend may not expose cancel for this run).');
-      } else {
-        setBanner(`Cancel requested for ${shortId(row.id)}.`);
-        await refresh();
-      }
-    } catch (err) {
-      setBanner((err as Error).message || 'Cancel failed');
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function onViewLogs(row: RunRow) {
-    setDetailLog(null);
-    try {
-      const detail = await getRun(row.id);
-      if (detail) {
-        const lines = [
-          `run_id: ${detail.run_id || detail.id || row.id}`,
-          `status: ${detail.status || row.status}`,
-          `conversation_id: ${detail.conversation_id || row.conversationId || '—'}`,
-          `session_id: ${detail.session_id || detail.agent_session_id || '—'}`,
-          `started_at: ${detail.started_at || row.startedAt || '—'}`,
-          `finished_at: ${detail.finished_at || row.finishedAt || '—'}`,
-          `error: ${detail.error || row.error || '—'}`,
-          `last_sequence: ${detail.last_sequence ?? '—'}`,
-          `last_event_id: ${detail.last_event_id || '—'}`,
-        ];
-        setDetailLog(lines.join('\n'));
-      } else {
-        const run = entityStore.runsById[row.id];
-        const tools = run
-          ? run.toolExecutionIds
-              .map((id) => entityStore.toolExecutionsById[id])
-              .filter(Boolean)
-          : [];
-        const lines = [
-          `run_id: ${row.id}`,
-          `status: ${row.status}`,
-          `conversation_id: ${row.conversationId || '—'}`,
-          `source: ${row.source} (detail API unavailable)`,
-          `started_at: ${row.startedAt || '—'}`,
-          `finished_at: ${row.finishedAt || '—'}`,
-          `error: ${row.error || '—'}`,
-          '',
-          '--- tool executions (entity store) ---',
-          ...tools.map(
-            (t) =>
-              `${t!.name} [${t!.status}] ${t!.isError ? 'ERROR' : 'ok'}`,
-          ),
-          tools.length === 0 ? '(none in local store)' : '',
-        ];
-        setDetailLog(lines.filter(Boolean).join('\n'));
-      }
-    } catch (err) {
-      setDetailLog(`Failed to load logs: ${(err as Error).message}`);
-    }
-  }
-
-  async function loadTrace(runId: string) {
-    setTraceLoading(true);
-    setTraceError(null);
-    try {
-      const resp = await getRunTraceSpans(runId);
-      const spans: TraceSpanEntity[] = (resp.spans || []).map((wire) => {
-        const id = String(wire.id || wire.spanId || wire.span_id || '');
-        const parentId = (wire.parentId || wire.parent_id || null) as string | null;
-        const kind = (wire.kind || 'other') as TraceSpanEntity['kind'];
-        const rawStatus = String(wire.status || '').toLowerCase();
-        const status =
-          rawStatus === 'ok' || rawStatus === 'error' || rawStatus === 'cancelled'
-            ? rawStatus
-            : 'running';
-        return createTraceSpan({
-          id: id || `${runId}-${Math.random()}`,
-          runId,
-          orgId: String(wire.orgId || wire.org_id || '') || null,
-          userId: String(wire.userId || wire.user_id || '') || null,
-          parentId,
-          kind,
-          name: String(wire.name || kind),
-          status,
-          spanId: (wire.spanId || wire.span_id || null) as string | null,
-          durationMs:
-            typeof wire.durationMs === 'number'
-              ? wire.durationMs
-              : typeof wire.duration_ms === 'number'
-                ? wire.duration_ms
-                : null,
-          tokens: typeof wire.tokens === 'number' ? wire.tokens : null,
-          cost: typeof wire.cost === 'number' ? wire.cost : null,
-          error: wire.error ? String(wire.error) : null,
-          metadata: (wire.metadata as Record<string, unknown>) || null,
-          startedAt: (wire.startedAt || wire.started_at || null) as string | null,
-          finishedAt: (wire.finishedAt || wire.finished_at || null) as string | null,
-        });
-      });
-      setTraceSpans(spans);
-      setTraceId(resp.traceId || resp.trace_id || null);
-    } catch {
-      const storeSpans = getStoreTraceSpans(entityStore, runId);
-      setTraceSpans(storeSpans);
-      const run = entityStore.runsById[runId];
-      setTraceId(run?.traceId || null);
-      if (!storeSpans || storeSpans.length === 0) {
-        setTraceError('No trace spans found for this run.');
-      }
-    } finally {
-      setTraceLoading(false);
-    }
-  }
-
-  async function onToggleLogs(row: RunRow) {
-    if (expandedRowId === row.id && expandedTab === 'logs') {
-      setExpandedRowId(null);
-      return;
-    }
-    setExpandedRowId(row.id);
-    setExpandedTab('logs');
-    await onViewLogs(row);
-  }
-
-  async function onToggleTrace(row: RunRow) {
-    if (expandedRowId === row.id && expandedTab === 'trace') {
-      setExpandedRowId(null);
-      return;
-    }
-    setExpandedRowId(row.id);
-    setExpandedTab('trace');
-    await loadTrace(row.id);
-  }
-
-  async function handleCopyLogs() {
-    if (!detailLog) return;
-    try {
-      await navigator.clipboard.writeText(detailLog);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // ignore
-    }
-  }
+  const open = (run: AdminRun) => navigate(`/admin/runs/${encodeURIComponent(run.run_id)}`);
+  const delta = stats ? stats.today - stats.yesterday : 0;
 
   return (
-    <div className="mgmt-page">
-      <header className="mgmt-header">
+    <div className={a.page}>
+      <div className={a.head}>
         <div>
-          <h2 className="mgmt-title">Active Runs</h2>
-          <p className="mgmt-subtitle">
-            Running, waiting approval, interrupted, failed, and completed runs across all conversations.
-          </p>
+          <h1>运行</h1>
+          <p>本组织所有用户的运行记录，点进任意一行查看完整 Trace。</p>
         </div>
-        <button
-          type="button"
-          className="mgmt-btn"
-          onClick={() => void refresh()}
-          disabled={loading}
-        >
-          <IconRefresh size={14} className={loading ? 'icon-spin' : ''} />
-          <span>{loading ? 'Refreshing…' : 'Refresh'}</span>
+        <span className={a.sp} />
+        <button type="button" className={a.btn} onClick={() => { void load(); void loadStats(); }} disabled={loading}>
+          {loading ? '刷新中…' : '刷新'}
         </button>
-      </header>
-
-      {banner ? (
-        <div className="mgmt-banner" role="status">
-          <IconAlertCircle size={15} />
-          <span>{banner}</span>
-          <button
-            type="button"
-            className="mgmt-banner-close"
-            aria-label="Dismiss notification"
-            title="Dismiss notification"
-            onClick={() => setBanner(null)}
-          >
-            <IconClose size={13} />
-          </button>
-        </div>
-      ) : null}
-
-      <div className="mgmt-filters" role="tablist" aria-label="Filter runs by status">
-        {RUN_STATUS_FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            role="tab"
-            aria-selected={filter === f.id}
-            className={`mgmt-chip${filter === f.id ? ' active' : ''}`}
-            onClick={() => setFilter(f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
       </div>
 
-      {loading && rows.length === 0 ? (
-        <div className="mgmt-empty">
-          <IconSparkles size={24} className="icon-pulse" />
-          <p>Loading runs…</p>
+      <div className={s.kpis}>
+        <div className={s.kpi}><small>今日运行</small><b>{stats?.today ?? '—'}</b><span>{stats ? `较昨日 ${delta >= 0 ? `+${delta}` : delta}` : ' '}</span></div>
+        <div className={s.kpi}>
+          <small>失败</small><b className={stats?.failed_today ? s.errNum : undefined}>{stats?.failed_today ?? '—'}</b>
+          <span>{!stats ? ' ' : stats.failure_rate == null ? '今日无运行' : `失败率 ${(stats.failure_rate * 100).toFixed(1)}%`}</span>
         </div>
-      ) : rows.length === 0 ? (
-        <div className="mgmt-empty">
-          <p className="mgmt-empty-title">No runs to display</p>
-          <p className="mgmt-empty-body">
-            {apiAvailable === false
-              ? 'The runs list API is not available yet. Active runs from this browser session will appear here when the workbench creates them.'
-              : filter === 'all'
-                ? 'No runs found in the local store or API. Start a conversation to create a run.'
-                : `No runs match “${RUN_STATUS_FILTERS.find((x) => x.id === filter)?.label}”.`}
-          </p>
+        <div className={s.kpi}>
+          <small>等待中</small><b className={stats?.waiting ? s.warnNum : undefined}>{stats?.waiting ?? '—'}</b>
+          <span>{!stats ? ' ' : stats.longest_wait_ms == null ? '没有等待审批或回答' : `最久 ${formatLongDuration(stats.longest_wait_ms)}`}</span>
         </div>
-      ) : (
-        <div className="mgmt-table-wrap">
-          <table className="mgmt-table">
+        <div className={s.kpi}>
+          <small>耗时中位数</small><b>{formatLongDuration(stats?.median_ms ?? null)}</b>
+          <span>P95 {formatLongDuration(stats?.p95_ms ?? null)}</span>
+        </div>
+        <div className={s.kpi}><small>近 7 天运行量</small>{stats ? <Sparkline values={stats.last_7_days} /> : null}</div>
+      </div>
+      {stats?.truncated ? <p className={s.scope}>近 7 天运行超过 2 万次，统计为下限值。</p> : null}
+
+      <div className={a.toolbar}>
+        <input className={a.search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索用户输入、会话标题、Run ID、用户" aria-label="搜索运行" />
+        <div className={a.seg} role="tablist" aria-label="按状态筛选">
+          {RUN_STATUS_FILTERS.map((f) => (
+            <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <select className={s.select} value={agentId} onChange={(e) => setAgentId(e.target.value)} aria-label="按智能体筛选">
+          <option value="">全部智能体</option>
+          {agents.map((ag) => <option key={ag.agent_id} value={ag.agent_id}>{ag.name}</option>)}
+        </select>
+        <select className={s.select} value={range} onChange={(e) => setRange(e.target.value as RunRange)} aria-label="时间范围">
+          {RANGES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+      </div>
+
+      {error ? <p className={a.notice} role="alert">{error}</p> : null}
+
+      <div className={a.tableWrap}>
+        {runs.length === 0 ? (
+          <div className={a.empty}>{loading ? '正在读取…' : error ? '—' : '没有符合条件的运行。'}</div>
+        ) : (
+          <table className={a.table}>
             <thead>
               <tr>
-                <th>Run ID</th>
-                <th>Conversation</th>
-                <th>Status</th>
-                <th>Step / Tool</th>
-                <th>Duration</th>
-                <th>Model</th>
-                <th>Tokens</th>
-                <th>Actions</th>
+                <th>状态</th><th>会话</th><th>用户</th><th>智能体</th><th>模型</th>
+                <th className={a.right}>工具</th><th className={a.right}>Tokens</th><th className={a.right}>耗时</th><th>开始</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
-                const isExpanded = expandedRowId === row.id;
-                return (
-                  <Fragment key={row.id}>
-                    <tr className={isExpanded ? 'selected is-expanded' : ''}>
-                      <td>
-                        <code className="mgmt-id-code" title={row.id}>{shortId(row.id, 12)}</code>
-                      </td>
-                      <td>
-                        {row.conversationId ? (
-                          <code className="mgmt-id-code" title={row.conversationId}>
-                            {shortId(row.conversationId, 10)}
-                          </code>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td>
-                        <span className={`mgmt-status status-${row.status}`}>
-                          <span className="mgmt-status-dot" />
-                          {formatRunStatusLabel(row.status)}
-                        </span>
-                      </td>
-                      <td className="mgmt-muted">
-                        {row.currentStep || '—'}
-                        {row.currentTool ? ` · ${row.currentTool}` : ''}
-                      </td>
-                      <td>{formatRunDuration(row.startedAt, row.finishedAt)}</td>
-                      <td className="mgmt-muted">{row.model || '—'}</td>
-                      <td className="mgmt-muted">{row.tokenUsage || '—'}</td>
-                      <td>
-                        <div className="mgmt-row-actions">
-                          <button
-                            type="button"
-                            className="mgmt-btn sm"
-                            onClick={() => void onOpen(row)}
-                            title="Open conversation"
-                          >
-                            <IconChat size={12} /> Open
-                          </button>
-                          <button
-                            type="button"
-                            className={`mgmt-btn sm secondary${isExpanded && expandedTab === 'logs' ? ' active' : ''}`}
-                            onClick={() => void onToggleLogs(row)}
-                            title="View logs"
-                          >
-                            <IconTerminal size={12} /> Logs
-                          </button>
-                          <button
-                            type="button"
-                            className={`mgmt-btn sm secondary${isExpanded && expandedTab === 'trace' ? ' active' : ''}`}
-                            onClick={() => void onToggleTrace(row)}
-                            title="View trace spans"
-                          >
-                            <IconLayers size={12} /> Trace
-                          </button>
-                          {canCancelRun(row.status) ? (
-                            <button
-                              type="button"
-                              className="mgmt-btn sm danger"
-                              disabled={busyId === row.id}
-                              onClick={() => void onCancel(row)}
-                            >
-                              {busyId === row.id ? '…' : 'Cancel'}
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                    {isExpanded ? (
-                      <tr key={`${row.id}-expand`} className="mgmt-expand-row">
-                        <td colSpan={8}>
-                          <div className="mgmt-inline-drawer" aria-label="Run detail">
-                            <div className="mgmt-inline-head">
-                              <div className="mgmt-inline-nav">
-                                <span className="mgmt-inline-title">Run {shortId(row.id, 12)}</span>
-                                <div className="mgmt-inline-tabs" role="tablist">
-                                  <button
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={expandedTab === 'logs'}
-                                    className={`mgmt-inline-tab${expandedTab === 'logs' ? ' active' : ''}`}
-                                    onClick={() => void onToggleLogs(row)}
-                                  >
-                                    <IconTerminal size={13} />
-                                    <span>Logs</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={expandedTab === 'trace'}
-                                    className={`mgmt-inline-tab${expandedTab === 'trace' ? ' active' : ''}`}
-                                    onClick={() => void onToggleTrace(row)}
-                                  >
-                                    <IconLayers size={13} />
-                                    <span>Trace</span>
-                                  </button>
-                                </div>
-                              </div>
-                              <div className="mgmt-inline-actions">
-                                {expandedTab === 'logs' && detailLog ? (
-                                  <button
-                                    type="button"
-                                    className="mgmt-btn sm secondary"
-                                    onClick={() => void handleCopyLogs()}
-                                    title="Copy logs"
-                                  >
-                                    {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-                                    <span>{copied ? 'Copied' : 'Copy'}</span>
-                                  </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className="mgmt-btn sm secondary"
-                                  onClick={() => setExpandedRowId(null)}
-                                  title="Close detail"
-                                >
-                                  <IconClose size={12} />
-                                  <span>Close</span>
-                                </button>
-                              </div>
-                            </div>
-                            <div className="mgmt-inline-content">
-                              {expandedTab === 'logs' ? (
-                                <div>
-                                  {row.error ? (
-                                    <p className="mgmt-error">Failure: {row.error}</p>
-                                  ) : null}
-                                  <pre className="mgmt-log">{detailLog || 'Loading logs…'}</pre>
-                                </div>
-                              ) : (
-                                <div className="mgmt-inline-trace-wrap">
-                                  {traceLoading ? (
-                                    <div className="mgmt-trace-loading">
-                                      <IconSparkles size={18} className="icon-pulse" />
-                                      <p>Loading trace spans…</p>
-                                    </div>
-                                  ) : traceError ? (
-                                    <p className="mgmt-error">{traceError}</p>
-                                  ) : (
-                                    <TracePanel spans={traceSpans} traceId={traceId} />
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
+              {runs.map((run) => (
+                <tr
+                  key={run.run_id}
+                  className={s.row}
+                  tabIndex={0}
+                  onClick={() => open(run)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') open(run); }}
+                >
+                  <td><RunStatus status={run.status} /></td>
+                  <td className={s.title}>
+                    {/* The user's words for this turn; runs of one conversation share its title. */}
+                    <span>{runInputLabel(run.user_input_excerpt) || run.conversation_title || '（无标题会话）'}</span>
+                    <small className={a.muted}>
+                      {run.conversation_title || '（无标题会话）'}
+                      {run.parent_run_id ? ' · 子运行' : run.turn_no ? ` · 第 ${run.turn_no} 轮` : ''}
+                    </small>
+                  </td>
+                  <td>{run.user_name || '—'}</td>
+                  <td>{run.agent_name ? `${run.agent_name}${run.agent_version_no ? ` · v${run.agent_version_no}` : ''}` : '—'}</td>
+                  <td className={`${a.mono} ${a.muted}`}>{run.model_id || '平台默认'}</td>
+                  <td className={`${a.right} ${a.num}`}>{run.tool_count}{run.approval_count ? <small className={a.muted}> · 审批 {run.approval_count}</small> : null}</td>
+                  <td className={`${a.right} ${a.num}`} title="token 用量尚未采集">—</td>
+                  <td className={`${a.right} ${a.num}`}>{formatRunDuration(run.started_at ?? null, run.completed_at ?? null)}</td>
+                  <td className={a.num}>{formatClock(run.started_at || run.created_at)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
+      {cursor ? (
+        <button type="button" className={`${a.btn} ${s.more}`} disabled={loading} onClick={() => void load(cursor)}>
+          {loading ? '读取中…' : '加载更多'}
+        </button>
+      ) : null}
     </div>
   );
 }

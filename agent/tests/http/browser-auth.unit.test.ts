@@ -38,6 +38,16 @@ function memoryCredentials() {
       if (row) row.role = role;
     },
     async touchLogin() {},
+    profileWrites: [] as any[],
+    async updateProfile(id: string, subject: string, patch: any) {
+      this.profileWrites.push({ id, subject, patch });
+      const row = [...rows.values()].find((candidate) => candidate.id === id);
+      if (row) {
+        if (patch.displayName !== undefined) row.displayName = patch.displayName;
+        if (patch.email !== undefined) row.email = patch.email;
+      }
+      return row || null;
+    },
   };
 }
 
@@ -167,6 +177,65 @@ describe('BrowserAuthService', () => {
   });
 });
 
+describe('BrowserAuthService — own profile', () => {
+  async function setup() {
+    const credentials = memoryCredentials();
+    const service = new BrowserAuthService({
+      credentials,
+      organizations: {
+        async createOrganization() {},
+        async getUserByExternalSubject() { return { userId: '01M1USER000000000000000000' }; },
+        async createUserIfAbsent(u: any) { return u; },
+        async addMembershipIfAbsent(m: any) { return m; },
+        async getOrganization() { return { name: '华东销售部' }; },
+      },
+      externalRefs: {
+        async getOrganizationRef() { return { orgId: '01M1ORG0000000000000000000' }; },
+        async getOrCreateOrganizationRef(ref: any) { return { orgId: ref.orgId }; },
+      },
+      secret: 'a'.repeat(32),
+    });
+    const { token }: any = await service.register({ username: 'dora', password: 'password123' });
+    return { service, credentials, auth: `Bearer ${token}` };
+  }
+
+  it('shows organisation, status and the editable fields', async () => {
+    const { service, auth } = await setup();
+    const profile: any = await service.profile(auth);
+    assert.equal(profile.username, 'dora');
+    assert.equal(profile.organization_name, '华东销售部');
+    assert.equal(profile.status, 'active');
+    assert.deepEqual(profile.editable_fields, ['display_name', 'email']);
+  });
+
+  it('updates display name and email in both identity stores', async () => {
+    const { service, credentials, auth } = await setup();
+    const updated: any = await service.updateProfile(auth, { display_name: '  多拉 ', email: 'dora@example.com' });
+    assert.equal(updated.display_name, '多拉');
+    assert.equal(updated.email, 'dora@example.com');
+    const [write] = credentials.profileWrites;
+    assert.equal(write.subject, `bff:${write.id}`, 'users row is addressed by its external subject');
+    assert.deepEqual(write.patch, { displayName: '多拉', email: 'dora@example.com' });
+    // Clearing the email is allowed; the other field stays untouched.
+    const cleared: any = await service.updateProfile(auth, { email: '' });
+    assert.equal(cleared.email, null);
+    assert.equal(cleared.display_name, '多拉');
+    assert.deepEqual(credentials.profileWrites[1].patch, { email: null });
+  });
+
+  it('refuses fields the user may not change, bad values and anonymous callers', async () => {
+    const { service, credentials, auth } = await setup();
+    const code = (c: string) => (error: any) => error instanceof BrowserAuthError && error.code === c;
+    await assert.rejects(service.updateProfile(auth, { role: 'admin' }), code('PROFILE_FIELD_NOT_EDITABLE'));
+    await assert.rejects(service.updateProfile(auth, { display_name: 'x', organization_id: 'other' }), code('PROFILE_FIELD_NOT_EDITABLE'));
+    await assert.rejects(service.updateProfile(auth, { email: 'not-an-email' }), code('AUTH_INPUT_INVALID'));
+    await assert.rejects(service.updateProfile(auth, { display_name: '   ' }), code('AUTH_INPUT_INVALID'));
+    await assert.rejects(service.updateProfile(auth, {}), code('AUTH_INPUT_INVALID'));
+    await assert.rejects(service.updateProfile('Bearer forged', { display_name: 'x' }), code('INVALID_TOKEN'));
+    assert.equal(credentials.profileWrites.length, 0, 'nothing is written on a refused request');
+  });
+});
+
 describe('browser auth HTTP route', () => {
   let server: any;
   let port: number;
@@ -181,6 +250,8 @@ describe('browser auth HTTP route', () => {
         register: async (body: any) => ({ token: 'signed', user: { username: body.username } }),
         login: async () => ({ token: 'signed', user: { username: 'alice' } }),
         me: async (authorization: string) => ({ username: 'alice', authorization }),
+        profile: async (authorization: string) => ({ username: 'alice', organization_name: 'org', authorization }),
+        updateProfile: async (authorization: string, body: any) => ({ username: 'alice', body, authorization }),
       },
       config: { ALLOW_UNAUTHENTICATED_INTERNAL: true },
     });
@@ -208,5 +279,24 @@ describe('browser auth HTTP route', () => {
     });
     assert.equal(me.status, 200);
     assert.equal((await me.json() as any).authorization, 'Bearer signed');
+  });
+
+  it('serves the profile on GET and edits it on PATCH', async () => {
+    const got = await fetch(`http://127.0.0.1:${port}/internal/auth/profile`, { headers: { Authorization: 'Bearer signed' } });
+    assert.equal(got.status, 200);
+    assert.equal((await got.json() as any).organization_name, 'org');
+    const patched = await fetch(`http://127.0.0.1:${port}/internal/auth/profile`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer signed', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.co' }),
+    });
+    assert.equal(patched.status, 200);
+    assert.deepEqual((await patched.json() as any).body, { email: 'a@b.co' });
+    const array = await fetch(`http://127.0.0.1:${port}/internal/auth/profile`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer signed', 'Content-Type': 'application/json' },
+      body: '[]',
+    });
+    assert.equal(array.status, 400);
   });
 });

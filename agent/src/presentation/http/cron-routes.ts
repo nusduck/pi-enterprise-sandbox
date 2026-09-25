@@ -21,6 +21,7 @@ import { mapErrorToHttp } from './error-mapper.js';
 export interface CronJobServiceLike {
   list(auth: AuthSubjects, opts: { limit?: number | undefined }): Promise<unknown>;
   create(auth: AuthSubjects, body: unknown): Promise<unknown>;
+  listAllRuns(auth: AuthSubjects, opts: { since?: string | null; limit?: unknown }): Promise<unknown>;
   listRuns(
     cronJobId: string,
     auth: AuthSubjects,
@@ -114,6 +115,23 @@ export async function handleCronRoute({
       respondWithMappedError(res, error);
       return true;
     }
+  }
+
+  // Must precede the single-job routes: `runs` would otherwise read as a job id.
+  if (path === '/internal/cron-jobs/runs' && req.method === 'GET') {
+    const auth = requireCronContext(req, res, cronJobService);
+    if (!auth) return true;
+    try {
+      json(res, 200, {
+        cron_job_runs: await cronJobService.listAllRuns(auth, {
+          since: parsedUrl.searchParams.get('since'),
+          limit: parsedUrl.searchParams.get('limit'),
+        }),
+      });
+    } catch (error) {
+      respondWithMappedError(res, error);
+    }
+    return true;
   }
 
   const runsMatch = path.match(/^\/internal\/cron-jobs\/([^/]+)\/runs$/);

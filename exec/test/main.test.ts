@@ -480,6 +480,14 @@ describe('public session plane requires the service token', () => {
     assert.notEqual(res.status, 401);
   });
 
+  test('the owner-wide artifact library sits behind the same token', async () => {
+    for (const path of ['/artifacts', '/artifacts?kind=image']) {
+      assert.equal((await appWithToken().request(path, { headers: acting })).status, 401, path);
+      const ok = await appWithToken().request(path, { headers: { ...acting, 'X-API-Key': TEST_API_TOKEN } });
+      assert.equal(ok.status, 200, path);
+    }
+  });
+
   test('health probes stay open — they are not part of the session plane', async () => {
     for (const path of ['/health', '/health/live']) {
       assert.equal((await appWithToken().request(path)).status, 200, path);

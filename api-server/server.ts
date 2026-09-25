@@ -46,7 +46,7 @@ import {
   handleListRuns,
   handleRunEvents,
 } from './src/routes/runs.js';
-import { handleRegister, handleLogin, handleLogout, handleMe } from './src/routes/auth.js';
+import { handleRegister, handleLogin, handleLogout, handleMe, handleProfile } from './src/routes/auth.js';
 import { handleEnsureSession } from './src/routes/sessions.js';
 import {
   handleGetProcess,
@@ -72,6 +72,7 @@ import {
   handleDeleteCronJob,
   handleGetCronJob,
   handleListCronJobRuns,
+  handleListAllCronJobRuns,
   handleListCronJobs,
   handleRunCronJob,
   handleUpdateCronJob,
@@ -85,6 +86,7 @@ import {
   handleListAgents,
   handleSetAgentActiveVersion,
 } from './src/routes/agents.js';
+import { handleAdminRunsRoute } from './src/routes/admin-runs.js';
 import { authFromRequest, checkSandboxReady } from './src/services/sandbox-client.js';
 import { checkAgentReady } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
@@ -244,6 +246,13 @@ const server = http.createServer(async (rawReq, res) => {
       await handleMe(res, req);
       return;
     }
+    if (path === '/api/auth/profile' && (req.method === 'GET' || req.method === 'PATCH')) {
+      const parsed = req.method === 'PATCH'
+        ? await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES })
+        : null;
+      await handleProfile(req.method, parsed, res, req);
+      return;
+    }
     if (req.method === 'POST' && path === '/api/auth/logout') {
       handleLogout(res);
       return;
@@ -328,6 +337,11 @@ const server = http.createServer(async (rawReq, res) => {
       await handleCreateCronJob(parsed, res, req);
       return;
     }
+    // Before the single-job routes: `runs` would otherwise read as a job id.
+    if (req.method === 'GET' && path === '/api/cron-jobs/runs') {
+      await handleListAllCronJobRuns(parsedUrl, res, req);
+      return;
+    }
     {
       const cronJobRuns = path.match(/^\/api\/cron-jobs\/([^/]+)\/runs$/);
       if (req.method === 'GET' && cronJobRuns) {
@@ -359,6 +373,9 @@ const server = http.createServer(async (rawReq, res) => {
         }
       }
     }
+
+    // ── 管理端 Run 查询（只读；角色与 org 作用域由 agent/ 判定） ──
+    if (await handleAdminRunsRoute(req.method || 'GET', path, parsedUrl, res, req)) return;
 
     // ── Agent catalog（目录事实归 agent/，这里只转发 + 身份投影） ──
     if (req.method === 'GET' && path === '/api/agents') {

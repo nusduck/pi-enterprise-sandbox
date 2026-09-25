@@ -3,7 +3,6 @@
  * Soft-fail when BFF has not yet proxied MCP/model/skill registry endpoints.
  */
 import {
-  ExtensionDiagnosticsSchema,
   McpServerListSchema,
   McpServerSchema,
   ModelItemSchema,
@@ -12,7 +11,6 @@ import {
   SkillListSchema,
   ToolRegistryItemSchema,
   ToolRegistrySchema,
-  type ExtensionDiagnostics,
   type McpServerItem,
   type ModelItem,
   type SkillItem,
@@ -21,7 +19,7 @@ import {
 import { parseApi } from '../schemas/api';
 import { authHeaders } from './client';
 
-export type { ExtensionDiagnostics, McpServerItem, ModelItem, SkillItem, ToolRegistryItem };
+export type { McpServerItem, ModelItem, SkillItem, ToolRegistryItem };
 
 const BASE = '/api';
 
@@ -57,12 +55,6 @@ async function softGet(
       error: (err as Error).message,
     };
   }
-}
-
-export async function getExtensionDiagnostics(): Promise<ExtensionDiagnostics | null> {
-  const res = await softGet('/extensions/diagnostics');
-  if (!res.ok) return null;
-  return parseApi(ExtensionDiagnosticsSchema, res.data, 'getExtensionDiagnostics');
 }
 
 function unwrapArray(data: unknown, keys: string[]): unknown[] {
