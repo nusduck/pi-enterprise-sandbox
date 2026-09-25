@@ -9,7 +9,7 @@ import { cancelRun, getRun } from '../../shared/api/runs';
 import { getAdminRun, listAdminRunEvents, listAdminRunTools, type AdminRun } from '../../shared/api/adminRuns';
 import { getProcessLogs, listProcesses, type ManagedProcess } from '../../shared/api/processes';
 import type { PersistedAgentEvent, ToolExecutionSnapshot } from '../../shared/schemas/events';
-import { canCancelRun, formatRunDuration } from './runHelpers';
+import { canCancelRun, formatRunDuration, runInputLabel } from './runHelpers';
 import { buildRunTimeline, formatSpan, type TimelineNode } from './runTimeline';
 import { RunStatus, formatClock } from './RunsPage';
 import a from '../settings/adminPage.module.css';
@@ -57,14 +57,19 @@ export function RunDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [detail, evs, ledger] = await Promise.all([
+      // Only the run itself decides "not found"; a failed timeline or ledger read
+      // keeps the rest of the page and says what is missing.
+      const [detail, evs, ledger] = await Promise.allSettled([
         getAdminRun(runId),
         listAdminRunEvents(runId),
         listAdminRunTools(runId),
       ]);
-      setRun(detail);
-      setEvents(evs);
-      setTools(ledger);
+      if (detail.status === 'rejected') throw detail.reason;
+      setRun(detail.value);
+      setEvents(evs.status === 'fulfilled' ? evs.value : []);
+      setTools(ledger.status === 'fulfilled' ? ledger.value : []);
+      const missing = [evs.status === 'rejected' ? '时间线' : '', ledger.status === 'rejected' ? '工具台账' : ''].filter(Boolean);
+      setNotice(missing.length ? `${missing.join('和')}读取失败，重新打开页面可以重试。` : null);
       // The owner-scoped run read succeeds only for the admin's own runs.
       const own = (await getRun(runId).catch(() => null)) as Record<string, unknown> | null;
       setSandboxSessionId(own ? String(own.sandbox_session_id || own.session_id || '') || null : null);
@@ -135,7 +140,15 @@ export function RunDetailPage() {
         <Link to="/admin/runs">运行</Link> / <span className={a.mono}>{runId.slice(0, 10)}</span>
       </div>
       <div className={a.head}>
-        <div><h1>{run?.conversation_title || '（无标题会话）'}</h1></div>
+        <div>
+          <h1>{run?.conversation_title || '（无标题会话）'}</h1>
+          {run ? (
+            <p>
+              {run.parent_run_id ? '子运行' : run.turn_no ? `第 ${run.turn_no} 轮` : ''}
+              {runInputLabel(run.user_input, 120) ? `${run.parent_run_id || run.turn_no ? '：' : ''}${runInputLabel(run.user_input, 120)}` : ''}
+            </p>
+          ) : null}
+        </div>
         {run ? <RunStatus status={status} /> : null}
         <span className={a.sp} />
         {cancellable ? <button type="button" className={a.btn} onClick={() => void cancel()}>{confirmCancel ? '确认取消运行' : '取消运行'}</button> : null}

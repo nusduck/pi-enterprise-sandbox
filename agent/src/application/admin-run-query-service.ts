@@ -188,6 +188,8 @@ export function presentAdminRun(row: AdminRunRow): Record<string, unknown> {
     trace_id: row.traceId,
     tool_count: row.toolCount,
     approval_count: row.approvalCount,
+    user_input_excerpt: row.userInputExcerpt,
+    turn_no: row.turnNo,
     created_at: row.createdAt,
     started_at: row.startedAt,
     completed_at: row.completedAt,

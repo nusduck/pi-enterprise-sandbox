@@ -5,7 +5,7 @@ import { isTerminalRunStatus, listProcessesForSession } from '../../entities';
 import { formatDuration, getActiveRunEntity } from '../runtime-timeline/buildTimeline';
 import { BudgetBar } from '../budget-bar/BudgetBar';
 import { shouldShowResumeEntry } from '../composer/composerMode';
-import { agentTone, isDefaultAgentName } from '../conversation-sidebar/sidebarModel';
+import { agentTone } from '../conversation-sidebar/sidebarModel';
 import { IconLayers, IconPanel, IconRefresh } from '../../shared/ui/Icons';
 import s from './conversationHeader.module.css';
 
@@ -88,7 +88,8 @@ export function ConversationHeader() {
         </button>
       )}
       <h1 className={s.title} title={title}>{title}</h1>
-      {agentId && !isDefaultAgentName(agentName) ? (
+      {/* Always shown, the org default included: the sidebar hides "default" tags to cut noise, the title bar does not. */}
+      {agentId && agentName ? (
         <span className={s.chip} title="会话建立时绑定的智能体，之后不会变化">
           <span className={s.dot} style={{ ['--tone' as string]: `var(--agent-tone-${agentTone(agentId)})` }} />
           {agentName}

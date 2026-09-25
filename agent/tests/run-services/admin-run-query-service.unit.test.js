@@ -34,7 +34,7 @@ function row(runId, orgId, over = {}) {
     runId, orgId, status: 'SUCCEEDED', statusReason: null, source: 'web', userId: '01M2T4AHKZFTPB5WYQD4M7YHDY',
     userName: 'alice', conversationId: null, conversationTitle: '标题', agentId: null, agentName: 'default',
     agentVersionId: null, agentVersionNo: 2, modelId: null, parentRunId: null, traceId: 't', toolCount: 3,
-    approvalCount: 1, createdAt: '2026-09-25T05:00:00.000Z', startedAt: '2026-09-25T05:00:00.000Z',
+    approvalCount: 1, userInputExcerpt: '晚上好', turnNo: 2, createdAt: '2026-09-25T05:00:00.000Z', startedAt: '2026-09-25T05:00:00.000Z',
     completedAt: '2026-09-25T05:00:30.000Z', updatedAt: '2026-09-25T05:00:30.000Z', ...over,
   };
 }
@@ -98,6 +98,8 @@ describe('AdminRunQueryService — access', () => {
     assert.equal(detail.user_name, 'alice');
     assert.equal(detail.tool_count, 3);
     assert.equal(detail.user_input, '你好');
+    assert.equal(listed.runs[0].user_input_excerpt, '晚上好');
+    assert.equal(listed.runs[0].turn_no, 2);
   });
 
   it('answers another org’s run and a missing run with the same 404', async () => {

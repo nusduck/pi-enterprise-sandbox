@@ -187,3 +187,14 @@ describe('management schemas', () => {
     assert.equal(model.supports_tool_call, true);
   });
 });
+
+describe('runInputLabel', () => {
+  it('keeps the words, drops the attachment manifest, folds whitespace', async () => {
+    const { runInputLabel } = await import('../src/pages/runs/runHelpers.ts');
+    assert.equal(runInputLabel('这张图片大概是什么颜色？\n\n[Attachments]\n- test-chart.png → datasets/x'), '这张图片大概是什么颜色？');
+    assert.equal(runInputLabel('  晚上好\n  你好  '), '晚上好 你好');
+    assert.equal(runInputLabel('\n\n[Attachments]\n- a.png'), '（仅附件）');
+    assert.equal(runInputLabel(null), null);
+    assert.equal(runInputLabel('a'.repeat(100), 10), `${'a'.repeat(10)}…`);
+  });
+});

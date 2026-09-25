@@ -36,6 +36,8 @@ export const AdminRunSchema = z
     completed_at: nullableString,
     updated_at: nullableString,
     user_input: nullableString,
+    user_input_excerpt: nullableString,
+    turn_no: z.number().nullable().optional(),
   })
   .passthrough();
 export type AdminRun = z.infer<typeof AdminRunSchema>;

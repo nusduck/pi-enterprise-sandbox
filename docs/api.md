@@ -376,12 +376,13 @@ Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不
 | `status` | 分组 `running` / `waiting` / `failed` / `completed`，或 plan §10 状态，逗号分隔 |
 | `agent_id` `user_id` | ULID |
 | `from` `to` | ISO-8601，按 `created_at` 过滤（`to` 不含） |
-| `q` | 会话标题 / 用户显示名模糊匹配，或精确 Run ID |
+| `q` | 会话标题 / 用户输入 / 用户显示名模糊匹配，或精确 Run ID |
 | `cursor` `limit` | 键集分页（按 `created_at`、`run_id` 倒序）；`limit` 1–200，默认 50 |
 
 返回 `{ runs, next_cursor }`；每行含 `run_id`、`status`、`user_id`、`user_name`、`conversation_id`、
 `conversation_title`、`agent_id`、`agent_name`、`agent_version_no`、`model_id`（取自版本配置
-`modelPolicy.modelId`，未固定为 `null`）、`parent_run_id`、`trace_id`、`tool_count`、`approval_count`
+`modelPolicy.modelId`，未固定为 `null`）、`parent_run_id`、`trace_id`、`tool_count`、`approval_count`、`user_input_excerpt`（触发这次运行的用户消息前 200 字）、
+`turn_no`（在会话顶层运行中的序号，子运行为 `null`）
 与各时间戳。**不含 token 用量**：Run 账本目前没有采集 usage。
 
 `GET /api/admin/runs/stats?day_start=<ISO>`：`day_start` 为调用方本地零点（须在最近两天内），

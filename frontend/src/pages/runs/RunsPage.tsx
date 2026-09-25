@@ -16,6 +16,7 @@ import {
   formatLongDuration,
   formatRunDuration,
   normalizeRunStatus,
+  runInputLabel,
   type RunStatusFilterId,
 } from './runHelpers';
 import a from '../settings/adminPage.module.css';
@@ -191,7 +192,7 @@ export function RunsPage() {
       {stats?.truncated ? <p className={s.scope}>近 7 天运行超过 2 万次，统计为下限值。</p> : null}
 
       <div className={a.toolbar}>
-        <input className={a.search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索会话标题、Run ID、用户" aria-label="搜索运行" />
+        <input className={a.search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索用户输入、会话标题、Run ID、用户" aria-label="搜索运行" />
         <div className={a.seg} role="tablist" aria-label="按状态筛选">
           {RUN_STATUS_FILTERS.map((f) => (
             <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
@@ -232,8 +233,12 @@ export function RunsPage() {
                 >
                   <td><RunStatus status={run.status} /></td>
                   <td className={s.title}>
-                    <span>{run.conversation_title || '（无标题会话）'}</span>
-                    {run.parent_run_id ? <small className={a.muted}>子运行</small> : null}
+                    {/* The user's words for this turn; runs of one conversation share its title. */}
+                    <span>{runInputLabel(run.user_input_excerpt) || run.conversation_title || '（无标题会话）'}</span>
+                    <small className={a.muted}>
+                      {run.conversation_title || '（无标题会话）'}
+                      {run.parent_run_id ? ' · 子运行' : run.turn_no ? ` · 第 ${run.turn_no} 轮` : ''}
+                    </small>
                   </td>
                   <td>{run.user_name || '—'}</td>
                   <td>{run.agent_name ? `${run.agent_name}${run.agent_version_no ? ` · v${run.agent_version_no}` : ''}` : '—'}</td>

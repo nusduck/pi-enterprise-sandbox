@@ -60,3 +60,14 @@ export function formatLongDuration(ms: number | null): string {
   if (m < 60) return `${m} 分 ${String(s % 60).padStart(2, '0')} 秒`;
   return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
 }
+
+/**
+ * One-line label for a run's user input: drops the attachment manifest the
+ * composer appends ("\n\n[Attachments]\n- a.png → …") and folds whitespace.
+ */
+export function runInputLabel(text: string | null | undefined, max = 80): string | null {
+  if (!text) return null;
+  const body = text.split(/\n\s*\[Attachments\]/)[0].replace(/\s+/g, ' ').trim();
+  if (!body) return text.includes('[Attachments]') ? '（仅附件）' : null;
+  return body.length > max ? `${body.slice(0, max)}…` : body;
+}

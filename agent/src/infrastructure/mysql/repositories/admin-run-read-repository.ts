@@ -44,6 +44,10 @@ export interface AdminRunRow {
   traceId: string | null;
   toolCount: number;
   approvalCount: number;
+  /** First 200 characters of the user message that started the run, when stored as `{ text }`. */
+  userInputExcerpt: string | null;
+  /** 1-based position among the conversation's top-level runs; null for child runs. */
+  turnNo: number | null;
   createdAt: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -81,6 +85,8 @@ function mapAdminRun(row: Record<string, unknown>): AdminRunRow {
     traceId: str(row.trace_id),
     toolCount: Number(row.tool_count || 0),
     approvalCount: Number(row.approval_count || 0),
+    userInputExcerpt: str(row.user_input_excerpt),
+    turnNo: row.turn_no == null ? null : Number(row.turn_no),
     createdAt: formatDateTime(row.created_at),
     startedAt: formatDateTime(row.started_at),
     completedAt: formatDateTime(row.completed_at),
@@ -121,6 +127,7 @@ export class AdminRunReadRepository {
       .leftJoin('tbl_agsvc_conversations as c', 'c.conversation_id', 'r.conversation_id')
       .leftJoin('tbl_agsvc_agent_versions as v', 'v.agent_version_id', 'r.agent_version_id')
       .leftJoin('tbl_agsvc_agent_definitions as d', 'd.agent_id', 'v.agent_id')
+      .leftJoin('tbl_agsvc_messages as m', 'm.message_id', 'r.triggering_message_id')
       .where('r.org_id', assertUlid(orgId, 'orgId'))
       .select(
         'r.run_id', 'r.status', 'r.status_reason', 'r.source', 'r.user_id', 'r.conversation_id',
@@ -133,6 +140,14 @@ export class AdminRunReadRepository {
         db.raw("JSON_UNQUOTE(JSON_EXTRACT(v.config_json, '$.modelPolicy.modelId')) as model_id"),
         db.raw('(SELECT COUNT(*) FROM tbl_agsvc_tool_executions te WHERE te.run_id = r.run_id) as tool_count'),
         db.raw('(SELECT COUNT(*) FROM tbl_agsvc_approvals a WHERE a.run_id = r.run_id) as approval_count'),
+        // Several runs of one conversation share its title; the user's own words and
+        // the turn number tell them apart in the list.
+        db.raw("LEFT(JSON_UNQUOTE(JSON_EXTRACT(m.content_json, '$.text')), 200) as user_input_excerpt"),
+        db.raw(`CASE WHEN r.parent_run_id IS NULL AND r.conversation_id IS NOT NULL THEN (
+          SELECT COUNT(*) FROM tbl_agsvc_runs r2
+           WHERE r2.conversation_id = r.conversation_id AND r2.parent_run_id IS NULL
+             AND (r2.created_at < r.created_at OR (r2.created_at = r.created_at AND r2.run_id <= r.run_id))
+        ) END as turn_no`),
       );
   }
 
@@ -149,6 +164,7 @@ export class AdminRunReadRepository {
       q = q.andWhere((w: Loose) => {
         w.where('c.title', 'like', like)
           .orWhere('u.display_name', 'like', like)
+          .orWhere(this.db.raw("JSON_UNQUOTE(JSON_EXTRACT(m.content_json, '$.text'))"), 'like', like)
           .orWhere('r.run_id', exact);
       });
     }
