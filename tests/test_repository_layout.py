@@ -68,7 +68,9 @@ HOTSPOT_LINE_BUDGETS = {
     # unnoticed. Pinned at their current length — split, do not raise.
     # 2026-09-06 拆出 conversationProjection.ts（会话列表的两个纯投影），
     # 1_456 -> 1_454，预算收紧。
-    "frontend/src/features/chat/ChatContext.tsx": 1_454,
+    # 2026-09-25 审批改为在对话流内就地处理，删掉 approvePending/rejectPending，
+    # 1_454 -> 1_404，预算收紧。
+    "frontend/src/features/chat/ChatContext.tsx": 1_404,
     # 2026-09-25 修历史回放游标（回放前不带 last_sequence）时合并注释，1_176 -> 1_175。
     "frontend/src/features/chat/entityBridge.ts": 1_175,
     # 2026-09-25 拆出 messageEvents.ts（message.* / thinking.* 分支，线性对话流

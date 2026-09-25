@@ -112,8 +112,6 @@ export type ChatController = {
   retryAttachmentDraft: (localId: string) => Promise<void>;
   setDropzoneVisible: (v: boolean) => void;
   // Approvals
-  approvePending: () => Promise<void>;
-  rejectPending: () => Promise<void>;
   /** Decide a specific approval by id (entity card or banner). */
   resolveApproval: (
     approvalId: string,
@@ -1136,52 +1134,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [bridge, setStatus, flashError],
   );
 
-  const approvePending = useCallback(async () => {
-    const store = bridge.getStore();
-    const runId = store.activeRunId;
-    const approval = Object.values(store.approvalsById).find(
-      (item) => item.runId === runId && item.status === 'pending',
-    );
-    if (!approval?.id) {
-      // Never silent no-op: banner can show waiting_approval from run.status alone
-      // while the approval entity was never rehydrated into the store.
-      flashError(
-        'No pending approval loaded for this run. Open Approval Center or refresh the conversation.',
-      );
-      if (runId) {
-        try {
-          await bridge.reconcileRun(runId);
-        } catch {
-          /* reconcile is best-effort */
-        }
-      }
-      return;
-    }
-    await resolveApproval(approval.id, 'approve');
-  }, [bridge, resolveApproval, flashError]);
-
-  const rejectPending = useCallback(async () => {
-    const store = bridge.getStore();
-    const runId = store.activeRunId;
-    const approval = Object.values(store.approvalsById).find(
-      (item) => item.runId === runId && item.status === 'pending',
-    );
-    if (!approval?.id) {
-      flashError(
-        'No pending approval loaded for this run. Open Approval Center or refresh the conversation.',
-      );
-      if (runId) {
-        try {
-          await bridge.reconcileRun(runId);
-        } catch {
-          /* reconcile is best-effort */
-        }
-      }
-      return;
-    }
-    await resolveApproval(approval.id, 'reject');
-  }, [bridge, resolveApproval, flashError]);
-
   const toggleInspector = useCallback(() => {
     setInspectorOpen((v) => !v);
   }, []);
@@ -1432,8 +1384,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     removeAttachmentDraft,
     retryAttachmentDraft,
     setDropzoneVisible,
-    approvePending,
-    rejectPending,
     resolveApproval,
     login,
     register,

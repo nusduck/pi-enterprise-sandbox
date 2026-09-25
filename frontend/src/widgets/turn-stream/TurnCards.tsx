@@ -194,7 +194,12 @@ export function ApprovalCard({
   onDecide: (id: string, decision: 'approve' | 'reject') => void;
 }) {
   const pending = approval.status === 'pending';
-  const what = tool ? `${toolVerb(tool.name)} ${summarizeToolInput(tool.input)}`.trim() : approval.command || '工具调用';
+  // An approval can arrive before its tool starts; the reducer then keeps the
+  // tool name in `command`, which reads better as an action.
+  const command = approval.command;
+  const what = tool
+    ? `${toolVerb(tool.name)} ${summarizeToolInput(tool.input)}`.trim()
+    : command && /^[a-z][a-z0-9_]*$/i.test(command) ? toolVerb(command) : command || '工具调用';
   if (!pending) {
     const label = approval.status === 'approved' ? '已批准' : approval.status === 'rejected' ? '已拒绝' : '审批已失效';
     return (
@@ -330,15 +335,22 @@ export function QuestionCard({
   onRespond: (response: unknown) => Promise<boolean>;
 }) {
   const waiting = Boolean(pending) && isLive(tool.status);
-  const f = questionFields(tool, waiting ? pending : null);
+  const parsed = questionFields(tool, waiting ? pending : null);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+  // Run events do not carry the answer (only the tool ledger does), so keep
+  // what this card sent until a refresh restores it from the ledger.
+  const [sent, setSent] = useState<string | null>(null);
+  const f = { ...parsed, answer: parsed.answer ?? sent };
 
   async function submit(value: string) {
     if (busy || !value) return;
     setBusy(true);
     try {
-      if (await onRespond(value)) setDraft('');
+      if (await onRespond(value)) {
+        setDraft('');
+        setSent(value);
+      }
     } finally {
       setBusy(false);
     }
@@ -402,25 +414,45 @@ export function JobCard({
   related,
   jobId,
   runActive,
+  process,
+  onOpenConsole,
 }: {
   tool: ToolExecutionEntity;
   related: ToolExecutionEntity[];
   jobId: string | null;
   runActive: boolean;
+  /** The sandbox process behind this job, matched by command, when listed. */
+  process: ProcessEntity | null;
+  onOpenConsole?: (processId: string) => void;
 }) {
   const f = jobFields(tool, related);
-  const running = f.running && runActive;
+  // Prefer the sandbox's own process state; job_output is only a snapshot the
+  // model happened to take. Without either, all we know is that it started.
+  const running = process
+    ? process.status === 'running' || process.status === 'created' || process.status === 'waiting_input'
+    : f.running;
+  const tail = f.outputTail || (process ? [process.stdout, process.stderr].filter(Boolean).join('\n').trim().split('\n').slice(-6).join('\n') : null);
   return (
     <div className={s.card}>
       <div className={s.cardH}>
         <span className={s.kind}>后台任务</span>
         <span className={s.arg}>{f.description || f.command || jobId || 'bash'}</span>
         <span className={s.sp} />
-        {running ? <Pill tone="run"><Spinner />运行中</Pill> : <Pill tone="mute">已结束</Pill>}
+        {running && runActive ? (
+          <Pill tone="run"><Spinner />运行中</Pill>
+        ) : running === false ? (
+          <Pill tone="mute">已结束</Pill>
+        ) : running == null ? (
+          <Pill tone="mute">已在后台启动</Pill>
+        ) : (
+          <Pill tone="run">运行中</Pill>
+        )}
+        {process && onOpenConsole ? (
+          <button type="button" className={s.linkBtn} onClick={() => onOpenConsole(process.id)}>控制台</button>
+        ) : null}
       </div>
       {f.command ? <pre className={s.pre}>{clip(f.command, 1000)}</pre> : null}
-      {f.outputTail ? <pre className={`${s.pre} ${s.tail}`}>{f.outputTail}</pre> : null}
-      {jobId ? <div className={`${s.cardB} ${s.muted}`}><code>{jobId}</code></div> : null}
+      {tail ? <pre className={`${s.pre} ${s.tail}`}>{tail}</pre> : null}
     </div>
   );
 }

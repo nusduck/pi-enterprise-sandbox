@@ -456,7 +456,7 @@ export function reduceRuntimeEvent(
           command:
             payload.command != null
               ? str(payload.command)
-              : existingAppr?.command ?? null,
+              : existingAppr?.command ?? (toolName || null),
           risk:
             payload.risk != null
               ? str(payload.risk)

@@ -114,6 +114,10 @@ describe('jobFields', () => {
     assert.equal(f.outputTail, 'TICK-1\nTICK-2');
   });
 
+  it('reports an unknown state before any job_output', () => {
+    assert.equal(jobFields({ input: { command: 'sleep 5' } }, []).running, null);
+  });
+
   it('stops after a successful job_kill', () => {
     const f = jobFields({ input: { command: 'sleep 120' } }, [{ name: 'job_kill', isError: false, result: {} }]);
     assert.equal(f.running, false);

@@ -179,7 +179,8 @@ export function questionFields(
 export type JobFields = {
   command: string | null;
   description: string | null;
-  running: boolean;
+  /** null when no job_output / job_kill has reported the job's state yet. */
+  running: boolean | null;
   outputTail: string | null;
 };
 
@@ -191,7 +192,7 @@ export function jobFields(
 ): JobFields {
   const args = record(tool.input) || {};
   let outputTail: string | null = null;
-  let running = true;
+  let running: boolean | null = null;
   for (const r of related) {
     if (r.name === 'job_kill' && !r.isError) running = false;
     if (r.isError) continue;

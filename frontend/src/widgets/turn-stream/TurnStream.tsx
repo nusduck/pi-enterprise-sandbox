@@ -127,6 +127,20 @@ export function TurnStream({ runId }: { runId: string }) {
   });
   const trailingArtifacts = related.artifacts.filter((a) => !claimed.has(a.id));
 
+  // Background jobs also show up as sandbox processes (no tool link); pair
+  // them by command so the job card carries the real state and console.
+  const processByJob = new Map<number, ProcessEntity>();
+  const pairedProcesses = new Set<string>();
+  items.forEach((item, idx) => {
+    if (item.kind !== 'job') return;
+    const command = (item.tool.input as Record<string, unknown> | null)?.command;
+    const match = related.loneProcesses.find((p) => !pairedProcesses.has(p.id) && p.command === command);
+    if (match) {
+      processByJob.set(idx, match);
+      pairedProcesses.add(match.id);
+    }
+  });
+
   function approvalCards(list: ApprovalEntity[] | undefined) {
     return (list || []).map((a) => (
       <ApprovalCard
@@ -163,7 +177,16 @@ export function TurnStream({ runId }: { runId: string }) {
       case 'question':
         return <QuestionCard tool={item.tool} pending={run?.pendingInput ?? null} onRespond={respondInteraction} />;
       case 'job':
-        return <JobCard tool={item.tool} related={item.related} jobId={item.jobId} runActive={runActive} />;
+        return (
+          <JobCard
+            tool={item.tool}
+            related={item.related}
+            jobId={item.jobId}
+            runActive={runActive}
+            process={processByJob.get(idx) || null}
+            onOpenConsole={openProcessConsole}
+          />
+        );
       case 'artifact': {
         const artifact = artifactByItem.get(idx);
         if (!artifact) return <ToolGroupItem tools={[item.tool]} processesByTool={related.processesByTool} />;
@@ -184,7 +207,7 @@ export function TurnStream({ runId }: { runId: string }) {
   return (
     <div className={s.stream}>
       {rendered}
-      {related.loneProcesses.map((p) => (
+      {related.loneProcesses.filter((p) => !pairedProcesses.has(p.id)).map((p) => (
         <div key={p.id} className={s.item}>
           <div className={s.card}>
             <div className={s.cardH}>
@@ -197,6 +220,14 @@ export function TurnStream({ runId }: { runId: string }) {
         </div>
       ))}
       {loneApprovals.length ? <div className={s.item}>{approvalCards(loneApprovals)}</div> : null}
+      {run?.status === 'waiting_approval' && !related.approvals.some((a) => a.status === 'pending') ? (
+        <div className={s.item}>
+          <div className={`${s.card} ${s.approval}`} role="status">
+            <div className={s.cardH}><b>等待审批</b></div>
+            <div className={s.cardB}>这次运行在等待审批，但审批详情还没有加载。刷新页面后可以在这里处理。</div>
+          </div>
+        </div>
+      ) : null}
       {trailingArtifacts.map((a) => (
         <div key={a.id} className={s.item}>
           <ArtifactCard artifact={a} sessionId={activeSessionId} />

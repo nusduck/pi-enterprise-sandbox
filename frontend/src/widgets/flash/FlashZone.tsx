@@ -1,7 +1,7 @@
 import { useChat } from '../../features/chat/ChatContext';
 
 export function FlashZone() {
-  const { state, entityStore, activeRunId, approvePending, rejectPending, clearFlash } = useChat();
+  const { state, entityStore, activeRunId, clearFlash } = useChat();
   const approval = Object.values(entityStore.approvalsById).find(
     (item) => item.runId === activeRunId && item.status === 'pending',
   );
@@ -25,32 +25,11 @@ export function FlashZone() {
         </div>
       ) : null}
 
+      {/* Approvals are decided in the turn stream; this only announces them. */}
       {approval ? (
-        <div
-          className="approval-banner"
-          role="alertdialog"
-          aria-modal="false"
-          data-approval-id={approval.id}
-          tabIndex={-1}
-        >
-          <span id={`approval-label-${approval.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`}>
-            {`⚠ Approval required: ${approval.reason || approval.id}`}
-          </span>
-          <button
-            type="button"
-            className="btn-approve"
-            onClick={() => void approvePending()}
-          >
-            Approve
-          </button>
-          <button
-            type="button"
-            className="btn-reject"
-            onClick={() => void rejectPending()}
-          >
-            Reject
-          </button>
-        </div>
+        <span className="sr-only" data-approval-id={approval.id}>
+          需要你批准：{approval.reason || approval.command || '一次工具调用'}
+        </span>
       ) : null}
     </div>
   );
