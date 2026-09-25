@@ -23,10 +23,10 @@ import { effectiveModel, supportsImages } from '../../features/chat/effectiveMod
 import { ImportArtifactDialog } from './ImportArtifactDialog';
 import { getActiveRunEntity } from '../runtime-timeline/buildTimeline';
 import { IconPlus, IconSend, IconStop, IconUpload } from '../../shared/ui/Icons';
+import { usePreference } from '../../shared/ui/preferences';
 import s from './composer.module.css';
 
 const MODE_NOTE: Record<string, string> = {
-  running: 'Enter 排队追问 · ⌘Enter 立即改向',
   waiting_approval: '等待审批：在上方卡片里批准或拒绝；这里输入的内容会排队',
   waiting_input: '智能体在等你回答：可以点上方选项，也可以直接输入',
 };
@@ -66,6 +66,7 @@ export function Composer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [enterPref] = usePreference('enterWhileRunning');
   const [plusOpen, setPlusOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
@@ -100,7 +101,9 @@ export function Composer() {
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (isEnterSubmitKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) {
       e.preventDefault();
-      void onPrimaryAction(e.metaKey || e.ctrlKey);
+      // The preference picks what plain Enter does; Cmd/Ctrl+Enter does the other.
+      const modified = e.metaKey || e.ctrlKey;
+      void onPrimaryAction(enterPref === 'steer' ? !modified : modified);
     }
   }
 
@@ -231,8 +234,11 @@ export function Composer() {
   const placeholder =
     mode === 'idle'
       ? state.conversationId ? '继续对话…' : '描述你要完成的任务…'
-      : mode === 'waiting_input' ? '输入你的回答…' : '补充要求，Enter 排队，⌘Enter 立即改向…';
-  const note = needsVision ? '当前模型不支持图片，请换一个支持看图的模型' : MODE_NOTE[mode] || (!gateOk ? (uploading ? '等待附件上传完成' : '有附件上传失败，请重试或移除') : '');
+      : mode === 'waiting_input' ? '输入你的回答…' : enterPref === 'steer' ? '补充要求，Enter 立即改向…' : '补充要求，Enter 排队追问…';
+  const runningNote = enterPref === 'steer' ? 'Enter 立即改向 · ⌘Enter 排队追问' : 'Enter 排队追问 · ⌘Enter 立即改向';
+  const note = needsVision
+    ? '当前模型不支持图片，请换一个支持看图的模型'
+    : mode === 'running' ? runningNote : MODE_NOTE[mode] || (!gateOk ? (uploading ? '等待附件上传完成' : '有附件上传失败，请重试或移除') : '');
 
   return (
     <>

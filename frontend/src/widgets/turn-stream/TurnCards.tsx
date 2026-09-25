@@ -27,6 +27,7 @@ import {
   toolVerb,
 } from '../../features/chat/projections/turnFields';
 import type { ToolStep } from '../../features/chat/projections/turnItems';
+import { usePreference } from '../../shared/ui/preferences';
 import s from './turnStream.module.css';
 
 export function Chevron() {
@@ -147,8 +148,9 @@ export function ToolGroupItem({
   const ordered: ToolStep[] = steps || tools.map((tool) => ({ kind: 'tool', tool }));
   const live = tools.find((t) => isLive(t.status));
   const failed = tools.filter((t) => t.isError || t.status === 'failed').length;
+  const [density] = usePreference('density');
   return (
-    <details className={s.act}>
+    <details className={s.act} open={density === 'expanded' || undefined}>
       <summary>
         <Chevron />
         {live ? (

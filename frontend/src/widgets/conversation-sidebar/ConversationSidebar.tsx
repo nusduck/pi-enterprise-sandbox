@@ -19,6 +19,7 @@ import {
   groupConversations,
   isDefaultAgentName,
 } from './sidebarModel';
+import { SettingsDialog } from '../settings/SettingsDialog';
 import s from './sidebar.module.css';
 
 /**
@@ -50,6 +51,7 @@ export function ConversationSidebar() {
   const [filterOpen, setFilterOpen] = useState(false);
   const [listOpen, setListOpen] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -289,7 +291,7 @@ export function ConversationSidebar() {
             <>
               {menuOpen ? (
                 <div className={s.menu} role="menu" style={{ bottom: 58, left: 8, right: 8 }}>
-                  <button type="button" role="menuitem" onClick={() => go('/settings/capabilities')}>设置</button>
+                  <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setSettingsOpen(true); }}>设置</button>
                   {isAdmin ? (
                     <button type="button" role="menuitem" onClick={() => go('/settings/runs')}>
                       管理控制台
@@ -344,6 +346,7 @@ export function ConversationSidebar() {
         </div>
       </aside>
       <div id="sidebar-backdrop" className={s.backdrop} hidden={!isMobile || !open} onClick={closeSidebar} />
+      {signedIn ? <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} /> : null}
     </>
   );
 }

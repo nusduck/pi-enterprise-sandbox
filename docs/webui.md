@@ -147,7 +147,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 - **侧栏**（`widgets/conversation-sidebar/`）：品牌行 → 图标导航（新建会话 ⌘L、定时任务）→ 搜索框
   （输入即过滤，⌘K 聚焦）→ 可折叠的「会话」分组，按今天 / 昨天 / 近 7 天 / 更早分组。会话行标注
   所属智能体（组织默认智能体不打标签，颜色按 `agentTone` 固定），运行中蓝点、等待审批黄点，
-  分组标题右侧可按智能体筛选。底部账户菜单：设置、管理控制台（admin）、主题切换、退出登录。
+  分组标题右侧可按智能体筛选。底部账户菜单：设置（打开设置弹窗）、管理控制台（admin）、主题切换、退出登录。
   分组、过滤与标签颜色是 `sidebarModel.ts` 里的纯函数。
 - **标题栏**（`widgets/conversation-header/`）：会话标题 + 绑定的智能体与版本；运行中或等待审批时
   显示状态与耗时，中断时给「继续运行」；右侧「资料」按钮开关资料抽屉。
@@ -169,7 +169,13 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   触发；预览与 Agent 的 cron 语义一致（`scheduleModel.ts`，测试直接对照 Agent 的 `nextCronOccurrence`）。
   一次性任务按所选时区换算成带偏移的 `run_at`。
 
-Settings 页面（`/settings/*`）暂未重做：从账户菜单进入，左侧分类导航提供 Capabilities、Approvals、
+- **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：用户名、显示名称、
+  用户类型（只读，来自 `/api/auth/me`）与退出登录。通用：外观（浅色 / 深色 / 跟随系统）、对话显示
+  （紧凑 / 展开：已完成轮次的工具组是否默认展开）、运行中按 Enter（排队追问 / 立即改向）。偏好存在本机
+  浏览器（`shared/ui/preferences.ts`，`usePreference` 跨组件实时同步，读不到时用默认值）。我的 Skills：
+  上传草稿（.zip / .skill，50 MB）、启用、停用，分层规则复用 `skillHelpers.splitSkillTiers`。
+
+部署级配置（能力、智能体、A2A、运行与审批）仍在 `/settings/*` 页面，暂未重做：从账户菜单的「管理控制台」进入，左侧分类导航提供 Capabilities、Approvals、
 Runs、Agents（admin）与 A2A Access（admin）。旧路径 `/runs` 与 `/approvals` 重定向到对应
 `/settings/*` 路径。
 
@@ -321,7 +327,8 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 
 ## 主题
 
-暗色（默认）与亮色：`ThemeProvider` 持久化用户偏好，通过 `[data-theme]` 切换，切换入口在账户菜单。
+暗色、亮色或跟随系统：`ThemeProvider` 读取 `theme` 偏好（沿用旧的 `app-theme` 存储键），跟随系统时监听
+`prefers-color-scheme`，通过 `[data-theme]` 切换；入口在设置弹窗与账户菜单。
 配色为中性灰加钴蓝（`shared/ui/tokens.css`），智能体标签用 `--agent-tone-0..5` 六个固定色槽。
 内网部署无法加载外部字体，只用系统字体栈。新组件样式用 CSS Modules（`*.module.css`），
 `shared/styles/app.css` 只保留仍被引用的旧样式。
@@ -330,8 +337,8 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 
 | 快捷键 | 操作 |
 |--------|------|
-| `Enter` | 空闲时发送；运行中排队追问；等待回答时提交回答（输入法组合期间不触发） |
-| `Ctrl+Enter` / `Cmd+Enter` | 运行中立即改向（steer）当前 Run |
+| `Enter` | 空闲时发送；运行中按设置排队追问（默认）或立即改向；等待回答时提交回答（输入法组合期间不触发） |
+| `Ctrl+Enter` / `Cmd+Enter` | 运行中执行与 Enter 相反的动作（默认为立即改向） |
 | `Ctrl+K` / `Cmd+K` | 聚焦侧栏搜索 |
 | `Shift+Enter` | 换行 |
 | `Ctrl+U` / `Cmd+U` | 打开文件选择器上传（Run 运行中与按钮一致被禁用） |

@@ -5,10 +5,12 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { usePreference } from './preferences';
 
 export type ThemeMode = 'dark' | 'light';
 
 interface ThemeContextValue {
+  /** The scheme actually applied (the `system` preference resolved). */
   theme: ThemeMode;
   toggleTheme: (next?: ThemeMode) => void;
 }
@@ -18,29 +20,35 @@ const ThemeContext = createContext<ThemeContextValue>({
   toggleTheme: () => {},
 });
 
-export function getInitialTheme(): ThemeMode {
+function systemTheme(): ThemeMode {
   if (typeof window === 'undefined') return 'dark';
-  const saved = localStorage.getItem('app-theme');
-  if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches
-    ? 'light'
-    : 'dark';
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
+/**
+ * Applies the colour-scheme preference (light / dark / follow the system) as
+ * `[data-theme]` on <html>; dark is the token default, so only light is set.
+ */
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
+  const [preference, setPreference] = usePreference('theme');
+  const [system, setSystem] = useState<ThemeMode>(systemTheme);
+  const theme: ThemeMode = preference === 'system' ? system : preference;
 
   useEffect(() => {
-    if (theme === 'light') {
-      document.documentElement.dataset.theme = 'light';
-    } else {
-      delete document.documentElement.dataset.theme;
-    }
-    localStorage.setItem('app-theme', theme);
+    const media = window.matchMedia?.('(prefers-color-scheme: light)');
+    if (!media) return;
+    const onChange = () => setSystem(media.matches ? 'light' : 'dark');
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+
+  useEffect(() => {
+    if (theme === 'light') document.documentElement.dataset.theme = 'light';
+    else delete document.documentElement.dataset.theme;
   }, [theme]);
 
   function toggleTheme(next?: ThemeMode) {
-    setTheme((curr) => next || (curr === 'light' ? 'dark' : 'light'));
+    setPreference(next || (theme === 'light' ? 'dark' : 'light'));
   }
 
   return (
