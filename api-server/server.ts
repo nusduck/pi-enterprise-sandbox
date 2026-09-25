@@ -72,6 +72,7 @@ import {
   handleDeleteCronJob,
   handleGetCronJob,
   handleListCronJobRuns,
+  handleListAllCronJobRuns,
   handleListCronJobs,
   handleRunCronJob,
   handleUpdateCronJob,
@@ -334,6 +335,11 @@ const server = http.createServer(async (rawReq, res) => {
     if (req.method === 'POST' && path === '/api/cron-jobs') {
       const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
       await handleCreateCronJob(parsed, res, req);
+      return;
+    }
+    // Before the single-job routes: `runs` would otherwise read as a job id.
+    if (req.method === 'GET' && path === '/api/cron-jobs/runs') {
+      await handleListAllCronJobRuns(parsedUrl, res, req);
       return;
     }
     {

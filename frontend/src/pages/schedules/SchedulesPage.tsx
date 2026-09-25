@@ -4,7 +4,7 @@ import { useChat } from '../../features/chat/ChatContext';
 import {
   createCronJob,
   deleteCronJob,
-  listCronJobRuns,
+  listAllCronJobRuns,
   listCronJobs,
   runCronJobNow,
   updateCronJob,
@@ -51,22 +51,15 @@ export function SchedulesPage() {
     const gen = ++generation.current;
     setLoading(true);
     try {
-      const list = await listCronJobs();
+      // The strip covers 30 days; one cross-job request replaces one per job.
+      const since = new Date();
+      since.setHours(0, 0, 0, 0);
+      since.setDate(since.getDate() - 30);
+      const [list, runs] = await Promise.all([listCronJobs(), listAllCronJobRuns(since)]);
       if (gen !== generation.current) return;
       setJobs(list);
       setError(null);
-      // The API has no cross-job history; gather each job's runs (bounded list).
-      const perJob = await Promise.all(
-        list.map((job) =>
-          listCronJobRuns(job.cron_job_id)
-            .then((runs) => runs.map((r) => ({ ...r, jobName: job.name, timezone: job.timezone })))
-            .catch(() => [] as HistoryRow[]),
-        ),
-      );
-      if (gen !== generation.current) return;
-      setHistory(
-        perJob.flat().sort((a, b) => String(b.scheduled_at || '').localeCompare(String(a.scheduled_at || ''))),
-      );
+      setHistory(runs.map((r) => ({ ...r, jobName: r.job_name, timezone: r.job_timezone })));
     } catch (err) {
       if (gen === generation.current) setError((err as Error).message || '读取定时任务失败');
     } finally {

@@ -223,6 +223,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/admin/runs/{id}` `/events` `/tools` | 单次运行详情 / 全部持久事件 / 工具台账（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
+| `GET` | `/api/cron-jobs/runs` | 本人所有未删除任务的执行记录（`since` ISO，`limit` 1–1000，默认 500），每条带 `job_name` / `job_timezone` |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |
 | `POST` | `/api/cron-jobs/{id}/run` | 立即触发一次 |
 | `GET` | `/api/capabilities/{skills,mcp,tools,models}` | 从 diagnostics 投影的能力清单 |

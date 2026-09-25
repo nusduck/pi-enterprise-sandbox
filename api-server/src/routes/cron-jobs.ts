@@ -6,6 +6,7 @@ import {
   deleteAgentCronJob,
   getAgentCronJob,
   listAgentCronJobRuns,
+  listAgentAllCronJobRuns,
   listAgentCronJobs,
   runAgentCronJob,
   updateAgentCronJob,
@@ -84,3 +85,15 @@ export async function handleListCronJobRuns(cronJobId: string, parsedUrl: URL, r
   }
 }
 
+/** GET /api/cron-jobs/runs?since=&limit= — executions across all of the caller's jobs. */
+export async function handleListAllCronJobRuns(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
+  try {
+    const auth = await resolveTrustedAuth(req);
+    json(res, 200, await listAgentAllCronJobRuns(
+      { since: parsedUrl.searchParams.get('since'), limit: parsedUrl.searchParams.get('limit') },
+      { auth, traceId: req?.traceId },
+    ));
+  } catch (error) {
+    sendError(res, error, req?.traceId);
+  }
+}

@@ -560,6 +560,18 @@ export async function listAgentCronJobRuns(
   });
 }
 
+/** Executions of all the caller's cron jobs (schedules page strip + history). */
+export async function listAgentAllCronJobRuns(
+  { since, limit }: { since?: string | null; limit?: string | null } = {},
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
+  const q = new URLSearchParams();
+  if (since) q.set('since', since);
+  if (limit) q.set('limit', limit);
+  const qs = q.toString();
+  return requestAgentCron(`/runs${qs ? `?${qs}` : ''}`, { auth, traceId });
+}
+
 /**
  * @param {string} runId
  * @param {{ auth?: object|null, traceId?: string|null, idempotencyKey?: string|null }} [opts]
