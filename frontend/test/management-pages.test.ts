@@ -19,7 +19,9 @@ import {
   runRowFromApi,
   runRowFromEntity,
   shortId,
+  traceSpansFromResponse,
 } from '../src/pages/runs/runHelpers.ts';
+import { buildTraceTree } from '../src/widgets/trace-panel/TracePanel.tsx';
 import {
   canDecideApproval,
   filterApprovalsByStatus,
@@ -124,6 +126,23 @@ describe('run helpers', () => {
     assert.equal(row.finishedAt, '2026-07-12T00:01:05.000Z');
     assert.equal(formatRunDuration(row.startedAt, row.finishedAt), '01:05');
     assert.equal(canCancelRun('RUNNING'), true);
+  });
+
+  it('builds the admin trace tree from parentSpanId and attributes', () => {
+    // Shape returned by GET /api/runs/:id/trace (camelCase, parentSpanId, attributes).
+    const spans = traceSpansFromResponse('run_1', {
+      traceId: 't1',
+      truncated: false,
+      spans: [
+        { id: 'root', spanId: 'root', parentSpanId: null, runId: 'run_1', kind: 'run', name: 'Run', status: 'ok' },
+        { id: 'm1', spanId: 'm1', parentSpanId: 'root', runId: 'run_1', kind: 'model', name: 'Model call', status: 'ok', attributes: { modelId: 'deepseek-flash' } },
+      ],
+    });
+    const tree = buildTraceTree(spans);
+    assert.equal(tree.length, 1);
+    assert.equal(tree[0].span.name, 'Run');
+    assert.equal(tree[0].children[0].span.name, 'Model call');
+    assert.equal(tree[0].children[0].span.metadata?.modelId, 'deepseek-flash');
   });
 
   it('formats duration', () => {

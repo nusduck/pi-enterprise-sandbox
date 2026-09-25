@@ -153,10 +153,10 @@ describe('approval decision UX', () => {
     );
     assert.match(src, /resolveApproval/);
     assert.match(src, /canDecideApproval/);
-    assert.match(src, /Decision failed\. The approval remains pending\./);
-    assert.match(src, /Approve/);
-    assert.match(src, /Reject/);
-    assert.match(src, /Open conversation/);
+    assert.match(src, /操作失败，这条审批仍在等待处理。/);
+    assert.match(src, /批准/);
+    assert.match(src, /拒绝/);
+    assert.match(src, /打开会话/);
     assert.match(src, /role=["']tablist["']/);
     // Buttons only when pending
     assert.match(src, /pending \? \(/);

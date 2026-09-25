@@ -171,7 +171,7 @@ function TraceNodeView({
 export function TracePanel({
   spans,
   traceId,
-  emptyHint = 'No trace spans for this run yet.',
+  emptyHint = '这次运行还没有 Trace。',
 }: {
   spans: TraceSpanEntity[];
   traceId?: string | null;
@@ -192,13 +192,13 @@ export function TracePanel({
           <dd className="mono">{traceId}</dd>
           {owner?.orgId ? (
             <>
-              <dt>Organization</dt>
+              <dt>组织</dt>
               <dd className="mono">{owner.orgId}</dd>
             </>
           ) : null}
           {owner?.userId ? (
             <>
-              <dt>User</dt>
+              <dt>用户</dt>
               <dd className="mono">{owner.userId}</dd>
             </>
           ) : null}

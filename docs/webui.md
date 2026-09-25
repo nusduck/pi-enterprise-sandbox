@@ -28,8 +28,8 @@ frontend/
 │   │                          context-inspector（资料抽屉）、process-console 等
 │   └── pages/
 │       ├── workbench/       ← 主工作台（会话 + 线性对话流）
-│       ├── runs/            ← Run 列表与取消（admin 管理控制台入口）
-│       ├── approvals/       ← 待审批列表
+│       ├── runs/            ← 运行列表、概况与 Trace（admin）
+│       ├── approvals/       ← 审批（admin）
 │       ├── schedules/       ← Cron 任务管理
 │       └── settings/        ← Capabilities、Agents 与 A2A 管理
 ├── test/                    ← node:test + tsx
@@ -198,6 +198,17 @@ Skills 可按系统 / 用户筛选，MCP 状态以服务端的 `status` 为准�
 **管理控制台**（`app/layout/AdminShell.tsx`）是独立的全屏布局：左侧「返回对话」与分组导航（运维：运行、
 审批；配置：智能体、能力、A2A 接入），不显示会话侧栏。非管理员访问时只显示「需要管理员权限」；服务端对
 管理接口有同样的角色校验。
+
+**运行**（`/admin/runs`）：按状态分 tab（带数量），表格列出开始时间、会话标题与所属智能体、状态、耗时；
+点一行在右侧打开详情，「概况」为状态 / 时间 / 会话等字段，「Trace」为 span 树（`traceSpansFromResponse`
+复用工作台的 trace 映射，按 `parentSpanId` 建树、`attributes` 作元数据）。取消需要第二次点击确认，
+「打开会话」跳到 `/c/<id>`。列表目前只含当前用户自己的运行，跨用户视图等服务端接口（第 3 期）。
+
+**审批**（`/admin/approvals`）：默认显示待审批；每条一张卡片（工具、风险、状态、原因、命令，可展开参数），
+待审批的卡片可直接批准 / 拒绝，效果与对话内审批卡相同。
+
+**A2A 接入**（`/admin/a2a`）：右上角切换智能体；上方是端点、Agent Card、认证方式等摘要，下方分「凭据 / 调用记录 /
+审计 / 接入示例」。签发后的一次性凭据只显示一次；吊销需要第二次点击确认。
 
 ### 消息格式
 

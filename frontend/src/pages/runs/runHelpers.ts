@@ -2,18 +2,28 @@
  * Pure helpers for Active Runs page (F5 / ADR 0003 §10).
  * Unit-testable — no React / no I/O.
  */
-import type { RunEntity, EntityStore, ToolExecutionEntity } from '../../entities';
-import type { RunDetail } from '../../shared/schemas/events';
+import {
+  createEntityStore,
+  createRun,
+  getRunTraceSpans,
+  upsertRun,
+  type RunEntity,
+  type EntityStore,
+  type ToolExecutionEntity,
+  type TraceSpanEntity,
+} from '../../entities';
+import { rehydrateTraceSpans } from '../../features/chat/entityBridge';
+import type { RunDetail, RunTraceResponse } from '../../shared/schemas/events';
 import type { RunListItem as ApiRunItem } from '../../shared/schemas/management';
 
 /** Status filter chips shown on the Active Runs page. */
 export const RUN_STATUS_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'running', label: 'Running' },
-  { id: 'waiting_approval', label: 'Waiting Approval' },
-  { id: 'waiting_input', label: 'Waiting Input' },
-  { id: 'failed', label: 'Failed' },
-  { id: 'completed', label: 'Completed' },
+  { id: 'all', label: '全部' },
+  { id: 'running', label: '运行中' },
+  { id: 'waiting_approval', label: '等待审批' },
+  { id: 'waiting_input', label: '等待回答' },
+  { id: 'failed', label: '失败' },
+  { id: 'completed', label: '已结束' },
 ] as const;
 
 export type RunStatusFilterId = (typeof RUN_STATUS_FILTERS)[number]['id'];
@@ -210,4 +220,13 @@ export function formatRunDuration(
 export function shortId(id: string, n = 10): string {
   if (id.length <= n) return id;
   return `${id.slice(0, n)}…`;
+}
+
+/**
+ * Trace spans of one run from the durable trace projection, through the same
+ * mapping the workbench uses (parentSpanId → tree, attributes → metadata).
+ */
+export function traceSpansFromResponse(runId: string, response: RunTraceResponse): TraceSpanEntity[] {
+  const base = upsertRun(createEntityStore(), createRun({ id: runId }));
+  return getRunTraceSpans(rehydrateTraceSpans(base, runId, response), runId);
 }
