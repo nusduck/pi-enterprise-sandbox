@@ -6,39 +6,13 @@ import {
   findRegenerateSource,
   shouldShowJumpToBottom,
 } from './messageActions';
-import { runHasEntitySteps } from '../runtime-steps/InlineRuntimeSteps';
+import { runHasTurnEntities } from '../turn-stream/TurnStream';
 import { isTerminalRunStatus } from '../../entities';
-import { IconChevronDown, IconSparkles, IconTerminal, IconCode, IconAlertCircle } from '../../shared/ui/Icons';
-
-const PROMPT_STARTERS = [
-  {
-    title: 'Analyze Codebase Architecture',
-    desc: 'Explore modules, dependencies and data flows across the workspace.',
-    prompt: 'Please analyze the codebase architecture, outline the key layers and suggest improvements.',
-    icon: <IconCode size={16} />,
-  },
-  {
-    title: 'Run Security & Governance Audit',
-    desc: 'Audit policy gates, tool access, high-risk bash commands and approvals.',
-    prompt: 'Audit current tool access policies and check if all external commands are properly gated.',
-    icon: <IconAlertCircle size={16} />,
-  },
-  {
-    title: 'Inspect Managed Processes',
-    desc: 'Check background services, live terminal processes and execution logs.',
-    prompt: 'Check active background processes and summarize recent execution outputs.',
-    icon: <IconTerminal size={16} />,
-  },
-  {
-    title: 'Generate Dynamic Agent Skill',
-    desc: 'Draft and test a specialized Skill ZIP package for this workspace.',
-    prompt: 'Help me design and create a specialized Skill package with tools for automated reporting.',
-    icon: <IconSparkles size={16} />,
-  },
-];
+import { IconChevronDown } from '../../shared/ui/Icons';
+import s from './messageList.module.css';
 
 export function MessageList() {
-  const { state, displayMessages, setDraftText, sendMessage, entityStore, activeRunId } = useChat();
+  const { state, displayMessages, sendMessage, entityStore, activeRunId } = useChat();
   const ref = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -91,24 +65,26 @@ export function MessageList() {
   }, [displayMessages]);
 
   /**
-   * One step rail per run, on the *first* assistant bubble of that run.
-   *
-   * The projection normally merges a run into a single bubble, so first and
-   * last are the same row. When something splits them anyway — a legacy
-   * transcript, or another run's row landing in between — the rail belongs to
-   * the top of the turn, where it reads as "here is what I did" before the
-   * answer, rather than trailing after it.
+   * One linear turn stream per Run, on the first assistant row of that Run.
+   * The stream renders every text segment and tool call of the Run in event
+   * order, so any further assistant rows of the same Run are skipped.
    */
-  const runtimeStepRunIds = useMemo(() => {
-    const firstByRun = new Map<string, number>();
+  const turnRows = useMemo(() => {
+    const first = new Set<number>();
+    const skip = new Set<number>();
+    const seen = new Set<string>();
     displayMessages.forEach((msg, idx) => {
-      if (msg.role === 'assistant' && msg._runId) {
-        const key = String(msg._runId);
-        if (!firstByRun.has(key)) firstByRun.set(key, idx);
+      if (msg.role !== 'assistant' || !msg._runId) return;
+      const key = String(msg._runId);
+      if (seen.has(key)) {
+        if (runHasTurnEntities(entityStore, key)) skip.add(idx);
+        return;
       }
+      seen.add(key);
+      if (runHasTurnEntities(entityStore, key)) first.add(idx);
     });
-    return new Set(firstByRun.values());
-  }, [displayMessages]);
+    return { first, skip };
+  }, [displayMessages, entityStore]);
 
   /** Regenerate is only offered on the last assistant bubble while idle. */
   const regen = useMemo(() => {
@@ -132,14 +108,6 @@ export function MessageList() {
     [sendMessage],
   );
 
-  function selectStarter(prompt: string) {
-    setDraftText(prompt);
-    const textarea = document.getElementById('input') as HTMLTextAreaElement | null;
-    if (textarea) {
-      textarea.focus();
-    }
-  }
-
   // aria-live="off" is deliberate: role="log" carries an implicit polite live
   // region, and streaming SSE tokens mutate existing text nodes, so leaving it
   // live makes screen readers re-read the transcript on every delta. Run state
@@ -154,56 +122,16 @@ export function MessageList() {
       onScroll={handleScroll}
     >
       {displayMessages.length === 0 ? (
-        <div className="welcome">
-          <div className="welcome-hero-badge">
-            <div className="welcome-icon">
-              <img src="/brand/uprc-icon.png" alt="" width={44} height={44} />
-            </div>
-            <div className="welcome-hero-tag">
-              <IconSparkles size={13} /> Enterprise Agent Workbench
-            </div>
-          </div>
-
-          <h2 className="welcome-title">What do you want to accomplish?</h2>
-          <p className="welcome-subtitle">
-            Autonomous execution, policy-gated tools, human-in-the-loop approvals, and audited subagent fleets.
-          </p>
-
-          <div className="welcome-starters-grid">
-            {PROMPT_STARTERS.map((s) => (
-              <button
-                key={s.title}
-                type="button"
-                className="starter-card"
-                onClick={() => selectStarter(s.prompt)}
-              >
-                <div className="starter-card-icon">{s.icon}</div>
-                <div className="starter-card-content">
-                  <span className="starter-card-title">{s.title}</span>
-                  <span className="starter-card-desc">{s.desc}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <p className="welcome-hints">
-            <kbd>Enter</kbd> send
-            <span className="hint-sep">·</span>
-            <kbd>Shift+Enter</kbd> newline
-            <span className="hint-sep">·</span>
-            <kbd>Ctrl/Cmd+U</kbd> attach
-            <span className="hint-sep">·</span>
-            <kbd>Ctrl/Cmd+L</kbd> new chat
+        <div className={s.welcome}>
+          <h2>今天想让智能体做什么？</h2>
+          <p>描述任务，或者把文件拖进来。运行过程会在这里逐步展示。</p>
+          <p className={s.keys}>
+            <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>⌘U</kbd> 添加文件 · <kbd>⌘L</kbd> 新建会话
           </p>
         </div>
       ) : (
         displayMessages.map((msg, idx) => {
-          const showRuntimeSteps = runtimeStepRunIds.has(idx);
-          const useEntitySteps =
-            showRuntimeSteps &&
-            msg.role === 'assistant' &&
-            Boolean(msg._runId) &&
-            runHasEntitySteps(entityStore, msg._runId || null);
+          if (turnRows.skip.has(idx)) return null;
           const canRegenerate =
             regen.allowed && idx === regen.assistantIdx;
           // Only the regenerating bubble gets the source text: handing it to
@@ -220,8 +148,7 @@ export function MessageList() {
               }
               msg={msg}
               idx={idx}
-              showRuntimeSteps={showRuntimeSteps}
-              useEntitySteps={useEntitySteps}
+              useTurnStream={turnRows.first.has(idx)}
               canRegenerate={canRegenerate}
               regenerateSource={regenerateSource}
               onRegenerate={handleRegenerate}

@@ -1,26 +1,34 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import { conversationTitle, isInterruptedMessage } from '../../shared/state';
-import {
-  countRunTools,
-  formatDuration,
-  formatRunStatusLabel,
-  getActiveRunEntity,
-  runStatusTone,
-} from '../runtime-timeline/buildTimeline';
+import { isTerminalRunStatus, listProcessesForSession } from '../../entities';
+import { formatDuration, getActiveRunEntity } from '../runtime-timeline/buildTimeline';
 import { BudgetBar } from '../budget-bar/BudgetBar';
 import { shouldShowResumeEntry } from '../composer/composerMode';
-import { IconMenu, IconLayers, IconRefresh, IconSun, IconMoon } from '../../shared/ui/Icons';
+import { agentTone, isDefaultAgentName } from '../conversation-sidebar/sidebarModel';
+import { IconLayers, IconPanel, IconRefresh } from '../../shared/ui/Icons';
+import s from './conversationHeader.module.css';
 
-import { useTheme } from '../../shared/ui/theme';
+const LIVE_LABEL: Record<string, string> = {
+  queued: '排队中',
+  restoring_session: '恢复会话中',
+  running: '运行中',
+  waiting_approval: '等待审批',
+  waiting_input: '等待你的回答',
+  cancelling: '正在取消',
+};
 
+/**
+ * Conversation title bar: what this conversation is and which agent it is
+ * bound to, the live state of the current run (only while it runs), and the
+ * toggle for the resources drawer (artifacts, files, datasets, processes).
+ */
 export function ConversationHeader() {
   const {
     state,
     entityStore,
     activeRunId,
     activeSessionId,
-    activeTraceId,
     displayMessages,
     resumeInterrupted,
     toggleSidebar,
@@ -29,234 +37,95 @@ export function ConversationHeader() {
     agentNameById,
   } = useChat();
 
-  const [theme, toggleTheme] = useTheme();
-
-  const conv = (state.conversations || []).find(
-    (c) => c.id === state.conversationId,
-  );
-  const title = conv
-    ? conversationTitle(conv)
-    : state.conversationId
-      ? 'Conversation'
-      : 'New Conversation';
-
+  const conv = (state.conversations || []).find((c) => c.id === state.conversationId);
+  const title = conv ? conversationTitle(conv) : state.conversationId ? '会话' : '新会话';
   const run = getActiveRunEntity(entityStore, activeRunId);
+  const live = Boolean(run && !isTerminalRunStatus(String(run.status)));
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    if (!run || run.finishedAt) return;
-    const status = run.status;
-    if (
-      status === 'succeeded' ||
-      status === 'failed' ||
-      status === 'cancelled' ||
-      status === 'interrupted' ||
-      status === 'budget_exceeded'
-    ) {
-      return;
-    }
+    if (!live) return;
     const id = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
-  }, [run?.id, run?.status, run?.finishedAt]);
+  }, [live]);
 
-  const showRun = Boolean(run || state.isStreaming);
-  const status = run?.status || (state.isStreaming ? 'running' : null);
-  const tone = status ? runStatusTone(status) : 'idle';
-  const tools = activeRunId ? countRunTools(entityStore, activeRunId) : 0;
-  const duration = run
-    ? formatDuration(run.startedAt || run.createdAt, run.finishedAt)
-    : null;
+  const agentId = typeof conv?.agent_id === 'string' ? conv.agent_id : null;
+  const agentName = agentNameById(agentId);
+  const rawVersion = conv?.agent_version_no;
+  const versionNo = rawVersion != null && Number.isFinite(Number(rawVersion)) ? Number(rawVersion) : null;
 
   const lastInterrupted = (() => {
     for (let i = displayMessages.length - 1; i >= 0; i--) {
-      if (displayMessages[i].role === 'assistant') {
-        return isInterruptedMessage(displayMessages[i]);
-      }
+      if (displayMessages[i].role === 'assistant') return isInterruptedMessage(displayMessages[i]);
     }
     return false;
   })();
-
   const showResume = shouldShowResumeEntry({
     runStatus: run?.status,
     lastMessageInterrupted: lastInterrupted,
     isStreaming: state.isStreaming,
   });
 
-  const agentSession =
-    (run?.agentSessionId &&
-      entityStore.agentSessionsById[run.agentSessionId]) ||
-    (state.conversationId &&
-      Object.values(entityStore.agentSessionsById).find(
-        (s) => s.conversationId === state.conversationId,
-      )) ||
-    null;
-
-  // 这个会话绑在哪个 Agent 上（D2：建会话时钉死）。只有 org 里确实存在多个
-  // Agent 时 `agentNameById` 才解析得出名字，单 Agent 的 org 看不到这个 chip。
-  const agentName = agentNameById(
-    typeof conv?.agent_id === 'string' ? conv.agent_id : null,
-  );
-
-  // This is the version the Agent service bound when the conversation was
-  // created. Never look at the Agent catalog's current active pointer here:
-  // changing an Agent must not silently retarget an existing conversation.
-  const boundVersionId =
-    typeof conv?.agent_version_id === 'string'
-      ? conv.agent_version_id
-      : null;
-  const rawBoundVersionNo = conv?.agent_version_no;
-  const boundVersionNo =
-    rawBoundVersionNo != null && Number.isFinite(Number(rawBoundVersionNo))
-      ? Number(rawBoundVersionNo)
-      : null;
-
-  const model =
-    run?.modelId ||
-    agentSession?.modelId ||
-    (typeof conv?.model_policy?.fixed_model_id === 'string'
-      ? conv.model_policy.fixed_model_id
-      : null) ||
-    null;
+  const resourceCount = useMemo(() => {
+    const convId = state.conversationId;
+    if (!convId) return 0;
+    const runIds = new Set(
+      Object.values(entityStore.runsById).filter((r) => r.conversationId === convId).map((r) => r.id),
+    );
+    const artifacts = Object.values(entityStore.artifactsById).filter((a) => a.runId && runIds.has(a.runId)).length;
+    return artifacts + listProcessesForSession(entityStore, activeSessionId).length;
+  }, [entityStore, state.conversationId, activeSessionId]);
 
   return (
-    <header
-      className="workbench-toolbar conversation-header"
-      role="region"
-      aria-label="Conversation"
-    >
-      <div className="wb-toolbar-left">
-        <button
-          type="button"
-          className="btn-icon"
-          id="btn-sidebar-toggle"
-          title="Toggle conversations"
-          aria-label="Toggle sidebar"
-          onClick={toggleSidebar}
-        >
-          <IconMenu size={18} />
+    <header className={s.head} role="region" aria-label="Conversation">
+      {state.sidebarOpen === false ? (
+        <button type="button" className={s.icon} onClick={toggleSidebar} aria-label="Toggle sidebar" title="展开侧栏">
+          <IconPanel size={18} />
         </button>
-        <div className="wb-title-block">
-          <h1 className="conv-header-title" title={title}>
-            {title}
-          </h1>
-          <div className="conv-header-meta">
-            {agentName ? (
-              <span className="conv-chip agent-chip" title={`Agent · ${agentName}`}>
-                {agentName}
-              </span>
-            ) : null}
-            {boundVersionNo != null || boundVersionId ? (
-              <span
-                className="conv-chip agent-version-chip"
-                title={
-                  boundVersionId
-                    ? `Server-bound Agent version · ${boundVersionId}`
-                    : 'Server-bound Agent version'
-                }
-              >
-                {boundVersionNo != null
-                  ? `Bound v${boundVersionNo}`
-                  : `Bound ${boundVersionId?.slice(0, 8)}`}
-              </span>
-            ) : null}
-            {model ? (
-              <span className="conv-chip model-chip" title={model}>
-                {model}
-              </span>
-            ) : null}
-            {activeSessionId || agentSession ? (
-              <span
-                className="conv-chip session-chip"
-                title={agentSession?.id || activeSessionId || ''}
-              >
-                {agentSession
-                  ? `Session · ${agentSession.status}`
-                  : `Sandbox · ${(activeSessionId || '').slice(-6)}`}
-              </span>
-            ) : null}
-          </div>
-        </div>
+      ) : (
+        <button type="button" className={`${s.icon} ${s.mobileOnly}`} onClick={toggleSidebar} aria-label="Toggle sidebar" title="会话列表">
+          <IconPanel size={18} />
+        </button>
+      )}
+      <h1 className={s.title} title={title}>{title}</h1>
+      {agentId && !isDefaultAgentName(agentName) ? (
+        <span className={s.chip} title="会话建立时绑定的智能体，之后不会变化">
+          <span className={s.dot} style={{ ['--tone' as string]: `var(--agent-tone-${agentTone(agentId)})` }} />
+          {agentName}
+          {versionNo != null ? <span className={s.ver}>v{versionNo}</span> : null}
+        </span>
+      ) : null}
+
+      <span className={s.sp} />
+
+      <div className={s.status} aria-live="polite">
+        {live && run ? (
+          <span className={`${s.pill} ${run.status === 'waiting_approval' || run.status === 'waiting_input' ? s.warn : s.run}`} role="status">
+            <span className={s.pulse} aria-hidden="true" />
+            {LIVE_LABEL[String(run.status)] || '运行中'}
+            <span className={s.dur}>{formatDuration(run.startedAt || run.createdAt, run.finishedAt)}</span>
+          </span>
+        ) : null}
+        {run ? <BudgetBar run={run} /> : null}
+        {showResume ? (
+          <button type="button" className={s.btn} onClick={() => void resumeInterrupted()}>
+            <IconRefresh size={12} /> 继续运行
+          </button>
+        ) : null}
       </div>
 
-      <div className="wb-toolbar-center" aria-live="polite">
-        {showRun && status ? (
-          <div
-            className={`run-status-bar inline tone-${tone}`}
-            role="status"
-            data-run-id={run?.id || ''}
-            data-run-status={status}
-          >
-            <span className="rsb-dot" aria-hidden="true" />
-            <span className="rsb-status">{formatRunStatusLabel(status)}</span>
-            {tools > 0 ? (
-              <>
-                <span className="rsb-sep">·</span>
-                <span className="rsb-detail">
-                  {tools} tool{tools === 1 ? '' : 's'}
-                </span>
-              </>
-            ) : null}
-            {duration ? (
-              <>
-                <span className="rsb-sep">·</span>
-                <span className="rsb-detail mono">{duration}</span>
-              </>
-            ) : null}
-            {run ? <BudgetBar run={run} /> : null}
-            {showResume ? (
-              <button
-                type="button"
-                className="rsb-resume-btn"
-                onClick={() => void resumeInterrupted()}
-                title="Resume interrupted run"
-              >
-                <IconRefresh size={12} /> Resume
-              </button>
-            ) : null}
-            {activeTraceId ? (
-              <span className="rsb-trace" title={activeTraceId}>
-                {activeTraceId.slice(0, 8)}
-              </span>
-            ) : null}
-          </div>
-        ) : (
-          <div className="run-status-bar inline idle" role="status">
-            <span
-              className="dot"
-              aria-hidden="true"
-              style={{ background: state.statusColor }}
-            />
-            <span id="status-label" className="rsb-detail">
-              {state.statusLabel}
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="wb-toolbar-right">
-        <button
-          type="button"
-          className="btn-icon"
-          title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-          aria-label="Toggle color theme"
-          onClick={() => toggleTheme()}
-        >
-          {theme === 'light' ? <IconMoon size={16} /> : <IconSun size={16} />}
-        </button>
-
-        <button
-          type="button"
-          className={`btn-toolbar${inspectorOpen ? ' active' : ''}`}
-          id="btn-inspector-toggle"
-          title="Context inspector"
-          aria-label="Toggle context inspector"
-          aria-pressed={inspectorOpen}
-          onClick={toggleInspector}
-        >
-          <IconLayers size={14} />
-          <span>Details</span>
-        </button>
-      </div>
+      <button
+        type="button"
+        className={`${s.btn}${inspectorOpen ? ` ${s.pressed}` : ''}`}
+        id="btn-inspector-toggle"
+        aria-label="Toggle context inspector"
+        aria-pressed={inspectorOpen}
+        onClick={toggleInspector}
+        title="产物、文件、数据集与进程"
+      >
+        <IconLayers size={14} />
+        资料{resourceCount ? <span className={s.count}>{resourceCount}</span> : null}
+      </button>
     </header>
   );
 }

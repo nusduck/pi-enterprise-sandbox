@@ -58,15 +58,16 @@ describe('F6 a11y attributes on key surfaces', () => {
 
   it('ConversationSidebar: primary nav + list semantics', () => {
     const side = readSrc('widgets', 'conversation-sidebar', 'ConversationSidebar.tsx');
-    assert.match(side, /aria-label=["']Primary["']/);
-    assert.match(side, /aria-label=["']Account["']/);
-    assert.match(side, /sidebar-nav-primary/);
-    assert.match(side, /sidebar-nav-footer/);
-    assert.match(side, /Settings/);
-    assert.match(side, /role=["']list["']/);
-    assert.match(side, /role=["']listitem["']/);
-    assert.match(side, /aria-label=["']Close sidebar["']/);
-    assert.match(side, /aria-label=["']Delete conversation["']/);
+    assert.match(side, /aria-label="主导航"/);
+    assert.match(side, /aria-label="搜索会话"/);
+    assert.match(side, /role="list"/);
+    assert.match(side, /role="listitem"/);
+    assert.match(side, /tabIndex=\{0\}/);
+    assert.match(side, /aria-label="收起侧栏"/);
+    assert.match(side, /aria-label="删除会话"/);
+    // Account actions live in a labelled menu, not bare links.
+    assert.match(side, /role="menu"/);
+    assert.match(side, /aria-expanded=\{menuOpen\}/);
   });
 
   it('Composer: status banners and running action group', () => {
@@ -78,13 +79,15 @@ describe('F6 a11y attributes on key surfaces', () => {
     assert.doesNotMatch(composer, /id=["']btn-install-skill["']/);
   });
 
-  it('Inline runtime steps: list region and expandable rows', () => {
-    const steps = readSrc('widgets', 'runtime-steps', 'InlineRuntimeSteps.tsx');
-    assert.match(steps, /aria-label=["']Runtime steps["']/);
-    assert.match(steps, /role=["']list["']/);
-    assert.match(steps, /aria-expanded=\{expandable \? open : undefined\}/);
-    assert.match(steps, /Approve/);
-    assert.match(steps, /Console/);
+  it('Turn stream: native disclosure rows and labelled action cards', () => {
+    const cards = readSrc('widgets', 'turn-stream', 'TurnCards.tsx');
+    // Tool groups, thinking and sub-tasks are <details>/<summary>: keyboard
+    // and screen-reader expansion come from the platform, not custom ARIA.
+    assert.match(cards, /<details className=\{s\.act\}/);
+    assert.match(cards, /<details className=\{s\.sub\}/);
+    assert.match(cards, /role="group" aria-label="需要你批准"/);
+    assert.match(cards, /批准/);
+    assert.match(cards, /打开进程控制台/);
 
     // Workbench no longer mounts the bottom Activity drawer.
     const workbench = readSrc('pages', 'workbench', 'WorkbenchPage.tsx');

@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -11,50 +10,31 @@ import { useChat } from '../../features/chat/ChatContext';
 import {
   activeAttachments,
   canSendAttachments,
-  fileTypeLabel,
   hasUploadingAttachments,
-  isInterruptedMessage,
   pastedImageName,
   uploadedAttachments,
 } from '../../shared/state';
 import { isEnterSubmitKey, isUploadShortcut } from '../../shared/ui/keyboard';
-import {
-  canFollowUp,
-  canSteer,
-  canStop,
-  composerModeLabel,
-  composerPlaceholder,
-  resolveComposerMode,
-  runningActionHint,
-  shouldShowResumeEntry,
-  type RunningAction,
-} from './composerMode';
+import { canFollowUp, canSteer, canStop, resolveComposerMode } from './composerMode';
 import { ModelPicker } from './ModelPicker';
 import { AgentPicker } from './AgentPicker';
-import {
-  formatRunStatusLabel,
-  getActiveRunEntity,
-} from '../runtime-timeline/buildTimeline';
-import {
-  IconPaperclip,
-  IconStop,
-  IconSend,
-  IconSteer,
-  IconPlus,
-  IconRefresh,
-  IconClose,
-  IconAlertCircle,
-  IconUpload,
-} from '../../shared/ui/Icons';
+import { AttachmentChips } from './AttachmentChips';
+import { ImportArtifactDialog } from './ImportArtifactDialog';
+import { getActiveRunEntity } from '../runtime-timeline/buildTimeline';
+import { IconPlus, IconSend, IconStop, IconUpload } from '../../shared/ui/Icons';
+import s from './composer.module.css';
 
-function formatSize(n?: number | null): string {
-  if (n == null || Number.isNaN(Number(n))) return '';
-  const b = Number(n);
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
-}
+const MODE_NOTE: Record<string, string> = {
+  running: 'Enter 排队追问 · ⌘Enter 立即改向',
+  waiting_approval: '等待审批：在上方卡片里批准或拒绝；这里输入的内容会排队',
+  waiting_input: '智能体在等你回答：可以点上方选项，也可以直接输入',
+};
 
+/**
+ * Message composer. While a run is active the box stays usable: Enter queues a
+ * follow-up that runs after the current one, Cmd/Ctrl+Enter steers the run
+ * now. Approvals and questions are answered in the stream, not here.
+ */
 export function Composer() {
   const {
     state,
@@ -71,12 +51,8 @@ export function Composer() {
     steerRun,
     followUpRun,
     stopRun,
-    approvePending,
-    rejectPending,
-    resumeInterrupted,
-    resolveApproval,
     respondInteraction,
-    displayMessages,
+    importArtifactToConversation,
     models,
     selectedModelId,
     fixedModelId,
@@ -88,8 +64,9 @@ export function Composer() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [runningAction, setRunningAction] = useState<RunningAction>('steer');
   const [submitting, setSubmitting] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const runId = activeRunId;
   const run = getActiveRunEntity(entityStore, runId);
@@ -103,30 +80,6 @@ export function Composer() {
     runStatus: run?.status,
     hasPendingApproval,
   });
-
-  const lastInterrupted = useMemo(() => {
-    for (let i = displayMessages.length - 1; i >= 0; i--) {
-      if (displayMessages[i].role === 'assistant') {
-        return isInterruptedMessage(displayMessages[i]);
-      }
-    }
-    return false;
-  }, [displayMessages]);
-
-  const showResume = shouldShowResumeEntry({
-    runStatus: run?.status,
-    lastMessageInterrupted: lastInterrupted,
-    isStreaming: state.isStreaming,
-  });
-
-  // Queued/restoring runs cannot accept steer; keep the available action active.
-  useEffect(() => {
-    if (mode !== 'running') {
-      setRunningAction('steer');
-    } else if (!canSteer(mode, run?.status)) {
-      setRunningAction('follow_up');
-    }
-  }, [mode, run?.status]);
 
   const attachments = activeAttachments(state.attachments);
   const gateOk = canSendAttachments(state.attachments);
@@ -146,7 +99,7 @@ export function Composer() {
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (isEnterSubmitKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) {
       e.preventDefault();
-      void onPrimaryAction();
+      void onPrimaryAction(e.metaKey || e.ctrlKey);
     }
   }
 
@@ -223,7 +176,7 @@ export function Composer() {
     return () => document.removeEventListener('keydown', onKey);
   }, [mode]);
 
-  async function onPrimaryAction() {
+  async function onPrimaryAction(steer = false) {
     if (submitting) return;
 
     if (mode === 'idle') {
@@ -251,7 +204,7 @@ export function Composer() {
       if (!text) return;
       setSubmitting(true);
       try {
-        if (mode === 'running' && runningAction === 'steer' && canSteer(mode, run?.status)) {
+        if (steer && canSteer(mode, run?.status)) {
           await steerRun(text);
         } else if (canFollowUp(mode)) {
           await followUpRun(text);
@@ -267,34 +220,14 @@ export function Composer() {
     stopRun();
   }
 
-  const primaryLabel =
-    mode === 'idle'
-      ? 'Send'
-      : mode === 'waiting_input'
-        ? 'Respond'
-        : mode === 'running' && runningAction === 'steer'
-        ? 'Steer'
-        : 'Follow-up';
-
-  const primaryTitle =
-    mode === 'idle'
-      ? !gateOk
-        ? uploading
-          ? 'Wait for uploads to finish'
-          : 'Remove or retry failed attachments'
-        : 'Send (Enter)'
-      : runningAction === 'steer' && mode === 'running'
-        ? 'Steer — change direction immediately (Enter)'
-        : 'Follow-up — queue after current work (Enter)';
-
   const primaryDisabled =
-    submitting ||
-    (mode === 'idle'
-      ? idleSendDisabled || textEmpty
-      : !draftText.trim() ||
-        (mode === 'running' &&
-          runningAction === 'steer' &&
-          !canSteer(mode, run?.status)));
+    submitting || (mode === 'idle' ? idleSendDisabled || textEmpty : !draftText.trim());
+  const primaryLabel = mode === 'idle' ? '发送' : mode === 'waiting_input' ? '回答' : '排队追问';
+  const placeholder =
+    mode === 'idle'
+      ? state.conversationId ? '继续对话…' : '描述你要完成的任务…'
+      : mode === 'waiting_input' ? '输入你的回答…' : '补充要求，Enter 排队，⌘Enter 立即改向…';
+  const note = MODE_NOTE[mode] || (!gateOk ? (uploading ? '等待附件上传完成' : '有附件上传失败，请重试或移除') : '');
 
   return (
     <>
@@ -317,329 +250,122 @@ export function Composer() {
           <div className="dz-icon">
             <IconUpload size={38} />
           </div>
-          <p>Drop file to upload</p>
-          <small>Uploaded directly to sandbox workspace</small>
+          <p>松开即可上传</p>
+          <small>文件会上传到当前会话的工作区</small>
         </div>
       </div>
 
-      <div className={`input-wrap composer-mode-${mode}`}>
-        {mode === 'waiting_approval' ? (
-          <div className="composer-banner waiting" role="status">
-            <div className="composer-banner-content">
-              <IconAlertCircle size={16} className="composer-banner-icon" />
-              <span className="composer-banner-text">
-                Agent is waiting for human approval
-                {pendingApproval?.reason
-                  ? `: ${pendingApproval.reason}`
-                  : ''}
-              </span>
-            </div>
-            <div className="composer-banner-actions">
+      <div className={s.wrap}>
+        <div className={s.box} data-mode={mode}>
+          <AttachmentChips
+            attachments={attachments}
+            onRemove={removeAttachmentDraft}
+            onRetry={(id) => void retryAttachmentDraft(id)}
+          />
+          <textarea
+            id="input"
+            ref={textareaRef}
+            className={s.input}
+            rows={1}
+            placeholder={placeholder}
+            aria-label="消息"
+            value={draftText}
+            onChange={onInput}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+          />
+          <div className={s.row}>
+            <div className={s.plusWrap}>
               <button
                 type="button"
-                className="composer-banner-btn approve"
-                onClick={() => {
-                  if (pendingApproval?.id) {
-                    void resolveApproval(pendingApproval.id, 'approve');
-                  } else {
-                    void approvePending();
-                  }
-                }}
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                className="composer-banner-btn reject"
-                onClick={() => {
-                  if (pendingApproval?.id) {
-                    void resolveApproval(pendingApproval.id, 'reject');
-                  } else {
-                    void rejectPending();
-                  }
-                }}
-              >
-                Reject
-              </button>
-              {canStop(mode) ? (
-                <button
-                  type="button"
-                  className="composer-banner-btn stop"
-                  onClick={onStop}
-                >
-                  Cancel Run
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {mode === 'waiting_input' && run?.pendingInput ? (
-          <div className="composer-banner waiting ix-composer-hint" role="status">
-            <div className="composer-banner-content">
-              <IconAlertCircle size={16} className="composer-banner-icon" />
-              <span className="composer-banner-text">
-                <strong>{run.pendingInput.title}</strong>
-                {run.pendingInput.message
-                  ? ` — reply in card or type here`
-                  : ' — reply in card or type here'}
-              </span>
-            </div>
-            {run.pendingInput.options.length ? (
-              <div className="composer-banner-actions">
-                {run.pendingInput.options.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    className="composer-banner-btn"
-                    onClick={() => void respondInteraction(option)}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {run.pendingInput.interactionType === 'confirm' ? (
-              <div className="composer-banner-actions">
-                <button
-                  type="button"
-                  className="composer-banner-btn approve"
-                  onClick={() => void respondInteraction(true)}
-                >
-                  Confirm
-                </button>
-                <button
-                  type="button"
-                  className="composer-banner-btn reject"
-                  onClick={() => void respondInteraction(false)}
-                >
-                  Decline
-                </button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {showResume ? (
-          <div className="composer-banner resume" role="status">
-            <div className="composer-banner-content">
-              <IconAlertCircle size={16} className="composer-banner-icon" />
-              <span className="composer-banner-text">
-                Run was interrupted
-                {run?.status === 'interrupted'
-                  ? ` (${formatRunStatusLabel(run.status)})`
-                  : ''}
-                . You can continue the execution.
-              </span>
-            </div>
-            <div className="composer-banner-actions">
-              <button
-                type="button"
-                className="composer-banner-btn resume"
-                onClick={() => {
-                  void resumeInterrupted();
-                  textareaRef.current?.focus();
-                }}
-              >
-                Resume
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {mode === 'running' ? (
-          <div className="composer-mode-bar">
-            <span className="composer-mode-label">
-              {composerModeLabel(mode)}
-            </span>
-            <div className="composer-action-switch" role="group" aria-label="Running action">
-              <button
-                type="button"
-                className={`composer-action-btn${runningAction === 'steer' ? ' active' : ''}`}
-                onClick={() => setRunningAction('steer')}
-                disabled={!canSteer(mode, run?.status)}
-                title="Change current execution direction"
-              >
-                <IconSteer size={13} /> Steer
-              </button>
-              <button
-                type="button"
-                className={`composer-action-btn${runningAction === 'follow_up' ? ' active' : ''}`}
-                onClick={() => setRunningAction('follow_up')}
-                title="Queue after current run finishes"
-              >
-                <IconPlus size={13} /> Follow-up
-              </button>
-            </div>
-            <span className="composer-action-hint">
-              {runningActionHint(runningAction)}
-            </span>
-          </div>
-        ) : null}
-
-        <div className="input-inner composer-card">
-          <div
-            id="attachment-drafts"
-            className="attachment-drafts"
-            hidden={attachments.length === 0}
-            aria-live="polite"
-          >
-            {attachments.map((a) => (
-              <div
-                key={a.localId}
-                className={`att-chip att-${a.status}`}
-                data-local-id={a.localId}
-              >
-                <span
-                  className={`file-type-tile${a.status === 'uploading' || a.status === 'queued' ? ' is-loading' : ''}${a.status === 'failed' ? ' is-error' : ''}`}
-                  aria-hidden="true"
-                >
-                  {a.status === 'failed'
-                    ? '!'
-                    : fileTypeLabel(a.name, a.mimeType)}
-                </span>
-                <span className="att-meta">
-                  <span className="att-name" title={a.path || a.name || ''}>
-                    {a.name || 'file'}
-                  </span>
-                  {a.status === 'failed' && a.error ? (
-                    <span
-                      className="att-error"
-                      title={
-                        a.errorCode ? `${a.errorCode}: ${a.error}` : a.error
-                      }
-                    >
-                      {a.error}
-                      {a.traceId ? ` (trace ${a.traceId.slice(0, 8)})` : ''}
-                    </span>
-                  ) : a.status === 'uploading' || a.status === 'queued' ? (
-                    <span className="att-status">
-                      {a.status === 'queued' ? 'Waiting to upload' : 'Uploading…'}
-                    </span>
-                  ) : (
-                    <span className="att-size">
-                      {[formatSize(a.size), 'Ready'].filter(Boolean).join(' · ')}
-                    </span>
-                  )}
-                </span>
-                <span className="att-actions">
-                  {a.status === 'failed' ? (
-                    <button
-                      type="button"
-                      className="att-btn att-retry"
-                      title="Retry upload"
-                      aria-label={`Retry ${a.name}`}
-                      onClick={() => void retryAttachmentDraft(a.localId)}
-                    >
-                      <IconRefresh size={13} />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="att-btn att-remove"
-                    title="Remove attachment"
-                    aria-label={`Remove ${a.name}`}
-                    onClick={() => removeAttachmentDraft(a.localId)}
-                  >
-                    <IconClose size={13} />
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <div className="composer-input-area">
-            <textarea
-              id="input"
-              ref={textareaRef}
-              rows={1}
-              placeholder={composerPlaceholder(mode, runningAction)}
-              value={draftText}
-              disabled={false}
-              onChange={onInput}
-              onKeyDown={onKeyDown}
-              onPaste={onPaste}
-            />
-          </div>
-
-          <div className="composer-toolbar">
-            <div className="composer-tools-left">
-              <button
-                className="btn btn-upload composer-tool-btn"
                 id="btn-upload"
-                title="Attach files (Ctrl+U)"
-                type="button"
-                onClick={openFilePicker}
+                className={s.tool}
+                aria-expanded={plusOpen}
+                aria-label="添加文件或引用产物"
+                title="添加文件或引用产物（⌘U 直接选择文件）"
                 disabled={mode === 'running'}
+                onClick={() => setPlusOpen((v) => !v)}
               >
-                <IconPaperclip size={16} />
+                <IconPlus size={16} />
               </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                hidden
-                onChange={(e) => {
-                  if (e.target.files?.length) {
-                    void handleFilesSelected(e.target.files);
-                    e.target.value = '';
-                  }
-                }}
-              />
-
-              <ModelPicker
-                models={models}
-                selectedModelId={selectedModelId}
-                onSelect={setSelectedModelId}
-                fixedModelId={fixedModelId}
-                disabled={mode !== 'idle' || models.length === 0}
-              />
-
-              {/* 单 Agent 的 org 完全看不到这个控件，体验与多 Agent 上线前一致。 */}
-              {agents.length > 1 && !state.conversationId ? (
-                <AgentPicker
-                  agents={agents}
-                  selectedAgentId={selectedAgentId}
-                  onSelect={setSelectedAgentId}
-                  disabled={mode !== 'idle'}
-                />
+              {plusOpen ? (
+                <div className={s.pop} role="menu" onMouseLeave={() => setPlusOpen(false)}>
+                  <button type="button" role="menuitem" onClick={() => { setPlusOpen(false); openFilePicker(); }}>
+                    上传文件或图片
+                    <small>也可以拖拽或粘贴 · ⌘U</small>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!state.conversationId}
+                    onClick={() => { setPlusOpen(false); setImportOpen(true); }}
+                  >
+                    引用其他会话的产物
+                    <small>{state.conversationId ? '复制到当前会话的工作区' : '会话开始后可用'}</small>
+                  </button>
+                </div>
               ) : null}
             </div>
-
-            <div className="composer-tools-right">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files?.length) {
+                  void handleFilesSelected(e.target.files);
+                  e.target.value = '';
+                }
+              }}
+            />
+            <ModelPicker
+              models={models}
+              selectedModelId={selectedModelId}
+              onSelect={setSelectedModelId}
+              fixedModelId={fixedModelId}
+              disabled={mode !== 'idle' || models.length === 0}
+            />
+            {/* 只在建会话前可选：会话一旦开始就绑定了智能体。 */}
+            {agents.length > 1 && !state.conversationId ? (
+              <AgentPicker
+                agents={agents}
+                selectedAgentId={selectedAgentId}
+                onSelect={setSelectedAgentId}
+                disabled={mode !== 'idle'}
+              />
+            ) : null}
+            <span className={s.note} role="status">{note}</span>
+            <div className={s.actions} role="group" aria-label="Running action">
               {canStop(mode) ? (
-                <button
-                  className="btn btn-stop"
-                  id="btn-stop"
-                  type="button"
-                  title="Stop run"
-                  aria-label="Stop generating"
-                  onClick={onStop}
-                >
-                  <IconStop size={13} />
+                <button type="button" id="btn-stop" className={s.stop} aria-label="停止运行" title="停止运行" onClick={onStop}>
+                  <IconStop size={12} />
                 </button>
               ) : null}
               <button
-                className={`btn ${mode === 'idle' ? 'btn-send' : 'btn-action'}`}
-                id="btn-send"
                 type="button"
-                title={primaryTitle}
+                id="btn-send"
+                className={s.send}
                 aria-label={primaryLabel}
+                title={`${primaryLabel}（Enter）`}
                 disabled={primaryDisabled}
                 onClick={() => void onPrimaryAction()}
               >
-                {mode === 'idle' ? (
-                  <IconSend size={15} />
-                ) : primaryLabel === 'Steer' ? (
-                  <IconSteer size={15} />
-                ) : (
-                  <IconPlus size={15} />
-                )}
+                <IconSend size={15} />
               </button>
             </div>
           </div>
         </div>
       </div>
+
+      {state.conversationId ? (
+        <ImportArtifactDialog
+          open={importOpen}
+          onClose={() => setImportOpen(false)}
+          conversations={state.conversations || []}
+          currentConversationId={state.conversationId}
+          onImport={(artifactId, target) => importArtifactToConversation(artifactId, target)}
+        />
+      ) : null}
     </>
   );
 }

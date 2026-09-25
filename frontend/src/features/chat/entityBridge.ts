@@ -875,7 +875,7 @@ export function createEntityBridge(
       const runId = detail.run_id || detail.id;
       if (!runId) continue;
 
-      store = rehydrateRun(manager.getStore(), detail);
+      store = rehydrateRun(manager.getStore(), { ...detail, last_sequence: null });
       manager.setStore(store);
 
       const persisted = (eventsByRun.get(runId) || [])
@@ -903,11 +903,10 @@ export function createEntityBridge(
         manager.setStore(store);
       };
 
-      // Always replay durable events first, then let SSE deliver the increment.
-      // Skipping replay while the run row still said RUNNING lost the assistant
-      // body whenever the run finished during the refresh, or SSE did not
-      // reconnect in time: the tool ledger below still restored the execution
-      // steps, so the bubble showed steps with no answer. The reducer dedupes on
+      // Always replay durable events first, then let SSE deliver the increment;
+      // skipping it lost the assistant body whenever the run finished during a
+      // refresh. The seed above omits last_sequence: that final cursor would
+      // classify every replayed event as a duplicate. The reducer dedupes on
       // event id, so replaying before the stream connects is safe.
       replayPersisted();
 
@@ -1055,7 +1054,7 @@ export function createEntityBridge(
     if (assistant) content.push(...assistant.content);
 
     // Tool / process / approval / artifact rows are never copied into chat
-    // content: `InlineRuntimeSteps` renders them straight from the EntityStore.
+    // content: the turn stream renders them straight from the EntityStore.
     // Duplicating them here would render the same run twice whenever a turn
     // produced more than one assistant message.
     const hasRuntimeSteps = Boolean(

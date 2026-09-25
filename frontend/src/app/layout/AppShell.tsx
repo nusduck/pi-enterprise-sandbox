@@ -17,7 +17,8 @@ import { useTheme } from '../../shared/ui/theme';
  * Shell interaction model:
  * - Left: navigation + conversations (drawer on mobile)
  * - Center: page content (workbench owns its own toolbar)
- * - Right: context inspector (workbench only; opens on entity select)
+ * - Right: conversation resources drawer (artifacts, files, datasets,
+ *   processes), opened from the conversation header; closed by default
  */
 function isManagementPath(pathname: string): boolean {
   return (
@@ -44,7 +45,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { state, toggleSidebar, inspectorOpen, setInspectorOpen } = useChat();
   const [theme, toggleTheme] = useTheme();
 
-  const [inspectorTab, setInspectorTab] = useState<InspectorTabId>('overview');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTabId>('artifacts');
   const [selected, setSelected] = useState<SelectedEntity>(null);
   const [consoleProcessId, setConsoleProcessId] = useState<string | null>(null);
 
@@ -65,10 +66,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   function openProcessConsole(processId: string) {
+    // The console is its own sheet; the resources drawer stays as the user left it.
     setConsoleProcessId(processId);
     setSelected({ kind: 'process', id: processId });
-    setInspectorTab('processes');
-    setInspectorOpen(true);
   }
 
   function closeProcessConsole() {

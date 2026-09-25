@@ -1,0 +1,19 @@
+.welcome {
+  margin: auto;
+  max-width: 560px;
+  padding: 48px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.welcome h2 { font-size: 22px; font-weight: 600; margin: 0; text-wrap: balance; }
+.welcome p { margin: 0; color: var(--color-text-secondary); font-size: 14px; }
+.keys { font-size: 12.5px !important; color: var(--color-text-muted) !important; }
+.keys kbd {
+  font: 11px var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+}

@@ -7,10 +7,7 @@ import {
   canFollowUp,
   canSteer,
   canStop,
-  composerModeLabel,
-  composerPlaceholder,
   resolveComposerMode,
-  runningActionHint,
   shouldShowResumeEntry,
 } from '../src/widgets/composer/composerMode.ts';
 import {
@@ -69,22 +66,6 @@ describe('resolveComposerMode', () => {
 });
 
 describe('composer mode helpers', () => {
-  it('labels and placeholders cover all modes', () => {
-    assert.equal(composerModeLabel('idle'), 'New task');
-    assert.equal(composerModeLabel('running'), 'Agent running');
-    assert.equal(composerModeLabel('waiting_approval'), 'Waiting approval');
-
-    assert.match(composerPlaceholder('idle'), /message/i);
-    assert.match(composerPlaceholder('running', 'steer'), /Steer/i);
-    assert.match(composerPlaceholder('running', 'follow_up'), /Follow-up/i);
-    assert.match(composerPlaceholder('waiting_approval'), /approve/i);
-  });
-
-  it('runningActionHint distinguishes steer vs follow-up', () => {
-    assert.match(runningActionHint('steer'), /direction/i);
-    assert.match(runningActionHint('follow_up'), /after/i);
-  });
-
   it('capability flags for modes', () => {
     assert.equal(canSteer('running', 'running'), true);
     assert.equal(canSteer('running', 'queued'), false);

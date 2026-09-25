@@ -325,7 +325,7 @@ body {
   background: var(--material-fill);
   border-color: var(--color-primary-border);
   color: #ffffff;
-  box-shadow: 0 0 12px -2px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 
 .btn-new-chat:active {
@@ -979,7 +979,7 @@ body {
   height: 52px;
   border-radius: var(--radius-lg);
   overflow: hidden;
-  box-shadow: 0 0 30px -4px rgba(99, 102, 241, 0.35), var(--shadow-md);
+  box-shadow: 0 0 30px -4px color-mix(in srgb, var(--color-primary) 35%, transparent), var(--shadow-md);
   border: 1px solid var(--color-border);
 }
 .welcome-icon img { width: 100%; height: 100%; object-fit: cover; }
@@ -1038,7 +1038,7 @@ body {
   background: var(--color-bg-card-hover);
   border-color: var(--color-primary-border);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-md), 0 0 16px -4px rgba(99, 102, 241, 0.2);
+  box-shadow: var(--shadow-md), 0 0 16px -4px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 .starter-card-icon {
@@ -1254,15 +1254,15 @@ body {
 .message-thinking-box {
   margin: 0 0 var(--space-3);
   border-radius: var(--radius-md);
-  background: rgba(99, 102, 241, 0.05);
-  border: 1px solid rgba(99, 102, 241, 0.18);
+  background: color-mix(in srgb, var(--color-primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, transparent);
   overflow: hidden;
   transition: all var(--duration-fast) var(--ease-out);
 }
 
 .message-thinking-box.is-streaming {
-  border-color: rgba(99, 102, 241, 0.35);
-  box-shadow: 0 0 16px -4px rgba(99, 102, 241, 0.2);
+  border-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+  box-shadow: 0 0 16px -4px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 .thinking-toggle-btn {
@@ -1301,7 +1301,7 @@ body {
   color: var(--color-text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
-  border-top: 1px solid rgba(99, 102, 241, 0.1);
+  border-top: 1px solid color-mix(in srgb, var(--color-primary) 10%, transparent);
   font-family: var(--font-sans);
 }
 
@@ -2109,7 +2109,7 @@ body {
 }
 .composer-banner.resume {
   border-color: var(--color-primary-border);
-  background: rgba(99, 102, 241, 0.08);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
 }
 
 .composer-banner-content {
@@ -2444,21 +2444,22 @@ body {
 
 .context-inspector {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(740px, 92vw);
-  height: min(620px, 86vh);
-  min-height: 520px;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
   background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl, 16px);
-  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--color-border);
+  border-left: 1px solid var(--color-border);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   z-index: calc(var(--z-inspector) + 1);
   overflow: hidden;
-  animation: modalScaleUp var(--duration-fast) var(--ease-out);
+  animation: drawerIn var(--duration-normal) var(--ease-out);
+}
+@keyframes drawerIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
 }
 .context-inspector.closed {
   display: none !important;
@@ -3547,7 +3548,7 @@ body {
   gap: 10px;
   padding: 10px 14px;
   border-radius: var(--radius-md);
-  background: rgba(99, 102, 241, 0.08);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
   border: 1px solid var(--color-primary-border);
   color: var(--color-text);
   font-size: 13px;
@@ -4240,7 +4241,7 @@ body {
 .mgmt-secret {
   padding: 12px 14px;
   border-radius: var(--radius-md);
-  background: rgba(99, 102, 241, 0.08);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
   border: 1px solid var(--color-primary-border);
   display: flex;
   flex-direction: column;
@@ -4316,12 +4317,6 @@ body {
 
 /* ── Responsive Media Queries ────────────────────────────────── */
 @media (max-width: 1100px) {
-  .context-inspector {
-    width: 94vw;
-    height: min(620px, 90vh);
-    min-height: 480px;
-    max-height: 90vh;
-  }
   .inspector-backdrop {
     display: block;
   }

@@ -696,3 +696,68 @@ export function IconMoon({ size = 16, className = '', ...props }: IconProps) {
   );
 }
 
+
+function LineIcon({ size = 18, className = '', children, ...props }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+      {...props}
+    >
+      {children}
+    </svg>
+  );
+}
+
+export function IconCompose(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <path d="M9 3.5H5.5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V11" />
+      <path d="M14.2 3.3a1.6 1.6 0 0 1 2.3 2.3L10.4 11.7 7.5 12.5l.8-2.9z" />
+    </LineIcon>
+  );
+}
+
+export function IconSearch(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <circle cx="9" cy="9" r="5.2" />
+      <path d="m13 13 3.5 3.5" />
+    </LineIcon>
+  );
+}
+
+export function IconPanel(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <rect x="3" y="4" width="14" height="12" rx="2" />
+      <path d="M8 4v12" />
+    </LineIcon>
+  );
+}
+
+export function IconFilter(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <path d="M4 6h12M6.5 10h7M9 14h2" />
+    </LineIcon>
+  );
+}
+
+export function IconHistory(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <path d="M3.6 10a6.4 6.4 0 1 0 1.9-4.6" />
+      <path d="M3.3 3.6v2.8h2.8" />
+      <path d="M10 6.6V10l2.3 1.6" />
+    </LineIcon>
+  );
+}
