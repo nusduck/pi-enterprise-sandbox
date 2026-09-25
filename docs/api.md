@@ -221,6 +221,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/admin/runs` | 全组织运行列表（**admin**）；见下文「管理端运行查询」 |
 | `GET` | `/api/admin/runs/stats` | 运行统计条（**admin**） |
 | `GET` | `/api/admin/runs/{id}` `/events` `/tools` | 单次运行详情 / 全部持久事件 / 工具台账（**admin**） |
+| `GET` | `/api/admin/skill-usage` | 近 N 天（`days` 1–90，默认 7）全组织各 Skill 的 `skill` 工具调用次数（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/runs` | 本人所有未删除任务的执行记录（`since` ISO，`limit` 1–1000，默认 500），每条带 `job_name` / `job_timezone` |
@@ -392,6 +393,10 @@ Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不
 `/events` 返回 `{ events, truncated }`，形状同会话事件回放（`run_id`、`sequence`、`event_id`、`type`、
 `payload`、`created_at`），BFF 分页拉齐（上限 2 万条）；`/tools` 形状同 `/api/runs/{id}/tools`。
 沙箱进程与日志仍按所有者隔离，管理端不提供跨用户的进程读取。
+
+`GET /api/admin/skill-usage?days=7` 返回 `{ days, since, usage: [{ name, calls }] }`，按调用次数倒序。
+只统计名为 `skill` 的工具调用（名字取自参数信封 `$payload.name`，兼容旧的扁平参数）；模型直接读取 Skill 文件
+（例如 `read` 某个 `SKILL.md`）不计入。权限规则同上：非 admin 403，参数非法 400。
 
 ### BFF 健康检查
 

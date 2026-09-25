@@ -61,6 +61,10 @@ function fakeRead() {
       calls.push(['listEvents', orgId, runId, opts]);
       return [{ runId, sequenceNo: 1, eventId: 'e1', eventType: 'run.accepted', eventVersion: 1, payloadJson: { data: {} }, createdAt: 'x' }];
     },
+    async skillUsage(orgId, since) {
+      calls.push(['skillUsage', orgId, since.toISOString()]);
+      return [{ name: 'docx', calls: 3 }];
+    },
     async listTools(orgId, runId) {
       return [{ toolExecutionId: 't1', runId, toolCallId: 'c1', toolName: 'bash', status: 'SUCCEEDED', argumentsJson: {}, resultJson: null }];
     },
@@ -229,5 +233,28 @@ describe('userMessageText', () => {
     assert.equal(userMessageText('plain'), 'plain');
     assert.equal(userMessageText({ text: '' }), null);
     assert.equal(userMessageText(null), null);
+  });
+});
+
+describe('skill usage', () => {
+  it('is admin-only, org-scoped and bounded', async () => {
+    const read = fakeRead();
+    await assert.rejects(service(read).skillUsage(MEMBER), AdminRoleRequiredError);
+    await assert.rejects(service(read).skillUsage(ADMIN, { days: '0' }), ValidationError);
+    await assert.rejects(service(read).skillUsage(ADMIN, { days: '91' }), ValidationError);
+    const out = await service(read).skillUsage(ADMIN, {});
+    assert.deepEqual(out, { days: 7, since: '2026-09-18T08:00:00.000Z', usage: [{ name: 'docx', calls: 3 }] });
+    assert.deepEqual(read.calls.at(-1), ['skillUsage', ORG_A, '2026-09-18T08:00:00.000Z']);
+  });
+
+  it('is served under /internal/admin/skill-usage', async () => {
+    const res = { status: 0, body: null, writeHead(s) { this.status = s; }, end(b) { this.body = JSON.parse(b); } };
+    const parsedUrl = new URL('http://agent/internal/admin/skill-usage?days=30');
+    await handleAdminRunRoute({
+      req: { method: 'GET', headers: { 'x-acting-user-id': 'u1', 'x-acting-organization-id': 'org-a', 'x-acting-role': 'admin' } },
+      res, parsedUrl, path: parsedUrl.pathname, adminRunQueryService: service(),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.days, 30);
   });
 });

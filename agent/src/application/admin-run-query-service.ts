@@ -315,4 +315,13 @@ export class AdminRunQueryService {
     await this.#requireRun(orgId, runId);
     return { tools: await this.read.listTools(orgId, runId) };
   }
+
+  /** `skill` tool calls per Skill over the last `days` days (1–90, default 7), org-wide. */
+  async skillUsage(auth: AdminAuth, opts: { days?: unknown } = {}) {
+    const orgId = await this.#adminOrg(auth);
+    const days = opts.days == null || opts.days === '' ? 7 : Number(opts.days);
+    if (!Number.isInteger(days) || days < 1 || days > 90) throw new ValidationError('days must be an integer between 1 and 90');
+    const since = new Date(this.now().getTime() - days * DAY_MS);
+    return { days, since: since.toISOString(), usage: await this.read.skillUsage(orgId, since) };
+  }
 }

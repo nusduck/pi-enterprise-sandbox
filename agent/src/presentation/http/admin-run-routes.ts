@@ -7,6 +7,7 @@
  *   GET /internal/admin/runs/:id             详情（含触发这次运行的用户输入）
  *   GET /internal/admin/runs/:id/events      持久事件（after_sequence / limit）
  *   GET /internal/admin/runs/:id/tools       工具台账
+ *   GET /internal/admin/skill-usage          近 N 天各 Skill 的 skill 工具调用次数（days）
  *
  * 返回 `true` 表示请求归这里处理（无论成败）。
  */
@@ -21,6 +22,7 @@ export interface AdminRunQueryServiceLike {
   get(auth: AuthSubjects, runId: string): Promise<unknown>;
   events(auth: AuthSubjects, runId: string, opts: { afterSequence?: unknown; limit?: unknown }): Promise<unknown>;
   tools(auth: AuthSubjects, runId: string): Promise<{ tools: unknown[] }>;
+  skillUsage(auth: AuthSubjects, opts: { days?: unknown }): Promise<unknown>;
 }
 
 export interface AdminRunRouteInput {
@@ -32,10 +34,11 @@ export interface AdminRunRouteInput {
 }
 
 const PREFIX = '/internal/admin/runs';
+const SKILL_USAGE = '/internal/admin/skill-usage';
 
 export async function handleAdminRunRoute(input: AdminRunRouteInput): Promise<boolean> {
   const { req, res, parsedUrl, path, adminRunQueryService: service } = input;
-  if (path !== PREFIX && !path.startsWith(`${PREFIX}/`)) return false;
+  if (path !== PREFIX && !path.startsWith(`${PREFIX}/`) && path !== SKILL_USAGE) return false;
   if (req.method !== 'GET') {
     json(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
     return true;
@@ -52,6 +55,10 @@ export async function handleAdminRunRoute(input: AdminRunRouteInput): Promise<bo
   const qs = parsedUrl.searchParams;
   const param = (name: string) => qs.get(name);
   try {
+    if (path === SKILL_USAGE) {
+      json(res, 200, await service.skillUsage(auth, { days: param('days') }));
+      return true;
+    }
     if (path === PREFIX) {
       json(res, 200, await service.list(auth, {
         status: param('status'),

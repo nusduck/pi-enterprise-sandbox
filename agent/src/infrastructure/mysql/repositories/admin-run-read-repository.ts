@@ -240,4 +240,25 @@ export class AdminRunReadRepository {
       };
     });
   }
+
+  /**
+   * `skill` tool calls per Skill name since `since`, across the org. The name
+   * lives in the argument envelope's `$payload`; flat legacy rows are read too.
+   * Reading a Skill's files with other tools is not counted.
+   */
+  async skillUsage(orgId: string, since: Date): Promise<Array<{ name: string; calls: number }>> {
+    const nameExpr = `JSON_UNQUOTE(COALESCE(JSON_EXTRACT(te.arguments_json, '$."$payload".name'), JSON_EXTRACT(te.arguments_json, '$.name')))`;
+    const rows = await this.db('tbl_agsvc_tool_executions as te')
+      .join('tbl_agsvc_runs as r', 'r.run_id', 'te.run_id')
+      .where('r.org_id', assertUlid(orgId, 'orgId'))
+      .andWhere('te.tool_name', 'skill')
+      .andWhere('te.created_at', '>=', toMysqlDateTime(since))
+      .select(this.db.raw(`${nameExpr} as skill_name`))
+      .count({ calls: '*' })
+      .groupBy('skill_name');
+    return rows
+      .filter((r: Record<string, unknown>) => r.skill_name != null && r.skill_name !== '')
+      .map((r: Record<string, unknown>) => ({ name: String(r.skill_name), calls: Number(r.calls) }))
+      .sort((a: { calls: number }, b: { calls: number }) => b.calls - a.calls);
+  }
 }

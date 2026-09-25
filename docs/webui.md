@@ -208,7 +208,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 避免与恢复逻辑竞争。
 
 **能力页**（`/admin/capabilities`）：Skills / MCP 服务 / 工具 / 模型 四个 tab，均为可搜索的只读表格；
-Skills 可按系统 / 用户筛选，有「所有者」列（接口只返回调用者自己的用户 Skill，所以用户 Skill 的所有者就是当前用户），MCP 状态以服务端的 `status` 为准（`capabilityFormat.ts`），模型标注目录默认模型
+Skills 可按系统 / 用户筛选，有「所有者」列（接口只返回调用者自己的用户 Skill，所以用户 Skill 的所有者就是当前用户），管理员另有「近 7 天调用」列（`/api/admin/skill-usage`，只统计 `skill` 工具调用；接口不可用时不显示该列），MCP 状态以服务端的 `status` 为准（`capabilityFormat.ts`），模型标注目录默认模型
 与看图 / 思考 / 工具调用能力。Extension 诊断已移除；个人 Skill 的上传与启用在设置弹窗里。
 
 **管理控制台**（`app/layout/AdminShell.tsx`）是独立的全屏布局：左侧「返回对话」与分组导航（运维：运行、

@@ -159,7 +159,7 @@
 | 账户编辑（**已实施**：`/api/auth/profile`，与 `me` 分开以免加重每请求鉴权） | `users` 有 `display_name`、`email`、`status`，`/api/auth/me` 只返回 `username`、`display_name` | `me` 返回邮箱、机构名、角色、状态；`PATCH /api/auth/me` 仅允许改显示名称与邮箱 | 邮箱格式校验；与 `run-completion-email.md` 的收件人来源一致 |
 | 产物库（**已实施**：exec `GET /artifacts` + Agent `/internal/identity/owner` + BFF 组合） | `/api/artifacts` 必须带 `session_id` | 按当前用户跨会话列产物（类型筛选、搜索、分页） | owner-scoped |
 | 定时任务 30 天汇总（**已实施**：`GET /api/cron-jobs/runs` 跨任务执行记录，前端聚合每日条） | 只能逐任务取 `/runs` | 可选：按用户的每日运行汇总 | 任务数量少时可不做 |
-| 能力调用统计 | 无 | 可选：Skill 近 7 天调用次数 | 没有就不显示该列 |
+| 能力调用统计（**已实施**：`/api/admin/skill-usage`，只统计 `skill` 工具调用） | 无 | 可选：Skill 近 7 天调用次数 | 没有就不显示该列 |
 
 ## 7. 验证
 

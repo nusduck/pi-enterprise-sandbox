@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Skill 调用统计**：能力页 Skills 表对管理员显示全组织「近 7 天调用」次数（新增 `GET /api/admin/skill-usage`，只统计 `skill` 工具调用）。
 - **定时任务运行汇总**：新增 `GET /api/cron-jobs/runs`，定时任务页的 30 天运行条与「运行」tab 改为一次请求取得，不再每个任务请求一次。
 - **智能体页**：顶栏显示未保存修改数，保存按钮写出将生成的版本号，工具权限 / MCP tab 显示数量，版本历史列出草稿与
   启用版本的逐字段差异；设置 → 账户显示登录方式；能力页 Skills 表增加「所有者」列。

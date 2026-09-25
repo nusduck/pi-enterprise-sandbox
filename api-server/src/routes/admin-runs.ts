@@ -6,6 +6,7 @@
  *   GET /api/admin/runs/:id          详情
  *   GET /api/admin/runs/:id/events   全部持久事件（分页拉齐）
  *   GET /api/admin/runs/:id/tools    工具台账
+ *   GET /api/admin/skill-usage       近 N 天各 Skill 的调用次数（days）
  *
  * 身份由服务端解析后写入 `X-Acting-*`（含角色），角色与作用域由 agent/ 判定。
  */
@@ -15,6 +16,7 @@ import { presentPersistedTimelineEvent } from '../application/conversation-timel
 import {
   getAdminRun,
   getAdminRunStats,
+  getAdminSkillUsage,
   listAdminRuns,
   listAdminRunTools,
   listAllAdminRunEvents,
@@ -22,6 +24,7 @@ import {
 import { sendError, sendJson as json } from '../http/response.js';
 
 const PREFIX = '/api/admin/runs';
+const SKILL_USAGE = '/api/admin/skill-usage';
 
 /** Returns true when the path belongs here (handled, whatever the outcome). */
 export async function handleAdminRunsRoute(
@@ -31,7 +34,7 @@ export async function handleAdminRunsRoute(
   res: ServerResponse,
   req: ReqWithTrace | null = null,
 ): Promise<boolean> {
-  if (path !== PREFIX && !path.startsWith(`${PREFIX}/`)) return false;
+  if (path !== PREFIX && !path.startsWith(`${PREFIX}/`) && path !== SKILL_USAGE) return false;
   if (method !== 'GET') {
     json(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
     return true;
@@ -39,6 +42,10 @@ export async function handleAdminRunsRoute(
   try {
     const auth = await resolveTrustedAuth(req);
     const opts = { auth, traceId: req?.traceId ?? null };
+    if (path === SKILL_USAGE) {
+      json(res, 200, await getAdminSkillUsage(parsedUrl.searchParams, opts));
+      return true;
+    }
     if (path === PREFIX) {
       json(res, 200, await listAdminRuns(parsedUrl.searchParams, opts));
       return true;

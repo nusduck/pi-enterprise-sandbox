@@ -12,8 +12,8 @@ type Opts = { auth?: any; traceId?: string | null };
 /** Query keys the Agent accepts; anything else from the browser is dropped. */
 const LIST_KEYS = ['status', 'agent_id', 'user_id', 'from', 'to', 'q', 'cursor', 'limit'] as const;
 
-async function requestAdminRuns(path: string, query: URLSearchParams | null, { auth = null, traceId = null }: Opts): Promise<any> {
-  const url = new URL(`${config.AGENT_BASE_URL}/internal/admin/runs${path}`);
+async function requestAdminRuns(path: string, query: URLSearchParams | null, { auth = null, traceId = null }: Opts, base = '/internal/admin/runs'): Promise<any> {
+  const url = new URL(`${config.AGENT_BASE_URL}${base}${path}`);
   if (query) for (const [k, v] of query) url.searchParams.set(k, v);
   const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
@@ -73,4 +73,9 @@ export async function listAllAdminRunEvents(runId: string, opts: Opts = {}): Pro
     after = last;
   }
   return { events, truncated: true };
+}
+
+/** `skill` tool calls per Skill over the last `days` days, org-wide (admin). */
+export function getAdminSkillUsage(source: URLSearchParams, opts: Opts = {}): Promise<any> {
+  return requestAdminRuns('', pick(source, ['days']), opts, '/internal/admin/skill-usage');
 }

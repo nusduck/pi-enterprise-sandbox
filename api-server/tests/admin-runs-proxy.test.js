@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { isProtectedApiPath } from '../src/config.js';
 import {
   getAdminRun,
+  getAdminSkillUsage,
   listAdminRuns,
   listAllAdminRunEvents,
 } from '../src/services/agent-admin-client.js';
@@ -75,4 +76,17 @@ describe('/api/admin/runs', () => {
     assert.equal(events.length, 1003);
     assert.equal(truncated, false);
   });
+
+  it('forwards only days to the skill usage endpoint', async (t) => {
+    const seen = [];
+    t.after(stubFetch(async (url) => {
+      seen.push(new URL(String(url)));
+      return jsonResponse(200, { days: 7, usage: [] });
+    }));
+    await getAdminSkillUsage(new URLSearchParams({ days: '7', org_id: 'x' }), { auth: AUTH });
+    assert.equal(seen[0].pathname, '/internal/admin/skill-usage');
+    assert.deepEqual(Object.fromEntries(seen[0].searchParams), { days: '7' });
+    assert.equal(isProtectedApiPath('/api/admin/skill-usage'), true);
+  });
 });
+

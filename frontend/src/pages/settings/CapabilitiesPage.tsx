@@ -12,6 +12,7 @@ import {
 } from '../../shared/api/capabilities';
 import { mcpStatus, toolStatus } from './capabilityFormat';
 import { useChat } from '../../features/chat/ChatContext';
+import { getAdminSkillUsage } from '../../shared/api/adminRuns';
 import s from './adminPage.module.css';
 
 type Tab = 'skills' | 'mcp' | 'tools' | 'models';
@@ -83,6 +84,13 @@ function matches(query: string, ...fields: Array<string | null | undefined>): bo
 export function CapabilitiesPage() {
   const { state } = useChat();
   const me = String(state.authUser?.display_name || state.authUser?.username || '');
+  // Admin-only statistic; without it the column is simply not shown.
+  const [usage, setUsage] = useState<Map<string, number> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getAdminSkillUsage(7).then((m) => { if (alive) setUsage(m); }).catch(() => { if (alive) setUsage(null); });
+    return () => { alive = false; };
+  }, []);
   const [tab, setTab] = useState<Tab>('skills');
   const [query, setQuery] = useState('');
   const [skillScope, setSkillScope] = useState<'all' | 'system' | 'user'>('all');
@@ -130,7 +138,7 @@ export function CapabilitiesPage() {
   if (tab === 'skills') {
     body = skills.items.length === 0 ? <Unavailable result={skills} noun=" Skill " loading={loading} /> : (
       <table className={s.table}>
-        <thead><tr><th>名称</th><th>说明</th><th>来源</th><th title="用户 Skill 只列出你自己的">所有者</th><th>状态</th></tr></thead>
+        <thead><tr><th>名称</th><th>说明</th><th>来源</th><th title="用户 Skill 只列出你自己的">所有者</th><th>状态</th>{usage ? <th className={s.right} title="全组织近 7 天 skill 工具的调用次数；直接读取 Skill 文件不计入">近 7 天调用</th> : null}</tr></thead>
         <tbody>
           {skillRows.map((item, i) => {
             const [label, cls] = skillSource(item);
@@ -145,6 +153,7 @@ export function CapabilitiesPage() {
                     ? <span className={`${s.pill} ${s.mute}`}>{item.published ? '已发布' : '草稿'}</span>
                     : <span className={`${s.pill} ${item.enabled === false ? s.mute : s.ok}`}>{item.enabled === false ? '已停用' : '可用'}</span>}
                 </td>
+                {usage ? <td className={`${s.right} ${s.num}`}>{usage.get(String(item.name || item.id || '')) ?? 0}</td> : null}
               </tr>
             );
           })}
