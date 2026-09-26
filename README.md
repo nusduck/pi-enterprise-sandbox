@@ -162,7 +162,6 @@ Sandbox **不再**按空闲 TTL 后台清会话/工作区（旧 `SANDBOX_SESSION
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_NETWORK_MODE` | `disabled` | **出站执行策略**：`disabled`（Bubblewrap `--unshare-net`，生产唯一允许）/ `allowlist`（无受控 egress proxy 时不构成隔离，生产拒绝）/ `unrestricted`（仅研发显式） |
 | `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + 私网 | **入站** Sandbox HTTP 来源 CIDR；空 = 拒绝全部 |
 | `SANDBOX_TRUSTED_PROXY_CIDRS` | _(空)_ | 可信反向代理；默认忽略 `X-Forwarded-For` |
 

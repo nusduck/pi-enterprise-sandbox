@@ -476,7 +476,7 @@ Exec internal plane (TypeScript)
   guideline 里，避免没装该能力的 run 读到幽灵工具。`AGENT_SYSTEM_PROMPT` 只替换
   身份 lead，不再另拼一层「平台安全」附录。
 - 策略版本常量 `POLICY_VERSION`（当前 `2026-07-15.1`）写入审批响应与审计 meta，便于追溯。
-- `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。`SANDBOX_NETWORK_MODE` 仍是网络权限唯一事实源，生产固定 `strict`。
+- `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。执行子进程始终 `--unshare-net`，没有网络开关（`SANDBOX_NETWORK_MODE` 已删除）；生产 profile 固定 `strict`。
 - approval key 由 durable `run_id`、Sandbox session、工具名、稳定 SDK
   `tool_call_id` 和规范化参数生成；pending/approved/rejected 与 operation
   fingerprint 由 Agent MySQL ledger 原子维护。resume 只授权完全相同的
