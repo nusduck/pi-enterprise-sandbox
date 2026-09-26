@@ -57,7 +57,12 @@ function localSkillContext(agentCtx: Loose): Loose {
 export { PINNED_DSH_VERSION } from './constants.js';
 export { DshRuntimeFactoryError };
 
-export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.ProcessEnv = process.env) {
+export function buildExecRpcConfig(
+  input: Record<string, any>,
+  env: NodeJS.ProcessEnv = process.env,
+  /** 本 Run 可连的数据源：只来自固定的 AgentVersion（sandbox-data-sources.md §4.1）。 */
+  dataSources: readonly string[] = [],
+) {
   const ctx = input?.context && typeof input.context === 'object' ? input.context : {};
   const session = input?.agentSession && typeof input.agentSession === 'object'
     ? input.agentSession
@@ -102,6 +107,7 @@ export function buildExecRpcConfig(input: Record<string, any>, env: NodeJS.Proce
     fenceToken: Number(ctx.executionFenceToken ?? ctx.fenceToken ?? 0) || 0,
     physicalRoots,
     ...(enabledSkills.length > 0 ? { enabledSkills } : {}),
+    ...(dataSources.length > 0 ? { dataSources: [...dataSources] } : {}),
     ...(typeof input.fetchImpl === 'function' ? { fetchImpl: input.fetchImpl } : {}),
   };
 }
@@ -293,7 +299,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
       const boundAgentVersion = input.agentVersion
         ? bindAgentVersionConfig(input.agentVersion)
         : null;
-      const rpc = buildExecRpcConfig(input, opts.env ?? process.env);
+      const rpc = buildExecRpcConfig(input, opts.env ?? process.env, boundAgentVersion?.dataSources ?? []);
       /** per-Run 装配的卸载器。Run 结束时必须逐个调用——监听器与 guard 都是有主的。
        * @type {Array<() => void>} */
       const disposers = [];

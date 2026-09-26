@@ -104,6 +104,7 @@ Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) ──入队─�
 - **BFF → Agent auth**: `/api/auth/*` 经 `AGENT_INTERNAL_TOKEN` 保护的 `/internal/auth/*` 读写 Agent MySQL `auth_credentials`；BFF 只持有 HttpOnly Cookie，exec 没有浏览器认证权威
 - **Browser/BFF → Sandbox**: 浏览器不直连 Sandbox。用户可见的文件、Dataset、Artifact、Process 操作只能经 BFF `/api/*`；Process 路由先由 Agent 授权 Session 并解析 Workspace，其余路由由 BFF/Agent 注入 owner context。exec `/sessions/*` adapters 只供 BFF 或受控测试调用，不是正式公共 API。
 - **Agent → MCP**: 直连外部 MCP（不经执行面）
+- **Sandbox 子进程 → 业务库（数据源）**: 子进程仍在 `--unshare-net` 下，只经 exec 为本次执行建的 unix socket（`/run/dsh-db/<id>/mysql.sock`）到达 `SANDBOX_DATA_SOURCES_JSON` 登记的地址；哪些库可用由 AgentVersion `dataSources` 决定并随 shell 请求下发，口令由 exec 启动时向 DBPM 取。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md)
 - **Agent → LLM**: HTTPS 直连，API Key 仅存 Agent 服务环境变量
 - **Browser ← API Server**: SSE (`text/event-stream`)，事件驱动渲染
 - **Artifact 下载**: 仅 `artifact_id` → control-plane snapshot；禁止 workspace path 作为交付 fallback

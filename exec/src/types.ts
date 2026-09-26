@@ -28,6 +28,21 @@ export interface WorkspaceContext {
   readonly draftSkillRoot?: string;
   /** 该用户已启用的 Skill 包，逐包绑定（ADR 0008 D4）。 */
   readonly enabledSkillPackages: readonly EnabledSkillPackage[];
+  /**
+   * 本次执行打开的数据源（design `sandbox-data-sources.md`）。省略即没有：公共面与
+   * MCP 窄桥从不携带。挂载与环境变量由隔离层统一注入，每条 spawn 路径都一样。
+   */
+  readonly dataSources?: readonly DataSourceMount[];
+}
+
+/** 一个数据源在一次执行里的挂载。`secret` 只用于输出脱敏，不进任何日志。 */
+export interface DataSourceMount {
+  readonly id: string;
+  /** 物理 socket 目录，只读绑定到 `/run/dsh-db/<id>`。 */
+  readonly hostDir: string;
+  /** 注入子进程的 `DSH_DB_<ID>_*`。 */
+  readonly env: Readonly<Record<string, string>>;
+  readonly secret: string;
 }
 
 export interface EnabledSkillPackage {

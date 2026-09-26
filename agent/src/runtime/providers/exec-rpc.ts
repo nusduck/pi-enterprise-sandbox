@@ -50,6 +50,11 @@ export interface ExecRpcConfig {
    */
   readonly enabledSkills?: readonly EnabledSkillRef[] | undefined;
   /**
+   * 本 Run 可连的数据源 id（docs/design/sandbox-data-sources.md §4.1）。只随 shell run/start
+   * 的请求体下发，同样进 `body_sha256`；exec 只挂清单点名且已登记的库。缺省即空。
+   */
+  readonly dataSources?: readonly string[] | undefined;
+  /**
    * 单次 fetch 的**默认**超时毫秒，默认 15000。
    *
    * 这是「一次普通 RPC 该等多久」，不是「一条命令可以跑多久」：前台 shell
@@ -102,6 +107,9 @@ export function resolveDeadlineMs(
   if (!Number.isFinite(base) || base <= 0) return EXEC_RPC_DEFAULT_TIMEOUT_MS;
   return Math.min(Math.trunc(base), EXEC_RPC_MAX_DEADLINE_MS);
 }
+
+/** 只有这两条会 spawn 子进程，数据源清单只随它们下发——fs/产物请求不需要也不该带。 */
+const SHELL_SPAWN_HTUS: ReadonlySet<string> = new Set(['/internal/v1/shell/run', '/internal/v1/shell/start']);
 
 const execRpcAls = new AsyncLocalStorage<ExecRpcConfig>();
 const execJobIdAls = new AsyncLocalStorage<string>();
@@ -194,6 +202,8 @@ export function fromWireError(wire: WireError): Error {
     code === 'WORKSPACE_NOT_FOUND' ||
     code === 'SKILL_PACKAGE_UNAVAILABLE' ||
     code === 'SKILL_STORE_UNAVAILABLE' ||
+    code === 'DATA_SOURCE_UNKNOWN' ||
+    code === 'DATA_SOURCE_UNAVAILABLE' ||
     code === 'INTERNAL_ERROR'
   ) {
     return new ContractError(code, wire.message);
@@ -273,7 +283,13 @@ export class ExecRpcClient {
     const envelope = this.envelope();
     const cfg = this.activeConfig();
     const enabledSkills = cfg.enabledSkills ?? [];
-    const bodyObj = enabledSkills.length > 0 ? { envelope, payload, enabledSkills } : { envelope, payload };
+    const dataSources = SHELL_SPAWN_HTUS.has(htu) ? cfg.dataSources ?? [] : [];
+    const bodyObj = {
+      envelope,
+      payload,
+      ...(enabledSkills.length > 0 ? { enabledSkills } : {}),
+      ...(dataSources.length > 0 ? { dataSources } : {}),
+    };
     const bodyText = JSON.stringify(bodyObj);
     const bodyBytes = new TextEncoder().encode(bodyText);
     const bodySha = sha256Hex(bodyBytes);
