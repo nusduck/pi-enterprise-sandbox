@@ -61,6 +61,8 @@ import {
   type IsolationState,
   type StorageRoot,
 } from './readiness.js';
+import { DataSourceService } from '../datasource/service.js';
+import { plaintextExecEnvSecrets, readDataSourceCatalog } from '../datasource/catalog.js';
 import fs from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -164,6 +166,8 @@ export interface ExecAppDeps {
   readonly resourceLimits?: ShellResourceLimits;
   /** 子进程磁盘配额监控配置。不传即不做准入与采样。 */
   readonly childQuota?: ChildQuotaConfig;
+  /** 数据源（design `sandbox-data-sources.md`）。不传即未配置：带清单的执行一律拒绝。 */
+  readonly dataSources?: DataSourceService;
 }
 
 export function createExecApp(deps: ExecAppDeps): Hono {
@@ -196,6 +200,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
     ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
     ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
+    ...(deps.dataSources !== undefined ? { dataSources: deps.dataSources } : {}),
   };
   const pub: PublicRouterDeps = {
     apiToken: deps.publicApiToken,
@@ -297,6 +302,8 @@ export function createExecAppFromEnv(
   opts: {
     /** DBPM 下发的 UPDRDB 口令（`resolveExecDbPassword()`）。配了数据库就必须给。 */
     readonly dbPassword?: string | undefined;
+    /** DBPM 下发的数据源口令（`fetchDataSourcePasswords()`），id → 口令。 */
+    readonly dataSourcePasswords?: ReadonlyMap<string, string>;
   } = {},
 ): ExecRuntime {
   const keyring = String(env['SANDBOX_INTERNAL_HMAC_KEYRING'] ?? '').trim();
@@ -333,10 +340,23 @@ export function createExecAppFromEnv(
   for (const note of unenforcedLimitDiagnostics(resourceLimits)) {
     process.stderr.write(`exec NOTICE: ${note}\n`);
   }
+  // 数据库口令只来自 DBPM（design `sandbox-data-sources.md` §3.1）：生产环境里
+  // `SANDBOX_EXEC_ENV_*` 不能再夹带看起来像口令的键；开发环境只告警。
+  const plaintextSecrets = plaintextExecEnvSecrets(env);
+  if (plaintextSecrets.length > 0) {
+    const message = `SANDBOX_EXEC_ENV_* must not carry database passwords (${plaintextSecrets.join(', ')}); use SANDBOX_DATA_SOURCES_JSON + DBPM`;
+    if (deployment === 'production') throw new Error(message);
+    process.stderr.write(`exec WARNING: ${message}\n`);
+  }
 
   const lifecycle = readWorkspaceLifecycleConfig(env);
   const workspaceManager = new WorkspaceManager(lifecycle);
   const controlRoots = readControlPlaneRoots(env);
+  const dataSources = new DataSourceService({
+    catalog: readDataSourceCatalog(env),
+    passwords: opts.dataSourcePasswords ?? new Map(),
+    socketRoot: path.join(controlRoots.controlRoot, 'dbs'),
+  });
   const storageRoots: readonly StorageRoot[] = [
     { name: 'workspaces', path: lifecycle.workspacesBaseRoot },
     { name: 'tmp', path: lifecycle.tempBaseRoot },
@@ -427,6 +447,7 @@ export function createExecAppFromEnv(
     ...(artifactService !== undefined ? { artifactService } : {}),
     ...(datasetService !== undefined ? { datasetService } : {}),
     ...(quotaStore !== undefined ? { quotaStore } : {}),
+    ...(dataSources.configured ? { dataSources } : {}),
   });
 
   return {
@@ -441,6 +462,8 @@ export function createExecAppFromEnv(
       for (const root of storageRoots) {
         await mkdir(root.path, { recursive: true, mode: 0o700 });
       }
+      // 上一轮进程被杀时没机会关的数据源 socket 目录，在接流量之前清掉。
+      await dataSources.removeStaleSockets();
       isolation = 'unchecked';
       try {
         preflightCheck(bwrapExecutable, buildPreflightProfile({ systemSkillRoot }));

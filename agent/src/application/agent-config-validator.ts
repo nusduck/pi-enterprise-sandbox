@@ -21,6 +21,8 @@ import {
   normalizedDelegation,
   parseDelegationConfig,
 } from '../domain/agent/delegation-config.js';
+import { normalizedDataSources, parseDataSourceConfig, unknownDataSources } from '../domain/agent/data-source-config.js';
+import { ENABLED_DATA_SOURCES_MAX, catalogEntryOf, readDataSourceCatalog, type DataSourceCatalogEntry } from '@dsh/contract/data-sources.js';
 import { parseRemoteAgentRegistry } from '../runtime/providers/a2a-remote-registry.js';
 import {
   parseToolArguments,
@@ -61,6 +63,7 @@ const TOP_LEVEL_V1_KEYS = Object.freeze([
   'toolPolicy',
   'mcpServers',
   'delegation',
+  'dataSources',
 ]);
 
 const LEGACY_TOP_LEVEL_KEYS = Object.freeze([
@@ -342,6 +345,8 @@ export class AgentConfigValidator {
   readonly remoteAgents: ReadonlyArray<{ id: string; name: string; description: string }>;
   /** serverId → 运维声明的宿主参数（docs/design/mcp-per-agent-arguments.md D1）。 */
   readonly hostArguments: ReadonlyMap<string, HostArgumentSpec>;
+  /** 数据源目录投影（`SANDBOX_DATA_SOURCES_JSON`，与 exec 同一解析规则）；目录写错构造即抛。 */
+  readonly dataSources: readonly DataSourceCatalogEntry[];
   readonly optionsDto: AgentConfigOptions;
 
   constructor(opts: {
@@ -356,6 +361,7 @@ export class AgentConfigValidator {
     platformToolNames?: readonly string[];
     remoteAgents?: ReadonlyArray<{ id: string; name?: string; description?: string }>;
     hostArguments?: ReadonlyMap<string, HostArgumentSpec>;
+    dataSources?: readonly DataSourceCatalogEntry[];
   } = {}) {
     const env = opts.env ?? process.env;
     this.registry = opts.registry ?? buildRegistry({ env });
@@ -383,6 +389,7 @@ export class AgentConfigValidator {
       this.mcpReadiness = Object.freeze(loaded.readiness);
     }
     this.hostArguments = opts.hostArguments ?? loadHostArgumentDeclarations(env);
+    this.dataSources = Object.freeze((opts.dataSources ?? readDataSourceCatalog(env).map(catalogEntryOf)).map((e) => ({ ...e })));
     this.remoteAgents = Object.freeze(
       (opts.remoteAgents ?? parseRemoteAgentRegistry(env)).map((agent) => ({
         id: agent.id,
@@ -431,6 +438,7 @@ export class AgentConfigValidator {
           remoteAgents: { supported: true, type: 'array', maxItems: DELEGATION_MAX_ENTRIES },
         },
       },
+      dataSources: { supported: true, type: 'array', maxItems: ENABLED_DATA_SOURCES_MAX, fields: { id: { supported: true, type: 'string' } } },
       extensions: { supported: false, readOnly: true },
       skills: { supported: false, readOnly: true },
       sandboxPolicy: { supported: false, readOnly: true },
@@ -444,6 +452,7 @@ export class AgentConfigValidator {
       mcpServers,
       mcpReadiness: { ...this.mcpReadiness },
       remoteAgents: this.remoteAgents.map((agent) => ({ ...agent })),
+      dataSources: this.dataSources.map((entry) => ({ ...entry })),
       maxConfigBytes: 256 * 1024,
     };
     const revisionMaterial = canonicalObject({
@@ -890,6 +899,8 @@ export class AgentConfigValidator {
       }
     });
 
+    const dataSources = parseDataSourceConfig(config.dataSources);
+    errors.push(...dataSources.errors, ...unknownDataSources(dataSources.ids ?? [], this.dataSources));
     for (const key of LEGACY_TOP_LEVEL_KEYS) {
       if (!Object.hasOwn(config, key)) continue;
       const value = config[key];
@@ -926,6 +937,7 @@ export class AgentConfigValidator {
         agents: delegation.config ? [...delegation.config.agents] : [],
         remoteAgents: delegation.config ? [...delegation.config.remoteAgents] : [],
       },
+      dataSources: dataSources.ids ? [...dataSources.ids] : [],
       persona: {
         configured: typeof config.systemPrompt === 'string' && config.systemPrompt.length > 0,
         chars: typeof config.systemPrompt === 'string' ? config.systemPrompt.length : 0,
@@ -964,6 +976,8 @@ export class AgentConfigValidator {
       ? normalizedDelegation(delegation.config)
       : undefined;
     if (normalizedDelegationConfig) normalized.delegation = normalizedDelegationConfig;
+    const dataSourceList = normalizedDataSources(dataSources.ids ?? []);
+    if (dataSourceList) normalized.dataSources = dataSourceList;
     return {
       valid: true,
       errors: [],
@@ -975,6 +989,7 @@ export class AgentConfigValidator {
         'toolPolicy',
         'mcpServers',
         'delegation',
+        'dataSources',
       ]) as Record<string, unknown>,
       effectiveSummary: summary,
       capabilityRevision: this.optionsDto.capabilityRevision,

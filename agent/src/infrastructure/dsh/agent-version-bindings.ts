@@ -13,6 +13,7 @@
 import { DshRuntimeFactoryError } from './errors.js';
 import { resolveToolNameAlias } from './constants.js';
 import { parseDelegationConfig } from '../../domain/agent/delegation-config.js';
+import { parseDataSourceConfig } from '../../domain/agent/data-source-config.js';
 import type { HostArgumentValues } from '../../domain/agent/mcp-host-arguments.js';
 import {
   loadMcpConfigFromAgentVersion,
@@ -461,6 +462,17 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     );
   }
 
+  // Business databases this agent's Runs may reach from the sandbox
+  // (docs/design/sandbox-data-sources.md §3.2). Malformed is fail-closed.
+  const dataSourcesParsed = parseDataSourceConfig(configJson.dataSources);
+  if (!dataSourcesParsed.ids) {
+    const first = dataSourcesParsed.errors[0];
+    throw new DshRuntimeFactoryError(
+      `AgentVersion.${first?.path ?? 'dataSources'}: ${first?.message ?? 'invalid'}`,
+      { code: 'DSH_DATA_SOURCES_INVALID' },
+    );
+  }
+
   return Object.freeze({
     agentVersionId,
     configJson,
@@ -495,6 +507,7 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     toolPolicy: Object.freeze({ ...toolPolicy }),
     sandboxPolicy: Object.freeze({ ...sandboxPolicy }),
     delegation: delegationParsed.config,
+    dataSources: dataSourcesParsed.ids,
   });
 }
 

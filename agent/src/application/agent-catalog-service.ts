@@ -39,6 +39,7 @@ import {
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import { parseDelegationConfig } from '../domain/agent/delegation-config.js';
+import { parseDataSourceConfig, unknownDataSources } from '../domain/agent/data-source-config.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -223,6 +224,14 @@ export class AgentCatalogService {
         (err as Error)?.message || 'Agent config is invalid',
         { code: (err as { code?: string })?.code || 'AGENT_CONFIG_INVALID' },
       );
+    }
+    // 数据源必须在平台目录里：写错的 id 在保存时拒绝，而不是等 Run 起来后 exec 报错。
+    const [unknownSource] = unknownDataSources(
+      parseDataSourceConfig(configJson.dataSources).ids ?? [],
+      this.configValidator.dataSources,
+    );
+    if (unknownSource) {
+      throw new ValidationError(`${unknownSource.path}: ${unknownSource.message}`, { code: unknownSource.code });
     }
     return configJson;
   }

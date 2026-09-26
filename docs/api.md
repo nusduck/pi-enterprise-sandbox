@@ -277,6 +277,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `mcpServers[i].toolArguments` | ✅ | 宿主参数的值（`{ "kb_id": "hr" }`）：键必须是该 server 在 `MCP_SERVERS_JSON[].hostArguments` 里声明的名字（否则 `MCP_ARGUMENT_UNKNOWN`），值为字符串（≤1024 字符）、数字或布尔（否则 `MCP_ARGUMENT_INVALID`）。`platformConstraints.mcpServers[].hostArguments` 只返回 `name` / `description`。见 [design/mcp-per-agent-arguments.md](design/mcp-per-agent-arguments.md) |
 | `delegation.remoteAgents` | ✅ | `delegate_to_remote_agent` 的白名单：`A2A_REMOTE_AGENTS_JSON` 里的远端 `id` 数组（≤20，去重）。保存时要求已登记（否则 `DELEGATION_REMOTE_AGENT_UNKNOWN`）；**不接收**地址、凭据、超时。`platformConstraints.remoteAgents` 只返回 `id`/`name`/`description`。见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md) |
 | `delegation.agents` | ✅ | `delegate_to_agent` 的白名单：同 org 的 Agent `name` 数组（≤20，去重）。保存时要求每个名字在本 org 存在（否则 `DELEGATION_AGENT_UNKNOWN`，别的 org 的同名 Agent 视为不存在）；运行时再判目标是否 active。省略或 `[]` = 不可委派。见 [design/agent-delegation.md](design/agent-delegation.md) |
+| `dataSources` | ✅ | 本 Agent 的 Run 可在沙箱里连接的业务库：`[{ "id": "<数据源 id>" }]`（≤16，不允许重复）。条目只接收 `id`，地址、账号、口令属于 `SANDBOX_DATA_SOURCES_JSON` 目录，写进来即 `CONFIG_UNKNOWN_FIELD`；保存时要求 id 在目录里（否则 `DATA_SOURCE_UNKNOWN`）。`platformConstraints.dataSources` 只返回 `id`/`label`/`description`/`engine`。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md) |
 | `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
 | `skills` | ❌ | 运行时的 skill 只来自**调用者自己的 skill 目录**；这里的值仅用于 A2A agent card 展示 |
 | `extensions` | ❌ | 旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
@@ -290,7 +291,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 - `GET /api/agents/config/options` 返回 `{ schemaVersion, fieldSupport, platformConstraints,
   capabilityRevision }`。`platformConstraints` 只描述能力：模型目录及其可选 effort、工具名、
-  MCP server/工具清单与 `mcpReadiness`，以及大小上限。**不返回**连接地址、密钥引用、
+  MCP server/工具清单与 `mcpReadiness`、远端 Agent 与数据源目录的展示字段，以及大小上限。**不返回**连接地址、密钥引用、
   宿主物理路径或别的用户的技能。
 - `POST /api/agents/config/validate` 接收 `{ config, agent_id? }`，返回
   `{ valid, errors, warnings, normalizedConfig?, effectiveSummary, capabilityRevision }`。
@@ -525,6 +526,15 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `stdoutMaxBytes` | 可选 | 可选 | **字节**，上限 `SANDBOX_MAX_OUTPUT_CHARS × 4`。截断按字符边界，不会切出半个字符，并置 `truncated` |
 | `timeoutMs` | 可选 | **拒绝** | 有限正整数，上限 `SANDBOX_EXECUTION_TIMEOUT_SECONDS × 1000`。后台作业按异步进程契约运行，没有前台预算，带了这个字段直接 400 |
 | `id` / `runId` | — | 可选 | 作业账本标识 |
+
+请求体顶层（与 `envelope`、`payload`、`enabledSkills` 并列）可带 `dataSources: string[]`：本 Run
+的 AgentVersion 授权的数据源 id（≤16，同样进 `body_sha256`），只随 `shell/run|start` 下发。exec 为这次
+执行把每个库的 unix socket 只读挂到 `/run/dsh-db/<id>/mysql.sock`，并注入 `DSH_DB_SOURCES` 与
+`DSH_DB_<ID>_{ENGINE,SOCKET,DATABASE,USER,PASSWORD}`；子进程仍在 `--unshare-net` 下，只能经这个
+socket 到达目录里登记的地址。`payload.env` 里的 `DSH_DB_*` 一律丢弃。结果与后台输出中出现的口令
+替换为 `***`。清单里的 id 不在 exec 目录 → `DATA_SOURCE_UNKNOWN`（400）；已登记但启动时取密失败或
+转发建不起来 → `DATA_SOURCE_UNAVAILABLE`（503）；两者都不执行命令。执行结束（后台作业结束）时
+socket 目录回收，每个连接记一条只含元数据的审计日志（`event: data_source_connection`）。
 
 取消与截止：
 

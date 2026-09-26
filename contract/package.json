@@ -14,6 +14,7 @@
     "./dbpm-config.js": "./dist/dbpm-config.js",
     "./schema-manifest.js": "./dist/schema-manifest.js",
     "./skill-manifest.js": "./dist/skill-manifest.js",
+    "./data-sources.js": "./dist/data-sources.js",
     "./shell-payload.js": "./dist/shell-payload.js",
     "./schema/schema-manifest.json": "./schema/schema-manifest.json",
     "./errors": "./dist/errors.js",

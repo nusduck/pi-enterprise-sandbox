@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { AgentCatalogService } from '../../src/application/agent-catalog-service.js';
+import { AgentConfigValidator } from '../../src/application/agent-config-validator.js';
 import { ConversationService } from '../../src/application/conversation-service.js';
 import { CreateRunService } from '../../src/application/create-run-service.js';
 import {
@@ -517,5 +518,46 @@ describe('delegation.agents 必须指向本 org 已有的 Agent（agent-delegati
       preview.errors.map((e) => [e.path, e.code]),
       [['delegation.agents[0]', 'DELEGATION_AGENT_UNKNOWN']],
     );
+  });
+});
+
+describe('dataSources 必须是平台目录里登记过的库（sandbox-data-sources.md §3.2）', () => {
+  it('登记过的 id 可以保存；目录外的 id 在保存时被拒且不落库', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = new AgentCatalogService({
+      transactionManager: world.transactionManager,
+      createRepositories: world.createRepositories,
+      db: world.rootDb,
+      generateId: world.generateId,
+      now: NOW,
+      configValidator: new AgentConfigValidator({
+        env: {},
+        mcpServers: [],
+        remoteAgents: [],
+        dataSources: [{ id: 'employees', label: 'HR', description: '', engine: 'mysql' }],
+      }),
+    });
+
+    const analyst = await catalog.createAgent(ADMIN_AUTH, {
+      name: 'analyst',
+      config: { schemaVersion: 1, dataSources: [{ id: 'employees' }] },
+    });
+    assert.equal(analyst.agent.name, 'analyst');
+
+    const before = world.tables.tbl_agsvc_agent_versions.length;
+    await assert.rejects(
+      () => catalog.createVersion(ADMIN_AUTH, analyst.agent.agent_id, {
+        config: { schemaVersion: 1, dataSources: [{ id: 'sales' }] },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'DATA_SOURCE_UNKNOWN',
+    );
+    await assert.rejects(
+      () => catalog.createVersion(ADMIN_AUTH, analyst.agent.agent_id, {
+        config: { schemaVersion: 1, dataSources: [{ id: 'employees', password: 'x' }] },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'DSH_DATA_SOURCES_INVALID',
+    );
+    assert.equal(world.tables.tbl_agsvc_agent_versions.length, before);
   });
 });
