@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **同一 MCP 按智能体填参数**：运维在 `MCP_SERVERS_JSON` 条目里声明 `hostArguments`（例如知识库 ID），管理员在智能体配置
+  `mcpServers[i].toolArguments` 里给值；模型看不到也改不了这些参数，审批与工具账本记录实际发出的参数，必填而未配值的工具在该智能体里不可用。
 - **智能体「协作」配置**：智能体设置页新增「协作」tab，勾选本智能体可委派的同组织智能体与已登记的远端 A2A
   智能体，写入 `delegation.agents` / `delegation.remoteAgents`，不再需要手写 JSON。纯前端改动。
 - **Skill 调用统计**：能力页 Skills 表对管理员显示全组织「近 7 天调用」次数（新增 `GET /api/admin/skill-usage`，只统计 `skill` 工具调用）。

@@ -13,6 +13,7 @@
 import { DshRuntimeFactoryError } from './errors.js';
 import { resolveToolNameAlias } from './constants.js';
 import { parseDelegationConfig } from '../../domain/agent/delegation-config.js';
+import type { HostArgumentValues } from '../../domain/agent/mcp-host-arguments.js';
 import {
   loadMcpConfigFromAgentVersion,
   mcpToolName,
@@ -27,6 +28,8 @@ export interface AgentVersionMcpAuthorization {
   readonly publicToolNames?: Readonly<Record<string, string>>;
   readonly decisions: Readonly<Record<string, AgentToolDecision>>;
   readonly defaultDecision: AgentToolDecision;
+  /** 宿主参数的值（docs/design/mcp-per-agent-arguments.md D2）；空对象 = 本 Agent 不填。 */
+  readonly toolArguments: HostArgumentValues;
 }
 
 /**
@@ -343,6 +346,7 @@ function buildAgentVersionAuthorization(
       );
     }
     mcpServers[server.serverId] = {
+      toolArguments: server.toolArguments ?? Object.freeze({}),
       enabledTools: Object.freeze([...server.enabledTools]),
       publicToolNames: Object.freeze(publicToolNames),
       decisions: Object.freeze(nestedDecisions),

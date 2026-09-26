@@ -12,6 +12,7 @@
 type Loose = any;
 
 import { publicMcpToolName } from './public-tool-name.js';
+import { parseToolArguments } from '../../domain/agent/mcp-host-arguments.js';
 
 export class McpConfigError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
@@ -308,6 +309,14 @@ export function loadMcpConfig(raw: unknown) {
       }
     }
 
+    // 宿主参数的值（docs/design/mcp-per-agent-arguments.md D2）。这里只校验形状：
+    // 键是否被运维声明由保存期 validator 判，运行期装配再按登记表判一次。
+    const parsedArguments = parseToolArguments(e.toolArguments, `${path}.toolArguments`);
+    if (parsedArguments.values === null) {
+      const [first] = parsedArguments.errors;
+      throw new McpConfigError(`${first.path}: ${first.message}`, { code: first.code });
+    }
+
     for (const tool of enabledTools) {
       const full = mcpToolName(serverId, tool);
       if (!isValidMcpToolName(full)) {
@@ -360,6 +369,7 @@ export function loadMcpConfig(raw: unknown) {
         serverId,
         enabledTools: Object.freeze([...enabledTools]),
         toolPolicy: Object.freeze({ ...toolPolicy }),
+        toolArguments: parsedArguments.values,
         timeoutSec,
         secretRef,
         toolInputSchemas,

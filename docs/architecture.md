@@ -202,7 +202,7 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 | `delegate_to_agent` | 自建 `delegate-to-agent`：把任务交给同 org 的**另一个** Agent（见下文「子 Run」） |
 | `delegate_to_remote_agent` | 自建 `delegate-to-remote-agent`：经官方 `@a2a-js/sdk/client` 调用运维登记的远端 A2A Agent（见下文「远端 A2A 委派」） |
 | `ask_user_question` | 出厂 `dsh-tool-ask-user` |
-| `mcp__<server>__<tool>` | 出厂 `dsh-mcp-client`，**一台服务器一个插件实例** |
+| `mcp__<server>__<tool>` | 出厂 `dsh-mcp-client`，**一台服务器一个插件实例**。声明了宿主参数（`hostArguments`）的工具，每个 Run 在自己的 scope 里注册同名影子定义：schema 去掉宿主参数，执行时并入本 AgentVersion 的 `toolArguments` 后调用 global 定义；缺必填值则本 Run 隐藏并拒绝（`runtime/policy/host-arguments.ts`，[设计](design/mcp-per-agent-arguments.md)） |
 
 `ctx.fs` / `ctx.shell` / `ctx.jobs` 是 RPC 代理（`remote-fs` / `remote-shell` /
 `remote-jobs`），所以出厂工具的字节操作全部落在 exec 容器里——agent 进程里没有执行面。

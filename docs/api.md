@@ -274,6 +274,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `toolPolicy.tools` | ✅ | 显式 `allow` / `require_approval` / `deny`；deny 在真实工具管线拦在工具体之前 |
 | `toolPolicy.riskLevels` / `classRiskLevels` / `riskApproval` | ✅ | 平台层与版本层**各自解析后取更严**；租户只能收紧，不能放松 |
 | `mcpServers` | ✅（授权面） | 引用哪台 server、`enabledTools` 授权哪些工具。**连接配置仍只来自 `MCP_SERVERS_JSON`**：版本里不接收地址、密钥引用、超时。省略或 `[]` = 不授权任何 MCP 工具 |
+| `mcpServers[i].toolArguments` | ✅ | 宿主参数的值（`{ "kb_id": "hr" }`）：键必须是该 server 在 `MCP_SERVERS_JSON[].hostArguments` 里声明的名字（否则 `MCP_ARGUMENT_UNKNOWN`），值为字符串（≤1024 字符）、数字或布尔（否则 `MCP_ARGUMENT_INVALID`）。`platformConstraints.mcpServers[].hostArguments` 只返回 `name` / `description`。见 [design/mcp-per-agent-arguments.md](design/mcp-per-agent-arguments.md) |
 | `delegation.remoteAgents` | ✅ | `delegate_to_remote_agent` 的白名单：`A2A_REMOTE_AGENTS_JSON` 里的远端 `id` 数组（≤20，去重）。保存时要求已登记（否则 `DELEGATION_REMOTE_AGENT_UNKNOWN`）；**不接收**地址、凭据、超时。`platformConstraints.remoteAgents` 只返回 `id`/`name`/`description`。见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md) |
 | `delegation.agents` | ✅ | `delegate_to_agent` 的白名单：同 org 的 Agent `name` 数组（≤20，去重）。保存时要求每个名字在本 org 存在（否则 `DELEGATION_AGENT_UNKNOWN`，别的 org 的同名 Agent 视为不存在）；运行时再判目标是否 active。省略或 `[]` = 不可委派。见 [design/agent-delegation.md](design/agent-delegation.md) |
 | `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |

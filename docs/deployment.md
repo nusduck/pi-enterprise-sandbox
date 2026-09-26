@@ -310,6 +310,25 @@ Server（例如可能崩溃循环的 stdio 子进程）在该条目里显式写
 这段时间 `/ready` 仍报 `connected` 而调用失败（HTTP 为 `fetch failed`，stdio 为 `Not connected`）；
 只暴露零个工具的 Server 会被报成 `unavailable`。
 
+#### 宿主参数（`hostArguments`）
+
+同一台 Server 被多个智能体使用、某些工具参数要按智能体取不同值（例如智能问答平台的知识库 ID）时，
+在该条目里声明哪些参数由平台填入，值由管理员在智能体配置 `mcpServers[i].toolArguments` 里给
+（设计见 [design/mcp-per-agent-arguments.md](design/mcp-per-agent-arguments.md)）：
+
+```json
+{"id":"qa-platform","url":"https://qa.example/mcp","authTokenRef":"QA_PLATFORM_TOKEN",
+ "hostArguments":{"kb_id":{"description":"知识库 ID"}}}
+```
+
+- 作用于该 Server 下所有在 `inputSchema.properties` 顶层声明了同名参数的工具；模型看到的 schema 里去掉这些参数，
+  执行时平台用智能体配置的值覆盖（模型传了也会被删掉）。审批卡、审批摘要与工具账本记录的都是实际发出的参数。
+- 参数必填而智能体没配值时，该工具在这个智能体的对话里不可用（调用被拒，`MCP_HOST_ARGUMENTS_MISSING`）。
+- 名字须匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，每台最多 10 个；名字像凭据（含 `token` / `secret` / `password` /
+  `api_key` / `credential` / `authorization`）**拒绝启动**——值存在智能体配置里（明文、管理员可见），
+  凭据继续走 `headerRefs` / `authTokenRef`，按智能体区分凭据就登记多份 Server。
+- 改声明与改清单一样需要重启 Agent。
+
 ### 远端 A2A Agent（出站委派）
 
 设计见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。`A2A_REMOTE_AGENTS_JSON`
