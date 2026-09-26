@@ -18,11 +18,8 @@
  * 完整断言的计划书。
  */
 
-/** Bubblewrap 要 unshare 的命名空间维度。今天 user/pid/ipc/uts 恒定存在，net 取决于网络模式。 */
+/** Bubblewrap 要 unshare 的命名空间维度。执行子进程五个都 unshare（net 恒定：子进程没有网络）。 */
 export type Namespace = 'user' | 'pid' | 'ipc' | 'uts' | 'net';
-
-/** 网络模式（与 `types.ts` 的 `SandboxMode` 是两个轴：那个只管文件效果，这个只管网络）。 */
-export type NetworkMode = 'disabled' | 'allowlist' | 'unrestricted';
 
 /**
  * 命名空间与进程身份计划。

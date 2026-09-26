@@ -357,7 +357,7 @@ Server（例如可能崩溃循环的 stdio 子进程）在该条目里显式写
 
 | 变量 | 开发 Compose 默认值 | 生产值 | 说明 |
 |------|-------------------|--------|------|
-| `SANDBOX_POLICY_PROFILE` | `balanced` | `strict` | `balanced` 只在 required Bubblewrap 生效时放行常见包管理器命令的审批前置门；网络仍由 `SANDBOX_NETWORK_MODE` 决定 |
+| `SANDBOX_POLICY_PROFILE` | `balanced` | `strict` | `balanced` 只在 required Bubblewrap 生效时放行常见包管理器命令的审批前置门；执行子进程始终没有网络 |
 | `SANDBOX_ISOLATION_BACKEND` | `bubblewrap` | `bubblewrap` | `balanced` 的必要隔离后端 |
 | `SANDBOX_ISOLATION_REQUIRED` | `true` | `true` | 隔离 preflight 失败即不 Ready |
 
@@ -400,24 +400,20 @@ EXEC_INTERNAL_ALLOW_CIDR=10.20.30.0/24
 
 外部 MCP 由 Agent Runtime 直接连接，不经过 Sandbox。凭据由 `authTokenRef` 指向的环境变量注入。
 
-**命名分离：** `EXEC_INTERNAL_ALLOW_CIDR` 只约束 **入站** 内部面来源；
-`SANDBOX_NETWORK_MODE` 只约束 **出站执行** 策略。已移除 container-wide iptables
-与 `SANDBOX_ALLOWED_CIDRS` / 端口 union allowlist 作为隔离权威的设计。
+**入站 vs 出站：** `EXEC_INTERNAL_ALLOW_CIDR` 只约束 **入站** 内部面来源。已移除 container-wide
+iptables 与 `SANDBOX_ALLOWED_CIDRS` / 端口 union allowlist 作为隔离权威的设计。
 
 ### 出站执行网络（与入站 CIDR 无关）
 
-| 变量 | 开发 | 生产 | 说明 |
-|------|------|------|------|
-| `SANDBOX_NETWORK_MODE` | 可显式 `unrestricted` | 固定 `disabled` | 生产禁止 `allowlist`/`unrestricted` |
+执行子进程**始终**在 Bubblewrap `--unshare-net` 的空网络命名空间里，没有开关。`SANDBOX_NETWORK_MODE`
+已于 2026-09-26 删除：TS exec 从未读取它，文档里「开发可设 `unrestricted`」从未生效。需要连业务库时用下文
+「数据源」（exec 转发 unix socket，子进程仍断网）。
 
-Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox/api/frontend；
-（业务库分析请用下文「数据源」：子进程保持断网，经 exec 转发的 unix socket 连库。）
-开发 Compose 另外给 Sandbox 接入 `service_egress`，仅当显式设置
-`SANDBOX_NETWORK_MODE=unrestricted` 时，沙箱子进程才可访问通过
-`SANDBOX_EXEC_ENV_*` 注入的远程业务库；这些显式 allowlist 值通过受控 spawn 环境
-进入子进程，不拼入 Bubblewrap 命令行。生产 overlay 用 `!override` 移除该网络，
-并固定 `SANDBOX_NETWORK_MODE=disabled`；`agent`/`agent-worker` 始终接入
-`service_egress` 以访问 LLM。
+Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox/api/frontend。开发 Compose 另外给
+Sandbox 接入 `service_egress`，供 exec 进程自身把数据源转发到 Compose 之外的业务库；子进程看不到它。
+生产 overlay 用 `!override` 移除该网络：数据源的 `endpoint` 若在 Compose 网络之外，需要为 sandbox 另行接入
+能到达该地址的网络（VM 部署则由防火墙放行 exec → endpoint）。`agent`/`agent-worker` 始终接入 `service_egress`
+以访问 LLM。
 
 ### 数据源（沙箱内连接业务库，[design](design/sandbox-data-sources.md)）
 

@@ -10,9 +10,9 @@
 #   agent, agent-worker            → backend_internal + service_egress (LLM/MCP egress)
 # Production nginx (overlay)       → both (public edge + upstreams)
 #
-# Execution isolation for untrusted Sandbox children is Bubblewrap --unshare-net
-# when SANDBOX_NETWORK_MODE=disabled (production default). Container-wide iptables
-# is not used; NET_ADMIN/NET_RAW are never granted.
+# Execution isolation for untrusted Sandbox children is Bubblewrap --unshare-net,
+# always (there is no network mode switch). Container-wide iptables is not used;
+# NET_ADMIN/NET_RAW are never granted.
 
 services:
   # ── MySQL 5.7 (dev/CI 兼容基线，对齐 UPDRDB 的 UPSQL 内核) ────────
@@ -650,11 +650,6 @@ services:
       # Comma-separated keys from process env injected into every execution/process.
       # Also: SANDBOX_EXEC_ENV_<NAME>=value (from env_file) → NAME in children.
       SANDBOX_SHARED_ENV_KEYS: ${SANDBOX_SHARED_ENV_KEYS:-}
-      # Outbound *execution* policy (disabled|allowlist|unrestricted).
-      # Default disabled → Bubblewrap --unshare-net (real isolation).
-      # Production forbids allowlist/unrestricted until a per-child egress proxy exists.
-      # Dev may set unrestricted explicitly (.env); never a production default.
-      SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-disabled}
       # /internal/v1/* 来源白名单（按监听器看到的 TCP 对端地址匹配，不看转发头）。
       # 空值 = 拒绝全部内部面请求；非法 CIDR = 拒绝启动。开发默认放行回环与私网段
       # （Compose 网络在 Docker Desktop 为 172.x，在 OrbStack 为 192.168.x）。
@@ -718,12 +713,10 @@ services:
       - apparmor=unconfined
       # Allow the unprivileged mount namespace to mount its private /proc.
       - systempaths=unconfined
-    # Sandbox API is reachable on the internal backend fabric. Development
-    # workloads may explicitly use SANDBOX_NETWORK_MODE=unrestricted to reach
-    # an external business DB through SANDBOX_EXEC_ENV_*; production removes
-    # this network and forces disabled execution networking in the overlay.
-    # With network_mode=disabled, untrusted child processes still get
-    # --unshare-net even though the service has a dev egress attachment.
+    # Sandbox API is reachable on the internal backend fabric. The dev egress
+    # attachment is for the exec process itself (data-source forwarding to
+    # business DBs outside Compose); untrusted child processes always get
+    # --unshare-net and never see it. Production removes this network.
     networks:
       - backend_internal
       - service_egress

@@ -395,47 +395,13 @@ test('persistent XDG home follows temp writability: read-only mode does not leav
 
 // ── 网络模式 ──────────────────────────────────────────────────────────
 
-test('network mode: default is disabled (fail-closed netns)', async () => {
+test('network: child processes always get an empty network namespace', async () => {
   const ws = await makeTestWorkspace();
   try {
-    const profile = buildIsolationProfile({ context: ws.context, mode: 'workspace-write', command: ['true'] });
-    assert.ok(profile.namespace.namespaces.includes('net'));
-  } finally {
-    await ws.cleanup();
-  }
-});
-
-test('network mode: allowlist/unrestricted do not unshare net', async () => {
-  const ws = await makeTestWorkspace();
-  try {
-    for (const networkMode of ['allowlist', 'unrestricted'] as const) {
-      const profile = buildIsolationProfile({
-        context: ws.context,
-        mode: 'workspace-write',
-        command: ['true'],
-        networkMode,
-      });
-      assert.ok(!profile.namespace.namespaces.includes('net'));
+    for (const mode of ['read-only', 'workspace-write'] as const) {
+      const profile = buildIsolationProfile({ context: ws.context, mode, command: ['true'] });
+      assert.ok(profile.namespace.namespaces.includes('net'));
     }
-  } finally {
-    await ws.cleanup();
-  }
-});
-
-test('network mode: unknown value is rejected', async () => {
-  const ws = await makeTestWorkspace();
-  try {
-    assert.throws(
-      () =>
-        buildIsolationProfile({
-          context: ws.context,
-          mode: 'workspace-write',
-          command: ['true'],
-          // @ts-expect-error deliberately invalid at the type level too
-          networkMode: 'open-everything',
-        }),
-      IsolationConfigError,
-    );
   } finally {
     await ws.cleanup();
   }
