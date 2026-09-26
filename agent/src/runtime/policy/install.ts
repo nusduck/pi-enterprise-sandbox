@@ -50,6 +50,8 @@ import {
 import { isDurableInteractionPendingError } from '../providers/user-questions.js';
 import { mcpToolName } from '../../infrastructure/mcp/mcp-config-loader.js';
 import { decideFromRiskTable } from './risk-table.js';
+import { bindHostArguments, type HostArgumentBinding } from './host-arguments.js';
+import type { HostArgumentSpec } from '../../domain/agent/mcp-host-arguments.js';
 
 /** 最小可用的工具执行形状——只取本模块用得到的字段，不复制 DSH 的完整类型。 */
 interface ToolExecutionLike {
@@ -136,6 +138,12 @@ export interface InstallPolicyOptions {
   readonly visibleTools?: readonly string[];
   /** AgentVersion authorization projected at Run creation. */
   readonly authorization?: AgentVersionAuthorization;
+  /**
+   * 运维声明的宿主参数（`MCP_SERVERS_JSON[].hostArguments`，serverId → 声明）。
+   * 与 `authorization` 同时给出时，本 Run 为受影响的 MCP 工具注册影子定义
+   * （docs/design/mcp-per-agent-arguments.md）。
+   */
+  readonly hostArgumentDeclarations?: ReadonlyMap<string, HostArgumentSpec>;
   /** Complete platform risk decision resolver for this Run. */
   readonly policyResolver?: (
     toolName: string,
@@ -323,6 +331,24 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
     return mergePolicyDecisions(decisions);
   };
 
+  // 0) 宿主参数影子定义。先于其余挂载点：guard、可见名单、审批与账本都要读它。
+  //    审批 digest、guard 与账本一律用合并后的参数——与影子真正发给 MCP 的一致。
+  let hostArgs: HostArgumentBinding | null = null;
+  if (options.authorization !== undefined && (options.hostArgumentDeclarations?.size ?? 0) > 0) {
+    disposers.push(
+      anyCtx.inject(['tools'], (scoped) => {
+        const bound = bindHostArguments(scoped.tools as never, {
+          authorization: options.authorization!,
+          declarations: options.hostArgumentDeclarations!,
+        });
+        hostArgs = bound.binding;
+        disposers.push(...bound.disposers);
+      }),
+    );
+  }
+  const effectiveArgsOf = (exec: ToolExecutionLike): Record<string, unknown> =>
+    hostArgs === null ? argsOf(exec) : (hostArgs as HostArgumentBinding).effectiveArgs(toolNameOf(exec), argsOf(exec));
+
   // 1) tools/pre-execute —— 风险表 + source_digest + 持久 PENDING 审批
   disposers.push(
     anyCtx.on('tools/pre-execute', (async (
@@ -330,7 +356,7 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
       next: () => Promise<PreToolDecision>,
     ): Promise<PreToolDecision> => {
       const outcome = await evaluatePreExecute(
-        { toolName: toolNameOf(exec), args: argsOf(exec), callId: callIdOf(exec) },
+        { toolName: toolNameOf(exec), args: effectiveArgsOf(exec), callId: callIdOf(exec) },
         options.approvalStore,
         undefined,
         options.riskOverrides ?? {},
@@ -366,12 +392,14 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
         // 所以这里返回理由就是终局，后面的监听器翻不了案。
         const parked = park.denyReason(callIdOf(e));
         if (parked !== undefined) return parked;
-        const installedDecision = resolveInstalledPolicy(toolNameOf(e), argsOf(e));
+        const hostDenied = (hostArgs as HostArgumentBinding | null)?.denyReason(toolNameOf(e));
+        if (hostDenied !== undefined) return hostDenied;
+        const installedDecision = resolveInstalledPolicy(toolNameOf(e), effectiveArgsOf(e));
         if (installedDecision !== null && installedDecision.decision === 'deny') {
           return installedDecision.reason;
         }
         if (guards.length === 0) return undefined;
-        const hit = runGuards(guards, toolNameOf(e), argsOf(e));
+        const hit = runGuards(guards, toolNameOf(e), effectiveArgsOf(e));
         if (hit === null || hit.decision === 'allow') return undefined;
         return hit.reason;
       });
@@ -388,7 +416,7 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
     ): Promise<unknown> => {
       const toolCallId = callIdOf(exec);
       const toolName = toolNameOf(exec);
-      const args = argsOf(exec);
+      const args = effectiveArgsOf(exec);
       const execution = { callId: toolCallId, toolName, args };
       return runWithToolExecutionContext(
         execution,
@@ -511,6 +539,8 @@ export function installEnterprisePolicy(ctx: Context, options: InstallPolicyOpti
           }
         }
         if (allowed === null) return;
+        const hidden = (hostArgs as HostArgumentBinding | null)?.hidden;
+        if (hidden !== undefined && hidden.size > 0) allowed = allowed.filter((name) => !hidden.has(name));
         // 出厂没有这个方法时静默跳过：可见性是优化，权威层在 guard 上。
         // 但**必须**是静默跳过而不是抛——否则一次上游版本变动会让所有 Run 起不来。
         tools.restrict?.({ allow: allowed });

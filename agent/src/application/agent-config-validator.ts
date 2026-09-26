@@ -22,6 +22,11 @@ import {
   parseDelegationConfig,
 } from '../domain/agent/delegation-config.js';
 import { parseRemoteAgentRegistry } from '../runtime/providers/a2a-remote-registry.js';
+import {
+  parseToolArguments,
+  readHostArgumentDeclarations,
+  type HostArgumentSpec,
+} from '../domain/agent/mcp-host-arguments.js';
 
 export const AGENT_CONFIG_SCHEMA_VERSION = 1 as const;
 
@@ -83,6 +88,7 @@ const MCP_ENTRY_V1_KEYS = Object.freeze([
   'serverId',
   'enabledTools',
   'toolPolicy',
+  'toolArguments',
 ]);
 
 const MCP_TOOL_POLICY_KEYS = Object.freeze([
@@ -302,6 +308,20 @@ function loadPlatformMcpServers(env: Record<string, string | undefined>): {
   }
 }
 
+/**
+ * 运维声明的宿主参数（`MCP_SERVERS_JSON[].hostArguments`）。启动期已拒绝非法声明；
+ * 这里读不出来时返回空表——于是任何 `toolArguments` 键都报 MCP_ARGUMENT_UNKNOWN，
+ * 是关闭而不是放行。
+ */
+function loadHostArgumentDeclarations(env: Record<string, string | undefined>): Map<string, HostArgumentSpec> {
+  try {
+    const parsed = JSON.parse(String(env.MCP_SERVERS_JSON ?? '').trim() || '[]');
+    return Array.isArray(parsed) ? readHostArgumentDeclarations(parsed) : new Map();
+  } catch {
+    return new Map();
+  }
+}
+
 function decisionsOf(value: unknown): Record<string, string> {
   if (!isPlainObject(value)) return {};
   const out: Record<string, string> = {};
@@ -320,6 +340,8 @@ export class AgentConfigValidator {
   readonly platformToolNames: readonly string[];
   /** `A2A_REMOTE_AGENTS_JSON` 里启用的远端；只留展示字段，地址与凭据引用不进配置面。 */
   readonly remoteAgents: ReadonlyArray<{ id: string; name: string; description: string }>;
+  /** serverId → 运维声明的宿主参数（docs/design/mcp-per-agent-arguments.md D1）。 */
+  readonly hostArguments: ReadonlyMap<string, HostArgumentSpec>;
   readonly optionsDto: AgentConfigOptions;
 
   constructor(opts: {
@@ -333,6 +355,7 @@ export class AgentConfigValidator {
     mcpDiscovery?: { ready?: boolean; servers?: unknown; error?: string } | null;
     platformToolNames?: readonly string[];
     remoteAgents?: ReadonlyArray<{ id: string; name?: string; description?: string }>;
+    hostArguments?: ReadonlyMap<string, HostArgumentSpec>;
   } = {}) {
     const env = opts.env ?? process.env;
     this.registry = opts.registry ?? buildRegistry({ env });
@@ -359,6 +382,7 @@ export class AgentConfigValidator {
       this.mcpServers = loaded.servers;
       this.mcpReadiness = Object.freeze(loaded.readiness);
     }
+    this.hostArguments = opts.hostArguments ?? loadHostArgumentDeclarations(env);
     this.remoteAgents = Object.freeze(
       (opts.remoteAgents ?? parseRemoteAgentRegistry(env)).map((agent) => ({
         id: agent.id,
@@ -376,6 +400,9 @@ export class AgentConfigValidator {
     const mcpServers = this.mcpServers.map((server) => ({
       serverId: server.serverId,
       toolNames: [...server.toolNames],
+      // 只有名字与描述：哪些参数由平台填，不含任何连接材料。
+      hostArguments: Object.entries(this.hostArguments.get(server.serverId) ?? {})
+        .map(([name, spec]) => ({ name, description: spec.description })),
     }));
     const fieldSupport = {
       schemaVersion: { supported: true, required: true, type: 'integer' },
@@ -390,7 +417,12 @@ export class AgentConfigValidator {
         },
       },
       toolPolicy: { supported: true, type: 'object' },
-      mcpServers: { supported: true, type: 'array', explicitEnabledTools: true },
+      mcpServers: {
+        supported: true,
+        type: 'array',
+        explicitEnabledTools: true,
+        fields: { toolArguments: { supported: true, type: 'object' } },
+      },
       delegation: {
         supported: true,
         type: 'object',
@@ -827,6 +859,17 @@ export class AgentConfigValidator {
           if (Object.keys(nested).length) normalizedEntry.toolPolicy = nested;
         } else if (entry.toolPolicy !== undefined) {
           errors.push(diagnostic(`${path}.toolPolicy`, 'CONFIG_TYPE', 'toolPolicy must be an object'));
+        }
+        if (entry.toolArguments !== undefined) {
+          const parsedArguments = parseToolArguments(
+            entry.toolArguments,
+            `${path}.toolArguments`,
+            this.hostArguments.get(normalizedServerId) ?? {},
+          );
+          errors.push(...parsedArguments.errors);
+          if (parsedArguments.values && Object.keys(parsedArguments.values).length) {
+            normalizedEntry.toolArguments = canonicalObject(parsedArguments.values);
+          }
         }
         normalizedMcp.push(normalizedEntry);
       }
