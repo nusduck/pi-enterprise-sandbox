@@ -411,12 +411,31 @@ EXEC_INTERNAL_ALLOW_CIDR=10.20.30.0/24
 | `SANDBOX_NETWORK_MODE` | 可显式 `unrestricted` | 固定 `disabled` | 生产禁止 `allowlist`/`unrestricted` |
 
 Compose 拓扑：`backend_internal`（`internal: true`）供 mysql/redis/sandbox/api/frontend；
+（业务库分析请用下文「数据源」：子进程保持断网，经 exec 转发的 unix socket 连库。）
 开发 Compose 另外给 Sandbox 接入 `service_egress`，仅当显式设置
 `SANDBOX_NETWORK_MODE=unrestricted` 时，沙箱子进程才可访问通过
 `SANDBOX_EXEC_ENV_*` 注入的远程业务库；这些显式 allowlist 值通过受控 spawn 环境
 进入子进程，不拼入 Bubblewrap 命令行。生产 overlay 用 `!override` 移除该网络，
 并固定 `SANDBOX_NETWORK_MODE=disabled`；`agent`/`agent-worker` 始终接入
 `service_egress` 以访问 LLM。
+
+### 数据源（沙箱内连接业务库，[design](design/sandbox-data-sources.md)）
+
+| 变量 | 服务 | 默认值 | 说明 |
+|------|------|--------|------|
+| `SANDBOX_DATA_SOURCES_JSON` | `sandbox`（exec）与 `agent` **同一份** | 未设置（无数据源） | JSON 数组，每项 `{ id, label, description?, engine?, endpoint, database, dbpmDbName, userName }`；`id` 为 `^[a-z][a-z0-9_]{0,31}$`，`engine` 只支持 `mysql`。出现任何口令类字段、未知字段、重复 id 或非法 endpoint 时两个服务都拒绝启动。exec 用它建转发，agent 用它校验智能体配置、给设置页列可选项 |
+| `FAKE_DBPM_EXTRA_ENTRIES` | `dbpm-fake` | 未设置 | 仅开发：追加假 DBPM 条目 `db:user:password;…`，给数据源只读账号用 |
+
+- 口令：exec 启动时按每项的 `dbpmDbName` + `userName` 向 DBPM 取（`DBPM_URL` 必须已配置，否则拒绝启动）。
+  **单个数据源取密失败不阻止 exec 启动**，该库标为不可用，引用它的执行返回 503 `DATA_SOURCE_UNAVAILABLE`。
+  口令轮换后需重启 exec。
+- 网络：沙箱子进程仍然 `--unshare-net`；exec 为每次执行在 `$SANDBOX_CONTROL_ROOT/dbs/<随机>/<id>/mysql.sock`
+  监听，只读挂到子进程的 `/run/dsh-db/<id>/`，并转发到 `endpoint`。VM/防火墙只需放行 **exec → endpoint**，
+  不要为子进程开放任何出口。控制面根路径要足够短：socket 路径超过 107 字节时 exec 拒绝启动。
+- 账号必须是**只读**账号：能使用该智能体的人都能让模型读到它（输出里的口令会被替换成 `***`，但挡不住刻意编码外带）。
+- 每个连接在 exec 标准输出记一条 `{"event":"data_source_connection", …}`：数据源 id、请求/租户/会话身份、
+  起止时间、上下行字节数与关闭原因，不含 SQL 与数据。
+- 旧写法 `SANDBOX_EXEC_ENV_*_PWD` / 带口令的 `*_DSN`：生产环境 exec 拒绝启动，开发环境打印告警。
 
 ### LLM Provider
 

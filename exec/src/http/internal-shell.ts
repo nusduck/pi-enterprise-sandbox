@@ -29,6 +29,7 @@ import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@dsh/contract/errors.js';
 import { parseEnvelope } from '@dsh/contract/envelope.js';
 import { parseEnabledSkills, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
+import { parseEnabledDataSources } from '@dsh/contract/data-sources.js';
 import {
   parseShellRunPayload,
   parseShellStartPayload,
@@ -49,6 +50,9 @@ import {
 } from '../shell/guarded-execution.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
+import type { DataSourceService } from '../datasource/service.js';
+import { openExecutionDataSources, redactRunResult, redactingReader } from '../datasource/execution.js';
+import { internalClaimsByRequest } from './internal-claims.js';
 
 export interface InternalShellDeps extends GuardedExecutionDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -63,6 +67,22 @@ export interface InternalShellDeps extends GuardedExecutionDeps {
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
+  /** 数据源（design `sandbox-data-sources.md`）。省略即未配置：带清单的请求一律拒绝。 */
+  readonly dataSources?: DataSourceService;
+}
+
+type ShellEnvelope = { requestId: string; orgId: string; userId: string; workspaceId: string };
+
+/** 为这次执行打开清单里的数据源。审计记录带上请求与会话身份，不带内容。 */
+function openFor(deps: InternalShellDeps, c: import('hono').Context, env: ShellEnvelope, ids: readonly string[]) {
+  const agentSessionId = internalClaimsByRequest.get(c.req.raw)?.agent_session_id;
+  return openExecutionDataSources(deps.dataSources, ids, {
+    requestId: env.requestId,
+    orgId: env.orgId,
+    userId: env.userId,
+    workspaceId: env.workspaceId,
+    ...(agentSessionId !== undefined ? { agentSessionId } : {}),
+  });
 }
 
 function buildContext(
@@ -95,13 +115,21 @@ function rootsOf(ctx: WorkspaceContext): readonly string[] {
   ];
 }
 
-async function parseBody(
-  c: import('hono').Context,
-): Promise<{ envelope: unknown; payload: unknown; enabledSkills: readonly EnabledSkillRef[] }> {
+async function parseBody(c: import('hono').Context): Promise<{
+  envelope: unknown;
+  payload: unknown;
+  enabledSkills: readonly EnabledSkillRef[];
+  dataSources: readonly string[];
+}> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') throw new ContractError('ENVELOPE_INVALID', 'body must be object');
   const b = body as Record<string, unknown>;
-  return { envelope: b['envelope'], payload: b['payload'], enabledSkills: parseEnabledSkills(b['enabledSkills']) };
+  return {
+    envelope: b['envelope'],
+    payload: b['payload'],
+    enabledSkills: parseEnabledSkills(b['enabledSkills']),
+    dataSources: parseEnabledDataSources(b['dataSources']),
+  };
 }
 
 /** 服务端上限：请求里的 `timeoutMs`/`stdoutMaxBytes` 只能要更小的值。 */
@@ -127,36 +155,41 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
 
   app.post('/internal/v1/shell/run', async (c) => {
     try {
-      const { envelope: rawEnv, payload, enabledSkills } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills, dataSources } = await parseBody(c);
       parseEnvelope(rawEnv);
-      const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
-      const ctx = buildContext(deps, env, enabledSkills);
-      const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
+      const env = rawEnv as ShellEnvelope;
       const parsed = parseShellRunPayload(payload, payloadLimits);
+      const session = await openFor(deps, c, env, dataSources);
+      try {
+        const ctx: WorkspaceContext = { ...buildContext(deps, env, enabledSkills), dataSources: session.mounts };
+        const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
 
-      const spec = executor.resolve({
-        command: parsed.command,
-        workdir: workdirString(parsed),
-        ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
-        ...(parsed.stdoutMaxBytes !== undefined ? { stdoutMaxBytes: parsed.stdoutMaxBytes } : {}),
-        ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}),
-        ...(parsed.env !== undefined ? { env: { ...parsed.env } } : {}),
-      });
-      // 准入、采样与取消融合（客户端断开 + 配额报警）在共享编排里，
-      // MCP 窄桥走同一份（复核 F1）。超额/测量失败一律 fail-closed：不 spawn，
-      // 把原因如实交给模型。
-      const outcome = await runGuardedForeground({
-        gate: quotaGateFor(deps, ctx),
-        clientSignal: c.req.raw.signal,
-        run: (signal) => executor.run({ ...spec, signal }),
-      });
-      if (outcome.kind === 'denied') {
-        return c.json({
-          ok: true,
-          data: deniedRunResult(ctx, executor.mode, outcome.message, spec.timeoutMs),
+        const spec = executor.resolve({
+          command: parsed.command,
+          workdir: workdirString(parsed),
+          ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
+          ...(parsed.stdoutMaxBytes !== undefined ? { stdoutMaxBytes: parsed.stdoutMaxBytes } : {}),
+          ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}),
+          ...(parsed.env !== undefined ? { env: { ...parsed.env } } : {}),
         });
+        // 准入、采样与取消融合（客户端断开 + 配额报警）在共享编排里，
+        // MCP 窄桥走同一份（复核 F1）。超额/测量失败一律 fail-closed：不 spawn，
+        // 把原因如实交给模型。
+        const outcome = await runGuardedForeground({
+          gate: quotaGateFor(deps, ctx),
+          clientSignal: c.req.raw.signal,
+          run: (signal) => executor.run({ ...spec, signal }),
+        });
+        if (outcome.kind === 'denied') {
+          return c.json({
+            ok: true,
+            data: deniedRunResult(ctx, executor.mode, outcome.message, spec.timeoutMs),
+          });
+        }
+        return c.json({ ok: true, data: redactRunResult(outcome.result, session.mounts) });
+      } finally {
+        await session.close();
       }
-      return c.json({ ok: true, data: outcome.result });
     } catch (err) {
       return failure(c, err);
     }
@@ -164,70 +197,83 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
 
   app.post('/internal/v1/shell/start', async (c) => {
     try {
-      const { envelope: rawEnv, payload, enabledSkills } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills, dataSources } = await parseBody(c);
       parseEnvelope(rawEnv);
-      const env = rawEnv as { orgId: string; userId: string; workspaceId: string };
-      const ctx = buildContext(deps, env, enabledSkills);
-      const roots = rootsOf(ctx);
-      const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
+      const env = rawEnv as ShellEnvelope;
       const parsed = parseShellStartPayload(payload, payloadLimits);
-      const spec = executor.resolve({
-        command: parsed.command,
-        workdir: workdirString(parsed),
-        ...(parsed.stdoutMaxBytes !== undefined ? { stdoutMaxBytes: parsed.stdoutMaxBytes } : {}),
-        ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}),
-        ...(parsed.env !== undefined ? { env: { ...parsed.env } } : {}),
-      });
+      // 后台作业的数据源跟着作业走：作业结束（完成/被杀/spawn 失败）时关闭，
+      // 作业没起成（准入、账本失败）时在下面的 catch 里关闭。close 幂等。
+      const session = await openFor(deps, c, env, dataSources);
+      try {
+        const ctx: WorkspaceContext = { ...buildContext(deps, env, enabledSkills), dataSources: session.mounts };
+        const roots = rootsOf(ctx);
+        const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
+        const spec = executor.resolve({
+          command: parsed.command,
+          workdir: workdirString(parsed),
+          ...(parsed.stdoutMaxBytes !== undefined ? { stdoutMaxBytes: parsed.stdoutMaxBytes } : {}),
+          ...(parsed.stdin !== undefined ? { stdin: parsed.stdin } : {}),
+          ...(parsed.env !== undefined ? { env: { ...parsed.env } } : {}),
+        });
 
-      const gate = quotaGateFor(deps, ctx);
-      const admission = await gate.admit();
+        const gate = quotaGateFor(deps, ctx);
+        const admission = await gate.admit();
 
-      const snapshot = await deps.jobRegistry.start({
-        ...(parsed.id !== undefined ? { id: parsed.id } : {}),
-        kind: 'bash',
-        label: parsed.command,
-        owner: {
-          orgId: env.orgId,
-          userId: env.userId,
-          workspaceId: env.workspaceId,
-          ...(parsed.runId !== undefined ? { runId: parsed.runId } : {}),
-        },
-        physicalRoots: roots,
-        run: () => {
-          // 准入不通过就不 spawn：句柄立刻结算成 killed，原因进 stderr。
-          const handle = admission.allow
-            ? executor.start(spec)
-            : deniedProcessHandle(ctx, executor.mode, admission.message);
-          const stopWatch = admission.allow
-            ? gate.watch(() => {
+        const snapshot = await deps.jobRegistry.start({
+          ...(parsed.id !== undefined ? { id: parsed.id } : {}),
+          kind: 'bash',
+          label: parsed.command,
+          owner: {
+            orgId: env.orgId,
+            userId: env.userId,
+            workspaceId: env.workspaceId,
+            ...(parsed.runId !== undefined ? { runId: parsed.runId } : {}),
+          },
+          physicalRoots: roots,
+          run: () => {
+            // 准入不通过就不 spawn：句柄立刻结算成 killed，原因进 stderr。
+            const handle = admission.allow
+              ? executor.start(spec)
+              : deniedProcessHandle(ctx, executor.mode, admission.message);
+            const stopWatch = admission.allow
+              ? gate.watch(() => {
+                  void handle.kill();
+                })
+              : async (): Promise<void> => undefined;
+            const live = handle as typeof handle & {
+              pid?: number | null;
+              pgid?: number | null;
+              writeStdin?: (data: string, eof: boolean) => void;
+            };
+            const output = redactingReader(() => handle.readOutput(), session.mounts);
+            return {
+              pid: live.pid ?? null,
+              pgid: live.pgid ?? undefined,
+              cancel: () => {
                 void handle.kill();
-              })
-            : async (): Promise<void> => undefined;
-          const live = handle as typeof handle & {
-            pid?: number | null;
-            pgid?: number | null;
-            writeStdin?: (data: string, eof: boolean) => void;
-          };
-          return {
-            pid: live.pid ?? null,
-            pgid: live.pgid ?? undefined,
-            cancel: () => {
-              void handle.kill();
-            },
-            done: handle.done
-              // 采样器必须跟着作业收尾——不论正常结束、被杀还是 spawn 失败。
-              .finally(() => stopWatch())
-              .then(() => ({
-                status: handle.status === 'completed' ? ('completed' as const) : ('killed' as const),
-                exitCode: handle.exitCode,
-                signal: handle.signal,
-              })),
-            readOutput: () => handle.readOutput(),
-            ...(live.writeStdin ? { writeStdin: live.writeStdin.bind(handle) } : {}),
-          };
-        },
-      });
-      return c.json({ ok: true, data: snapshot });
+              },
+              done: handle.done
+                // 采样器与数据源转发必须跟着作业收尾——不论正常结束、被杀还是 spawn 失败。
+                .finally(() => stopWatch())
+                .finally(() => session.close())
+                .then(() => {
+                  output.end();
+                  return {
+                    status: handle.status === 'completed' ? ('completed' as const) : ('killed' as const),
+                    exitCode: handle.exitCode,
+                    signal: handle.signal,
+                  };
+                }),
+              readOutput: output.read,
+              ...(live.writeStdin ? { writeStdin: live.writeStdin.bind(handle) } : {}),
+            };
+          },
+        });
+        return c.json({ ok: true, data: snapshot });
+      } catch (err) {
+        await session.close();
+        throw err;
+      }
     } catch (err) {
       return failure(c, err);
     }
@@ -237,6 +283,11 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
 /** 统一的失败响应：`toWireError` 兜底脱敏；请求体非法归 400，其余 500。 */
 function failure(c: import('hono').Context, err: unknown): Response {
   const wire = toWireError(err, { physicalRoots: [] });
-  const status = wire.code === 'ENVELOPE_INVALID' ? 400 : 500;
+  const status =
+    wire.code === 'ENVELOPE_INVALID' || wire.code === 'DATA_SOURCE_UNKNOWN'
+      ? 400
+      : wire.code === 'DATA_SOURCE_UNAVAILABLE'
+        ? 503
+        : 500;
   return c.json({ ok: false, error: wire }, status as never);
 }

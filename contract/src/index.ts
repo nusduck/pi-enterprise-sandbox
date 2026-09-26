@@ -14,6 +14,7 @@
  * - `dbpm-config.ts` 各进程取哪些口令、配置来源与「连接串不许夹口令」的启动约束
  * - `skill-manifest.ts` 已启用用户 Skill 清单、GET 规范化签名字节与版本目录规则
  * - `shell-payload.ts` 内部 shell run/start 请求体的两侧共用解析与边界校验
+ * - `data-sources.ts` 按智能体授权的数据源清单、目录投影与沙箱内路径/环境变量约定
  */
 
 export {
@@ -193,3 +194,17 @@ export type {
   ShellRunResult,
   ShellSandboxInfo,
 } from '@deepseek-ai/dsh-shell';
+
+export {
+  DATA_SOURCE_ENGINES,
+  DATA_SOURCE_ENV_PREFIX,
+  DATA_SOURCE_ID_PATTERN,
+  DATA_SOURCE_MOUNT_ROOT,
+  ENABLED_DATA_SOURCES_MAX,
+  DataSourceConfigError,
+  catalogEntryOf,
+  dataSourceEnvPrefix,
+  parseEnabledDataSources,
+  readDataSourceCatalog,
+} from './data-sources.js';
+export type { DataSourceCatalogEntry, DataSourceConfig, DataSourceEngine } from './data-sources.js';

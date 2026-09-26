@@ -102,7 +102,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 **`/admin/agents`（仅 admin）** — `pages/settings/AgentsPage.tsx`，管理控制台的「智能体」。
 左侧是 org 内的智能体列表（有未保存草稿的显示黄点）与「新建智能体」，右侧是一个编辑器：
 顶部固定栏显示「编辑基于 vN」、未保存标记、校验状态和「放弃修改 / 仅保存为新版本 / 保存并启用」，
-下方按「基本信息 / 模型 / 工具权限 / MCP / 协作 / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
+下方按「基本信息 / 模型 / 工具权限 / MCP / 协作 / 数据源 / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
 参数一次只渲染一类，样式在 `agents.module.css`）。工具权限按类别分组（`groupToolsForPermissions`），
 每个工具是「继承 / 允许 / 审批 / 禁止」四段选择，可只看已覆盖项；新建智能体复用同一个编辑器。
 顶栏显示「N 处未保存修改」（`configDiff`：草稿与启用版本逐字段比较，键顺序不算修改，空对象不算叶子），
@@ -147,6 +147,11 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   清空的名单删子键、全空删整个 `delegation`；草稿里有而候选里没有的名字显示为「已保留」行，只能
   移除，`delegation.<key>[i]` 的错误挂在该行。远端清单只能由运维在 `A2A_REMOTE_AGENTS_JSON`
   登记，页面不提供登记入口。设计见 [design/agent-delegation-config-ui.md](design/agent-delegation-config-ui.md)。
+- 「数据源」分类（`DataSourceFields.tsx`、`dataSourceHelpers.ts`）编辑 `dataSources`：从 config-options 的
+  `platformConstraints.dataSources` 勾选（只显示名称、id、说明、引擎），写成 `[{ id }]`，清空时删键；
+  草稿里有而目录里没有的 id 显示为「已保留」行，只能移除，`dataSources[i]` 的错误挂在该行；结构不合法时暂停该分类。
+  目录由运维在 `SANDBOX_DATA_SOURCES_JSON` 登记，页面不提供登记入口。设计见
+  [design/sandbox-data-sources.md](design/sandbox-data-sources.md)。
 - Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
   是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为「不支持」，
   要求改掉后才能发布，不静默降级到别的档位。

@@ -152,7 +152,8 @@ services:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       FAKE_DBPM_PORTS: "7000,7001"
       FAKE_DBPM_FAIL_PORTS: ${FAKE_DBPM_FAIL_PORTS:-}
-      FAKE_DBPM_ENTRIES: "${DBPM_DB_NAME:-sandbox}:${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:-sandbox_dev_only};${DBPM_REDIS_DB_NAME:-redis}:${DBPM_REDIS_DB_USER_NAME:-default}:${REDIS_PASSWORD:-redis_dev_only}"
+      # FAKE_DBPM_EXTRA_ENTRIES：开发用的额外条目（如数据源只读账号），格式同上 `db:user:password;…`。
+      FAKE_DBPM_ENTRIES: "${DBPM_DB_NAME:-sandbox}:${MYSQL_USER:-sandbox}:${MYSQL_PASSWORD:-sandbox_dev_only};${DBPM_REDIS_DB_NAME:-redis}:${DBPM_REDIS_DB_USER_NAME:-default}:${REDIS_PASSWORD:-redis_dev_only};${FAKE_DBPM_EXTRA_ENTRIES:-}"
     volumes:
       - ./scripts/dev/fake-dbpm.mjs:/opt/fake-dbpm/fake-dbpm.mjs:ro
     read_only: true
@@ -328,6 +329,9 @@ services:
       DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
       DBPM_REDIS_DB_NAME: ${DBPM_REDIS_DB_NAME:-redis}
       DBPM_REDIS_DB_USER_NAME: ${DBPM_REDIS_DB_USER_NAME:-default}
+      # 数据源目录（docs/design/sandbox-data-sources.md）：与 sandbox 同一份。Agent 只用它
+      # 校验智能体配置、给设置页列可选项；不取口令、不连业务库。
+      SANDBOX_DATA_SOURCES_JSON: ${SANDBOX_DATA_SOURCES_JSON:-}
       # env_file 会把宿主 .env 整体注入。应用口令只来自 DBPM（ADR 0011 D10），这里清空
       # 服务端口令与其他服务的带口令连接串，不让它们出现在进程环境 / docker inspect 里。
       MYSQL_PASSWORD: ""
@@ -580,10 +584,13 @@ services:
       SANDBOX_DATABASE_URL: ${SANDBOX_COMPOSE_DATABASE_URL:-mysql+pymysql://sandbox@mysql:3306/sandbox}
       # UPDRDB 两个 Proxy；空 = 使用 DSN 单端点。与 Agent 读同一个变量。
       UPDRDB_ENDPOINTS: ${UPDRDB_ENDPOINTS:-}
-      # DBPM 取密：exec 只取 UPDRDB 条目。
+      # DBPM 取密：exec 取 UPDRDB 条目，以及数据源目录里每个库的只读账号。
       DBPM_URL: ${DBPM_URL:-dbpm-fake:7000,dbpm-fake:7001}
       DBPM_DB_NAME: ${DBPM_DB_NAME:-sandbox}
       DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
+      # 数据源目录（docs/design/sandbox-data-sources.md）：沙箱子进程仍然断网，只经 exec 转发的
+      # unix socket 连到这里登记的库；口令由 exec 启动时向 DBPM 取，不写在这里。
+      SANDBOX_DATA_SOURCES_JSON: ${SANDBOX_DATA_SOURCES_JSON:-}
       # env_file 仍需保留（SANDBOX_EXEC_ENV_* 透传），但口令与 Agent 侧连接串不进 exec 进程。
       MYSQL_PASSWORD: ""
       MYSQL_ROOT_PASSWORD: ""

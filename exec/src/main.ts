@@ -2,12 +2,14 @@
  * Exec HTTP 入口。Wave 6 起取代 Python sandbox 服务进程。
  * 挂载内部 HMAC 面与公共会话面；健康检查保持 /health 与 /ready。
  *
- * 启动顺序（design §9.2）：取密 → 装配（建池）→ schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen。任何一步失败都退出，
+ * 启动顺序（design §9.2）：取密（UPDRDB + 数据源）→ 装配（建池）→ schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen。任何一步失败都退出，
  * 不先对外提供服务。
  */
 import { createExecAppFromEnv, readExecDbConfigFromSandboxEnv } from './http/app.js';
 import { listenHono } from './http/node-listener.js';
 import { resolveExecDbPassword } from './startup-credentials.js';
+import { readDataSourceCatalog } from './datasource/catalog.js';
+import { fetchDataSourcePasswords } from './datasource/service.js';
 
 const port = Number.parseInt(process.env['EXEC_PORT'] ?? process.env['SANDBOX_PORT'] ?? '8081', 10);
 
@@ -20,9 +22,20 @@ try {
   process.exit(1);
 }
 
+// 数据源口令（design `sandbox-data-sources.md` §4.5）：目录配错、DBPM 端点配错拒绝启动；
+// 单个数据源取密失败只让它不可用，平台本身不依赖业务库。
+let dataSourcePasswords: ReadonlyMap<string, string>;
+try {
+  dataSourcePasswords = await fetchDataSourcePasswords(readDataSourceCatalog(process.env), process.env);
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`exec data source configuration invalid, refusing to start: ${message}\n`);
+  process.exit(1);
+}
+
 let runtime: ReturnType<typeof createExecAppFromEnv>;
 try {
-  runtime = createExecAppFromEnv(process.env, { dbPassword });
+  runtime = createExecAppFromEnv(process.env, { dbPassword, dataSourcePasswords });
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
   process.stderr.write(`exec configuration invalid, refusing to start: ${message}\n`);

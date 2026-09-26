@@ -12,7 +12,8 @@
  * 可写挂载**只**从 `writableRoots()` 派生（ADR 0008 D2）——本文件不自己算
  * 一遍"这个模式下什么能写"，这正是本次要消灭的"两边各算一遍"。
  */
-import type { EnabledSkillPackage, SandboxMode, WorkspaceContext } from '../types.js';
+import type { DataSourceMount, EnabledSkillPackage, SandboxMode, WorkspaceContext } from '../types.js';
+import { DATA_SOURCE_ENV_PREFIX, DATA_SOURCE_MOUNT_ROOT } from '@dsh/contract/data-sources.js';
 import { writableRoots } from '../fs/writable-roots.js';
 import {
   AGENT_PYTHON_VENV,
@@ -201,6 +202,36 @@ function buildSkillPackageMounts(packages: readonly EnabledSkillPackage[]): Moun
   }));
 }
 
+/** 数据源 socket 目录逐个只读绑定（design `sandbox-data-sources.md` §4.2）。
+ * `required: true`：socket 目录是 exec 刚为这次执行建的，缺了说明转发没建起来，
+ * 宁可 spawn 失败也不让模型连一个不存在的库。网络命名空间不受影响。 */
+function buildDataSourceMounts(sources: readonly DataSourceMount[]): Mount[] {
+  return sources.map((source) => ({
+    kind: 'ro_bind',
+    source: source.hostDir,
+    target: `${DATA_SOURCE_MOUNT_ROOT}/${source.id}`,
+    required: true,
+    sessionSpecific: true,
+  }));
+}
+
+/** 调用方（含模型经 shell `env` 参数）传入的 `DSH_DB_*` 一律丢弃：这个前缀只由数据源注入。 */
+function withoutDataSourceKeys(env: Readonly<Record<string, string>> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (!key.toUpperCase().startsWith(DATA_SOURCE_ENV_PREFIX)) out[key] = value;
+  }
+  return out;
+}
+
+/** 本次执行的数据源环境变量：每个挂载的 `DSH_DB_<ID>_*`，外加 `DSH_DB_SOURCES`。 */
+function dataSourceEnvVars(sources: readonly DataSourceMount[]): Record<string, string> {
+  if (sources.length === 0) return {};
+  const env: Record<string, string> = { [`${DATA_SOURCE_ENV_PREFIX}SOURCES`]: sources.map((s) => s.id).join(',') };
+  for (const source of sources) Object.assign(env, source.env);
+  return env;
+}
+
 /** workspace 根、session 私有 temp 根：是否可写完全由 `writableRoots()` 决定
  * （ADR 0008 D2）。不在其中时仍然挂载——只是换成只读——因为 `read-only`
  * 模式的含义是"全盘只读"，不是"看不见"。 */
@@ -278,6 +309,7 @@ export function buildIsolationProfile(input: BuildProfileInput): IsolationProfil
     ...buildSkillPackageMounts(ctx.enabledSkillPackages),
     ...rootMounts,
     ...buildHomeMounts(ctx, tempWritable),
+    ...buildDataSourceMounts(ctx.dataSources ?? []),
   ];
 
   const uid = input.uid ?? DEFAULT_UID;
@@ -297,7 +329,8 @@ export function buildIsolationProfile(input: BuildProfileInput): IsolationProfil
     env: {
       clearEnv: true,
       vars: {
-        ...input.envOverrides,
+        ...withoutDataSourceKeys(input.envOverrides),
+        ...dataSourceEnvVars(ctx.dataSources ?? []),
         HOME: '/home/sandbox',
         PWD: cwd,
         TMPDIR: AGENT_TEMP_PATH,

@@ -27,6 +27,7 @@ import type { ShellResourceLimits } from '../shell/resource-limits.js';
 import type { ChildQuotaConfig } from '../workspace/child-quota.js';
 import type { QuotaStore } from '../workspace/quota-store.js';
 import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
+import type { DataSourceService } from '../datasource/service.js';
 
 export interface InternalRouterDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -47,6 +48,8 @@ export interface InternalRouterDeps {
   readonly childQuota?: ChildQuotaConfig;
   /** 配额账本（读预留量）。 */
   readonly quotaStore?: QuotaStore;
+  /** 数据源（design `sandbox-data-sources.md`）。省略即未配置。 */
+  readonly dataSources?: DataSourceService;
 }
 
 /**
@@ -133,6 +136,7 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
     ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
     ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
+    ...(deps.dataSources !== undefined ? { dataSources: deps.dataSources } : {}),
   });
   registerInternalJobsRoutes(app, { jobRegistry: deps.jobRegistry });
   registerInternalArtifactRoutes(app, {
