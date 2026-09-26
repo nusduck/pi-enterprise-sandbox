@@ -134,6 +134,12 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   依赖它的修改，不渲染成"零授权"。草稿里启用了、但当前目录已经没有的 MCP 工具仍
   会渲染成一行并标注「当前目录中已没有」，否则那条
   `mcpServers[i].enabledTools[j]` 的错误就没有可以落脚的控件。
+- MCP 分类里，已选中的 Server 若在 `MCP_SERVERS_JSON` 声明了宿主参数（`platformConstraints.mcpServers[].hostArguments`），
+  卡片下方出现「平台参数」输入框（`McpArgumentFields.tsx`、`mcpArgumentHelpers.ts`），写入 `mcpServers[i].toolArguments`：
+  清空即删键、全空删整个对象；原值是数字或布尔时按原类型保存。草稿里有而当前未声明的键显示为「已保留」行、只能移除，
+  `toolArguments.<key>` 的错误挂在该行；`toolArguments` 不是对象时该区暂停。模型看不到这些参数，
+  工具要求而留空时该工具在对话中不可用。审批卡显示的就是实际发出的参数，不单独标注哪些由平台填入
+  （见 [design/mcp-per-agent-arguments.md](design/mcp-per-agent-arguments.md) §9）。
 - 「协作」分类（`DelegationFields.tsx`、`delegationHelpers.ts`）编辑 `delegation`：两组勾选，
   同组织智能体（候选即页面的智能体列表，排除正在编辑的智能体自身，非 active 的只能取消）与
   远端 A2A 智能体（候选是 `config/options` 的 `platformConstraints.remoteAgents`，只有

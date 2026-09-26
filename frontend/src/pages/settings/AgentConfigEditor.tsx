@@ -23,6 +23,8 @@ import {
   type ToolDecision,
 } from './agentHelpers';
 import { DelegationFields } from './DelegationFields';
+import { McpArgumentFields } from './McpArgumentFields';
+import { hostArgumentsFor, setToolArgument, toolArgumentsIssue, toolArgumentsOf } from './mcpArgumentHelpers';
 import {
   delegationMaxItems,
   delegationOf,
@@ -295,7 +297,7 @@ function ToolPolicyFields({ config, value, onChange, errors, disabled, tools }: 
   );
 }
 
-function McpFields({ config, value, onChange, errors, disabled, mcpServers }: SectionProps & { mcpServers: CatalogState<McpServerItem> }) {
+function McpFields({ config, value, onChange, errors, disabled, mcpServers, platformConstraints }: SectionProps & { mcpServers: CatalogState<McpServerItem>; platformConstraints?: Record<string, unknown> }) {
   const entries = mcpEntriesOf(config);
   const knownIds = new Set(mcpServers.items.map(serverIdOf));
   const stale = entries.filter((entry) => !knownIds.has(entry.serverId));
@@ -353,6 +355,18 @@ function McpFields({ config, value, onChange, errors, disabled, mcpServers }: Se
                       );
                     }) : <p className={s.hint}>拿不到实时工具列表：已开放的工具保留在 JSON 里，但无法开放新工具。</p>}
                   </div>
+                ) : null}
+                {selected ? (
+                  <McpArgumentFields
+                    serverId={id}
+                    entryIndex={entry?.index ?? 0}
+                    declared={hostArgumentsFor(platformConstraints, id)}
+                    current={toolArgumentsOf(config, id)}
+                    issue={toolArgumentsIssue(config, id)}
+                    errors={errors}
+                    disabled={disabled}
+                    onChange={(name, next) => commitConfig(value, onChange, (current) => setToolArgument(current, id, name, next))}
+                  />
                 ) : null}
                 <FieldError message={errorFor(errors, `mcpServers[${entry?.index ?? 0}]`)} />
               </fieldset>
@@ -421,7 +435,7 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
       {section === 'basic' ? <BasicFields config={config} value={value} onChange={onChange} errors={errors} disabled={disabled} /> : null}
       {section === 'model' ? <ModelFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('modelPolicy')} models={models} /> : null}
       {section === 'tools' ? <ToolPolicyFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('toolPolicy')} tools={tools} /> : null}
-      {section === 'mcp' ? <McpFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('mcpServers')} mcpServers={mcpServers} /> : null}
+      {section === 'mcp' ? <McpFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('mcpServers')} mcpServers={mcpServers} platformConstraints={options?.platformConstraints} /> : null}
       {section === 'delegation' ? (
         <DelegationFields
           {...delegationOf(config)}

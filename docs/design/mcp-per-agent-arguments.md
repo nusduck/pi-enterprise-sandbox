@@ -167,7 +167,7 @@ execute: async (modelArgs, exec) => {
 
 - `tools/pre-execute` 与账本的 `started/ended` 目前拿的是 `exec.arguments`（模型参数）。对 MCP 工具，
   改为 `mergeHostArguments(...)` 的结果：
-  - 审批卡显示的是会发给 MCP 的完整参数，宿主参数带「平台填入」标记（前端据 `hostArgumentKeys` 字段渲染）；
+  - 审批卡显示的是会发给 MCP 的完整参数（不单独标注宿主参数，见 §9）；
   - 审批的参数摘要（digest）按合并后的参数计算。AgentVersion 在 Run 内钉死，所以恢复/重放时合并结果不变，
     与现有「同一 callId + 同一 digest 才放行」的语义一致。
 - 结构化日志与账本都不需要脱敏宿主参数：它们按 D1 的约束不是密钥。
@@ -189,7 +189,7 @@ execute: async (modelArgs, exec) => {
 | `agent/src/application/agent-config-validator.ts` / `infrastructure/dsh/agent-version-bindings.ts` | 保存期与 Run 启动期校验；授权投影带上宿主值 |
 | `agent/src/runtime/policy/install.ts`（或同层新模块） | Run 作用域注册影子定义、缺值隐藏、审批/账本改用合并参数 |
 | `api-server/` | 无改动（配置与 options 已有转发） |
-| `frontend/` | MCP 分类里的宿主参数输入框；审批卡的「平台填入」标记 |
+| `frontend/` | MCP 分类里的宿主参数输入框（审批卡不另做标记，见 §9） |
 
 ---
 
@@ -235,7 +235,7 @@ execute: async (modelArgs, exec) => {
 2. **登记表**：`hostArguments` 解析与启动期校验；`.env.example`、`deployment.md` 同步。
 3. **配置**：`toolArguments` 解析、保存期诊断、`bindAgentVersionConfig` 投影、`fieldSupport` 与 options。
 4. **运行期**：影子注册、缺值隐藏、合并执行、审批与账本改用合并参数；`boot.test.ts` 证明装配生效。
-5. **前端**：MCP 分类输入框、审批卡标记。
+5. **前端**：MCP 分类输入框（审批卡不另做标记，见 §9）。
 6. **文档**：`architecture.md`（MCP 一节）、`api.md`（config 字段表）、`deployment.md`、`webui.md`、`CHANGELOG.md`。
 
 ---
@@ -263,11 +263,15 @@ execute: async (modelArgs, exec) => {
   2. 让模型在参数里写 `kb_id=finance`（提示注入式要求）→ A 的调用仍发出 `hr`；
   3. 请求里的工具 schema（模型最终请求为证）不含 `kb_id`；
   4. A 清空 `kb_id` 且该参数必填 → 对话中该工具不可见，调用不会发出；
-  5. 该工具设为需审批 → 审批卡显示 `kb_id=hr（平台填入）`，批准后账本记录的参数与 Server 收到的一致；
+  5. 该工具设为需审批 → 审批卡显示的参数含 `kb_id=hr`，批准后账本记录的参数与 Server 收到的一致；
   6. 跨租户读取该 Run → 404。
 
 ## 9. 待决问题
 
+- **审批卡不做「平台填入」标记，也不让审批人填写或修改宿主参数**（2026-09-26 决定，取代 D5 中的标记）：宿主参数是
+  管理员在智能体配置里定的值，不是模型的决定，审批人对它没有要判断的东西。审批记录、审批 digest 与工具账本
+  仍然记录实际发出的参数（含宿主值）——digest 必须与真实调用一致，审计要能看出查的是哪个知识库，审批人
+  看到配置错了也能直接拒绝。
 - 智能问答平台的真实工具签名：宿主参数是否都在 `inputSchema.properties` 顶层、是否必填、有无密钥类参数。
 - 是否需要按用户变化的参数（例如当前用户 ID 透传给平台做数据权限）。若需要，另立设计：值来自服务端解析的身份，
   不来自 AgentVersion，也不能由模型提供。

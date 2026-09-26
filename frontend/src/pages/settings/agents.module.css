@@ -226,3 +226,11 @@
 .delegRow code { font-size: 12px; color: var(--color-text-muted); }
 .delegDesc { flex: 1 1 200px; min-width: 0; color: var(--color-text-muted); font-size: 12.5px; }
 .delegError { flex-basis: 100%; padding-left: 24px; }
+/* MCP 平台参数 (host arguments) */
+.hostArgs { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 2px 24px; padding-top: 8px; border-top: 1px dashed var(--color-border); font-size: 13px; }
+.hostArgRow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.hostArgRow > span { min-width: 88px; color: var(--color-text-muted); }
+.hostArgRow code { font-size: 12px; color: var(--color-text-muted); }
+.hostArgRow input { flex: 1 1 180px; min-width: 0; }
+.hostArgError { flex-basis: 100%; }
+.linkBtn { border: 0; background: none; padding: 0; color: var(--color-accent-text, var(--color-text)); text-decoration: underline; cursor: pointer; font-size: 12px; }
