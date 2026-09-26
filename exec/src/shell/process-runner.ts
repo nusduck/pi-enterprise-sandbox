@@ -26,7 +26,7 @@
 import { type ChildProcess } from 'node:child_process';
 import { buildIsolationProfile } from '../isolation/build.js';
 import { spawnLaunch } from '../isolation/bubblewrap.js';
-import type { IsolationProfile, NetworkMode, ResourceLimitPlan } from '../isolation/profile.js';
+import type { IsolationProfile, ResourceLimitPlan } from '../isolation/profile.js';
 import type { SandboxMode, WorkspaceContext } from '../types.js';
 import { fuseDeadline } from './deadline.js';
 import {
@@ -64,7 +64,6 @@ export interface SpawnTarget {
   readonly cwdScope?: 'workspace' | 'temp' | 'skill-draft' | undefined;
   /** 已经过 `safe-env.ts` 洗过的环境变量表。 */
   readonly envOverrides: Readonly<Record<string, string>>;
-  readonly networkMode?: NetworkMode | undefined;
   readonly maxProcessCount?: number;
   /** 命名空间内部的其余 rlimit（NOFILE / CPU / FSIZE / AS）。 */
   readonly rlimits?: ResourceLimitPlan | undefined;
@@ -86,7 +85,6 @@ function buildProfile(target: SpawnTarget): IsolationProfile {
     envOverrides: target.envOverrides,
     ...(target.relativeCwd !== undefined ? { relativeCwd: target.relativeCwd } : {}),
     ...(target.cwdScope !== undefined ? { cwdScope: target.cwdScope } : {}),
-    ...(target.networkMode !== undefined ? { networkMode: target.networkMode } : {}),
     ...(target.maxProcessCount !== undefined ? { maxProcessCount: target.maxProcessCount } : {}),
     ...(target.rlimits !== undefined ? { rlimits: target.rlimits } : {}),
     ...(target.uid !== undefined ? { uid: target.uid } : {}),
