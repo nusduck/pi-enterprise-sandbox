@@ -26,8 +26,8 @@ bind-mount 进 bwrap，并把连接参数与口令注入子进程环境。子进
 sed -n 259,290p exec/src/isolation/build.ts
 grep -n "unshare-net" exec/src/isolation/render.ts
 
-# SANDBOX_NETWORK_MODE 在 exec 的 TS 源码里没有读取方：networkMode 没有调用方传值，恒为 disabled
-grep -rn "networkMode" exec/src --include='*.ts' | grep -v test
+# （2026-09-26 时）SANDBOX_NETWORK_MODE 在 exec 的 TS 源码里没有读取方，恒为 disabled；
+# 之后该变量与 allowlist/unrestricted 分支已删除，子进程无条件 --unshare-net
 
 # 现有的 env 注入通道：SANDBOX_EXEC_ENV_<NAME> 透传；拒绝清单按子串 PASSWORD 等拦截，
 # 但 .env.example 的示例用 *_DB_PWD，不含这些子串，明文口令可以直接进子进程
@@ -248,5 +248,5 @@ exec 返回 `DATA_SOURCE_UNAVAILABLE`。
 - ~~业务库是否强制 TLS~~ —— 已定（2026-09-26）：不强制。转发器保持纯字节转发，不做出口 TLS。
 - ~~DBPM 口令是否轮换~~ —— 已定（2026-09-26）：不轮换。exec 启动时取一次；万一人工改口令，重启 exec。
 - 单个数据源取密失败时，exec 是继续启动（本稿默认）还是拒绝启动。
-- `SANDBOX_NETWORK_MODE` 未接线（§1）属于文档与代码漂移，与本设计无关，另开 PR 处理：
-  要么接线并按生产约束拒绝非 `disabled`，要么从文档与 Compose 中删除。
+- ~~`SANDBOX_NETWORK_MODE` 未接线~~ —— 已定（2026-09-26）：删除该变量与 allowlist/unrestricted 分支，
+  子进程无条件断网（单独 PR）。

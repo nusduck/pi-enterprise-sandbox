@@ -228,25 +228,6 @@ test('[py: test_bwrap_can_start_process_in_persistent_temp] relative cwd in the 
   }
 });
 
-test('[py: test_bwrap_rejects_unknown_network_mode] unsupported network mode is rejected before any argv is built', async () => {
-  const ws = await makeTestWorkspace();
-  try {
-    assert.throws(
-      () =>
-        buildIsolationProfile({
-          context: ws.context,
-          mode: 'workspace-write',
-          command: ['bash', '-c', 'echo ok'],
-          // @ts-expect-error deliberately invalid
-          networkMode: 'open-everything',
-        }),
-      IsolationConfigError,
-    );
-  } finally {
-    await ws.cleanup();
-  }
-});
-
 test('[py: test_bwrap_never_inherits_host_secret_environment] build.ts never autonomously pulls process.env into the profile (see report: the allowlist/denylist gate itself is a W2 gap)', async () => {
   const ws = await makeTestWorkspace();
   const previous = process.env['SANDBOX_API_TOKEN'];

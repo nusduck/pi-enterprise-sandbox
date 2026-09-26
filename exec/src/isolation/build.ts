@@ -25,7 +25,6 @@ import {
   IsolationConfigError,
   type IsolationProfile,
   type Mount,
-  type NetworkMode,
   type ResourceLimitPlan,
 } from './profile.js';
 
@@ -114,8 +113,6 @@ export interface BuildProfileInput {
   /** 默认 `"workspace"`。 */
   readonly cwdScope?: 'workspace' | 'temp' | 'skill-draft';
   readonly envOverrides?: Readonly<Record<string, string>>;
-  /** 默认 `"disabled"`（fail-closed：空 netns）。 */
-  readonly networkMode?: NetworkMode;
   /** 默认 `true`。 */
   readonly dieWithParent?: boolean;
   /** 默认 `false`。 */
@@ -287,14 +284,13 @@ function buildHomeMounts(ctx: WorkspaceContext, tempWritable: boolean): Mount[] 
   }));
 }
 
-const NETWORK_MODES: readonly NetworkMode[] = ['disabled', 'allowlist', 'unrestricted'];
-
+/**
+ * 执行子进程**总是** `--unshare-net`（空网络命名空间，只有 lo）。没有「开网络」的模式：
+ * `SANDBOX_NETWORK_MODE` 在 TS exec 里从来没有读取方（2026-09-26 核实），留着的
+ * allowlist/unrestricted 分支只会让人以为能开。需要连业务库走数据源的 unix socket
+ * 转发（design `sandbox-data-sources.md`），不开网络。
+ */
 export function buildIsolationProfile(input: BuildProfileInput): IsolationProfile {
-  const networkMode = input.networkMode ?? 'disabled';
-  if (!NETWORK_MODES.includes(networkMode)) {
-    throw new IsolationConfigError(`Unsupported sandbox network mode: ${JSON.stringify(networkMode)}`);
-  }
-
   const ctx = input.context;
   const cwdScope = input.cwdScope ?? 'workspace';
   const cwd = logicalCwd(input.relativeCwd ?? '.', cwdScope);
@@ -317,7 +313,7 @@ export function buildIsolationProfile(input: BuildProfileInput): IsolationProfil
 
   return {
     namespace: {
-      namespaces: networkMode === 'disabled' ? ['user', 'pid', 'ipc', 'uts', 'net'] : ['user', 'pid', 'ipc', 'uts'],
+      namespaces: ['user', 'pid', 'ipc', 'uts', 'net'],
       uid,
       gid,
       asPid1: input.asPid1 ?? false,
