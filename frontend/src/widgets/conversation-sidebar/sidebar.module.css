@@ -153,7 +153,6 @@
   color: var(--tag);
   background: color-mix(in srgb, var(--tag) 14%, transparent);
 }
-.conv:hover .tag { display: none; }
 .t0 { --tag: var(--agent-tone-0); }
 .t1 { --tag: var(--agent-tone-1); }
 .t2 { --tag: var(--agent-tone-2); }
