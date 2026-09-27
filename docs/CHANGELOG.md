@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   由 AgentVersion 配置 `delegation.remoteAgents` 授权，缺省不可调用；出站只发往卡片同源、有超时与响应上限。
   见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。
 
+### Removed
+
+- `SANDBOX_NETWORK_MODE` 及执行隔离层的 `allowlist` / `unrestricted` 分支：TS exec 从未读取该变量，执行子进程一直是
+  `--unshare-net`；文档里「开发可设 `unrestricted`」从未生效。现在把「子进程始终断网」写成事实，连业务库请用数据源。
+  已设置该变量的 `.env` 不受影响（被忽略）。
+
 ### Fixed
 
 - **管理端运行列表区分同一会话的多轮**：此前每行只显示会话标题，同一会话的几次运行看起来像重复记录；现在主文字是

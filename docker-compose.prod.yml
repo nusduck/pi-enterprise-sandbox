@@ -186,9 +186,6 @@ services:
       SANDBOX_MCP_INTERNAL_TOKEN: ${SANDBOX_MCP_INTERNAL_TOKEN:?Set SANDBOX_MCP_INTERNAL_TOKEN for production}
       # /internal/v1/* 来源白名单：空值拒绝全部内部面请求，因此生产必填；不得是 0.0.0.0/0 / ::/0。
       EXEC_INTERNAL_ALLOW_CIDR: ${EXEC_INTERNAL_ALLOW_CIDR:?Set EXEC_INTERNAL_ALLOW_CIDR for production (measured Agent/Worker source CIDRs)}
-      # Execution policy: disabled only (Bubblewrap --unshare-net). allowlist is
-      # fail-closed in production until a real per-child egress proxy exists.
-      SANDBOX_NETWORK_MODE: disabled
       SANDBOX_POLICY_PROFILE: strict
       SANDBOX_ISOLATION_BACKEND: bubblewrap
       SANDBOX_ISOLATION_REQUIRED: "true"
