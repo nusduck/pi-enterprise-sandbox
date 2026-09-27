@@ -23,6 +23,14 @@ import {
   type ToolDecision,
 } from './agentHelpers';
 import { DelegationFields } from './DelegationFields';
+import { DataSourceFields } from './DataSourceFields';
+import {
+  dataSourceCandidates,
+  dataSourcesMaxItems,
+  dataSourcesOf,
+  dataSourceStructureIssues,
+  setDataSources,
+} from './dataSourceHelpers';
 import { McpArgumentFields } from './McpArgumentFields';
 import { hostArgumentsFor, setToolArgument, toolArgumentsIssue, toolArgumentsOf } from './mcpArgumentHelpers';
 import {
@@ -38,7 +46,7 @@ import s from './agents.module.css';
 export type { CatalogState };
 
 /** Which part of the configuration the editor shows (one tab at a time). */
-export type EditorSection = 'basic' | 'model' | 'tools' | 'mcp' | 'delegation' | 'json';
+export type EditorSection = 'basic' | 'model' | 'tools' | 'mcp' | 'delegation' | 'dataSources' | 'json';
 
 export type AgentConfigEditorProps = {
   section: EditorSection;
@@ -394,7 +402,9 @@ function McpFields({ config, value, onChange, errors, disabled, mcpServers, plat
 export function AgentConfigEditor({ section, value, onChange, models, tools, mcpServers, agents, selfName, options, errors, disabled = false }: AgentConfigEditorProps) {
   const parsed = parseAgentConfigDraft(value);
   const config = parsed.ok ? parsed.config : null;
-  const issues = config ? [...structuredEditorIssues(config), ...delegationStructureIssues(config)] : [];
+  const issues = config
+    ? [...structuredEditorIssues(config), ...delegationStructureIssues(config), ...dataSourceStructureIssues(config)]
+    : [];
   const paused = (prefix: string) => disabled || issues.some((issue) => issue.startsWith(prefix));
 
   if (section === 'json') {
@@ -451,6 +461,20 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
           errors={errors}
           disabled={paused('delegation')}
           onChange={(field, next) => commitConfig(value, onChange, (current) => setDelegationList(current, field, next))}
+        />
+      ) : null}
+      {section === 'dataSources' ? (
+        <DataSourceFields
+          selected={dataSourcesOf(config)}
+          candidates={{
+            items: dataSourceCandidates(options?.platformConstraints),
+            available: options != null,
+            error: options ? null : '配置能力读取失败',
+          }}
+          max={dataSourcesMaxItems(options?.fieldSupport)}
+          errors={errors}
+          disabled={paused('dataSources')}
+          onChange={(next) => commitConfig(value, onChange, (current) => setDataSources(current, next))}
         />
       ) : null}
     </div>

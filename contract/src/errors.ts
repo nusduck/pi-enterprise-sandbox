@@ -32,6 +32,8 @@ export { FsError };
  *                         （design §3.3：拒绝并报出，不静默丢弃）
  * - `SKILL_STORE_UNAVAILABLE`   用户 Skill 存储不可读（挂载掉线、权限、未配置），
  *                         不能当成「没有 Skill」放行
+ * - `DATA_SOURCE_UNKNOWN` 清单点名的数据源不在 exec 的目录里（配置漂移或伪造），拒绝执行
+ * - `DATA_SOURCE_UNAVAILABLE` 数据源已登记，但启动时取密失败或转发通道建不起来
  * - `INTERNAL_ERROR`      未归类的兜底错误（不应该常态出现；出现说明调用
  *                         方抛出的不是 FsError / ContractError，需要补分类）
  */
@@ -43,6 +45,8 @@ export type TransportErrorCode =
   | 'WORKSPACE_NOT_FOUND'
   | 'SKILL_PACKAGE_UNAVAILABLE'
   | 'SKILL_STORE_UNAVAILABLE'
+  | 'DATA_SOURCE_UNKNOWN'
+  | 'DATA_SOURCE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 /** 契约错误码 = DSH 的 `FS_*` 错误码 ∪ 我们自己的传输层错误码。 */

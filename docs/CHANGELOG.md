@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 数据源：模型可在沙箱里连接业务库做数据分析。运维在 `SANDBOX_DATA_SOURCES_JSON` 登记库（口令由 exec
+  启动时向 DBPM 取），管理员在智能体设置页新增的「数据源」分类里按智能体勾选（AgentVersion `dataSources`）。
+  沙箱子进程仍然断网，只经 exec 为每次执行建的 unix socket 连到登记的地址；输出里的口令替换为 `***`，
+  每个连接记审计日志。生产环境不再接受经 `SANDBOX_EXEC_ENV_*` 注入的数据库口令（`*_PWD`、带口令的 DSN），
+  exec 拒绝启动。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md)。
+
 - **同一 MCP 按智能体填参数**：运维在 `MCP_SERVERS_JSON` 条目里声明 `hostArguments`（例如知识库 ID），管理员在智能体配置
   `mcpServers[i].toolArguments` 里给值；模型看不到也改不了这些参数，审批与工具账本记录实际发出的参数，必填而未配值的工具在该智能体里不可用。
 - **智能体「协作」配置**：智能体设置页新增「协作」tab，勾选本智能体可委派的同组织智能体与已登记的远端 A2A
