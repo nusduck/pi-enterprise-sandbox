@@ -102,11 +102,11 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 **`/admin/agents`（仅 admin）** — `pages/settings/AgentsPage.tsx`，管理控制台的「智能体」。
 左侧是 org 内的智能体列表（有未保存草稿的显示黄点）与「新建智能体」，右侧是一个编辑器：
 顶部固定栏显示「编辑基于 vN」、未保存标记、校验状态和「放弃修改 / 仅保存为新版本 / 保存并启用」，
-下方按「基本信息 / 模型 / 工具权限 / MCP / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
+下方按「基本信息 / 模型 / 工具权限 / MCP / 协作 / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
 参数一次只渲染一类，样式在 `agents.module.css`）。工具权限按类别分组（`groupToolsForPermissions`），
 每个工具是「继承 / 允许 / 审批 / 禁止」四段选择，可只看已覆盖项；新建智能体复用同一个编辑器。
 顶栏显示「N 处未保存修改」（`configDiff`：草稿与启用版本逐字段比较，键顺序不算修改，空对象不算叶子），
-保存按钮写出目标版本号（「仅保存为 v4 / 保存并启用 v4」）；「工具权限」「MCP」tab 上显示覆盖工具数与所选服务数；
+保存按钮写出目标版本号（「仅保存为 v4 / 保存并启用 v4」）；「工具权限」「MCP」「协作」tab 上显示覆盖工具数、所选服务数与委派对象数；
 版本历史顶部列出「vN → 草稿」的逐字段差异（− 旧值 / + 新值）。版本行显示创建时间；创建者接口未返回，暂不显示。
 
 - 页面反复说明的一件事是**保存 = 建新版本**：`agent_versions` 不可变，编辑配置
@@ -117,7 +117,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 - 「回滚」不是一个单独功能，就是在版本历史里激活一个旧版本——无需数据修复。
 - 配置编辑器的结构化分页和「JSON」页写入同一份草稿，结构化控件
   只修改它负责的字段，未知字段、旧字段和旧格式仍留在 JSON 中。`modelPolicy`、
-  `toolPolicy` 与 `mcpServers` 的形状不合法时，结构化控件暂停，避免一次点击把
+  `toolPolicy`、`mcpServers` 与 `delegation` 的形状不合法时，结构化控件暂停，避免一次点击把
   无法理解的配置覆盖掉；当前能力目录不可达时保留已知草稿值，并阻止依赖该目录
   的发布。平台管理的 `skills`、`extensions`、`sandboxPolicy` 与 `a2a` 只显示
   为继承状态，不提供保存后不会影响运行时的假开关。
@@ -134,6 +134,19 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   依赖它的修改，不渲染成"零授权"。草稿里启用了、但当前目录已经没有的 MCP 工具仍
   会渲染成一行并标注「当前目录中已没有」，否则那条
   `mcpServers[i].enabledTools[j]` 的错误就没有可以落脚的控件。
+- MCP 分类里，已选中的 Server 若在 `MCP_SERVERS_JSON` 声明了宿主参数（`platformConstraints.mcpServers[].hostArguments`），
+  卡片下方出现「平台参数」输入框（`McpArgumentFields.tsx`、`mcpArgumentHelpers.ts`），写入 `mcpServers[i].toolArguments`：
+  清空即删键、全空删整个对象；原值是数字或布尔时按原类型保存。草稿里有而当前未声明的键显示为「已保留」行、只能移除，
+  `toolArguments.<key>` 的错误挂在该行；`toolArguments` 不是对象时该区暂停。模型看不到这些参数，
+  工具要求而留空时该工具在对话中不可用。审批卡显示的就是实际发出的参数，不单独标注哪些由平台填入
+  （见 [design/mcp-per-agent-arguments.md](design/mcp-per-agent-arguments.md) §9）。
+- 「协作」分类（`DelegationFields.tsx`、`delegationHelpers.ts`）编辑 `delegation`：两组勾选，
+  同组织智能体（候选即页面的智能体列表，排除正在编辑的智能体自身，非 active 的只能取消）与
+  远端 A2A 智能体（候选是 `config/options` 的 `platformConstraints.remoteAgents`，只有
+  id / 名称 / 描述，固定标「需审批」）。每行的描述就是进模型系统提示的文本。新勾选追加到末尾，
+  清空的名单删子键、全空删整个 `delegation`；草稿里有而候选里没有的名字显示为「已保留」行，只能
+  移除，`delegation.<key>[i]` 的错误挂在该行。远端清单只能由运维在 `A2A_REMOTE_AGENTS_JSON`
+  登记，页面不提供登记入口。设计见 [design/agent-delegation-config-ui.md](design/agent-delegation-config-ui.md)。
 - Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
   是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为「不支持」，
   要求改掉后才能发布，不静默降级到别的档位。

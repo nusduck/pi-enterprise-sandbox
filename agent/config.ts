@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadToolRiskPolicy } from './src/infrastructure/dsh/tool-risk-policy.js';
 import { parseRemoteAgentRegistry } from './src/runtime/providers/a2a-remote-registry.js';
+import { readHostArgumentDeclarations } from './src/domain/agent/mcp-host-arguments.js';
 import { resolveSkillRoots } from './src/skills/manager.js';
 import { primarySkillRoot, DEFAULT_SKILL_ROOTS } from './src/skills/paths.js';
 import {
@@ -338,6 +339,9 @@ function resolveMcpServers(env = process.env) {
   try {
     const parsed = JSON.parse(env.MCP_SERVERS_JSON);
     if (!Array.isArray(parsed)) throw new Error('must be an array');
+    // hostArguments（docs/design/mcp-per-agent-arguments.md D1）：声明非法即拒绝启动，
+    // 不留到第一次 Run 装配时才发现。
+    readHostArgumentDeclarations(parsed);
     return parsed;
   } catch (error) {
     throw new Error(`Invalid MCP_SERVERS_JSON: ${error.message}`);

@@ -264,3 +264,51 @@ describe('AgentConfigValidator delegation.remoteAgents (a2a-remote-delegation.md
     assert.equal(result.valid, false);
   });
 });
+
+describe('AgentConfigValidator mcpServers[].toolArguments (docs/design/mcp-per-agent-arguments.md D2)', () => {
+  const PLATFORM = [{ serverId: 'qa', tools: ['ask'] }];
+  const DECLARED = new Map([['qa', { kb_id: { description: '知识库 ID' } }]]);
+  const qa = (toolArguments) => ({
+    schemaVersion: 1,
+    mcpServers: [{ serverId: 'qa', enabledTools: ['ask'], toolArguments }],
+  });
+
+  it('accepts declared values and keeps them in the normalized config', () => {
+    const result = validator({ mcpServers: PLATFORM, hostArguments: DECLARED }).validate(qa({ kb_id: 'hr' }));
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.normalizedConfig?.mcpServers?.[0]?.toolArguments, { kb_id: 'hr' });
+  });
+
+  it('rejects undeclared keys, non-scalar values and a non-object, each at its own path', () => {
+    const result = validator({ mcpServers: PLATFORM, hostArguments: DECLARED })
+      .validate(qa({ kb_id: ['hr'], app_id: 'x' }));
+    assert.equal(result.valid, false);
+    assert.deepEqual(result.errors.map((e) => `${e.path}:${e.code}`), [
+      'mcpServers[0].toolArguments.kb_id:MCP_ARGUMENT_INVALID',
+      'mcpServers[0].toolArguments.app_id:MCP_ARGUMENT_UNKNOWN',
+    ]);
+    const notObject = validator({ mcpServers: PLATFORM, hostArguments: DECLARED }).validate(qa('hr'));
+    assert.deepEqual(notObject.errors.map((e) => e.code), ['CONFIG_TYPE']);
+  });
+
+  it('fails closed when the deployment declares nothing for the server', () => {
+    const result = validator({ mcpServers: PLATFORM, hostArguments: new Map() }).validate(qa({ kb_id: 'hr' }));
+    assert.deepEqual(result.errors.map((e) => e.code), ['MCP_ARGUMENT_UNKNOWN']);
+  });
+
+  it('reads declarations from MCP_SERVERS_JSON and exposes only names and descriptions', () => {
+    const env = {
+      MCP_SERVERS_JSON: JSON.stringify([
+        { id: 'qa', url: 'https://qa.example/mcp', authTokenRef: 'QA_TOKEN', hostArguments: { kb_id: { description: '知识库 ID' } } },
+      ]),
+    };
+    const v = validator({ env, mcpServers: PLATFORM });
+    assert.deepEqual(v.validate(qa({ kb_id: 'hr' })).errors, []);
+    const options = v.options();
+    assert.deepEqual(options.platformConstraints.mcpServers, [
+      { serverId: 'qa', toolNames: ['ask'], hostArguments: [{ name: 'kb_id', description: '知识库 ID' }] },
+    ]);
+    assert.equal(JSON.stringify(options).includes('QA_TOKEN'), false);
+    assert.deepEqual(options.fieldSupport.mcpServers.fields.toolArguments, { supported: true, type: 'object' });
+  });
+});

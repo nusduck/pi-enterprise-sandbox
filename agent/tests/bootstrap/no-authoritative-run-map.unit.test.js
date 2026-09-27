@@ -218,6 +218,27 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
+    rel: 'application/agent-config-validator.ts',
+    match: /readHostArgumentDeclarations\(parsed\)\s*:\s*new\s+Map\(\)|catch\s*\{\s*return\s+new\s+Map\(\)/,
+    purpose:
+      'Host-argument declarations parsed from MCP_SERVERS_JSON for save-time validation (empty when unreadable = fail closed); deployment config, no Run facts',
+    scope: 'local',
+  },
+  {
+    rel: 'domain/agent/mcp-host-arguments.ts',
+    match: /const\s+out\s*=\s*new\s+Map<string,\s*HostArgumentSpec>\(/,
+    purpose:
+      'Pure projection of MCP_SERVERS_JSON hostArguments (serverId -> declared names); deployment config, no Run facts',
+    scope: 'local',
+  },
+  {
+    rel: 'runtime/policy/host-arguments.ts',
+    match: /const\s+(?:bound|hidden)\s*=\s*new\s+Map/,
+    purpose:
+      "One Run's host-argument shadow index (tool -> injected keys/values, tool -> missing keys); derived from the pinned AgentVersion, released with the Run scope",
+    scope: 'local',
+  },
+  {
     rel: 'runtime/providers/a2a-remote-client.ts',
     match: /readonly\s+#cards\s*=\s*new\s+Map/,
     purpose:
@@ -490,9 +511,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 2026-09-25: 35 → 36（两支合并）。`runtime/providers/a2a-remote-client.ts` 的 `#cards`：
     // 按远端 id 缓存 A2A Agent Card（5 分钟），没有任何 Run 事实。它此前写成内联
     // 对象类型的泛型，扫描正则认不出（`<[^;\n(){}]*>` 不允许 `{ ; }`），于是漏登记。
+    // 2026-09-26: 36 → 39（mcp-per-agent-arguments.md）。validator 的宿主参数声明（读不出为空 =
+    // 关闭）、domain 纯投影、每 Run 影子定义的两张索引（按钉死的 AgentVersion 推导，随 Run
+    // scope 释放）。都没有 Run 事实。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      36,
+      39,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

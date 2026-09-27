@@ -47,6 +47,7 @@ import {
   type CatalogState,
 } from './agentHelpers';
 import { AgentConfigEditor, type EditorSection } from './AgentConfigEditor';
+import { delegationOf } from './delegationHelpers';
 import { AgentValidationPanel, validationSummary } from './AgentValidationPanel';
 import { IconRefresh } from '../../shared/ui/Icons';
 import { agentTone } from '../../widgets/conversation-sidebar/sidebarModel';
@@ -96,6 +97,8 @@ export function AgentsPage() {
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [versions, setVersions] = useState<AgentVersion[]>([]);
   const [configDraft, setConfigDraft] = useState('');
+  // The agent list doubles as the delegation candidate directory.
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newConfig, setNewConfig] = useState(() => formatAgentConfig({ schemaVersion: 1 }));
@@ -204,6 +207,7 @@ export function AgentsPage() {
       if (requestId !== refreshRequestRef.current) return;
       const list = sortAgentsForDisplay(agentList);
       setAgents(list);
+      setAgentsLoaded(true);
       if (
         expectedSelectedAgentId &&
         selectedAgentIdRef.current !== expectedSelectedAgentId
@@ -532,11 +536,14 @@ export function AgentsPage() {
   const nextVersionNo = Math.max(0, ...versions.map((v) => v.version_no)) + 1;
   const overrideCount = draftConfig.ok ? Object.keys(toolDecisionsOf(draftConfig.config)).length : 0;
   const mcpCount = draftConfig.ok ? mcpEntriesOf(draftConfig.config).length : 0;
+  const delegation = draftConfig.ok ? delegationOf(draftConfig.config) : null;
+  const delegationCount = delegation ? delegation.agents.length + delegation.remoteAgents.length : 0;
   const tabs: Array<[AgentTab, string, number?]> = [
     ['basic', '基本信息'],
     ['model', '模型'],
     ['tools', '工具权限', overrideCount],
     ['mcp', 'MCP', mcpCount],
+    ['delegation', '协作', delegationCount],
     ...(creating ? [] : [['versions', '版本历史'] as [AgentTab, string]]),
     ['json', 'JSON'],
   ];
@@ -546,6 +553,8 @@ export function AgentsPage() {
     models: catalogs.models,
     tools: catalogs.tools,
     mcpServers: catalogs.mcpServers,
+    agents: { items: agents, available: agentsLoaded, loading: loading && !agentsLoaded },
+    selfName: creating ? newName : selectedAgent?.name ?? '',
     options: configOptions,
     disabled: mutating,
   };

@@ -220,6 +220,7 @@ tool call 重试会领回已建的子 Run 继续等。**待验证**：父 Run �
    `buildRunServices` 带上委派服务与白名单、系统提示追加 Delegation 段；
    `boot.test.ts` 证明插件真的装上（cordis patch 装不上不报错）。
 4. **（按需）前端**：结构化控件；如只用 Advanced JSON，则只更新 `webui.md` 说明。
+   （2026-09-26 补记：由 [`agent-delegation-config-ui.md`](agent-delegation-config-ui.md) 实现为「协作」分类。）
 5. **文档**：`architecture.md`（子 Run 一节）、`api.md`（config 字段表）、`CHANGELOG.md`。
 
 ---

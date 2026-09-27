@@ -29,6 +29,8 @@ import { DshRuntimeFactoryError } from './errors.js';
 import { waitForPendingTitle } from './session-title-grace.js';
 import { PINNED_DSH_VERSION } from './constants.js';
 import { bindAgentVersionConfig } from './agent-version-bindings.js';
+import { readHostArgumentDeclarations } from '../../domain/agent/mcp-host-arguments.js';
+import { readMcpServersFromEnv } from '../../runtime/plugins/mcp-entries.js';
 import { dshProviderRoute, reasoningEffortsForRoute } from './reasoning-efforts.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
@@ -260,6 +262,10 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
   }));
   const bootRuntime = opts.bootRuntime;
   const createAgent = opts.createAgent;
+  // 宿主参数声明：进程级、与 MCP 插件树同一份 MCP_SERVERS_JSON（启动期已校验）。
+  const hostArgumentDeclarations =
+    opts.hostArgumentDeclarations ??
+    readHostArgumentDeclarations(readMcpServersFromEnv(opts.env ?? process.env));
 
   async function ensureCtx(runtime) {
     const ctx = typeof bootRuntime === 'function'
@@ -492,6 +498,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
                 : {}
             ),
             physicalRoots: rpc.physicalRoots ?? [],
+            hostArgumentDeclarations,
             env: opts.env ?? process.env,
           });
           disposers.push(() => installed.dispose());
