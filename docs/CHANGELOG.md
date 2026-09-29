@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **会话转录接口只返回用户回合**：`GET /api/conversations/:id` 的 `messages` 不再带 assistant 行与 `thinking`
+  （前端已改由 Run 时间线渲染，转录里的那份是第二个会漂移的副本）；用户文本只读 `content_json.text`，
+  不再兼容只有完整 prompt 上下文的旧行。账本里 assistant 消息照常持久化，仅浏览器转录不再展示。
+
 - **前端消息区收敛为单一渲染路径**（PR #55 之后的清理）：助手行不再由「服务端转录 + 实时投影」两路合并，
   而是每个 Run 一行、正文完全由 `TurnStream` 从 EntityStore 渲染；`ChatState.messages` 只存用户回合。
   删除旧气泡分支（`ThinkingBlock`、转录文本/`_fileLinks` 渲染）、`projectRunMessages`、

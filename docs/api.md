@@ -334,7 +334,10 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 **一个会话绑定一个 Agent，绑定在建会话时完成，此后不可变**：换 Agent 要新建会话。
 已存在的会话即使不传 `agent_id`，后续 Run 也继续用它绑定的那个 Agent，不会回落到
 租户默认。不传 `agent_id` 建新会话时的行为与多 Agent 上线前完全一致（租户默认 Agent）。
-`GET /api/conversations{,/id}` 的响应带 `agent_id`，即该会话绑定的智能体。
+`GET /api/conversations{,/id}` 的响应带 `agent_id`，即该会话绑定的智能体。`GET /api/conversations/:id` 的
+`messages` **只含用户回合**（`role: "user"`，带 `message_id` / `run_id` / `sequence_no` / `created_at`，文本取自创建 Run 时
+落库的 `content_json.text`）；助手的文本、思考、工具一律经 `GET /api/runs/:id/events` 的时间线获得，转录里不再出现
+assistant 行或 `thinking` 字段。
 
 进程接口的事实与控制权在 exec 的 `exec_jobs`，不在 Agent。BFF 先让 Agent
 按当前浏览器身份授权 `session_id` 并取得其 `workspace_id`，再用 owner-scoped

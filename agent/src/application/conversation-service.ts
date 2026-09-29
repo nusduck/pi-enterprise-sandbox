@@ -19,10 +19,6 @@ import {
   conversationTitleFromMessages,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
-import {
-  extractAssistantTextForUi,
-  extractAssistantThinkingForUi,
-} from '../lib/event-redaction.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -66,49 +62,20 @@ function isArchived(row) {
 }
 
 /**
- * Extract display text from messages.content_json for browser transcript.
- * Skips dsh_journal_* system rows; surfaces user turns and assistant text.
+ * Present one durable Message row for the browser transcript.
+ *
+ * The transcript carries **user turns only**: assistant output (text, thinking,
+ * tools) is rendered from the Run's event timeline, so serving it here would
+ * be a second, drifting copy. Create-run always stores the current turn's
+ * canonical text in `content_json.text`.
  */
 export function presentTranscriptMessage(msg) {
   if (!msg || typeof msg !== 'object') return null;
-  const role = String(msg.role || '').toLowerCase();
-  if (role !== 'user' && role !== 'assistant') return null;
-  const messageType = String(msg.messageType || '').toLowerCase();
-  if (messageType.startsWith('dsh_journal')) return null;
-
-  const content = msg.contentJson ?? {};
-  let text = '';
-  if (typeof content === 'string') {
-    text = content;
-  } else if (content && typeof content === 'object') {
-    if (typeof content.text === 'string') {
-      text = content.text;
-    } else if (Array.isArray(content.messages)) {
-      // Legacy create-run rows only have the full prompt context. The current
-      // turn is its last user item, not the first historic item.
-      const current = [...content.messages]
-        .reverse()
-        .find((m) => m && typeof m === 'object' &&
-          (m.role === 'user' || m.role == null));
-      if (current) {
-        if (typeof current.content === 'string') text = current.content;
-        else if (Array.isArray(current.content)) {
-          text = extractAssistantTextForUi(current);
-        }
-      }
-    } else if (Array.isArray(content.content)) {
-      text = extractAssistantTextForUi(content);
-    }
-  }
-  // Empty assistant placeholders (tool-only turns) still surface as empty bubbles
-  // only when we have no text; skip pure empty assistant rows without content.
-  if (role === 'assistant' && !String(text || '').trim()) return null;
+  if (String(msg.role || '').toLowerCase() !== 'user') return null;
+  const text = msg.contentJson?.text;
+  if (typeof text !== 'string') return null;
 
   const sequenceNo = msg.sequenceNo;
-  const thinking =
-    content && typeof content === 'object' && typeof content.thinking === 'string'
-      ? content.thinking
-      : '';
   return {
     // Keep the durable message identity and ordering fields intact.  The
     // browser transcript is a projection of the append-only messages table,
@@ -118,28 +85,13 @@ export function presentTranscriptMessage(msg) {
     id: msg.messageId || null,
     message_id: msg.messageId || null,
     run_id: msg.runId || null,
-    role,
-    content: [{ type: 'text', text: String(text || '') }],
+    role: 'user',
+    content: [{ type: 'text', text }],
     sequence_no: sequenceNo != null && Number.isFinite(Number(sequenceNo))
       ? Number(sequenceNo)
       : null,
     created_at: msg.createdAt || null,
-    ...(thinking.trim() ? { thinking } : {}),
   };
-}
-
-function thinkingByJournalEntryId(messages: Record<string, any>[] = []) {
-  const map = new Map<string, string>();
-  for (const msg of messages) {
-    const content = msg?.contentJson;
-    if (!content || content.kind !== 'session_journal_entry') continue;
-    const entry = content.entry;
-    const id = typeof entry?.id === 'string' ? entry.id : '';
-    if (!id) continue;
-    const thinking = extractAssistantThinkingForUi(entry.message);
-    if (thinking) map.set(id, thinking);
-  }
-  return map;
 }
 
 /**
@@ -154,17 +106,8 @@ function thinkingByJournalEntryId(messages: Record<string, any>[] = []) {
  * @param [session]
  */
 export function presentConversation(row: Record<string, any>, messages: Record<string, any>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null } | null = null) {
-  const journalThinking = thinkingByJournalEntryId(messages);
   const transcript = Array.isArray(messages)
-    ? messages.map((msg) => {
-      const presented = presentTranscriptMessage(msg);
-      if (!presented || presented.role !== 'assistant' || presented.thinking) {
-        return presented;
-      }
-      const sessionEntryId = msg?.contentJson?.sessionEntryId;
-      const thinking = typeof sessionEntryId === 'string' ? journalThinking.get(sessionEntryId) : '';
-      return thinking ? { ...presented, thinking } : presented;
-    }).filter(Boolean)
+    ? messages.map(presentTranscriptMessage).filter(Boolean)
     : [];
   const agentSessionId =
     session?.agentSessionId ?? row.currentAgentSessionId ?? null;
