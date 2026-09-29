@@ -65,8 +65,7 @@ frontend/
 
 ### 状态管理
 
-Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、Approval、Artifact、trace 和
-AgentSession 都由 `platformEventNormalize -> runReducer` 单次归约。`ChatState` 不含 `currentMsg`、
+Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、Approval、Artifact 和 trace 都由 `platformEventNormalize -> runReducer` 单次归约。`ChatState` 不含 `currentMsg`、
 `pendingTool`、`pendingApproval` 或 `readyFiles`，只保存服务端历史快照、选择状态、上传草稿、布局、
 认证与 transport 控制。`activeRunId` 直接从 EntityStore 读取，不维护 React 镜像 state。
 
@@ -296,7 +295,7 @@ sendMessage(text)
   ├── GET /api/runs/:run_id/events（支持 sequence 续传）
   │     ↓ SSE (sse.readSSEStream)
   │     platformEventNormalize -> RuntimeEvent -> runReducer -> EntityStore
-  │       run.accepted/started/trace   → Run + AgentSession 关系
+  │       run.accepted/started/…       → Run 生命周期与身份（agentSessionId / conversationId）
   │       message.delta/completed      → MessageEntity
   │       tool.execution.* / approval.* / artifact.ready → 对应规范化实体
   │       run.completed/failed/cancelled → 终态

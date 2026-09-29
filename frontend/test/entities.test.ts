@@ -105,20 +105,8 @@ describe('run event reducer', () => {
     r = reduceRuntimeEvent(
       s,
       ev({
-        event_id: 'e3',
-        sequence: 3,
-        run_id: 'run_a',
-        type: 'message.started',
-        payload: { message_id: 'm1', role: 'assistant' },
-      }),
-    );
-    s = r.store;
-
-    r = reduceRuntimeEvent(
-      s,
-      ev({
         event_id: 'e4',
-        sequence: 4,
+        sequence: 3,
         run_id: 'run_a',
         type: 'message.delta',
         payload: { message_id: 'm1', text: 'Hello' },
@@ -131,7 +119,7 @@ describe('run event reducer', () => {
       s,
       ev({
         event_id: 'e5',
-        sequence: 5,
+        sequence: 4,
         run_id: 'run_a',
         type: 'message.delta',
         payload: { message_id: 'm1', text: ' world' },
@@ -148,7 +136,7 @@ describe('run event reducer', () => {
       s,
       ev({
         event_id: 'e6',
-        sequence: 6,
+        sequence: 5,
         run_id: 'run_a',
         type: 'run.completed',
       }),

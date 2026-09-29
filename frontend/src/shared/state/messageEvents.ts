@@ -49,30 +49,6 @@ export function reduceMessageEvent(
   let next = store;
 
   switch (ev.type) {
-    case 'message.started': {
-      // Default assistant only when role is omitted; never mint chat rows for toolResult.
-      const startedRole = normalizeChatMessageRole(
-        payload.role == null || payload.role === '' ? 'assistant' : payload.role,
-      );
-      if (!startedRole) break;
-      const messageId = str(payload.message_id || payload.id, `msg_${runId}_${seq}`);
-      const existing = next.messagesById[messageId];
-      next = upsertMessage(
-        next,
-        createMessage({
-          id: messageId,
-          runId,
-          conversationId: next.runsById[runId]?.conversationId || null,
-          role: startedRole,
-          text: str(payload.text),
-          status: 'streaming',
-          seq: existing?.seq ?? seq,
-          createdAt: ts,
-        }),
-      );
-      break;
-    }
-
     case 'message.delta': {
       // Deltas are model tokens only. toolResult never streams deltas, but if a
       // bad envelope appears, do not append tool JSON onto an assistant bubble.

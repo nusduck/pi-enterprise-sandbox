@@ -54,22 +54,15 @@ describe('stream preview preservation and truncation normalization', () => {
     const { store } = reducePlatformEventBatch(createEntityStore(), [
       platform({ eventId: 'p_1', sequence: 1, type: 'run.started', runId }),
       platform({
-        eventId: 'p_2',
-        sequence: 2,
-        type: 'message.created',
-        runId,
-        data: { messageId: 'msg_stream', role: 'assistant' },
-      }),
-      platform({
         eventId: 'p_3',
-        sequence: 3,
+        sequence: 2,
         type: 'message.delta',
         runId,
         data: { messageId: 'msg_stream', delta: fullText },
       }),
       platform({
         eventId: 'p_4',
-        sequence: 4,
+        sequence: 3,
         type: 'message.completed',
         runId,
         data: {

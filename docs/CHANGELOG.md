@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **前端再清两处死代码**：`AgentSession` 实体（`agentSessionsById`、`createAgentSession` / `upsertAgentSession`、
+  run → session 的链接）——唯一写入方 `session.restored` 已在上一轮删除，此后只剩一个永远为空的映射；
+  以及 `message.started`（别名自 `message.created`）事件分支——agent 不发这个事件，`message.delta` 自己会建消息。
+  测试里对应的死事件帧同步删除并重排序号。行为不变。
+
 - **前端删除一批既无生产者也无读取方的死代码**：`budget-bar` 部件整体（`BudgetBar` 与其数据来源
   `run.budgetUsage/Limits/Warning`：运行详情接口不返回 `budget`，事件流也不发 `budget.*`，该条永远不渲染）、
   reducer 的 `run.task_plan_updated` / `run.compaction_updated` / `budget.*` / `session.restored` / `run.trace`
