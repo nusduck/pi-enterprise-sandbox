@@ -525,7 +525,7 @@ describe('unified platform reducer', () => {
         type: 'run.started',
       }),
     ).store;
-    // Path-only / synthetic id (adapter art_<runId>_<seq>)
+    // Path-only event: no durable artifact_id, so nothing downloadable
     s = reducePlatformEvent(
       s,
       makeRuntimeEvent({
@@ -534,7 +534,6 @@ describe('unified platform reducer', () => {
         run_id: runId,
         type: 'artifact.created',
         payload: {
-          artifact_id: `art_${runId}_2`,
           path: 'workspace/out.txt',
           name: 'out.txt',
         },
@@ -920,21 +919,21 @@ describe('refresh recovery', () => {
                 run_id: 'run_r',
                 sequence: 1,
                 event_id: 'e1',
-                type: 'tool_start',
-                payload: { id: 't1', name: 'bash', args: { command: 'pwd' } },
+                type: 'tool.execution.started',
+                payload: { toolCallId: 't1', toolName: 'bash', args: { command: 'pwd' } },
               },
               {
                 run_id: 'run_r',
                 sequence: 2,
                 event_id: 'e2',
-                type: 'tool_end',
-                payload: { id: 't1', result: '/w' },
+                type: 'tool.execution.completed',
+                payload: { toolCallId: 't1', result: '/w' },
               },
               {
                 run_id: 'run_r',
                 sequence: 3,
                 event_id: 'e3',
-                type: 'file_ready',
+                type: 'artifact.ready',
                 payload: { artifact_id: 'a1', name: 'x.md' },
               },
             ],

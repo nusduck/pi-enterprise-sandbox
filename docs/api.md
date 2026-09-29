@@ -18,47 +18,30 @@ DSH Enterprise Sandbox API 分层：
 
 ## 一、SSE 事件协议
 
-API Server 通过 SSE (`text/event-stream`) 推送以下事件类型：
+浏览器只消费 **平台事件**：`GET /api/runs/{run_id}/events`（以及会话级事件回放）返回的每一帧都是 BFF 转发的
+Agent 事件信封，类型为点分名称，并带持久 `sequence` 与 `event_id`：
 
-| 事件 | 字段 | 说明 |
-|------|------|------|
-| `trace` | `{ trace_id }` | 端到端追踪 ID（BFF/Agent 入口） |
-| `session` | `{ session_id, workspace_id, conversation_id?, session_reused?, trace_id? }` | Sandbox 会话已创建/复用（公共协议不暴露物理路径） |
-| `token` | `{ text: string }` | LLM 文本增量 |
-| `tool_start` | `{ id, name, args }` | 工具开始执行 |
-| `tool_end` | `{ id, name, result, isError }` | 工具执行完成 |
-| `file_ready` | `{ artifact_id, path, name?, mime_type?, size? }` | 产物可供下载（仅 `submit_artifact` 成功后） |
-| `approval_required` | `{ approval_id, idempotency_key?, tool_name?, command?, reason?, risk_level? }` | 高风险工具等待人工审批；同一 key 只产生一个 durable approval |
-| `interaction_requested` | `{ interaction_id, interaction_type, title, options? }` | Agent 等待用户输入 |
-| `task_plan_updated` | `{ tasks }` | 结构化任务计划更新 |
-| `context_warning` | `{ tokens, context_window, percent }` | 上下文使用率预警 |
-| `compaction_started/completed/failed` | `{ reason }` | 上下文压缩生命周期 |
-| `capability_registry_updated` | `{ reason, registry_version, counts?, run_id?, profile_id? }` | Session capability registry 变更（有界、无密钥） |
-| `done` | `{}` | Agent 回合结束 |
-| `session_closed` | `{ session_id }` | 流连接关闭 |
-| `error` | `{ message }` | 错误信息 |
-
-共享契约夹具：`tests/fixtures/sse_events.json`。
-
-**file_ready 触发来源（P7 产物唯一交付）：**
-- ✅ `submit_artifact` 工具执行成功 → 发出 `file_ready`（含 `artifact_id` 等字段）
-- ❌ `write` / `edit` 成功 **不会** 发出 `file_ready`（仅写私有工作区）
-- ❌ bash 或代码执行不会自动触发 — Agent 须调用 `submit_artifact` 显式提交
-- ❌ 无 workspace 自动扫描
-
-示例流：
+```text
+id: 01K...
+event: tool.execution.completed
+data: {"sequence":18,"event":{"type":"tool.execution.completed","event_id":"01K...","data":{...},"context":{...}},"ts":...,"event_id":"01K..."}
 ```
-data: {"type":"session","session_id":"sandbox_abc123","workspace_id":"ws_abc","conversation_id":"conv_xxx"}
-data: {"type":"token","text":"我来帮你写一个"}
-data: {"type":"token","text":"Python 脚本。"}
-data: {"type":"tool_start","id":"call_1","name":"write","args":{"path":"fib.py","content":"def fib..."}}
-data: {"type":"tool_end","id":"call_1","name":"write","result":{"content":[{"type":"text","text":"Written..."}]}}
-data: {"type":"tool_start","id":"call_2","name":"submit_artifact","args":{"path":"fib.py","name":"fib.py"}}
-data: {"type":"tool_end","id":"call_2","name":"submit_artifact","result":{...}}
-data: {"type":"file_ready","artifact_id":"art_abc123","path":"fib.py","name":"fib.py","mime_type":"application/octet-stream","size":42}
-data: {"type":"done"}
-data: {"type":"session_closed","session_id":"sandbox_abc123"}
-```
+
+事件族（以 Agent 实际写入 `run_events` 的为准；前端映射见 `frontend/src/shared/state/platformEventNormalize.ts`）：
+
+| 族 | 事件 | 说明 |
+|----|------|------|
+| Run 生命周期 | `run.accepted` / `run.queued` / `run.started` / `run.status.changed` / `run.completed` / `run.failed` / `run.cancelled` | 状态机迁移，`status` 为大写状态机值 |
+| 消息 | `message.delta` / `message.completed`、`thinking.*` | 文本与思考增量；用户回合以 `message.completed`（`role: "user"`）落库 |
+| 工具 | `tool.call.proposed` / `tool.execution.started` / `tool.execution.progress` / `tool.execution.completed` / `tool.execution.failed` | 以 `toolCallId` 关联，`toolName` / `args` / `result` / `isError` |
+| 审批与交互 | `approval.requested` / `approval.resolved`、`interaction.*` | 高风险工具等待人工审批；同一 key 只产生一个 durable approval |
+| 进程 | `process.started` / `process.output` / `process.completed` / `process.failed` / `process.cancelled` | 后台进程与其控制台输出 |
+| 产物 | `artifact.ready` | 仅 `submit_artifact` 成功后（含 `artifactId`）；`write` / `edit` / bash 不会触发 |
+| 模型与会话 | `model.request.started/completed/failed`、`session.snapshot.saved`、`session.restored` / `session.compacted` | 观测与会话账本事件 |
+
+旧的无点号事件名（`token`、`tool_start`、`tool_end`、`file_ready`、`done`、`session`、`trace`、`session_closed` 等）
+**已不存在**：Agent 不再发出，前端也不再适配。真实线上帧的回放见 `frontend/test/fixtures/live-run-sse.json`
+（`frontend/test/live-run-replay.test.ts` 逐帧喂给浏览器同一条摄入路径）。
 
 ---
 

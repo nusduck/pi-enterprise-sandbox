@@ -66,7 +66,7 @@ frontend/
 ### 状态管理
 
 Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、Approval、Artifact、trace 和
-AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState` 不含 `currentMsg`、
+AgentSession 都由 `platformEventNormalize -> runReducer` 单次归约。`ChatState` 不含 `currentMsg`、
 `pendingTool`、`pendingApproval` 或 `readyFiles`，只保存服务端历史快照、选择状态、上传草稿、布局、
 认证与 transport 控制。`activeRunId` 直接从 EntityStore 读取，不维护 React 镜像 state。
 
@@ -296,11 +296,12 @@ sendMessage(text)
   ├── React 更新 user message / transport UI
   ├── GET /api/runs/:run_id/events（支持 sequence 续传）
   │     ↓ SSE (sse.readSSEStream)
-  │     agentEventAdapter -> RuntimeEvent -> runReducer -> EntityStore
-  │       trace/session/agent_session → Run + AgentSession 关系
-  │       token                    → MessageEntity delta
-  │       tool/approval/file_ready → 对应规范化实体
-  │       done/error               → 不可被尾随 session_closed 覆盖的终态
+  │     platformEventNormalize -> RuntimeEvent -> runReducer -> EntityStore
+  │       run.accepted/started/trace   → Run + AgentSession 关系
+  │       message.delta/completed      → MessageEntity
+  │       tool.execution.* / approval.* / artifact.ready → 对应规范化实体
+  │       run.completed/failed/cancelled → 终态
+  │     （只认平台事件：带持久序号与 event_id 的点分类型；无法规范化的帧直接丢弃）
   ├── projections/projectConversationMessages（用户行 + 每个 Run 一个助手行）
   └── React 最终渲染（助手行的正文一律由 TurnStream 从 EntityStore 渲染）
 ```
@@ -374,9 +375,9 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
 
 解析见 `frontend/src/shared/sse/parser.ts`。Agent 发出的是带点号的平台事件（`message.delta`、
 `thinking.delta`、`tool.execution.started`、`approval.requested`、`interaction.requested`、
-`run.status.changed` 等），经 `platformEventNormalize` 直接进入 reducer；旧的 `token` / `tool_start`
-等无点号事件仍由 `agentEventAdapter` 适配。事件契约见 [API 文档](api.md#sse-事件协议) 与
-`tests/fixtures/sse_events.json`。
+`run.status.changed` 等），经 `platformEventNormalize` 直接进入 reducer；没有持久序号 / `event_id` 的
+旧式事件（`token`、`tool_start` …）不再被适配，直接丢弃。事件契约见 [API 文档](api.md#sse-事件协议)，
+真实线上帧回放见 `frontend/test/fixtures/live-run-sse.json`。
 
 - **实时与刷新走同一个 reducer**：刷新后 `rehydrateConversation` 拉取会话全部持久事件并重放；重放前
   写入 run 行时不带 `last_sequence`，否则持久事件会被判为重复而跳过。

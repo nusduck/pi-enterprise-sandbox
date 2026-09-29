@@ -1,3 +1,4 @@
+import { frame } from './support/platformEvents.ts';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import {
@@ -130,7 +131,7 @@ test('reconcileRun replaces transient spans with the durable trace tree', async 
 
   const bridge = createEntityBridge();
   bridge.beginRun({ runId: 'run_trace' });
-  bridge.ingestAgentEvent('run_trace', { type: 'trace', trace_id: traceId });
+  bridge.ingestAgentEvent('run_trace', frame(1, 'run.trace', { trace_id: traceId }) as never);
   await bridge.reconcileRun('run_trace');
   const store = bridge.getStore();
   assert.deepEqual(requests, [

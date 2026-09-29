@@ -647,7 +647,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         // A first turn has no client-side conversation/session yet. The create
         // response is therefore authoritative for the identity that subsequent
-        // turns must reuse. Relying on a legacy `session` SSE event left these
+        // turns must reuse. Relying on a `session` SSE event left these
         // fields null when the durable run stream only emitted platform events,
         // so every send after the first silently created a new conversation.
         const createdConversationId = created.conversation_id || cur.conversationId;
@@ -702,7 +702,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           { signal: abortCtrl.signal },
         );
         // Refresh the durable ledger even after a clean stream close. The
-        // stream may have omitted a tool_end event, so closure alone is not a
+        // stream may have omitted a tool.execution.completed event, so closure alone is not a
         // success signal.
         try {
           await bridge.reconcileRun(runId);

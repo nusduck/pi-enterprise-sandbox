@@ -38,7 +38,15 @@ import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
 import { createEntityStore } from '../src/entities/index.ts';
 import { createRunSSEManager } from '../src/shared/sse/manager.ts';
 import { makeRuntimeEvent } from '../src/shared/schemas/events.ts';
-import { adaptAgentEventStream } from '../src/shared/sse/agentEventAdapter.ts';
+import {
+  frame,
+  ingestAll,
+  messageCompleted,
+  messageDelta,
+  runCompleted,
+  toolCompleted,
+  toolStarted,
+} from './support/platformEvents.ts';
 import { reduceRuntimeEventBatch } from '../src/shared/state/runReducer.ts';
 
 // ── In-memory localStorage for Node ─────────────────────────────
@@ -183,9 +191,9 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('stream: token SSE builds assistant text only through EntityStore', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1' });
-    for (const chunk of ['Hel', 'lo', ' world']) {
-      bridge.ingestAgentEvent(runId, { type: 'token', text: chunk });
-    }
+    ['Hel', 'lo', ' world'].forEach((chunk, i) => {
+      ingestAll(bridge, runId, [messageDelta(i + 1, chunk)]);
+    });
     assert.equal(runText(bridge, runId), 'Hello world');
     assert.equal('currentMsg' in createState(INITIAL), false);
     bridge.dispose();
@@ -195,14 +203,12 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1', sessionId: 's1' });
 
-    const agentEvents = [
-      { type: 'session', session_id: 's1', conversation_id: 'c1' },
-      { type: 'token', text: 'Answer' },
-      { type: 'done' },
-    ];
-    for (const ev of agentEvents) {
-      bridge.ingestAgentEvent(runId, ev);
-    }
+    ingestAll(bridge, runId, [
+      frame(1, 'run.started', { conversation_id: 'c1', session_id: 's1' }),
+      messageDelta(2, 'Answer'),
+      messageCompleted(3),
+      runCompleted(4),
+    ]);
 
     const storeSnap = bridge.getStore();
     assert.equal(storeSnap.runsById[runId].status, 'succeeded');
@@ -214,10 +220,9 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('stream: second turn keeps first assistant via multi-run projection', () => {
     const bridge = createEntityBridge();
     const r1 = bridge.beginRun({ conversationId: 'c-multi' });
-    bridge.ingestAgentEvent(r1, { type: 'token', text: 'First reply' });
-    bridge.ingestAgentEvent(r1, { type: 'done' });
+    ingestAll(bridge, r1, [messageDelta(1, 'First reply', 'm_r1'), runCompleted(2)]);
     const r2 = bridge.beginRun({ conversationId: 'c-multi' });
-    bridge.ingestAgentEvent(r2, { type: 'token', text: 'Second reply' });
+    ingestAll(bridge, r2, [messageDelta(1, 'Second reply', 'm_r2')]);
     assert.match(runText(bridge, r1), /First reply/);
     assert.match(runText(bridge, r2), /Second reply/);
     // Both runs remain addressable after activeRunId moves to r2
@@ -232,11 +237,9 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('approval: SSE approval state exists only in EntityStore', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1' });
-    bridge.ingestAgentEvent(runId, {
-      type: 'approval_required',
-      approval_id: 'appr_1',
-      reason: 'rm -rf /tmp/cache',
-    });
+    ingestAll(bridge, runId, [
+      frame(1, 'approval.requested', { approvalId: 'appr_1', reason: 'rm -rf /tmp/cache' }),
+    ]);
     let approval = bridge.getStore().approvalsById.appr_1;
     assert.equal(approval.id, 'appr_1');
     assert.match(approval.reason, /rm -rf/);
@@ -268,11 +271,9 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('approval: entity bridge marks approval decided', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c2' });
-    bridge.ingestAgentEvent(runId, {
-      type: 'approval_required',
-      approval_id: 'ap_entity',
-      reason: 'sudo',
-    });
+    ingestAll(bridge, runId, [
+      frame(1, 'approval.requested', { approvalId: 'ap_entity', reason: 'sudo' }),
+    ]);
     let snap = bridge.getStore();
     assert.ok(snap.approvalsById.ap_entity);
     assert.equal(snap.approvalsById.ap_entity.status, 'pending');
@@ -353,8 +354,8 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     const bridge = createEntityBridge();
     const r1 = bridge.beginRun({ conversationId: 'cA' });
     const r2 = bridge.beginRun({ conversationId: 'cB' });
-    bridge.ingestAgentEvent(r1, { type: 'token', text: 'a' });
-    bridge.ingestAgentEvent(r2, { type: 'token', text: 'b' });
+    ingestAll(bridge, r1, [messageDelta(1, 'a', 'm_r1')]);
+    ingestAll(bridge, r2, [messageDelta(1, 'b', 'm_r2')]);
 
     bridge.stopRun(r1);
     // r2 still present in store
@@ -367,7 +368,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
   it('logout boundary: entity bridge reset removes runtime data and focus', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'private-conversation' });
-    bridge.ingestAgentEvent(runId, { type: 'token', text: 'private answer' });
+    ingestAll(bridge, runId, [messageDelta(1, 'private answer')]);
     assert.ok(Object.keys(bridge.getStore().runsById).length > 0);
 
     bridge.reset();
@@ -479,23 +480,21 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     mgr.disconnect('run_re');
   });
 
-  it('reconnect: adaptAgentEventStream sequences are monotonic across a full flow', () => {
-    const { events } = adaptAgentEventStream('run_flow', [
-      { type: 'session', session_id: 's' },
-      { type: 'token', text: 'x' },
-      { type: 'approval_required', approval_id: 'a1', reason: 'risk' },
-      { type: 'tool_start', id: 't1', name: 'bash' },
-      { type: 'tool_end', id: 't1', result: 'ok' },
-      { type: 'done' },
+  it('reconnect: a full flow reduces to a terminal run with its approval', () => {
+    const bridge = createEntityBridge();
+    const runId = bridge.beginRun({ conversationId: 'c-flow' });
+    ingestAll(bridge, runId, [
+      frame(1, 'run.started', { session_id: 's' }),
+      messageDelta(2, 'x'),
+      frame(3, 'approval.requested', { approvalId: 'a1', reason: 'risk' }),
+      toolStarted(4, 't1', 'bash'),
+      toolCompleted(5, 't1', 'ok'),
+      runCompleted(6),
     ]);
-    for (let i = 1; i < events.length; i++) {
-      assert.ok(events[i].sequence > events[i - 1].sequence);
-    }
-    const { store: entityStore } = reduceRuntimeEventBatch(
-      createEntityStore(),
-      events,
-    );
-    assert.equal(entityStore.runsById.run_flow.status, 'succeeded');
-    assert.ok(entityStore.approvalsById.a1);
+    const store = bridge.getStore();
+    assert.equal(store.runsById[runId].status, 'succeeded');
+    assert.equal(store.runsById[runId].lastSequence, 6);
+    assert.ok(store.approvalsById.a1);
+    bridge.dispose();
   });
 });

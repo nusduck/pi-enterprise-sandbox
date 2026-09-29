@@ -124,8 +124,7 @@ export function isDurableArtifactId(
   if (artifactId == null) return false;
   const id = String(artifactId).trim();
   if (!id) return false;
-  // Agent adapter synthesizes art_<runId>_<seq> when file_ready omits artifact_id
-  if (runId && id.startsWith(`art_${runId}_`)) return false;
+  // Client-side placeholders are never durable server artifacts.
   if (id.startsWith('synth_') || id.startsWith('local_')) return false;
   return true;
 }
@@ -171,7 +170,7 @@ export function reduceRuntimeEvent(
   raw: RuntimeEvent | unknown,
   opts: { seenEventIds?: Set<string>; applyOutOfOrder?: boolean } = {},
 ): ReduceResult {
-  // Platform envelopes and legacy RuntimeEvents share one normalize path.
+  // Platform envelopes and RuntimeEvents share one normalize path.
   const normalized = normalizeToRuntimeEvent(raw);
   const ev =
     normalized ||
@@ -868,7 +867,7 @@ export function reduceRuntimeEvent(
         next.runsById[runId]?.sandboxSessionId ||
         null;
       next = touchRun(next, runId, {
-        // Legacy agent_session arrives after restore/create has completed.
+        // The session is restored/created by the time this event arrives.
         status:
           next.runsById[runId]?.status === 'queued'
             ? 'running'
@@ -904,8 +903,7 @@ export function reduceRuntimeEvent(
       next = touchRun(next, runId, {
         contextUsage: {
           tokens: typeof payload.tokens === 'number' ? payload.tokens : prior?.tokens ?? null,
-          // Two producers, two conventions: the legacy agent stream sends
-          // context_window, the platform context.usage event sends contextWindow.
+          // Accept both spellings of the window field.
           contextWindow: typeof payload.context_window === 'number'
             ? payload.context_window
             : typeof payload.contextWindow === 'number'

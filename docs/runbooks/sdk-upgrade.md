@@ -65,12 +65,12 @@ npm --prefix agent run typecheck
 | 组合结果（自建 provider 挂上、出厂 local/sandbox 关掉） | `agent/tests/runtime/boot.test.ts` |
 | patch YAML 与 manifest 逐字节一致 | `agent/tests/runtime/plugins.test.ts` |
 | 策略纯函数 | `agent/tests/runtime/policy.test.ts` |
-| SSE 投影 | `agent/tests/runtime/` + `tests/fixtures/sse_events.json` |
+| 事件投影 | `agent/tests/` 下 event-projector 用例 + `frontend/test/live-run-replay.test.ts`（真实线上帧回放） |
 | 出厂 MCP `tools/list` 与调用集成 | `agent/tests/runtime/mcp-live.test.ts`（起真实 stdio MCP server 验证集成） |
 
 If a DSH event shape changes, update the projector and its unit tests only after
 confirming that the durable platform-event and BFF SSE contracts remain compatible
-with `tests/fixtures/sse_events.json`.
+with the captured wire frames in `frontend/test/fixtures/live-run-sse.json`.
 
 ## 2. Gray check (staging)
 
