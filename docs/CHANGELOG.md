@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **租户默认 Agent 改名「通用智能体」并移除旧配置字段**：默认 Agent 的定义名从 `default` 改为
+  `通用智能体`（同名即查找键，开发期已有的 `default` 行不会被迁移，会另建新行）；新建默认版本
+  直接发 `schemaVersion: 1` 配置，不再带 `skills`/`extensions`/`sandboxPolicy`/`a2a`。
+  校验器不再把这四个字段当只读兼容数据，出现即 `CONFIG_UNKNOWN_FIELD`（legacy 记录里为
+  `LEGACY_FIELD_REQUIRES_MIGRATION`）。
+
 ### Added
 
 - **长任务完成邮件通知**：用户在「设置 → 账户」打开开关后，自己发起的 Run 运行超过阈值（默认 5 分钟）结束时——完成、失败或取消——

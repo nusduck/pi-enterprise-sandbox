@@ -24,6 +24,7 @@ import {
   formatUserExternalSubject,
 } from '../../infrastructure/mysql/repositories/organization-repository.js';
 import { ConflictError } from '../../infrastructure/mysql/errors.js';
+import { DEFAULT_AGENT_DEFINITION_NAME } from '../../infrastructure/mysql/repositories/agent-catalog-repository.js';
 import {
   assertNotExternalInUlidSlot,
   DEFAULT_EXTERNAL_PROVIDER,
@@ -370,7 +371,7 @@ export class RunParentProvisioner {
     } else {
       const beforeAgent = await this.repos.catalog.getDefinitionByOrgAndName(
         orgId,
-        'default',
+        DEFAULT_AGENT_DEFINITION_NAME,
       );
       ({ definition, version } =
         await this.repos.catalog.ensureTenantDefaultAgent({
