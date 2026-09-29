@@ -119,8 +119,7 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   只修改它负责的字段，未知字段、旧字段和旧格式仍留在 JSON 中。`modelPolicy`、
   `toolPolicy`、`mcpServers` 与 `delegation` 的形状不合法时，结构化控件暂停，避免一次点击把
   无法理解的配置覆盖掉；当前能力目录不可达时保留已知草稿值，并阻止依赖该目录
-  的发布。平台管理的 `skills`、`extensions`、`sandboxPolicy` 与 `a2a` 只显示
-  为继承状态，不提供保存后不会影响运行时的假开关。
+  的发布。
 - 配置校验由 Agent 服务的 `config/options` 与 `config/validate` 提供：选项 DTO 使用
   `schemaVersion`、`fieldSupport`、`platformConstraints`、`capabilityRevision`，
   校验结果必须带 `valid`、字段级 `errors`/`warnings`；有效结果还带
@@ -155,9 +154,9 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
 - Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
   是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为「不支持」，
   要求改掉后才能发布，不静默降级到别的档位。
-- legacy 配置升级到 `schemaVersion: 1` 时，无法映射的模型引用和非空的
-  `skills`/`extensions`/`sandboxPolicy`/`a2a` 会阻止发布并列出待处理字段：
-  表单与 JSON 往返都不会把它们悄悄删掉。
+- legacy 配置升级到 `schemaVersion: 1` 时，无法映射的模型引用会阻止发布并列出待处理字段：
+  表单与 JSON 往返都不会把它们悄悄删掉。`skills`/`extensions`/`sandboxPolicy`/`a2a`
+  已从 schema 移除，出现即按未知字段报错。
 - config 仍可直接编辑 JSON。解析规则在 `pages/settings/agentHelpers.ts`（纯函数，
   可测）：空文本 = 空配置而不是错误；数组与标量被拒；比较的是**解析后的 JSON
   语义**，对象键顺序不会诱导创建相同内容的新版本，数组顺序仍算配置变化。服务端

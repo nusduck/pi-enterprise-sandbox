@@ -72,7 +72,7 @@ export function seedExecutorWorld(state) {
     {
       agent_id: DEF,
       org_id: ORG,
-      name: 'default',
+      name: '通用智能体',
       description: null,
       status: 'active',
       active_version_id: VER,
