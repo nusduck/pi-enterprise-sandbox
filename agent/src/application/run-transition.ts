@@ -3,7 +3,12 @@
  * Used by ExecuteRunService and recovery projection paths.
  */
 
-import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
+import {
+  AGGREGATE_TYPE_RUN,
+  AGGREGATE_TYPE_RUN_NOTIFICATION,
+  EVENT_TYPE_RUN_TERMINAL_NOTIFICATION,
+} from '../infrastructure/outbox/outbox-status.js';
+import { isTerminalRunStatus } from '../domain/run/run-status.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid } from '../domain/shared/ulid.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
@@ -119,6 +124,23 @@ export async function applyRunTransitionInTxn(args: { repos: RunTransitionRepos,
       userId: scope.userId,
     },
   });
+
+  // 终态只会经这里写入（CAS 保证一个 Run 只进一次终态），所以通知请求挂在这里、
+  // 与状态同事务：失败、取消、恢复扫描收尾都覆盖到，不依赖模型还有没有下一轮。
+  // 发不发、发给谁由消费者按账本决定；这里只记「这个 Run 结束了」。
+  if (isTerminalRunStatus(to)) {
+    await repos.outbox.insert({
+      outboxId: assertUlid(generateId(), 'notificationOutboxId'),
+      aggregateType: AGGREGATE_TYPE_RUN_NOTIFICATION,
+      aggregateId: runId,
+      eventType: EVENT_TYPE_RUN_TERMINAL_NOTIFICATION,
+      payloadJson: {
+        status: to,
+        orgId: scope.orgId,
+        userId: scope.userId,
+      },
+    });
+  }
 
   return { ok: true, run, event };
 }

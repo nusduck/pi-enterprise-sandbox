@@ -122,6 +122,12 @@
 .field input[aria-invalid='true'] { border-color: var(--color-danger-text); }
 .field input:disabled { opacity: 0.6; }
 .field .fieldError { color: var(--color-danger-text); }
+.check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; font-weight: 500; }
+.check input { margin: 2px 0 0; }
+.check input:disabled { opacity: 0.6; }
+.check > span { display: flex; flex-direction: column; gap: 4px; }
+.check small { color: var(--color-text-muted); font-size: 12px; font-weight: 400; }
+.check .fieldError { color: var(--color-danger-text); }
 .formActions { display: flex; align-items: center; gap: 8px; }
 .sp { flex: 1; }
 .error { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--color-danger-soft); color: var(--color-danger-text); font-size: 12.5px; }

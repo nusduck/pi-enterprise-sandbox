@@ -77,11 +77,23 @@ type CredentialStore = {
   updateProfile?(
     externalUserId: string,
     userExternalSubject: string,
-    patch: { displayName?: string; email?: string | null },
+    patch: ProfilePatch,
   ): Promise<Credential | null>;
+  /** 长任务完成邮件开关，存在 users 行上（通知消费者从那里读）。 */
+  getNotifyRunComplete?(userExternalSubject: string): Promise<boolean>;
   setRole(id: string, role: string): Promise<void>;
   touchLogin(id: string): Promise<void>;
 };
+
+type ProfilePatch = { displayName?: string; email?: string | null; notifyRunComplete?: boolean };
+
+/** 服务端算出的邮件通知能力；前端据此禁用开关，不自行猜测。 */
+export type NotificationCapability = {
+  available: boolean;
+  min_run_duration_ms: number | null;
+};
+
+const EDITABLE_PROFILE_FIELDS = ['display_name', 'email', 'notify_run_complete'];
 
 export class BrowserAuthError extends Error {
   status: number;
@@ -145,6 +157,7 @@ export class BrowserAuthService {
   ttlSeconds: number;
   allowPublicRegister: boolean;
   adminUsernames: Set<string>;
+  notificationCapability: NotificationCapability;
   now: () => Date;
 
   constructor(input: {
@@ -158,6 +171,7 @@ export class BrowserAuthService {
     ttlSeconds?: number;
     allowPublicRegister?: boolean;
     adminUsernames?: string[];
+    notificationCapability?: NotificationCapability;
     now?: () => Date;
   }) {
     this.credentials = input.credentials;
@@ -172,6 +186,10 @@ export class BrowserAuthService {
     this.adminUsernames = new Set(
       (input.adminUsernames || []).map((name) => name.trim().toLowerCase()).filter(Boolean),
     );
+    this.notificationCapability = input.notificationCapability ?? {
+      available: false,
+      min_run_duration_ms: null,
+    };
     this.now = input.now || (() => new Date());
   }
 
@@ -429,28 +447,44 @@ export class BrowserAuthService {
     } catch {
       organizationName = null;
     }
+    let notifyRunComplete = false;
+    if (this.credentials.getNotifyRunComplete) {
+      try {
+        notifyRunComplete = await this.credentials.getNotifyRunComplete(
+          formatUserExternalSubject('bff', entry.id),
+        );
+      } catch {
+        throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      }
+    }
     return {
       ...this.publicUser(entry),
       organization_name: organizationName,
       status: entry.isActive ? 'active' : 'disabled',
       created_at: entry.createdAt ?? null,
       last_login_at: entry.lastLoginAt ?? null,
-      editable_fields: ['display_name', 'email'],
+      notify_run_complete: notifyRunComplete,
+      notifications: { email: this.notificationCapability },
+      editable_fields: EDITABLE_PROFILE_FIELDS,
     };
   }
 
   /**
-   * Self-service edit: only the display name and the email. Username, role,
-   * organisation and status belong to the deployment / an administrator, so
-   * any other key is refused rather than silently ignored.
+   * Self-service edit: the display name, the email and the run-completion email
+   * switch. Username, role, organisation and status belong to the deployment /
+   * an administrator, so any other key is refused rather than silently ignored.
+   *
+   * Turning the switch on needs the capability to be configured and an email
+   * address to send to; otherwise it is refused (422) instead of "saved" while
+   * no mail would ever go out.
    */
   async updateProfile(authorization: string | undefined, body: Record<string, unknown>) {
     const entry = await this.authenticated(authorization);
-    const unknown = Object.keys(body || {}).filter((k) => k !== 'display_name' && k !== 'email');
+    const unknown = Object.keys(body || {}).filter((k) => !EDITABLE_PROFILE_FIELDS.includes(k));
     if (unknown.length) {
       throw new BrowserAuthError(422, 'PROFILE_FIELD_NOT_EDITABLE', `Not editable: ${unknown.join(', ')}`);
     }
-    const patch: { displayName?: string; email?: string | null } = {};
+    const patch: ProfilePatch = {};
     if (Object.hasOwn(body, 'display_name')) {
       const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
       if (!name || name.length > 255) {
@@ -470,9 +504,37 @@ export class BrowserAuthService {
         patch.email = email;
       }
     }
+    if (Object.hasOwn(body, 'notify_run_complete')) {
+      const value = body.notify_run_complete;
+      if (typeof value !== 'boolean') {
+        throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', 'notify_run_complete must be a boolean');
+      }
+      if (value && !this.notificationCapability.available) {
+        throw new BrowserAuthError(422, 'NOTIFICATION_UNAVAILABLE', 'Email notification is not configured on this deployment');
+      }
+      const email = patch.email !== undefined ? patch.email : entry.email;
+      if (value && !email) {
+        throw new BrowserAuthError(422, 'NOTIFY_EMAIL_REQUIRED', 'Set an email address before turning on email notification');
+      }
+      patch.notifyRunComplete = value;
+    }
+    // 开关开着就必须有地址：清空邮箱而不同时关掉开关会让通知静默落空。
+    if (patch.email === null && patch.notifyRunComplete === undefined && this.credentials.getNotifyRunComplete) {
+      let enabled: boolean;
+      try {
+        enabled = await this.credentials.getNotifyRunComplete(formatUserExternalSubject('bff', entry.id));
+      } catch {
+        throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      }
+      if (enabled) {
+        throw new BrowserAuthError(422, 'NOTIFY_EMAIL_REQUIRED', 'Turn off email notification before clearing the email address');
+      }
+    }
     if (!Object.keys(patch).length) {
       throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', 'Nothing to update');
     }
+    // 开关只存在 users 行上：先确保这一行存在，否则更新会落空。
+    if (patch.notifyRunComplete !== undefined) await this.ensureUserProvisioned(entry);
     if (!this.credentials.updateProfile) {
       throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
     }
