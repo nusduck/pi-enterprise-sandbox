@@ -118,6 +118,8 @@ export type ChatState = {
   abortCtrl: AbortController | null;
   sessionId: string | null;
   conversationId: string | null;
+  /** Conversation whose Run timeline must finish restoring before display. */
+  restoringConversationId: string | null;
   conversations: ConversationSummary[];
   artifacts: Artifact[];
   attachments: AttachmentDraft[];

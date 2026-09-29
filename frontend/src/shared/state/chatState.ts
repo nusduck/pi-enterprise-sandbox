@@ -6,6 +6,7 @@ export const INITIAL: Readonly<ChatState> = Object.freeze({
   abortCtrl: null,
   sessionId: null,
   conversationId: null,
+  restoringConversationId: null,
   conversations: [],
   artifacts: [],
   attachments: [],

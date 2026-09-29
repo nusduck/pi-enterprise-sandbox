@@ -7,6 +7,7 @@ import {
   shouldShowJumpToBottom,
 } from './messageActions';
 import { runHasTurnEntities } from '../turn-stream/TurnStream';
+import { conversationDisplay } from '../../features/chat/conversationLoading';
 import { isTerminalRunStatus } from '../../entities';
 import { IconChevronDown } from '../../shared/ui/Icons';
 import s from './messageList.module.css';
@@ -16,6 +17,7 @@ export function MessageList() {
   const ref = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const { loading, messages: visibleMessages } = conversationDisplay(state, displayMessages);
 
   function handleScroll() {
     const el = ref.current;
@@ -121,7 +123,9 @@ export function MessageList() {
       ref={ref}
       onScroll={handleScroll}
     >
-      {displayMessages.length === 0 ? (
+      {loading ? (
+        <div className={s.welcome} role="status">正在恢复会话…</div>
+      ) : visibleMessages.length === 0 ? (
         <div className={s.welcome}>
           <h2>今天想让智能体做什么？</h2>
           <p>描述任务，或者把文件拖进来。运行过程会在这里逐步展示。</p>
@@ -130,7 +134,7 @@ export function MessageList() {
           </p>
         </div>
       ) : (
-        displayMessages.map((msg, idx) => {
+        visibleMessages.map((msg, idx) => {
           if (turnRows.skip.has(idx)) return null;
           const canRegenerate =
             regen.allowed && idx === regen.assistantIdx;

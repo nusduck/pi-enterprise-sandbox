@@ -221,6 +221,7 @@ export type EntityBridge = {
     conversationId?: string | null;
     agentSessionId?: string | null;
     sessionId?: string | null;
+    focus?: boolean;
   }) => string;
   /** Reduce one Agent wire event into the entity store. */
   ingestAgentEvent: (runId: string, ev: SSEEvent) => void;
@@ -358,6 +359,8 @@ export function createEntityBridge(
   const reconcileInFlight = new Map<string, Promise<RunEntity | null>>();
   /** Invalidates late HTTP reconciliation results after logout/reset. */
   let storeGeneration = 0;
+  /** Ignore focus writes from older asynchronous timeline restores. */
+  let focusRevision = 0;
 
   function localRunId(): string {
     const uuid = globalThis.crypto?.randomUUID?.();
@@ -415,6 +418,8 @@ export function createEntityBridge(
       conversationId?: string | null;
       agentSessionId?: string | null;
       sessionId?: string | null;
+      /** Record a background run without changing the selected conversation. */
+      focus?: boolean;
     } = {},
   ): string {
     const runId = opts.runId || localRunId();
@@ -428,11 +433,13 @@ export function createEntityBridge(
         status: 'queued',
       }),
     );
-    store = {
-      ...store,
-      activeRunId: runId,
-      activeConversationId: opts.conversationId || store.activeConversationId,
-    };
+    if (opts.focus !== false) {
+      store = {
+        ...store,
+        activeRunId: runId,
+        activeConversationId: opts.conversationId || store.activeConversationId,
+      };
+    }
     manager.setStore(store);
     eventAdapters.set(
       runId,
@@ -476,6 +483,7 @@ export function createEntityBridge(
   }
 
   function focusConversation(conversationId: string | null): void {
+    focusRevision += 1;
     store = setActiveConversation(manager.getStore(), conversationId);
     manager.setStore(store);
     onStoreChange?.(store);
@@ -860,6 +868,7 @@ export function createEntityBridge(
 
   async function rehydrateConversation(conversationId: string): Promise<RunEntity[]> {
     const expectedGeneration = storeGeneration;
+    const expectedFocusRevision = focusRevision;
     const timeline = await getConversationEvents(conversationId);
     if (expectedGeneration !== storeGeneration) return [];
     const eventsByRun = new Map<string, PersistedAgentEvent[]>();
@@ -1002,7 +1011,9 @@ export function createEntityBridge(
     store = backfillArtifactSessionIds(manager.getStore());
     manager.setStore(store);
 
-    store = setActiveConversation(manager.getStore(), conversationId);
+    store = focusRevision === expectedFocusRevision
+      ? setActiveConversation(manager.getStore(), conversationId)
+      : manager.getStore();
     manager.setStore(store);
     onStoreChange?.(store);
     return restored;
