@@ -3,7 +3,6 @@ import { useChat } from '../../features/chat/ChatContext';
 import { conversationTitle, isInterruptedMessage } from '../../shared/state';
 import { isTerminalRunStatus, listProcessesForSession } from '../../entities';
 import { formatDuration, getActiveRunEntity } from '../runtime-timeline/buildTimeline';
-import { BudgetBar } from '../budget-bar/BudgetBar';
 import { shouldShowResumeEntry } from '../composer/composerMode';
 import { agentTone } from '../conversation-sidebar/sidebarModel';
 import { IconLayers, IconPanel, IconRefresh } from '../../shared/ui/Icons';
@@ -107,7 +106,6 @@ export function ConversationHeader() {
             <span className={s.dur}>{formatDuration(run.startedAt || run.createdAt, run.finishedAt)}</span>
           </span>
         ) : null}
-        {run ? <BudgetBar run={run} /> : null}
         {showResume ? (
           <button type="button" className={s.btn} onClick={() => void resumeInterrupted()}>
             <IconRefresh size={12} /> 继续运行

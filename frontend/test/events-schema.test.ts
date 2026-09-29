@@ -51,8 +51,9 @@ describe('RuntimeEventSchema', () => {
 
   it('lists known ADR event types', () => {
     assert.ok(RUNTIME_EVENT_TYPES.includes('run.created'));
-    assert.ok(RUNTIME_EVENT_TYPES.includes('process.stdout'));
-    assert.ok(RUNTIME_EVENT_TYPES.includes('budget.exceeded'));
+    assert.ok(RUNTIME_EVENT_TYPES.includes('tool.completed'));
+    assert.ok(RUNTIME_EVENT_TYPES.includes('artifact.created'));
+    assert.equal(RUNTIME_EVENT_TYPES.includes('process.stdout' as never), false);
   });
 
   it('parses create-run response', () => {

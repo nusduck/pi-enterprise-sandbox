@@ -427,6 +427,13 @@ describe('conversation history rehydration', () => {
       if (url.includes('/datasets')) {
         return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
       }
+      if (url.includes('/api/processes')) {
+        // Managed processes are session-scoped REST state, not stream events.
+        return new Response(JSON.stringify({ processes: [{
+          process_id: 'proc_1', run_id: 'run_matrix', sandbox_session_id: 'session_matrix',
+          execution_id: 'tool_proc', command: 'sleep 1', status: 'completed', exit_code: 0,
+        }] }), { status: 200 });
+      }
       assert.match(url, /\/api\/conversations\/conv_matrix\/events$/);
       return new Response(
         JSON.stringify({
@@ -469,42 +476,6 @@ describe('conversation history rehydration', () => {
             {
               run_id: 'run_matrix',
               sequence: 3,
-              event_id: 'evt_process',
-              type: 'process.started',
-              payload: {
-                data: {
-                  process_id: 'proc_1',
-                  command: 'sleep 1',
-                  status: 'running',
-                  tool_call_id: 'tool_proc',
-                },
-              },
-            },
-            {
-              run_id: 'run_matrix',
-              sequence: 4,
-              event_id: 'evt_process_out',
-              type: 'process.output',
-              payload: {
-                data: {
-                  process_id: 'proc_1',
-                  stream: 'stdout',
-                  chunk: 'hello-process\n',
-                },
-              },
-            },
-            {
-              run_id: 'run_matrix',
-              sequence: 5,
-              event_id: 'evt_process_done',
-              type: 'process.completed',
-              payload: {
-                data: { process_id: 'proc_1', exit_code: 0 },
-              },
-            },
-            {
-              run_id: 'run_matrix',
-              sequence: 6,
               event_id: 'evt_tool_end',
               type: 'tool.execution.completed',
               payload: {
@@ -515,7 +486,7 @@ describe('conversation history rehydration', () => {
             },
             {
               run_id: 'run_matrix',
-              sequence: 7,
+              sequence: 4,
               event_id: 'evt_artifact',
               type: 'artifact.ready',
               payload: {
@@ -528,7 +499,7 @@ describe('conversation history rehydration', () => {
             },
             {
               run_id: 'run_matrix',
-              sequence: 8,
+              sequence: 5,
               event_id: 'evt_done',
               type: 'run.completed',
               payload: { status: 'SUCCEEDED' },
@@ -545,7 +516,7 @@ describe('conversation history rehydration', () => {
       const store = bridge.getStore();
       const run = store.runsById.run_matrix;
       assert.equal(run.status, 'succeeded');
-      assert.equal(run.lastSequence, 8);
+      assert.equal(run.lastSequence, 5);
 
       // Messages
       const messages = run.messageIds.map((id) => store.messagesById[id]);
@@ -562,11 +533,10 @@ describe('conversation history rehydration', () => {
       assert.equal(store.toolExecutionsById.tool_proc.name, 'process_start');
       assert.equal(store.toolExecutionsById.tool_proc.status, 'completed');
 
-      // Process handle + output (D1 + D5 rehydrate floor)
+      // Process handle (REST-listed; D1 + D5 rehydrate floor)
       assert.deepEqual(run.processIds, ['proc_1']);
       assert.ok(store.processesById.proc_1, 'process entity must rehydrate');
       assert.equal(store.processesById.proc_1.command, 'sleep 1');
-      assert.equal(store.processesById.proc_1.stdout, 'hello-process\n');
       assert.equal(store.processesById.proc_1.status, 'completed');
       assert.equal(store.processesById.proc_1.exitCode, 0);
 
@@ -589,6 +559,12 @@ describe('conversation history rehydration', () => {
       if (url.includes('/datasets')) {
         return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
       }
+      if (url.includes('/api/processes')) {
+        return new Response(JSON.stringify({ processes: [{
+          process_id: 'proc_flat', run_id: 'run_flat', sandbox_session_id: 'session_flat',
+          command: 'python app.py', status: 'completed',
+        }] }), { status: 200 });
+      }
       assert.match(url, /\/api\/conversations\/conv_flat\/events$/);
       return new Response(
         JSON.stringify({
@@ -604,29 +580,6 @@ describe('conversation history rehydration', () => {
             {
               run_id: 'run_flat',
               sequence: 1,
-              event_id: '01HZEVTFLAT000000000000001',
-              type: 'process.started',
-              payload: {
-                processId: 'proc_flat',
-                command: 'python app.py',
-                toolCallId: 'tc_flat',
-              },
-            },
-            {
-              run_id: 'run_flat',
-              sequence: 2,
-              event_id: '01HZEVTFLAT000000000000002',
-              type: 'process.output',
-              payload: {
-                processId: 'proc_flat',
-                stream: 'stderr',
-                text: 'warn-line\n',
-                cursor: 10,
-              },
-            },
-            {
-              run_id: 'run_flat',
-              sequence: 3,
               event_id: '01HZEVTFLAT000000000000003',
               type: 'artifact.ready',
               payload: {
@@ -646,7 +599,6 @@ describe('conversation history rehydration', () => {
       await bridge.rehydrateConversation('conv_flat');
       const store = bridge.getStore();
       assert.equal(store.processesById.proc_flat?.command, 'python app.py');
-      assert.equal(store.processesById.proc_flat?.stderr, 'warn-line\n');
       assert.equal(store.artifactsById.art_flat?.name, 'out.xlsx');
       assert.equal(store.artifactsById.art_flat?.source, 'submit_artifact');
       assert.equal(store.artifactsById.art_flat?.sessionId, 'session_flat');

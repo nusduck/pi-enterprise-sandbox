@@ -463,7 +463,7 @@ export function JobCard({
   const running = process
     ? process.status === 'running' || process.status === 'created' || process.status === 'waiting_input'
     : f.running;
-  const tail = f.outputTail || (process ? [process.stdout, process.stderr].filter(Boolean).join('\n').trim().split('\n').slice(-6).join('\n') : null);
+  const tail = f.outputTail;
   return (
     <div className={s.card}>
       <div className={s.cardH}>

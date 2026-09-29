@@ -76,30 +76,6 @@ export type AgentSessionEntity = {
   updatedAt: string | null;
 };
 
-/** Run budget usage counters (ADR §4.9) — present when backend provides usage. */
-export type RunBudgetUsage = {
-  steps?: number;
-  tool_calls?: number;
-  llm_tokens?: number;
-  cost?: number;
-  consecutive_tool_failures?: number;
-  processes?: number;
-  duration_seconds?: number;
-  started_at?: number;
-  [key: string]: unknown;
-};
-
-export type RunBudgetLimits = {
-  max_steps?: number | null;
-  max_tool_calls?: number | null;
-  max_run_duration?: number | null;
-  max_llm_tokens?: number | null;
-  max_cost?: number | null;
-  max_consecutive_tool_failures?: number | null;
-  max_processes?: number | null;
-  [key: string]: unknown;
-};
-
 export type RunEntity = {
   id: string;
   conversationId: string | null;
@@ -125,12 +101,6 @@ export type RunEntity = {
   /** Model that served this run, from the Agent Run row (`model_id`). */
   modelId: string | null;
   error: string | null;
-  /** Live budget usage when backend/SSE provides it (F4). */
-  budgetUsage: RunBudgetUsage | null;
-  /** Budget limits for this run (F4). */
-  budgetLimits: RunBudgetLimits | null;
-  /** 'warning' | 'exceeded' | null */
-  budgetWarning: string | null;
   pendingInput: {
     interactionId: string;
     interactionType: string;
@@ -138,14 +108,6 @@ export type RunEntity = {
     message: string | null;
     options: string[];
   } | null;
-  compactionStatus: 'idle' | 'running' | 'completed' | 'failed';
-  compactionError: string | null;
-  taskPlan: Array<{
-    taskId: string;
-    content: string;
-    status: string;
-    evidence: string | null;
-  }>;
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string | null;
@@ -210,12 +172,6 @@ export type ProcessEntity = {
   toolExecutionId: string | null;
   status: ProcessStatus;
   command: string | null;
-  stdout: string;
-  stderr: string;
-  /** Cursor for log resume / process.output (plan §19.6). */
-  cursor: number | null;
-  /** True when live buffers were truncated to cap memory growth. */
-  logTruncated: boolean;
   exitCode: number | null;
   startedAt: string | null;
   finishedAt: string | null;

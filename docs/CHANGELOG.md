@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **前端删除一批既无生产者也无读取方的死代码**：`budget-bar` 部件整体（`BudgetBar` 与其数据来源
+  `run.budgetUsage/Limits/Warning`：运行详情接口不返回 `budget`，事件流也不发 `budget.*`，该条永远不渲染）、
+  reducer 的 `run.task_plan_updated` / `run.compaction_updated` / `budget.*` / `session.restored` / `run.trace`
+  与 `process.*` 事件分支（agent 与 exec 都不发这些事件；进程状态与日志由 REST `/api/processes` 提供）、
+  实体字段 `taskPlan` / `compactionStatus` / `compactionError` / `Process.stdout|stderr|cursor|logTruncated`、
+  `appendCappedLog` 及其上限常量。进程控制台的「实时日志」读的正是那份永远为空的缓冲，现在只显示 REST 历史日志，
+  界面行为不变。`budget_exceeded` 状态仍映射为失败状态，未改动；预算超限提示本来就没有数据来源。
+  同时把 `api.md` 事件表里不存在的 `process.*` / `session.restored` 行去掉。
+
 - **前端删除 `context.usage` 死代码链**：`context.usage` 事件的生产者是 Pi 时代的 observability 扩展（#10），
   在 DSH 重建（#44）时连同扩展一起删除，而读取它的上下文检查器界面在前端重设计（#45）中已删，
   此后整条链两头都空。现在删除 reducer 的 `run.context_updated` 分支、`Run.contextUsage` 字段、

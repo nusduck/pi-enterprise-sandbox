@@ -35,9 +35,10 @@ data: {"sequence":18,"event":{"type":"tool.execution.completed","event_id":"01K.
 | 消息 | `message.delta` / `message.completed`、`thinking.*` | 文本与思考增量；用户回合以 `message.completed`（`role: "user"`）落库 |
 | 工具 | `tool.call.proposed` / `tool.execution.started` / `tool.execution.progress` / `tool.execution.completed` / `tool.execution.failed` | 以 `toolCallId` 关联，`toolName` / `args` / `result` / `isError` |
 | 审批与交互 | `approval.requested` / `approval.resolved`、`interaction.*` | 高风险工具等待人工审批；同一 key 只产生一个 durable approval |
-| 进程 | `process.started` / `process.output` / `process.completed` / `process.failed` / `process.cancelled` | 后台进程与其控制台输出 |
 | 产物 | `artifact.ready` | 仅 `submit_artifact` 成功后（含 `artifactId`）；`write` / `edit` / bash 不会触发 |
-| 模型与会话 | `model.request.started/completed/failed`、`session.snapshot.saved`、`session.restored` / `session.compacted` | 观测与会话账本事件 |
+| 模型与会话 | `model.request.started/completed/failed`、`session.snapshot.saved`、`session.compacted` | 观测与会话账本事件 |
+
+进程状态与日志不走事件流：由 `GET /api/processes`（按会话列出）与 `GET /api/processes/{id}/logs` 提供。
 
 旧的无点号事件名（`token`、`tool_start`、`tool_end`、`file_ready`、`done`、`session`、`trace`、`session_closed` 等）
 **已不存在**：Agent 不再发出，前端也不再适配。真实线上帧的回放见 `frontend/test/fixtures/live-run-sse.json`

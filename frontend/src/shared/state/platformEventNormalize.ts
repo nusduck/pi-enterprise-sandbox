@@ -7,9 +7,6 @@
 import type { RuntimeEvent } from '../schemas/events';
 import { makeRuntimeEvent, parseRuntimeEvent } from '../schemas/events';
 
-/** Cap process log buffers retained in the entity store (chars per stream). */
-export const PROCESS_LOG_CHAR_CAP = 256 * 1024;
-
 /** Cap seen-event-id sets per run connection (memory growth). */
 export const SEEN_EVENT_ID_CAP = 4_000;
 
@@ -30,9 +27,6 @@ const PLATFORM_TYPE_ALIASES: Record<string, string> = {
   'tool.execution.progress': 'tool.progress',
   'tool.execution.completed': 'tool.completed',
   'tool.execution.failed': 'tool.failed',
-  // Process
-  'process.output': 'process.output',
-  'process.cancelled': 'process.cancelled',
   // Approval
   'approval.requested': 'tool.approval_required',
   'approval.resolved': 'approval.resolved',
@@ -172,26 +166,6 @@ export function isExternalRiskApproval(
     return false;
   }
   return true;
-}
-
-/**
- * Append text to a process log buffer with a hard char cap (keeps the tail).
- */
-export function appendCappedLog(
-  existing: string,
-  chunk: string,
-  cap: number = PROCESS_LOG_CHAR_CAP,
-): { text: string; truncated: boolean } {
-  if (!chunk) return { text: existing, truncated: existing.length > cap };
-  const next = existing + chunk;
-  if (next.length <= cap) return { text: next, truncated: false };
-  // Keep a small head marker + tail so operators see truncation.
-  const keep = Math.max(0, cap - 48);
-  const tail = next.slice(next.length - keep);
-  return {
-    text: `…[truncated ${next.length - keep} chars]\n${tail}`,
-    truncated: true,
-  };
 }
 
 /**
@@ -453,12 +427,6 @@ function normalizePayload(
   // events.
   if (type === 'run.status_changed' && p.status != null) {
     p.status = String(p.status).toLowerCase();
-  }
-
-  // process.output → stream-aware text
-  if (type === 'process.output') {
-    if (p.text == null) p.text = p.chunk ?? p.data ?? p.output ?? '';
-    if (p.stream == null) p.stream = p.channel || 'stdout';
   }
 
   // approval.resolved decision
