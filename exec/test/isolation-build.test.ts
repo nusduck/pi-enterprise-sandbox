@@ -9,8 +9,10 @@
  * 不需要它，但这个钩子确实存在"这件事本身。
  */
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { test } from 'node:test';
 import { buildIsolationProfile } from '../src/isolation/build.js';
+import { resolveEffectiveMounts } from '../src/isolation/bubblewrap.js';
 import { writableRoots } from '../src/fs/writable-roots.js';
 import {
   AGENT_PYTHON_VENV,
@@ -568,6 +570,38 @@ test('三个 skill 根职责分开：只有草稿是可写的', async () => {
     assert.equal(byTarget.get('/home/sandbox/skill-user/pkg')?.kind, 'ro_bind');
     // 草稿：唯一可写的那个。
     assert.equal(byTarget.get('/home/sandbox/skill-draft')?.kind, 'bind');
+  } finally {
+    await ws.cleanup();
+  }
+});
+
+test('草稿根首次使用：源目录还不存在时也要建出来（required:false ≠ 可以不管）', async () => {
+  const ws = await makeTestWorkspace();
+  try {
+    // 首次使用的真实状态：`<draftRoot>/<org>/<user>` 还不存在。
+    const draftSkillRoot = `${ws.root}/skill-draft/${ws.context.orgId}/${ws.context.userId}`;
+    assert.ok(!existsSync(draftSkillRoot), '前置条件：这个每用户草稿目录此时必须不存在');
+
+    const context = { ...ws.context, draftSkillRoot };
+    const profile = buildIsolationProfile({
+      context,
+      mode: 'workspace-write',
+      command: ['bash', '-c', 'pwd'],
+    });
+    assert.ok(
+      profile.mounts.some((m) => m.target === '/home/sandbox/skill-draft'),
+      'build 阶段草稿根必须在 MountPlan 里（ensureDir: true）',
+    );
+
+    // 这一步以前会把整条草稿根摘掉：`ensureDir` 只在 `required: true` 分支里生效，
+    // 而草稿根是 `required: false` —— 于是目录永远建不出来，沙箱里也就永远看不到
+    // `/home/sandbox/skill-draft`。它同时是「首次使用不报错」和「首次使用能落地」的分界。
+    const resolved = resolveEffectiveMounts(profile.mounts);
+    assert.ok(
+      resolved.some((m) => m.target === '/home/sandbox/skill-draft'),
+      '草稿根不能被 ENOENT 探测静默摘掉，否则沙箱内看不到它',
+    );
+    assert.ok(existsSync(draftSkillRoot), 'resolveEffectiveMounts 必须把每用户草稿目录建出来');
   } finally {
     await ws.cleanup();
   }

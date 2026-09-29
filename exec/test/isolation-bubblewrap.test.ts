@@ -169,6 +169,62 @@ test('resolveEffectiveMounts: required=true + ensureDir creates the source direc
   }
 });
 
+test('resolveEffectiveMounts: required=false + ensureDir creates the source instead of dropping the mount (per-owner Skill draft root)', async () => {
+  const { root, cleanup } = await scratchDir();
+  try {
+    // Exactly the first-use state of `ctx.draftSkillRoot`:
+    // `${SANDBOX_SKILL_DRAFT_ROOT}/<org>/<user>` does not exist yet.
+    const draftRoot = join(root, 'skill-draft', 'org1', 'user1');
+    assert.ok(!existsSync(draftRoot));
+    const mount: BindMount = {
+      kind: 'bind',
+      source: draftRoot,
+      target: '/home/sandbox/skill-draft',
+      required: false,
+      ensureDir: true,
+      sessionSpecific: true,
+    };
+    let degradedCalls = 0;
+    const resolved = resolveEffectiveMounts([mount], { onDegraded: () => (degradedCalls += 1) });
+    assert.deepEqual(
+      resolved,
+      [mount],
+      'ensureDir must run before the ENOENT probe, otherwise the mount is dropped and the directory is never created',
+    );
+    assert.ok(existsSync(draftRoot), 'ensureDir must create the missing source directory');
+    assert.equal(degradedCalls, 0, 'a directory we just created ourselves is not a degraded mount');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('resolveEffectiveMounts: required=false + ensureDir keeps degrading (never throwing) when the source cannot be created', async (t) => {
+  if (isRoot) {
+    t.skip('running as root: permission bits do not deny access, cannot exercise EACCES here');
+    return;
+  }
+  const { root, cleanup } = await scratchDir();
+  try {
+    const blocked = join(root, 'read-only-parent');
+    await mkdir(blocked, { recursive: true });
+    await chmod(blocked, 0o500);
+    const mount: BindMount = {
+      kind: 'bind',
+      source: join(blocked, 'draft', 'org1', 'user1'),
+      target: '/home/sandbox/skill-draft',
+      required: false,
+      ensureDir: true,
+      sessionSpecific: true,
+    };
+    const degraded: BindMount[] = [];
+    const resolved = resolveEffectiveMounts([mount], { onDegraded: (b) => degraded.push(b) });
+    assert.deepEqual(resolved, [], 'an uncreatable optional source is dropped, not fatal');
+    assert.equal(degraded.length, 1, 'the caller still hears about it (unlike plain ENOENT)');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('resolveEffectiveMounts: structural mounts (dir/proc/dev/tmpfs) pass through untouched, order preserved', () => {
   const mounts: Mount[] = [
     { kind: 'proc', target: '/proc', sessionSpecific: false },
