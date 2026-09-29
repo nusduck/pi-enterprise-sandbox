@@ -40,6 +40,7 @@ import {
   normalizeToRuntimeEvent,
 } from './platformEventNormalize';
 import { reduceMessageEvent } from './messageEvents';
+import { canFocusStartedRun } from './runFocusPolicy';
 
 export type ReduceOutcome =
   | 'applied'
@@ -263,10 +264,7 @@ export function reduceRuntimeEvent(
         traceId:
           str(payload.trace_id) || next.runsById[runId]?.traceId || null,
       });
-      if (
-        conversationId &&
-        (next.activeRunId === runId || next.activeConversationId == null)
-      ) {
+      if (canFocusStartedRun(next, runId, conversationId)) {
         next = setActiveConversation(next, conversationId, { activeRunId: runId });
       }
       break;

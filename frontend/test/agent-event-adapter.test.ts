@@ -102,6 +102,20 @@ describe('Agent event adapter', () => {
     bridge.dispose();
   });
 
+  it('keeps background create-run and run.started from stealing a newer selection', () => {
+    const bridge = createEntityBridge();
+    bridge.focusConversation('conv_b');
+    bridge.beginRun({ runId: 'run_a', conversationId: 'conv_a', focus: false });
+    bridge.ingestAgentEvent('run_a', {
+      type: 'run.started', sequence: 1, event_id: 'evt_run_a',
+      payload: { conversation_id: 'conv_a' },
+    });
+    assert.equal(bridge.getStore().activeConversationId, 'conv_b');
+    assert.equal(bridge.getStore().activeRunId, null);
+    assert.equal(bridge.getStore().runsById.run_a?.conversationId, 'conv_a');
+    bridge.dispose();
+  });
+
   it('projects tool rows as a marker only, never as chat content', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c-tools' });

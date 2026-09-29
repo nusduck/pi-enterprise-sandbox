@@ -34,7 +34,6 @@ import {
   uploadedAttachments,
   buildUserTurnWithAttachments,
   activeAttachments,
-  conversationTitleFromUserText,
   type ChatState,
   type ChatMessage,
 } from '../../shared/state';
@@ -61,6 +60,8 @@ import { createEntityBridge, type EntityBridge } from './entityBridge';
 import type { EntityStore } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { projectConversationMessages } from './projections/conversationMessages';
+import { beginConversationRestore, finishConversationRestore, failConversationRestore } from './conversationLoading';
+import { bindCreatedRunIdentity } from './conversationIdentity';
 import { runUploadQueue } from './uploads/runUploadQueue';
 import { useRunControls } from './controllers/useRunControls';
 import { useModelSelection } from './useModelSelection';
@@ -159,6 +160,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const savedSidebar = loadPersistedSidebarOpen();
     return createState({
       ...INITIAL,
+      restoringConversationId: loadPersistedConversationId(),
       // Mobile always starts closed; desktop uses saved UI preference.
       sidebarOpen: isMobile() ? false : (savedSidebar ?? true),
     });
@@ -269,6 +271,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const refreshArtifacts = useCallback(async (sessionId?: string | null) => {
     const generation = sessionGenerationRef.current;
+    const conversationGeneration = conversationLoadGenerationRef.current;
     const sid = sessionId || currentSessionId();
     if (!sid) {
       setState((s) => update(s, { artifacts: [] }));
@@ -276,8 +279,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
     try {
       const data = await listArtifacts(sid);
-      if (generation !== sessionGenerationRef.current) return;
-      setState((s) => update(s, { artifacts: data.artifacts || [] }));
+      if (generation !== sessionGenerationRef.current ||
+          conversationGeneration !== conversationLoadGenerationRef.current ||
+          sid !== currentSessionId()) return;
+      setState((s) => {
+        if (generation !== sessionGenerationRef.current ||
+            conversationGeneration !== conversationLoadGenerationRef.current ||
+            sid !== currentSessionId()) return s;
+        return update(s, { artifacts: data.artifacts || [] });
+      });
     } catch (err) {
       console.warn('[artifacts] list failed:', (err as Error).message);
     }
@@ -341,10 +351,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // F2: do NOT abort background runs / SSE managers on conversation switch.
       // Only detach UI focus. EntityStore continues receiving events for
       // in-flight background runs.
+      bridge.focusConversation(null);
       // Optimistically focus the target conversation ID for instant feedback.
       setState((s) => {
-        const n = update(s, {
+        const n = update(beginConversationRestore(s, id), {
           conversationId: id,
+          sessionId: null,
+          artifacts: [],
+          attachments: [],
+          traceId: null,
           isStreaming: false,
           // EntityBridge keeps the per-run controller while focus detaches.
           abortCtrl: null,
@@ -383,18 +398,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
         persistConversationId(conv.id);
 
-        await bridge.rehydrateConversation(conv.id);
+        try {
+          await bridge.rehydrateConversation(conv.id);
+        } catch (error) {
+          console.warn('[conv] timeline restore failed:', error);
+          flashError('Conversation loaded, but activity history could not be restored');
+        }
         if (loadGeneration !== conversationLoadGenerationRef.current) return;
+        setState((s) => finishConversationRestore(s, id));
         applyModelForConversation(conv.id);
 
         if (sessionId) {
           await refreshArtifacts(sessionId);
+          if (loadGeneration !== conversationLoadGenerationRef.current) return;
           setStatus(`Session ${sessionId.slice(-8)}`);
         } else {
           setStatus('Agent Ready');
         }
       } catch (err) {
         if (loadGeneration !== conversationLoadGenerationRef.current) return;
+        bridge.focusConversation(null);
+        setState((s) => failConversationRestore(s, id));
         console.error('[conv] select failed:', err);
         flashError(`Failed to load conversation: ${(err as Error).message}`);
         setStatus('Agent Ready');
@@ -490,6 +514,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setState((s) => {
       const n = update(s, {
         conversationId: null,
+        restoringConversationId: null,
         messages: [],
         sessionId: null,
         artifacts: [],
@@ -547,7 +572,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(
     async (text?: string) => {
       const cur = stateRef.current;
-      if (cur.isStreaming) return;
+      if (cur.isStreaming || cur.restoringConversationId) return;
 
       if (!canSendAttachments(cur.attachments)) {
         const active = activeAttachments(cur.attachments);
@@ -587,6 +612,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setDraftText('');
 
       const abortCtrl = new AbortController();
+      const sendConversationGeneration = conversationLoadGenerationRef.current;
       let generation = 0;
       // runId assigned after create; tag user bubble once we have it so order
       // merge can place the assistant after this user even if a later turn starts.
@@ -614,6 +640,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
         if (!created.run_id) throw new Error('Run response is missing run_id');
         runId = created.run_id;
+        // The run still belongs to A if the user selected B while create-run
+        // was pending, but its response must not refocus or persist A in B's UI.
+        const canFocus = sendConversationGeneration === conversationLoadGenerationRef.current &&
+          isActiveGeneration(stateRef.current, generation);
 
         // A first turn has no client-side conversation/session yet. The create
         // response is therefore authoritative for the identity that subsequent
@@ -630,57 +660,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             // A user may have detached to another conversation while this
             // asynchronous create request was in flight. Do not steal focus
             // back from that newer UI generation.
-            if (!isActiveGeneration(s, generation)) return s;
-            const existingConversation = (s.conversations || []).find(
-              (conversation) => conversation.id === createdConversationId,
-            );
-            const hasPriorUserMessage = cur.messages.some(
-              (message) => message.role === 'user',
-            );
-            const existingTitle = String(existingConversation?.title || '')
-              .trim()
-              .toLowerCase();
-            const hasPlaceholderTitle =
-              !existingTitle ||
-              existingTitle === 'new chat' ||
-              existingTitle === 'new conversation';
-            const shouldSetInitialTitle =
-              Boolean(createdConversationId) &&
-              (!cur.conversationId ||
-                (!hasPriorUserMessage && hasPlaceholderTitle));
-            const now = new Date().toISOString();
-            const conversations = shouldSetInitialTitle
-              ? [
-                  {
-                    ...existingConversation,
-                    id: createdConversationId as string,
-                    title: conversationTitleFromUserText(trimmed),
-                    created_at: existingConversation?.created_at || now,
-                    updated_at: now,
-                  },
-                  ...(s.conversations || []).filter(
-                    (conversation) =>
-                      conversation.id !== createdConversationId,
-                  ),
-                ]
-              : s.conversations;
-            const next = update(s, {
-              ...(createdConversationId
-                ? { conversationId: createdConversationId }
-                : {}),
-              ...(createdSessionId ? { sessionId: createdSessionId } : {}),
-              ...(shouldSetInitialTitle ? { conversations } : {}),
-            });
+            if (!canFocus || !isActiveGeneration(s, generation)) return s;
+            const next = bindCreatedRunIdentity(s, cur, createdConversationId, createdSessionId, trimmed);
             stateRef.current = next;
             return next;
           });
-          if (createdConversationId) {
+          if (createdConversationId && canFocus) {
             persistConversationId(createdConversationId);
             bridge.focusConversation(createdConversationId);
           }
         }
         // Stamp the optimistic user message with run id for stable ordering.
         setState((s) => {
+          if (!canFocus || !isActiveGeneration(s, generation)) return s;
           const messages = [...s.messages];
           for (let i = messages.length - 1; i >= 0; i -= 1) {
             if (messages[i]._messageId === localMessageId) {
@@ -695,6 +687,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           conversationId: createdConversationId,
           agentSessionId: created.agent_session_id || null,
           sessionId: createdSessionId,
+          focus: canFocus,
         });
         bridge.attachTransport(runId, abortCtrl);
         await streamRunEvents(
@@ -1046,6 +1039,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const handleFilesSelected = useCallback(
     async (fileList: FileList | File[]) => {
+      if (stateRef.current.restoringConversationId) return;
       const files = Array.from(fileList || []).filter(Boolean) as File[];
       if (!files.length) return;
 
@@ -1138,7 +1132,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sessionGenerationRef.current += 1;
       const data = await apiLogin({ username, password });
       setState((s) =>
-        update(s, { authReady: true, authUser: data.user || { username } }),
+        update(s, { authReady: true, authUser: data.user || { username }, restoringConversationId: null }),
       );
       setStatus(`Logged in as ${data.user?.username || username}`);
       await refreshConversations();
@@ -1158,6 +1152,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         authReady: true,
         authUser: data.user || { username },
         conversationId: null,
+        restoringConversationId: null,
         sessionId: null,
         messages: [],
         attachments: [],
@@ -1237,7 +1232,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         if (error instanceof ApiError && error.status === 401) {
           try { await apiLogout(); } catch { /* Anonymous logout is best-effort. */ }
         }
-        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: null }));
+        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: null, restoringConversationId: null }));
       }
 
       if (!authedUser || cancelled) return;
@@ -1278,6 +1273,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             console.warn('[boot] timeline restore failed:', (error as Error).message);
             flashError('Conversation loaded, but activity history could not be restored');
           }
+          if (cancelled || loadGeneration !== conversationLoadGenerationRef.current) return;
+          setState((s) => finishConversationRestore(s, savedConvId));
           if (
             cancelled ||
             loadGeneration !== conversationLoadGenerationRef.current
@@ -1289,7 +1286,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
           return;
         } catch {
-          clearPersistedChat();
+          if (!cancelled && loadGeneration === conversationLoadGenerationRef.current) {
+            setState((s) => finishConversationRestore(s, savedConvId));
+            clearPersistedChat();
+          }
         }
       }
     }

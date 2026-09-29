@@ -3,6 +3,65 @@ import assert from 'node:assert/strict';
 import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
 
 describe('conversation history rehydration', () => {
+  it('does not let a slower old conversation steal focus after switching', async () => {
+    const originalFetch = globalThis.fetch;
+    let releaseOld!: () => void;
+    const oldResponse = new Promise<Response>((resolve) => {
+      releaseOld = () => resolve(new Response(JSON.stringify({ runs: [], events: [] }), { status: 200 }));
+    });
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes('/conv_old/events')) return oldResponse;
+      if (url.includes('/conv_new/events')) return new Response(JSON.stringify({ runs: [], events: [] }), { status: 200 });
+      if (url.includes('/datasets')) return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const bridge = createEntityBridge();
+      bridge.focusConversation('conv_old');
+      const oldRestore = bridge.rehydrateConversation('conv_old');
+      bridge.focusConversation('conv_new');
+      await bridge.rehydrateConversation('conv_new');
+      releaseOld();
+      await oldRestore;
+      assert.equal(bridge.getStore().activeConversationId, 'conv_new');
+    } finally {
+      releaseOld();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('does not let replayed run.started focus a detached conversation', async () => {
+    const originalFetch = globalThis.fetch;
+    let releaseOld!: () => void;
+    const oldResponse = new Promise<Response>((resolve) => {
+      releaseOld = () => resolve(new Response(JSON.stringify({
+        runs: [{ run_id: 'run_old', conversation_id: 'conv_old', status: 'succeeded' }],
+        events: [{ run_id: 'run_old', type: 'run.started', sequence: 1, event_id: 'event_old', payload: { conversation_id: 'conv_old' } }],
+      }), { status: 200 }));
+    });
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.includes('/conv_old/events')) return oldResponse;
+      if (url.includes('/run_old/tools')) return new Response(JSON.stringify({ tools: [] }), { status: 200 });
+      if (url.includes('/datasets')) return new Response(JSON.stringify({ datasets: [] }), { status: 200 });
+      throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch;
+    try {
+      const bridge = createEntityBridge();
+      bridge.focusConversation('conv_old');
+      const oldRestore = bridge.rehydrateConversation('conv_old');
+      bridge.focusConversation(null);
+      releaseOld();
+      await oldRestore;
+      assert.equal(bridge.getStore().activeConversationId, null);
+      assert.equal(bridge.getStore().activeRunId, null);
+    } finally {
+      releaseOld();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('restores the real flattened platform-event contract after refresh', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input) => {

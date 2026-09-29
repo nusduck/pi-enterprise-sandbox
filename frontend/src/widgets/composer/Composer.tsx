@@ -95,7 +95,7 @@ export function Composer() {
   const uploading = hasUploadingAttachments(state.attachments);
   const hasUploaded = uploadedAttachments(state.attachments).length > 0;
 
-  const idleSendDisabled = !gateOk;
+  const idleSendDisabled = !gateOk || Boolean(state.restoringConversationId);
   const textEmpty = !draftText.trim() && !hasUploaded;
 
   useEffect(() => {
@@ -266,6 +266,11 @@ export function Composer() {
   const note = needsVision
     ? '当前模型不支持图片，请换一个支持看图的模型'
     : mode === 'running' ? runningNote : MODE_NOTE[mode] || (!gateOk ? (uploading ? '等待附件上传完成' : '有附件上传失败，请重试或移除') : '');
+
+  // A's pending-run controls must not remain interactive while loading B.
+  if (state.restoringConversationId) {
+    return <div className={s.wrap} role="status">正在恢复会话，暂不可操作…</div>;
+  }
 
   return (
     <>
