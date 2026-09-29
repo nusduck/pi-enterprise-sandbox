@@ -112,12 +112,13 @@ describe('AgentConfigValidator accepted configurations', () => {
     assert.deepEqual(result.effectiveSummary.migration.blockedPaths, ['skills']);
   });
 
-  it('drops an empty legacy placeholder instead of blocking or re-emitting it', () => {
-    const result = validator().validate({ skills: [], extensions: {} });
-    assert.deepEqual(result.errors, []);
-    assert.equal(result.valid, true);
-    assert.equal(Object.hasOwn(result.normalizedConfig ?? {}, 'skills'), false);
-    assert.equal(Object.hasOwn(result.normalizedConfig ?? {}, 'extensions'), false);
+  it('rejects the removed skills/extensions/sandboxPolicy/a2a fields as unknown on v1', () => {
+    const result = validator().validate({ schemaVersion: 1, skills: [], extensions: [], sandboxPolicy: {}, a2a: {} });
+    assert.equal(result.valid, false);
+    assert.deepEqual(
+      result.errors.map((error) => error.path).sort(),
+      ['a2a', 'extensions', 'sandboxPolicy', 'skills'],
+    );
   });
 
   it('authorizes a referenced MCP tool and rejects only the unavailable one', () => {

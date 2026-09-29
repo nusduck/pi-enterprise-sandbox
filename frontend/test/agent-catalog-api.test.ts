@@ -55,7 +55,7 @@ describe('agent catalog api', () => {
       agents: [
         {
           agent_id: '01J0000000000000000000000A',
-          name: 'default',
+          name: '通用智能体',
           status: 'active',
           active_version_id: '01J0000000000000000000000V',
           active_version_no: 1,
@@ -67,7 +67,7 @@ describe('agent catalog api', () => {
     const agents = await listAgents();
     assert.equal(calls[0]?.url, '/api/agents');
     assert.equal(agents.length, 1);
-    assert.equal(agents[0]?.name, 'default');
+    assert.equal(agents[0]?.name, '通用智能体');
     assert.equal(agents[0]?.active_version_no, 1);
   });
 
@@ -395,12 +395,12 @@ describe('agents page helpers', () => {
   it('keeps the tenant default agent at the top of the list', () => {
     const rows = [
       { agent_id: '3', name: 'zeta', status: 'active' },
-      { agent_id: '1', name: 'default', status: 'active' },
+      { agent_id: '1', name: '通用智能体', status: 'active' },
       { agent_id: '2', name: 'alpha', status: 'active' },
     ];
     assert.deepEqual(
       sortAgentsForDisplay(rows).map((a) => a.name),
-      ['default', 'alpha', 'zeta'],
+      ['通用智能体', 'alpha', 'zeta'],
     );
   });
 });
