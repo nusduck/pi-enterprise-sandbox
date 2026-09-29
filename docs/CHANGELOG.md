@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **前端删除 `context.usage` 死代码链**：`context.usage` 事件的生产者是 Pi 时代的 observability 扩展（#10），
+  在 DSH 重建（#44）时连同扩展一起删除，而读取它的上下文检查器界面在前端重设计（#45）中已删，
+  此后整条链两头都空。现在删除 reducer 的 `run.context_updated` 分支、`Run.contextUsage` 字段、
+  `context.usage` 别名映射与 schema 项。若以后要恢复「上下文占用」展示，需要 agent 侧重新发事件
+  （DSH agent-loop 已记录 `contextWindow` 与模型返回的 `usage`）并重新做界面。
+
 - **新增 ADR 0014：SSE 契约以真实平台事件为准**：取代 ADR 0007 验证要求第 1 条（「`sse_events.json` 逐字节不变、
   api-server/frontend 零改动」）。该夹具描述的旧事件名已不存在，验证依据改为真实线上帧回放
   （`frontend/test/fixtures/live-run-sse.json`）；0007 与 README/AGENTS 的索引同步加了取代说明。

@@ -138,12 +138,6 @@ export type RunEntity = {
     message: string | null;
     options: string[];
   } | null;
-  contextUsage: {
-    tokens: number | null;
-    contextWindow: number | null;
-    percent: number | null;
-    warning: boolean;
-  } | null;
   compactionStatus: 'idle' | 'running' | 'completed' | 'failed';
   compactionError: string | null;
   taskPlan: Array<{
