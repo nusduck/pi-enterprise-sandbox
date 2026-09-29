@@ -92,6 +92,16 @@ function sseData(obj: unknown): Uint8Array {
 
 // ── Suite ───────────────────────────────────────────────────────
 
+/** Assistant text of a Run, read from its message entities. */
+function runText(bridge: ReturnType<typeof createEntityBridge>, runId: string): string {
+  const store = bridge.getStore();
+  return store.runsById[runId].messageIds
+    .map((id) => store.messagesById[id])
+    .filter((m) => m.role === 'assistant')
+    .map((m) => m.text)
+    .join('');
+}
+
 describe('F6 E2E smoke — core flows (mock backend)', () => {
   let store: Store;
   let originalFetch: typeof fetch | undefined;
@@ -136,7 +146,8 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
       { role: 'user', content: 'Hello from server' },
       { role: 'assistant', content: 'Hi there' },
     ]);
-    assert.equal(serverMessages.length, 2);
+    // Assistant output renders from the Run's entities, not the transcript.
+    assert.equal(serverMessages.length, 1);
     assert.equal(
       (serverMessages[0].content[0] as { text: string }).text,
       'Hello from server',
@@ -152,7 +163,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
       sessionId: 'sess_1',
     });
     assert.equal(s.conversationId, 'conv_server_1');
-    assert.equal(s.messages.length, 2);
+    assert.equal(s.messages.length, 1);
 
     clearPersistedChat();
     assert.equal(loadPersistedConversationId(), null);
@@ -175,8 +186,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     for (const chunk of ['Hel', 'lo', ' world']) {
       bridge.ingestAgentEvent(runId, { type: 'token', text: chunk });
     }
-    const projected = bridge.projectRunMessages(runId);
-    assert.equal((projected[0].content[0] as { text: string }).text, 'Hello world');
+    assert.equal(runText(bridge, runId), 'Hello world');
     assert.equal('currentMsg' in createState(INITIAL), false);
     bridge.dispose();
   });
@@ -196,10 +206,7 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
 
     const storeSnap = bridge.getStore();
     assert.equal(storeSnap.runsById[runId].status, 'succeeded');
-    const msgs = bridge.projectRunMessages(runId);
-    assert.ok(msgs.length >= 1);
-    const text = (msgs[0].content[0] as { text?: string }).text || '';
-    assert.match(text, /Answer/);
+    assert.match(runText(bridge, runId), /Answer/);
     bridge.dispose();
   });
 
@@ -211,10 +218,8 @@ describe('F6 E2E smoke — core flows (mock backend)', () => {
     bridge.ingestAgentEvent(r1, { type: 'done' });
     const r2 = bridge.beginRun({ conversationId: 'c-multi' });
     bridge.ingestAgentEvent(r2, { type: 'token', text: 'Second reply' });
-    const fromR1 = bridge.projectRunMessages(r1);
-    const fromR2 = bridge.projectRunMessages(r2);
-    assert.match(String((fromR1[0]?.content[0] as { text?: string })?.text || ''), /First reply/);
-    assert.match(String((fromR2[0]?.content[0] as { text?: string })?.text || ''), /Second reply/);
+    assert.match(runText(bridge, r1), /First reply/);
+    assert.match(runText(bridge, r2), /Second reply/);
     // Both runs remain addressable after activeRunId moves to r2
     assert.equal(bridge.getStore().activeRunId, r2);
     assert.ok(bridge.getStore().runsById[r1]);

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **前端消息区收敛为单一渲染路径**（PR #55 之后的清理）：助手行不再由「服务端转录 + 实时投影」两路合并，
+  而是每个 Run 一行、正文完全由 `TurnStream` 从 EntityStore 渲染；`ChatState.messages` 只存用户回合。
+  删除旧气泡分支（`ThinkingBlock`、转录文本/`_fileLinks` 渲染）、`projectRunMessages`、
+  文本/序号猜测式的合并去重、`mergeAssistantTurns` 与对应样式；run 失败原因改在 `TurnStream` 内展示。
+  不再兼容没有 Run 事件的旧会话（开发期，不迁移）；创建 Run 只发当前用户回合。
+
 - **租户默认 Agent 改名「通用智能体」并移除旧配置字段**：默认 Agent 的定义名从 `default` 改为
   `通用智能体`（同名即查找键，开发期已有的 `default` 行不会被迁移，会另建新行）；新建默认版本
   直接发 `schemaVersion: 1` 配置，不再带 `skills`/`extensions`/`sandboxPolicy`/`a2a`。

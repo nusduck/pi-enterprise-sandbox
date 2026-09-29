@@ -18,6 +18,7 @@ import { projectTurnItems, runHasTurnEntities, type TurnItem } from '../../featu
 
 export { runHasTurnEntities };
 import { MarkdownBody } from '../markdown/Markdown';
+import { runFailureReason } from '../../features/chat/projections/conversationMessages';
 import { turnSummary } from '../../features/chat/projections/turnFields';
 import { ArtifactDrawer, type DrawerArtifact } from './ArtifactDrawer';
 import {
@@ -67,6 +68,7 @@ export function TurnStream({ runId }: { runId: string }) {
 
   const run = entityStore.runsById[runId];
   const runActive = Boolean(run && !isTerminalRunStatus(String(run.status)));
+  const failureReason = runFailureReason(run);
   const items = useMemo(() => projectTurnItems(entityStore, runId), [entityStore, runId]);
 
   const related = useMemo(() => {
@@ -253,6 +255,11 @@ export function TurnStream({ runId }: { runId: string }) {
             <div className={s.cardH}><b>等待审批</b></div>
             <div className={s.cardB}>这次运行在等待审批，但审批详情还没有加载。刷新页面后可以在这里处理。</div>
           </div>
+        </div>
+      ) : null}
+      {failureReason ? (
+        <div className={s.item}>
+          <div className={s.errText} role="alert">运行失败：{failureReason}</div>
         </div>
       ) : null}
       {trailingArtifacts.map((a) => (

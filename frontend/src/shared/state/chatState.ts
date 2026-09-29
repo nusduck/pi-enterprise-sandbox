@@ -230,6 +230,9 @@ export function clearPersistedChat(): void {
 /**
  * Normalize server conversation messages into UI message shape.
  * Server stores { role, content: string }; UI uses content: [{ type:'text', text }].
+ *
+ * Only user turns are kept: assistant output (text, thinking, tools) is
+ * rendered from the Run's EntityStore projection, never from this transcript.
  */
 export function normalizeServerMessages(messages: unknown): ChatMessage[] {
   if (!Array.isArray(messages)) return [];
@@ -237,8 +240,7 @@ export function normalizeServerMessages(messages: unknown): ChatMessage[] {
     .filter(
       (m): m is Record<string, unknown> =>
         Boolean(m) &&
-        ((m as { role?: string }).role === 'user' ||
-          (m as { role?: string }).role === 'assistant'),
+        (m as { role?: string }).role === 'user',
     )
     .map((m) => {
       let text = '';
@@ -258,14 +260,6 @@ export function normalizeServerMessages(messages: unknown): ChatMessage[] {
       const out: ChatMessage = {
         role: m.role as string,
         content: [{ type: 'text', text }],
-        thinking:
-          typeof m.thinking === 'string' ? m.thinking : undefined,
-        thinkingStatus:
-          m.thinking_status === 'streaming' || m.thinkingStatus === 'streaming'
-            ? 'streaming'
-            : typeof m.thinking === 'string' && m.thinking
-              ? 'complete'
-              : undefined,
         _messageId: String(m.messageId ?? m.message_id ?? m.id ?? ''),
         _runId:
           m.runId != null || m.run_id != null
@@ -297,25 +291,14 @@ export function normalizeServerMessages(messages: unknown): ChatMessage[] {
           }];
         });
       }
-      // Preserve interrupted status from server persistence / recovery
-      if (m.interrupted === true || m.status === 'interrupted') {
-        out.interrupted = true;
-        out.status = 'interrupted';
-      }
-      if (m.stopReason) out.stopReason = String(m.stopReason);
       return out;
     });
 }
 
-/** True when an assistant message should show the interrupted badge. */
+/** True when an assistant row (derived from a Run) should show the interrupted badge. */
 export function isInterruptedMessage(msg: ChatMessage | null | undefined): boolean {
   if (!msg || msg.role === 'user') return false;
-  return (
-    msg.interrupted === true ||
-    msg.status === 'interrupted' ||
-    msg.stopReason === 'aborted' ||
-    msg.stopReason === 'interrupted'
-  );
+  return msg.interrupted === true || msg.status === 'interrupted';
 }
 
 /**

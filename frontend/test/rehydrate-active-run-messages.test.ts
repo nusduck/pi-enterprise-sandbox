@@ -116,15 +116,18 @@ function installFetch(runtimeAvailable: boolean) {
   return { restore: () => { globalThis.fetch = originalFetch; }, seen };
 }
 
+/** The Run's message entities in order — the only source the UI renders from. */
+function runMessages(bridge: ReturnType<typeof createEntityBridge>) {
+  const store = bridge.getStore();
+  return (store.runsById[RUN]?.messageIds ?? [])
+    .map((id) => store.messagesById[id])
+    .filter(Boolean);
+}
+
 function assistantText(bridge: ReturnType<typeof createEntityBridge>) {
-  return bridge
-    .projectRunMessages(RUN)
+  return runMessages(bridge)
     .filter((m) => m.role === 'assistant')
-    .map((m) =>
-      typeof m.content === 'string'
-        ? m.content
-        : JSON.stringify(m.content ?? ''),
-    )
+    .map((m) => m.text)
     .join('');
 }
 
@@ -149,7 +152,7 @@ describe('refresh during an active Run', () => {
     try {
       const bridge = createEntityBridge();
       await bridge.rehydrateConversation(CONV);
-      const roles = bridge.projectRunMessages(RUN).map((m) => m.role);
+      const roles = runMessages(bridge).map((m) => m.role);
       assert.ok(roles.includes('user'), `expected a user message, got ${roles}`);
     } finally {
       restore();
@@ -161,9 +164,7 @@ describe('refresh during an active Run', () => {
     try {
       const bridge = createEntityBridge();
       await bridge.rehydrateConversation(CONV);
-      const assistants = bridge
-        .projectRunMessages(RUN)
-        .filter((m) => m.role === 'assistant');
+      const assistants = runMessages(bridge).filter((m) => m.role === 'assistant');
       assert.equal(
         assistants.length,
         1,

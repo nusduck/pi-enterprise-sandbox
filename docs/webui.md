@@ -300,9 +300,17 @@ sendMessage(text)
   │       token                    → MessageEntity delta
   │       tool/approval/file_ready → 对应规范化实体
   │       done/error               → 不可被尾随 session_closed 覆盖的终态
-  ├── selectors/projectRunMessages
-  └── React 最终渲染
+  ├── projections/projectConversationMessages（用户行 + 每个 Run 一个助手行）
+  └── React 最终渲染（助手行的正文一律由 TurnStream 从 EntityStore 渲染）
 ```
+
+### 消息区的唯一渲染路径
+
+`ChatState.messages` 只保存用户回合（服务端历史 + 乐观发送）；服务端转录里的 assistant 行、
+`thinking` 字段不进前端状态。每个 Run 恰好对应一个助手行，其思考、文本、工具、审批、产物
+全部由 `TurnStream` 从 EntityStore 按事件顺序渲染，失败原因（`run.error`）与「运行已中断」
+也来自 Run 实体。不存在「转录气泡 → 时间线」的二次切换，也不再有按文本/序号猜测合并
+转录行与实时投影的逻辑。创建 Run 只发送当前用户回合（服务端只取最后一条用户消息）。
 
 ### 会话切换与中止
 

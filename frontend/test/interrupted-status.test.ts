@@ -9,26 +9,19 @@ import {
 } from '../src/shared/state/index.ts';
 
 describe('interrupted status', () => {
-  it('normalizeServerMessages preserves interrupted flag', () => {
+  it('normalizeServerMessages keeps user turns only — assistant output comes from Run entities', () => {
     const msgs = normalizeServerMessages([
       { role: 'user', content: 'hi' },
-      {
-        role: 'assistant',
-        content: 'partial',
-        interrupted: true,
-        status: 'interrupted',
-      },
+      { role: 'assistant', content: 'partial', interrupted: true, thinking: 'hmm' },
     ]);
-    assert.equal(msgs.length, 2);
-    assert.equal(msgs[1].interrupted, true);
-    assert.equal(msgs[1].status, 'interrupted');
-    assert.equal(msgs[1].content[0] && 'text' in msgs[1].content[0] ? msgs[1].content[0].text : '', 'partial');
+    assert.equal(msgs.length, 1);
+    assert.equal(msgs[0].role, 'user');
   });
 
   it('normalizeServerMessages retains durable message ordering metadata', () => {
     const [message] = normalizeServerMessages([{
-      role: 'assistant',
-      content: 'durable answer',
+      role: 'user',
+      content: 'durable question',
       message_id: 'msg_01',
       run_id: 'run_01',
       sequence_no: 42,
@@ -70,8 +63,8 @@ describe('interrupted status', () => {
     assert.equal(
       isInterruptedMessage({
         role: 'assistant',
-        content: [{ type: 'text', text: 'hello' }],
-        stopReason: 'aborted',
+        content: [],
+        status: 'interrupted',
       }),
       true,
     );
