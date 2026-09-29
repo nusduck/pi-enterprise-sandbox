@@ -898,26 +898,6 @@ export function reduceRuntimeEvent(
       break;
     }
 
-    case 'run.context_updated': {
-      const prior = next.runsById[runId]?.contextUsage;
-      next = touchRun(next, runId, {
-        contextUsage: {
-          tokens: typeof payload.tokens === 'number' ? payload.tokens : prior?.tokens ?? null,
-          // Accept both spellings of the window field.
-          contextWindow: typeof payload.context_window === 'number'
-            ? payload.context_window
-            : typeof payload.contextWindow === 'number'
-              ? payload.contextWindow
-              : prior?.contextWindow ?? null,
-          percent: typeof payload.percent === 'number' ? payload.percent : prior?.percent ?? null,
-          warning: typeof payload.warning === 'boolean'
-            ? payload.warning
-            : prior?.warning === true,
-        },
-      });
-      break;
-    }
-
     case 'run.task_plan_updated': {
       const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
       next = touchRun(next, runId, {

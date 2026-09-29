@@ -126,7 +126,6 @@ export function createRun(
     budgetLimits: null,
     budgetWarning: null,
     pendingInput: null,
-    contextUsage: null,
     compactionStatus: 'idle',
     compactionError: null,
     taskPlan: [],
