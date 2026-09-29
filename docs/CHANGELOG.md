@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   文本/序号猜测式的合并去重、`mergeAssistantTurns` 与对应样式；run 失败原因改在 `TurnStream` 内展示。
   不再兼容没有 Run 事件的旧会话（开发期，不迁移）；创建 Run 只发当前用户回合。
 
+- **租户默认 Agent 改名「通用智能体」并移除旧配置字段**：默认 Agent 的定义名从 `default` 改为
+  `通用智能体`（同名即查找键，开发期已有的 `default` 行不会被迁移，会另建新行）；新建默认版本
+  直接发 `schemaVersion: 1` 配置，不再带 `skills`/`extensions`/`sandboxPolicy`/`a2a`。
+  校验器不再把这四个字段当只读兼容数据，出现即 `CONFIG_UNKNOWN_FIELD`（legacy 记录里为
+  `LEGACY_FIELD_REQUIRES_MIGRATION`）。
+
 ### Added
 
 - **长任务完成邮件通知**：用户在「设置 → 账户」打开开关后，自己发起的 Run 运行超过阈值（默认 5 分钟）结束时——完成、失败或取消——
@@ -845,7 +851,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **api-server 与 agent 容器以 root 运行**：两个 Dockerfile 现在在移交写入路径后降权到基础镜像的 `node` 用户。存量部署注意：`agent_user_skills` 卷是以 root 创建的，需重建或 chown 一次。
 - **BFF 全部出站调用无超时**：上游接受连接但不响应时会无限悬挂并钉死浏览器请求与 socket。Agent 调用现受 `AGENT_REQUEST_TIMEOUT_MS`（默认 15s）约束，Sandbox 调用受 `SANDBOX_REQUEST_TIMEOUT_MS`（默认 15s）约束。
 - **Sandbox JWT 密钥 fail-open**：`auth_enabled=true` 但未配置密钥时回退到公开默认值，可伪造任意身份 token。现在缺失即启动失败（fail-closed）。
-
 
 ## [0.1.0] — 2026-06-28
 

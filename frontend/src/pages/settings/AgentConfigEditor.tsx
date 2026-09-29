@@ -420,10 +420,9 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
             onChange={(event) => onChange(event.target.value)}
             aria-label="智能体配置 JSON"
           />
-          <small>未知字段和旧字段会保留在草稿里并由服务端校验报告；切换分类不会丢弃它们。</small>
+          <small>未知字段会保留在草稿里并由服务端校验报告；切换分类不会丢弃它们。</small>
         </label>
         <p className={s.hint}>
-          平台管理的 skills、extensions、sandboxPolicy、a2a 只能继承，不提供保存后不生效的开关。
           Schema v{options?.schemaVersion ?? '—'} · 能力版本 {options?.capabilityRevision || '未知'}
         </p>
       </div>
