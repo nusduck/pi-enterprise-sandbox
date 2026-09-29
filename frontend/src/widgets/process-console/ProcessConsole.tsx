@@ -1,5 +1,5 @@
 /**
- * Process Console sheet — live stdout/stderr, stdin, signal, cancel,
+ * Process Console sheet — logs (GET /api/processes/{id}/logs), stdin, signal, cancel,
  * offset history load, pause auto-scroll, stream filter, search, download.
  * (ADR 0003 §8.3 / F4)
  */
@@ -47,7 +47,6 @@ export function ProcessConsole({
   const [historyStdout, setHistoryStdout] = useState('');
   const [historyStderr, setHistoryStderr] = useState('');
   const [historyOffset, setHistoryOffset] = useState(0);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
 
   // Reset local state when process changes
@@ -60,18 +59,11 @@ export function ProcessConsole({
     setHistoryStdout('');
     setHistoryStderr('');
     setHistoryOffset(0);
-    setHistoryLoaded(false);
   }, [process?.id]);
 
-  const liveStdout = process?.stdout || '';
-  const liveStderr = process?.stderr || '';
-  // Prefer live entity logs; prepend history only when it adds content
-  const stdout = historyLoaded
-    ? mergeLogs(historyStdout, liveStdout)
-    : liveStdout;
-  const stderr = historyLoaded
-    ? mergeLogs(historyStderr, liveStderr)
-    : liveStderr;
+  // Logs come from GET /api/processes/{id}/logs; the stream carries no process output.
+  const stdout = historyStdout;
+  const stderr = historyStderr;
 
   const lines = useMemo(
     () =>
@@ -122,7 +114,6 @@ export function ProcessConsole({
         historyOffset === 0 ? logs.stderr : prev + logs.stderr,
       );
       setHistoryOffset(logs.next_offset);
-      setHistoryLoaded(true);
       flash(
         logs.truncated
           ? `Loaded history (truncated · offset ${logs.next_offset})`
@@ -377,12 +368,3 @@ export function ProcessConsole({
   );
 }
 
-/** Prefer longer live buffer; otherwise concatenate unique prefix history. */
-function mergeLogs(history: string, live: string): string {
-  if (!history) return live;
-  if (!live) return history;
-  if (live.startsWith(history)) return live;
-  if (history.includes(live)) return history;
-  // Overlap heuristic: if live is a suffix of history+live, just append
-  return history + live;
-}

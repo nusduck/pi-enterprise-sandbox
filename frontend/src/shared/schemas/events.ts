@@ -12,8 +12,6 @@ export const RUNTIME_EVENT_TYPES = [
   'run.completed',
   'run.failed',
   'run.cancelled',
-  'run.trace',
-  'message.started',
   'message.delta',
   'message.completed',
   'thinking.started',
@@ -24,18 +22,8 @@ export const RUNTIME_EVENT_TYPES = [
   'tool.started',
   'tool.completed',
   'tool.failed',
-  'process.started',
-  'process.stdout',
-  'process.stderr',
-  'process.completed',
-  'process.failed',
   'artifact.created',
-  'session.restored',
   'session.compacted',
-  'budget.warning',
-  'budget.exceeded',
-  'run.task_plan_updated',
-  'run.compaction_updated',
 ] as const;
 
 export type RuntimeEventType = (typeof RUNTIME_EVENT_TYPES)[number] | string;

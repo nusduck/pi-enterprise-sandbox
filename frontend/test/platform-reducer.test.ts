@@ -13,8 +13,6 @@ import {
   rehydrateToolExecutions,
 } from '../src/shared/state/runReducer.ts';
 import {
-  PROCESS_LOG_CHAR_CAP,
-  appendCappedLog,
   inferToolSource,
   isExternalRiskApproval,
   normalizeToRuntimeEvent,
@@ -252,7 +250,7 @@ describe('normalizeToRuntimeEvent', () => {
 });
 
 describe('unified platform reducer', () => {
-  it('applies platform tool/process/approval/artifact chain', () => {
+  it('applies platform tool/approval/artifact chain', () => {
     const runId = '01HZRUN0000000000000000001';
     const { store, applied } = reducePlatformEventBatch(createEntityStore(), [
       platform({
@@ -270,36 +268,15 @@ describe('unified platform reducer', () => {
         data: { toolCallId: 'tc_bash', name: 'bash', args: { command: 'pwd' } },
       }),
       platform({
-        eventId: '01HZEVT0000000000000000012',
-        sequence: 3,
-        type: 'process.started',
-        runId,
-        data: { processId: 'p1', command: 'pwd', toolCallId: 'tc_bash' },
-      }),
-      platform({
-        eventId: '01HZEVT0000000000000000013',
-        sequence: 4,
-        type: 'process.output',
-        runId,
-        data: { processId: 'p1', stream: 'stdout', text: '/workspace\n', cursor: 11 },
-      }),
-      platform({
-        eventId: '01HZEVT0000000000000000014',
-        sequence: 5,
-        type: 'process.completed',
-        runId,
-        data: { processId: 'p1', exitCode: 0 },
-      }),
-      platform({
         eventId: '01HZEVT0000000000000000015',
-        sequence: 6,
+        sequence: 3,
         type: 'tool.execution.completed',
         runId,
         data: { toolCallId: 'tc_bash', result: { ok: true } },
       }),
       platform({
         eventId: '01HZEVT0000000000000000016',
-        sequence: 7,
+        sequence: 4,
         type: 'approval.requested',
         runId,
         data: {
@@ -312,7 +289,7 @@ describe('unified platform reducer', () => {
       }),
       platform({
         eventId: '01HZEVT0000000000000000018',
-        sequence: 8,
+        sequence: 5,
         type: 'artifact.ready',
         runId,
         data: {
@@ -324,11 +301,9 @@ describe('unified platform reducer', () => {
       }),
     ]);
 
-    assert.ok(applied >= 8);
+    assert.ok(applied >= 5);
     assert.equal(store.toolExecutionsById.tc_bash.status, 'completed');
     assert.equal(store.toolExecutionsById.tc_bash.source, 'sandbox');
-    assert.equal(store.processesById.p1.stdout, '/workspace\n');
-    assert.equal(store.processesById.p1.status, 'completed');
     assert.equal(store.approvalsById.ap_net.status, 'pending');
     assert.equal(store.approvalsById.ap_net.risk, 'high');
     assert.equal(store.artifactsById.art1.source, 'submit_artifact');
@@ -660,43 +635,6 @@ describe('permission / display boundaries', () => {
     assert.equal(inferToolSource('bash', {}), 'sandbox');
     assert.equal(inferToolSource('mcp_db_query', {}), 'mcp');
     assert.equal(inferToolSource('custom', { source: 'internal' }), 'internal');
-  });
-});
-
-describe('process log memory cap', () => {
-  it('appendCappedLog keeps tail under PROCESS_LOG_CHAR_CAP', () => {
-    const chunk = 'x'.repeat(PROCESS_LOG_CHAR_CAP + 5000);
-    const { text, truncated } = appendCappedLog('', chunk);
-    assert.equal(truncated, true);
-    assert.ok(text.length <= PROCESS_LOG_CHAR_CAP + 64);
-    assert.match(text, /truncated/);
-  });
-
-  it('reducer truncates huge process.output streams', () => {
-    const huge = 'y'.repeat(PROCESS_LOG_CHAR_CAP + 2000);
-    let s = createEntityStore();
-    s = reduceRuntimeEvent(
-      s,
-      makeRuntimeEvent({
-        event_id: 'p1',
-        sequence: 1,
-        run_id: 'run_p',
-        type: 'process.started',
-        payload: { process_id: 'proc1', command: 'yes' },
-      }),
-    ).store;
-    s = reduceRuntimeEvent(
-      s,
-      makeRuntimeEvent({
-        event_id: 'p2',
-        sequence: 2,
-        run_id: 'run_p',
-        type: 'process.output',
-        payload: { process_id: 'proc1', stream: 'stdout', text: huge },
-      }),
-    ).store;
-    assert.equal(s.processesById.proc1.logTruncated, true);
-    assert.ok(s.processesById.proc1.stdout.length < huge.length);
   });
 });
 

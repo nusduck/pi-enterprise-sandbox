@@ -269,7 +269,7 @@ describe('run event reducer', () => {
     assert.equal(gap.store.runsById.run_o.lastSequence, 2);
   });
 
-  it('tracks tool, approval, process, artifact via IDs on run', () => {
+  it('tracks tool, approval, artifact via IDs on run', () => {
     let s = createEntityStore();
     const batch = reduceRuntimeEventBatch(s, [
       ev({
@@ -301,42 +301,26 @@ describe('run event reducer', () => {
         event_id: 't4',
         sequence: 4,
         run_id: 'run_t',
-        type: 'process.started',
-        payload: { process_id: 'p1', command: 'ls' },
-      }),
-      ev({
-        event_id: 't5',
-        sequence: 5,
-        run_id: 'run_t',
-        type: 'process.stdout',
-        payload: { process_id: 'p1', text: 'file.txt\n' },
-      }),
-      ev({
-        event_id: 't6',
-        sequence: 6,
-        run_id: 'run_t',
         type: 'artifact.created',
         payload: { artifact_id: 'a1', name: 'out.pdf' },
       }),
       ev({
-        event_id: 't7',
-        sequence: 7,
+        event_id: 't5',
+        sequence: 5,
         run_id: 'run_t',
         type: 'tool.completed',
         payload: { tool_call_id: 'tc1', result: { ok: true } },
       }),
     ]);
     s = batch.store;
-    assert.equal(batch.applied, 7);
+    assert.equal(batch.applied, 5);
     const run = s.runsById.run_t;
     assert.deepEqual(run.toolExecutionIds, ['tc1']);
     assert.deepEqual(run.approvalIds, ['ap1']);
-    assert.deepEqual(run.processIds, ['p1']);
     assert.deepEqual(run.artifactIds, ['a1']);
     assert.equal(s.approvalsById.ap1.status, 'pending');
     assert.equal(s.approvalsById.ap1.idempotencyKey, 'approval_scope_1');
     assert.equal(s.toolExecutionsById.tc1.status, 'completed');
-    assert.equal(s.processesById.p1.stdout, 'file.txt\n');
     assert.equal(getRunToolExecutions(s, 'run_t')[0].name, 'bash');
 
     // A repeated SSE notification for the same durable approval is an update,
@@ -345,7 +329,7 @@ describe('run event reducer', () => {
       s,
       ev({
         event_id: 't8',
-        sequence: 8,
+        sequence: 6,
         run_id: 'run_t',
         type: 'tool.approval_required',
         payload: {

@@ -113,11 +113,7 @@ describe('F6 a11y attributes on key surfaces', () => {
     assert.match(caps, /aria-selected=\{tab === id\}/);
   });
 
-  it('BudgetBar + ConversationHeader: status/region labels', () => {
-    const budget = readSrc('widgets', 'budget-bar', 'BudgetBar.tsx');
-    assert.match(budget, /role=["']status["']/);
-    assert.match(budget, /aria-label=\{`Budget:/);
-
+  it('ConversationHeader: region label', () => {
     const header = readSrc(
       'widgets',
       'conversation-header',

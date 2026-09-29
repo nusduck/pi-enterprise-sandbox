@@ -13,13 +13,6 @@ import {
   isProcessInteractive,
 } from '../src/widgets/process-console/logHelpers.ts';
 import {
-  budgetTone,
-  extractBudgetSnapshot,
-  formatBudgetSummary,
-  hasBudgetData,
-  listBudgetDimensions,
-} from '../src/widgets/budget-bar/budget.ts';
-import {
   cancelProcess,
   getProcessLogs,
   listProcesses,
@@ -69,54 +62,6 @@ describe('process console log lines', () => {
     assert.equal(isProcessInteractive('waiting_input'), true);
     assert.equal(isProcessInteractive('completed'), false);
     assert.equal(isProcessInteractive('failed'), false);
-  });
-
-  it('projects rehydrated process entity buffers into console log lines (D5)', () => {
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
-      makeRuntimeEvent({
-        event_id: 'p1',
-        sequence: 1,
-        run_id: 'run_pc',
-        type: 'process.started',
-        payload: { process_id: 'proc_view', command: 'python -u app.py' },
-      }),
-      makeRuntimeEvent({
-        event_id: 'p2',
-        sequence: 2,
-        run_id: 'run_pc',
-        type: 'process.output',
-        payload: {
-          process_id: 'proc_view',
-          stream: 'stdout',
-          text: 'line-a\nline-b\n',
-        },
-      }),
-      makeRuntimeEvent({
-        event_id: 'p3',
-        sequence: 3,
-        run_id: 'run_pc',
-        type: 'process.output',
-        payload: {
-          process_id: 'proc_view',
-          stream: 'stderr',
-          text: 'warn\n',
-        },
-      }),
-    ]);
-    const proc = store.processesById.proc_view;
-    assert.ok(proc);
-    const lines = buildLogLines(proc.stdout, proc.stderr);
-    assert.deepEqual(
-      lines.map((l) => [l.stream, l.text]),
-      [
-        ['stdout', 'line-a'],
-        ['stdout', 'line-b'],
-        ['stderr', 'warn'],
-      ],
-    );
-    const download = formatLogsForDownload(proc.stdout, proc.stderr);
-    assert.match(download, /line-a/);
-    assert.match(download, /warn/);
   });
 });
 
@@ -259,76 +204,12 @@ describe('process API client (session-scoped exec authority)', () => {
         runId: 'r1',
         status: 'completed',
         command: 'echo hi',
-        stdout: 'hi\n',
         exitCode: 0,
       }),
     );
     const proc = store.processesById.done_p;
     assert.equal(isProcessInteractive(proc.status), false);
-    const lines = buildLogLines(proc.stdout, proc.stderr);
-    assert.equal(lines.length, 1);
-    assert.equal(lines[0].text, 'hi');
-  });
-});
-
-describe('budget helpers', () => {
-  it('hasBudgetData requires usage', () => {
-    assert.equal(hasBudgetData(null), false);
-    assert.equal(hasBudgetData({ usage: null, limits: null }), false);
-    assert.equal(
-      hasBudgetData({ usage: { steps: 1 }, limits: { max_steps: 10 } }),
-      true,
-    );
-  });
-
-  it('lists dimensions and formats summary', () => {
-    const snap = {
-      usage: { steps: 8, tool_calls: 3, llm_tokens: 1200 },
-      limits: {
-        max_steps: 10,
-        max_tool_calls: 100,
-        max_llm_tokens: 500_000,
-      },
-    };
-    const dims = listBudgetDimensions(snap);
-    assert.ok(dims.length >= 3);
-    const steps = dims.find((d) => d.key === 'steps');
-    assert.ok(steps);
-    assert.equal(steps!.near, true); // 8/10 = 0.8
-    assert.equal(steps!.exceeded, false);
-
-    const summary = formatBudgetSummary(snap);
-    assert.match(summary, /Steps/);
-    assert.match(summary, /Tools/);
-    assert.equal(budgetTone(snap), 'near');
-  });
-
-  it('budgetTone exceeded when over limit', () => {
-    const snap = {
-      usage: { steps: 12 },
-      limits: { max_steps: 10 },
-      warning: null as string | null,
-    };
-    assert.equal(budgetTone(snap), 'exceeded');
-  });
-
-  it('extractBudgetSnapshot from run-like object', () => {
-    const snap = extractBudgetSnapshot({
-      budgetUsage: { steps: 2, tool_calls: 1 },
-      budgetLimits: { max_steps: 50, max_tool_calls: 100 },
-      budgetWarning: 'warning',
-    });
-    assert.ok(snap);
-    assert.equal(snap!.usage?.steps, 2);
-    assert.equal(snap!.limits?.max_steps, 50);
-    assert.equal(snap!.warning, 'warning');
-
-    // API-style budget field
-    const fromApi = extractBudgetSnapshot({
-      budget: { steps: 1, tool_calls: 0 },
-      budget_limits: { max_steps: 10 },
-    });
-    assert.ok(fromApi);
-    assert.equal(fromApi!.usage?.steps, 1);
+    assert.equal(proc.command, 'echo hi');
+    assert.equal(proc.exitCode, 0);
   });
 });

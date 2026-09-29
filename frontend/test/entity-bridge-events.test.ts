@@ -123,14 +123,6 @@ describe('entity bridge event ingest', () => {
     bridge.dispose();
   });
 
-  it('records the trace id of the run', () => {
-    const bridge = createEntityBridge();
-    const runId = bridge.beginRun({ conversationId: 'c1', sessionId: 's1' });
-    ingestAll(bridge, runId, [frame(1, 'run.trace', { trace_id: 'trace_1' })]);
-    assert.equal(bridge.getStore().runsById[runId].traceId, 'trace_1');
-    bridge.dispose();
-  });
-
   it('ingests a durable artifact.ready event with camelCase fields', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c1' });

@@ -7,15 +7,12 @@
  */
 import type {
   EntityStore,
-  RunEntity,
   RunStatus,
   ToolSource,
 } from '../../entities/types';
 import {
-  createAgentSession,
   createApproval,
   createArtifact,
-  createProcess,
   createRun,
   createToolExecution,
   createTraceSpan,
@@ -23,9 +20,7 @@ import {
   setActiveConversation,
   upsertApproval,
   upsertMessage,
-  upsertAgentSession,
   upsertArtifact,
-  upsertProcess,
   upsertRun,
   upsertToolExecution,
   upsertTraceSpan,
@@ -33,7 +28,6 @@ import {
 import type { RuntimeEvent, ToolExecutionSnapshot } from '../schemas/events';
 import { parseRuntimeEvent } from '../schemas/events';
 import {
-  appendCappedLog,
   capSeenEventIds,
   inferToolSource,
   isExternalRiskApproval,
@@ -269,13 +263,6 @@ export function reduceRuntimeEvent(
       break;
     }
 
-    case 'run.trace': {
-      next = touchRun(next, runId, {
-        traceId: str(payload.trace_id) || next.runsById[runId]?.traceId || null,
-      });
-      break;
-    }
-
     case 'run.status_changed': {
       const status = str(payload.status) as RunStatus;
       if (status) {
@@ -347,7 +334,6 @@ export function reduceRuntimeEvent(
       break;
     }
 
-    case 'message.started':
     case 'message.delta':
     case 'thinking.started':
     case 'thinking.delta':
@@ -622,97 +608,6 @@ export function reduceRuntimeEvent(
       break;
     }
 
-    case 'process.started': {
-      const processId = str(payload.process_id || payload.id);
-      if (!processId) break;
-      const toolCallId = str(payload.tool_call_id) || null;
-      next = upsertProcess(
-        next,
-        createProcess({
-          id: processId,
-          runId,
-          toolExecutionId: toolCallId,
-          status: 'running',
-          command: payload.command != null ? str(payload.command) : null,
-          cursor: typeof payload.cursor === 'number' ? payload.cursor : 0,
-          startedAt: ts,
-          createdAt: ts,
-        }),
-      );
-      if (toolCallId && next.toolExecutionsById[toolCallId]) {
-        const tool = next.toolExecutionsById[toolCallId];
-        next = upsertToolExecution(next, {
-          ...tool,
-          processId,
-          updatedAt: ts,
-        });
-      }
-      break;
-    }
-
-    case 'process.stdout':
-    case 'process.stderr':
-    case 'process.output': {
-      const processId = str(payload.process_id || payload.id);
-      if (!processId) break;
-      const proc =
-        next.processesById[processId] ||
-        createProcess({ id: processId, runId, status: 'running' });
-      const chunk = str(payload.text || payload.chunk || payload.data);
-      const stream = str(payload.stream, 'stdout').toLowerCase();
-      const isStderr =
-        ev.type === 'process.stderr' || stream === 'stderr' || stream === 'err';
-      const out = isStderr
-        ? appendCappedLog(proc.stderr, chunk)
-        : appendCappedLog(proc.stdout, chunk);
-      next = upsertProcess(next, {
-        ...proc,
-        runId,
-        stdout: isStderr ? proc.stdout : out.text,
-        stderr: isStderr ? out.text : proc.stderr,
-        logTruncated: proc.logTruncated || out.truncated,
-        cursor:
-          typeof payload.cursor === 'number'
-            ? payload.cursor
-            : proc.cursor != null
-              ? proc.cursor + chunk.length
-              : chunk.length,
-        status: 'running',
-        updatedAt: ts,
-      });
-      break;
-    }
-
-    case 'process.completed':
-    case 'process.failed':
-    case 'process.cancelled': {
-      const processId = str(payload.process_id || payload.id);
-      if (!processId) break;
-      const proc =
-        next.processesById[processId] ||
-        createProcess({ id: processId, runId });
-      const status =
-        ev.type === 'process.cancelled'
-          ? 'cancelled'
-          : ev.type === 'process.failed'
-            ? 'failed'
-            : 'completed';
-      next = upsertProcess(next, {
-        ...proc,
-        runId,
-        status,
-        exitCode:
-          typeof payload.exit_code === 'number'
-            ? payload.exit_code
-            : typeof payload.exitCode === 'number'
-              ? payload.exitCode
-              : proc.exitCode,
-        finishedAt: ts,
-        updatedAt: ts,
-      });
-      break;
-    }
-
     case 'artifact.created': {
       // Only durable server artifact_id from submit_artifact / artifact.ready.
       // Missing id → still advance event cursor below, but never create a
@@ -852,110 +747,8 @@ export function reduceRuntimeEvent(
       break;
     }
 
-    case 'session.restored': {
-      const agentSessionId =
-        str(payload.agent_session_id || payload.session_id) ||
-        next.runsById[runId]?.agentSessionId ||
-        null;
-      const conversationId =
-        str(payload.conversation_id) ||
-        next.runsById[runId]?.conversationId ||
-        null;
-      const sandboxSessionId =
-        str(ev.session_id) ||
-        str(payload.sandbox_session_id) ||
-        next.runsById[runId]?.sandboxSessionId ||
-        null;
-      next = touchRun(next, runId, {
-        // The session is restored/created by the time this event arrives.
-        status:
-          next.runsById[runId]?.status === 'queued'
-            ? 'running'
-            : next.runsById[runId]?.status,
-        agentSessionId,
-        sandboxSessionId,
-      });
-      if (agentSessionId && conversationId) {
-        next = upsertAgentSession(
-          next,
-          createAgentSession({
-            id: agentSessionId,
-            conversationId,
-            sandboxSessionId,
-            workspaceId: str(payload.workspace_id) || null,
-            modelId: str(payload.model_id) || null,
-            status: 'active',
-            runIds: [runId],
-            updatedAt: ts,
-          }),
-        );
-      }
-      break;
-    }
-
     case 'session.compacted': {
       // No run status change; metadata only
-      break;
-    }
-
-    case 'run.task_plan_updated': {
-      const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-      next = touchRun(next, runId, {
-        taskPlan: tasks.map((item) => {
-          const task = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-          return {
-            taskId: str(task.task_id),
-            content: str(task.content),
-            status: str(task.status, 'pending'),
-            evidence: task.evidence != null ? str(task.evidence) : null,
-          };
-        }),
-      });
-      break;
-    }
-
-    case 'run.compaction_updated': {
-      const status = str(payload.status, 'idle') as RunEntity['compactionStatus'];
-      next = touchRun(next, runId, {
-        compactionStatus: status,
-        compactionError: payload.error != null ? str(payload.error) : null,
-      });
-      break;
-    }
-
-    case 'budget.warning': {
-      next = touchRun(next, runId, {
-        budgetUsage:
-          payload.usage && typeof payload.usage === 'object'
-            ? (payload.usage as RunEntity['budgetUsage'])
-            : next.runsById[runId]?.budgetUsage || null,
-        budgetLimits:
-          payload.limits && typeof payload.limits === 'object'
-            ? (payload.limits as RunEntity['budgetLimits'])
-            : next.runsById[runId]?.budgetLimits || null,
-        budgetWarning: 'warning',
-      });
-      break;
-    }
-
-    case 'budget.exceeded': {
-      next = touchRun(next, runId, {
-        status: 'budget_exceeded',
-        error: str(
-          payload.message || payload.reason,
-          'Budget exceeded',
-        ),
-        budgetUsage:
-          payload.usage && typeof payload.usage === 'object'
-            ? (payload.usage as RunEntity['budgetUsage'])
-            : next.runsById[runId]?.budgetUsage || null,
-        budgetLimits:
-          payload.limits && typeof payload.limits === 'object'
-            ? (payload.limits as RunEntity['budgetLimits'])
-            : next.runsById[runId]?.budgetLimits || null,
-        budgetWarning: 'exceeded',
-        finishedAt: ts,
-      });
       break;
     }
 
@@ -1076,8 +869,6 @@ export function rehydrateRun(
     created_at?: string | null;
     updated_at?: string | null;
     model_id?: string | null;
-    budget?: unknown;
-    budget_limits?: unknown;
     pending_input?: {
       interaction_id?: string;
       interactionId?: string;
@@ -1144,15 +935,6 @@ export function rehydrateRun(
     }
   })() as RunStatus;
 
-  const budgetUsage =
-    detail.budget && typeof detail.budget === 'object'
-      ? (detail.budget as RunEntity['budgetUsage'])
-      : null;
-  const budgetLimits =
-    detail.budget_limits && typeof detail.budget_limits === 'object'
-      ? (detail.budget_limits as RunEntity['budgetLimits'])
-      : null;
-
   const rawPending = detail.pending_input ?? detail.pendingInput ?? null;
   const pendingInput =
     status === 'waiting_input' && rawPending
@@ -1197,8 +979,6 @@ export function rehydrateRun(
         status === 'waiting_approval' || status === 'waiting_input'
           ? null
           : detail.error ?? existing?.error ?? null,
-      budgetUsage: budgetUsage ?? existing?.budgetUsage ?? null,
-      budgetLimits: budgetLimits ?? existing?.budgetLimits ?? null,
       startedAt: detail.started_at ?? existing?.startedAt ?? null,
       finishedAt: detail.finished_at ?? existing?.finishedAt ?? null,
       createdAt: detail.created_at ?? existing?.createdAt ?? null,
