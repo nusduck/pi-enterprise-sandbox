@@ -67,6 +67,7 @@
     "knex": "^3.1.0",
     "mysql2": "3.15.3",
     "node-addon-require-builtin": "0.1.4",
+    "nodemailer": "10.0.12",
     "yaml": "2.9.0",
     "yauzl": "^3.4.0"
   },

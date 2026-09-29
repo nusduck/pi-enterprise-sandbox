@@ -377,6 +377,23 @@ docker compose exec redis redis-cli -a redis_dev_only FLUSHALL
 
 生产启动前必须设置强 `REDIS_PASSWORD`；prod overlay 在缺失时 fail-fast。
 
+### 本地收发长任务完成邮件
+
+邮件通知默认关（变量见 [deployment.md](deployment.md)「长任务完成邮件通知」）。本地验证不接真实邮件服务，用
+mailpit 捕获：它只接入后端内部网络，不发布宿主端口，也不写进 Compose（仅开发用）。
+
+```bash
+docker run -d --name dsh-mailpit --network pi-enterprise-sandbox-backend-internal axllent/mailpit:v1.27
+NOTIFY_EMAIL_ENABLED=true SMTP_HOST=dsh-mailpit SMTP_PORT=1025 \
+  NOTIFY_EMAIL_FROM='Agent <noreply@example.test>' PUBLIC_WEB_BASE_URL=http://localhost:3000 \
+  NOTIFY_MIN_RUN_DURATION_MS=10000 docker compose up -d agent agent-worker
+# 捕获到的邮件（在接入同一网络的容器里查）：GET http://dsh-mailpit:8025/api/v1/messages
+```
+
+agent 与 agent-worker 必须拿到同样的值；配置不全时 worker 启动日志写
+`run completion email disabled: <原因>`，账户页的开关显示为不可用。投递记录在 `tbl_agsvc_notification_deliveries`。
+这些变量只在本次 `up` 的 shell 里生效，普通重启会丢掉。
+
 ## 测试
 
 ### 运行测试

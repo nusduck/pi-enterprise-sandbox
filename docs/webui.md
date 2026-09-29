@@ -204,8 +204,10 @@ AgentSession 都由 `agentEventAdapter -> runReducer` 单次归约。`ChatState`
   产物按其记录的沙箱会话 ID 对应到会话标题；MCP facade 提交的产物记录的是 workspace ID，对不上会话时显示
   「其他会话」，下载也可能不可用。
 
-- **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：显示名称与邮箱可编辑
-  （`/api/auth/profile`，前端先校验、服务端为准，失败时保留草稿），用户名、机构、用户类型、登录方式、账户状态、注册时间、
+- **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：显示名称、邮箱与「长任务完成邮件通知」
+  开关可编辑（`/api/auth/profile`，校验在 `widgets/settings/accountDraft.ts`，前端先校验、服务端为准，失败时保留草稿；
+  服务端 `notifications.email.available` 为假时开关禁用并提示「部署未配置邮件发送」，已打开的仍可关掉；打开时必须保留邮箱，
+  服务端的 `NOTIFY_EMAIL_REQUIRED` / `NOTIFICATION_UNAVAILABLE` 显示在开关下方），用户名、机构、用户类型、登录方式、账户状态、注册时间、
   最近登录只读；另有退出登录。保存后侧栏里的名称要到下次加载页面才更新（`ChatContext` 已贴着行数预算，
   没有加刷新 `authUser` 的入口）。通用：外观（浅色 / 深色 / 跟随系统）、对话显示
   （紧凑 / 展开：已完成轮次的工具组是否默认展开）、运行中按 Enter（排队追问 / 立即改向）。偏好存在本机

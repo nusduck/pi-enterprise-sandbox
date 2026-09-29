@@ -60,7 +60,7 @@ facade 是 slim 镜像，不带模型工具链、Bubblewrap、执行面代码与
 | **Frontend** | `dsh-enterprise-frontend` | Vite + React → Nginx | 纯 UI 渲染，零 Agent 逻辑；Nginx 反向代理 `/api/*` |
 | **API Server (BFF)** | `dsh-enterprise-api` | Node.js 22 | 认证、会话文件边缘、Run API 与 SSE relay |
 | **Agent** | `dsh-enterprise-agent` | Node.js 22 + `@deepseek-ai/dsh-*` `0.1.1-rc.2` | MySQL Run/Session authority；经 `agent/src/runtime/` 组合 DSH：远程 fs/shell/jobs provider、MySQL 会话持久化、策略挂载点、SSE 投影 |
-| **Agent Worker** | `dsh-enterprise-agent-worker` | 同 Agent 镜像，入口 `dist/worker.js` | 消费**按子任务深度分层**的 BullMQ Run 队列（`agent-runs` / `agent-runs-d1` / …，每层一个消费者，ADR 0012）并真正执行 Run；Worker Lease 续约、会话恢复、Outbox publisher。**无 HTTP 面、不暴露端口**；可独立于 Agent HTTP 面横向扩缩容 |
+| **Agent Worker** | `dsh-enterprise-agent-worker` | 同 Agent 镜像，入口 `dist/worker.js` | 消费**按子任务深度分层**的 BullMQ Run 队列（`agent-runs` / `agent-runs-d1` / …，每层一个消费者，ADR 0012）并真正执行 Run；Worker Lease 续约、会话恢复、Outbox publisher、Run 终态邮件通知。**无 HTTP 面、不暴露端口**；可独立于 Agent HTTP 面横向扩缩容 |
 | **Sandbox（执行面）** | `dsh-enterprise-sandbox` | Node.js 22 + TypeScript + Bubblewrap | Agent 专用内部执行平面（HMAC `/internal/v1/*`）+ 对 BFF 的公共会话面；命令执行、文件、搜索、数据集、产物。compose 中无 `ports:` 段——宿主不可直连，只能从 `backend_internal` 访问 |
 | **Sandbox MCP** | `dsh-enterprise-sandbox-mcp` | 同一镜像，入口 `dist/mcp-main.js` | 对外的 Streamable HTTP MCP 面。**只能走 `/internal/mcp/v1/*` 窄桥**，够不到内部面——这是它单独成进程的全部理由 |
 
@@ -159,6 +159,10 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - `agent_sessions.sandbox_session_id` 与 `sandbox_sessions.agent_session_id` 为逻辑索引引用（无循环外键）；租户列 `org_id`/`user_id` 由 SQL 谓词强制
 - 不可变 migration + checksum；失败事务回滚；重复 init 幂等
 - 需推到 Redis Stream 的持久化事件与领域状态同事务写入 `domain_outbox`（Outbox pattern）
+- Run 进入终态时同事务多写一行 `run_notification` outbox（payload 不带 `runId` 键，RunEventStream publisher 不会认领）；
+  agent-worker 的通知循环（`bootstrap/worker-notification.ts` → `infrastructure/notification/`）按 `users.notify_run_complete`、
+  `users.email` 与运行时长决定是否发 SMTP 邮件，投递账 `notification_deliveries` 以 `(run_id, kind)` 去重。收件人只从账本解析，
+  模型没有发信工具（[design](design/run-completion-email.md)）
 
 ### 4b. Redis 5.0.14 Agent-only 运行态协调拓扑
 

@@ -29,7 +29,8 @@
     "20260904000002_workspace_quota_reservations.js",
     "20260912000001_claim_without_skip_locked.js",
     "20260923000001_upspec_naming.js",
-    "20260923000002_dsh_naming.js"
+    "20260923000002_dsh_naming.js",
+    "20260928000001_run_completion_notifications.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -3965,6 +3966,159 @@
         }
       }
     },
+    "tbl_agsvc_notification_deliveries": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "attempts": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "delivery_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "kind": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "last_error": {
+          "type": "varchar(512)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "recipient_hash": {
+          "type": "char(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sent_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "status": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "1970-01-01 00:00:00.000",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "delivery_id"
+          ]
+        },
+        "ind_agsvc_nd_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id",
+            "kind"
+          ]
+        },
+        "ind_agsvc_nd_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "tbl_agsvc_notification_deliveries_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
     "tbl_agsvc_organization_external_refs": {
       "engine": "InnoDB",
       "collation": "utf8mb4_unicode_ci",
@@ -6945,6 +7099,15 @@
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "notify_run_complete": {
+          "type": "tinyint(1)",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
           "generation": null
         },
         "status": {

@@ -1,6 +1,7 @@
 /**
- * 本人账户资料（`/api/auth/profile`）。可改的字段由 Agent 决定（目前是显示名称与邮箱），
- * 其余字段只读；提交不可改的字段会得到 422 `PROFILE_FIELD_NOT_EDITABLE`。
+ * 本人账户资料（`/api/auth/profile`）。可改的字段由 Agent 决定（目前是显示名称、邮箱与
+ * 长任务完成邮件开关），其余字段只读；提交不可改的字段会得到 422 `PROFILE_FIELD_NOT_EDITABLE`。
+ * 邮件通知是否可用由服务端在 `notifications.email` 里给出，前端不自行判断。
  */
 import { z } from 'zod';
 import { parseApi } from '../schemas/api';
@@ -18,6 +19,17 @@ const ProfileSchema = z
     created_at: z.string().nullable().optional(),
     last_login_at: z.string().nullable().optional(),
     editable_fields: z.array(z.string()).default([]),
+    notify_run_complete: z.boolean().optional(),
+    notifications: z
+      .object({
+        email: z
+          .object({
+            available: z.boolean(),
+            min_run_duration_ms: z.number().nullable(),
+          })
+          .optional(),
+      })
+      .optional(),
   })
   .passthrough();
 export type Profile = z.infer<typeof ProfileSchema>;
@@ -43,6 +55,10 @@ export function getProfile(): Promise<Profile> {
   return request('GET');
 }
 
-export function updateProfile(patch: { display_name?: string; email?: string | null }): Promise<Profile> {
+export function updateProfile(patch: {
+  display_name?: string;
+  email?: string | null;
+  notify_run_complete?: boolean;
+}): Promise<Profile> {
   return request('PATCH', patch);
 }

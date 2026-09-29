@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **长任务完成邮件通知**：用户在「设置 → 账户」打开开关后，自己发起的 Run 运行超过阈值（默认 5 分钟）结束时——完成、失败或取消——
+  收到一封邮件，包含任务标题、状态、耗时和会话链接，不含模型回答、产物或工具参数。收件人只取账本里的 `users.email`，模型没有发信工具；
+  子任务不单独通知，同一个 Run 至多一封。部署需配置 `NOTIFY_EMAIL_ENABLED`、`SMTP_*`、`NOTIFY_EMAIL_FROM`、`PUBLIC_WEB_BASE_URL`
+  （agent 与 agent-worker 同值），配置不全时开关显示不可用。新增迁移 `20260928000001_run_completion_notifications`
+  （`users.notify_run_complete` 列与 `notification_deliveries` 表）；研发阶段的旧库不做增量升级，按
+  [development reset runbook](runbooks/development-reset.md) 重建后用 `scripts/dev/schema-apply.sh` 建表。
+  见 [design/run-completion-email.md](design/run-completion-email.md)。
+
 - 数据源：模型可在沙箱里连接业务库做数据分析。运维在 `SANDBOX_DATA_SOURCES_JSON` 登记库（口令由 exec
   启动时向 DBPM 取），管理员在智能体设置页新增的「数据源」分类里按智能体勾选（AgentVersion `dataSources`）。
   沙箱子进程仍然断网，只经 exec 为每次执行建的 unix socket 连到登记的地址；输出里的口令替换为 `***`，

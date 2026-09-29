@@ -25,6 +25,11 @@ export const RUN_STREAM_CLAIM_ELIGIBILITY = Object.freeze({
   includePayloadRunId: true,
 });
 
+/** 通知消费者只认 run_notification 聚合（见 outbox-status.ts）。 */
+export const RUN_NOTIFICATION_CLAIM_ELIGIBILITY = Object.freeze({
+  aggregateTypes: Object.freeze(['run_notification']),
+});
+
 /**
  * Normalize and validate an eligibility object.
  * Empty / omitted filters mean "no eligibility restriction" (claim any due row).

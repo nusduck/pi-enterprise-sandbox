@@ -39,6 +39,7 @@ function memoryCredentials() {
     },
     async touchLogin() {},
     profileWrites: [] as any[],
+    notify: new Map<string, boolean>(),
     async updateProfile(id: string, subject: string, patch: any) {
       this.profileWrites.push({ id, subject, patch });
       const row = [...rows.values()].find((candidate) => candidate.id === id);
@@ -46,7 +47,11 @@ function memoryCredentials() {
         if (patch.displayName !== undefined) row.displayName = patch.displayName;
         if (patch.email !== undefined) row.email = patch.email;
       }
+      if (patch.notifyRunComplete !== undefined) this.notify.set(subject, patch.notifyRunComplete);
       return row || null;
+    },
+    async getNotifyRunComplete(subject: string) {
+      return this.notify.get(subject) ?? false;
     },
   };
 }
@@ -178,10 +183,11 @@ describe('BrowserAuthService', () => {
 });
 
 describe('BrowserAuthService — own profile', () => {
-  async function setup() {
+  async function setup(notificationCapability?: { available: boolean; min_run_duration_ms: number | null }) {
     const credentials = memoryCredentials();
     const service = new BrowserAuthService({
       credentials,
+      notificationCapability,
       organizations: {
         async createOrganization() {},
         async getUserByExternalSubject() { return { userId: '01M1USER000000000000000000' }; },
@@ -205,7 +211,57 @@ describe('BrowserAuthService — own profile', () => {
     assert.equal(profile.username, 'dora');
     assert.equal(profile.organization_name, '华东销售部');
     assert.equal(profile.status, 'active');
-    assert.deepEqual(profile.editable_fields, ['display_name', 'email']);
+    assert.deepEqual(profile.editable_fields, ['display_name', 'email', 'notify_run_complete']);
+    assert.equal(profile.notify_run_complete, false);
+    assert.deepEqual(profile.notifications, { email: { available: false, min_run_duration_ms: null } });
+  });
+
+  it('turns run-completion email on and off when the deployment supports it', async () => {
+    const { service, credentials, auth } = await setup({ available: true, min_run_duration_ms: 300_000 });
+    const on: any = await service.updateProfile(auth, { email: 'dora@example.com', notify_run_complete: true });
+    assert.equal(on.notify_run_complete, true);
+    assert.deepEqual(on.notifications.email, { available: true, min_run_duration_ms: 300_000 });
+    assert.deepEqual(credentials.profileWrites[0].patch, { email: 'dora@example.com', notifyRunComplete: true });
+    await assert.rejects(
+      service.updateProfile(auth, { email: '' }),
+      (error: any) => error instanceof BrowserAuthError && error.code === 'NOTIFY_EMAIL_REQUIRED',
+      'the address cannot be cleared while notification is on',
+    );
+    const off: any = await service.updateProfile(auth, { notify_run_complete: false });
+    assert.equal(off.notify_run_complete, false);
+    assert.equal((await service.profile(auth) as any).notify_run_complete, false);
+    // Clearing both in one request is fine.
+    await service.updateProfile(auth, { notify_run_complete: true });
+    const cleared: any = await service.updateProfile(auth, { email: '', notify_run_complete: false });
+    assert.equal(cleared.email, null);
+    assert.equal(cleared.notify_run_complete, false);
+  });
+
+  it('refuses to turn run-completion email on when it could never be delivered', async () => {
+    const code = (c: string) => (error: any) => error instanceof BrowserAuthError && error.code === c;
+    const unavailable = await setup();
+    await unavailable.service.updateProfile(unavailable.auth, { email: 'dora@example.com' });
+    await assert.rejects(
+      unavailable.service.updateProfile(unavailable.auth, { notify_run_complete: true }),
+      code('NOTIFICATION_UNAVAILABLE'),
+    );
+    // Turning it off is always allowed, even without the capability.
+    await unavailable.service.updateProfile(unavailable.auth, { notify_run_complete: false });
+
+    const noEmail = await setup({ available: true, min_run_duration_ms: 0 });
+    await assert.rejects(
+      noEmail.service.updateProfile(noEmail.auth, { notify_run_complete: true }),
+      code('NOTIFY_EMAIL_REQUIRED'),
+    );
+    await assert.rejects(
+      noEmail.service.updateProfile(noEmail.auth, { email: '', notify_run_complete: true }),
+      code('NOTIFY_EMAIL_REQUIRED'),
+    );
+    await assert.rejects(
+      noEmail.service.updateProfile(noEmail.auth, { notify_run_complete: 'yes' }),
+      code('AUTH_INPUT_INVALID'),
+    );
+    assert.equal(noEmail.credentials.profileWrites.length, 0, 'nothing is written on a refused request');
   });
 
   it('updates display name and email in both identity stores', async () => {
