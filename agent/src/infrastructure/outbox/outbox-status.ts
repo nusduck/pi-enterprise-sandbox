@@ -26,6 +26,14 @@ export function isOutboxStatus(value: unknown): value is OutboxStatus {
 /** Aggregate type that maps to run:stream:{runId}. */
 export const AGGREGATE_TYPE_RUN = 'run';
 
+/**
+ * Run 进入终态时同事务多写的一行，只给通知消费者认领。payload **不带**
+ * `runId` / `run_id` 键（run id 在 aggregate_id）：RunEventStream publisher 的
+ * eligibility 会认领带这两个键的任何行，带上就会被它抢走。
+ */
+export const AGGREGATE_TYPE_RUN_NOTIFICATION = 'run_notification';
+export const EVENT_TYPE_RUN_TERMINAL_NOTIFICATION = 'notification.run_terminal';
+
 export const DEFAULT_MAX_ATTEMPTS = 10;
 export const DEFAULT_STALE_CLAIM_MS = 60_000;
 export const DEFAULT_BASE_DELAY_MS = 1_000;

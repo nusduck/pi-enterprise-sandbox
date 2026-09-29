@@ -27,6 +27,10 @@ import { isDataPlaneReachable } from './worker-probe.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { BrowserAuthService } from '../application/browser-auth-service.js';
+import {
+  emailNotificationCapability,
+  resolveEmailNotificationConfig,
+} from '../infrastructure/notification/email-config.js';
 
 /**
  * Build the lightweight observability columns for the operator Run list.
@@ -394,6 +398,8 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       allowPublicRegister:
         String(env.SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER || 'true').toLowerCase() !== 'false',
       adminUsernames: String(env.SANDBOX_AUTH_ADMIN_USERNAMES || '').split(','),
+      // 与 worker 同一份判定：配置不全时账户页的开关禁用，打开会被 422 拒绝。
+      notificationCapability: emailNotificationCapability(resolveEmailNotificationConfig(env)),
     });
   }
 

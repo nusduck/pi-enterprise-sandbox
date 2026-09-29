@@ -4,6 +4,16 @@ import { listSkills, setSkillEnabled, uploadSkillDraft, type SkillItem } from '.
 import { splitSkillTiers } from '../../pages/settings/skillHelpers';
 import { usePreference, type Preferences } from '../../shared/ui/preferences';
 import { getProfile, updateProfile, type Profile } from '../../shared/api/account';
+import { ApiError } from '../../shared/api/client';
+import {
+  buildProfilePatch,
+  draftFromProfile,
+  emailNotification,
+  fieldErrorForProfileCode,
+  isDirty,
+  type AccountDraft,
+  type AccountErrors,
+} from './accountDraft';
 import s from './settings.module.css';
 
 type Tab = 'account' | 'general' | 'skills';
@@ -40,21 +50,20 @@ function formatDate(value: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString('zh-CN', { hour12: false });
 }
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => void }) {
   const { state } = useChat();
   const fallback = state.authUser;
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ display_name: '', email: '' });
-  const [fieldError, setFieldError] = useState<{ display_name?: string; email?: string }>({});
+  const [draft, setDraft] = useState<AccountDraft>({ display_name: '', email: '', notify_run_complete: false });
+  const [fieldError, setFieldError] = useState<AccountErrors>({});
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const adopt = useCallback((p: Profile) => {
     setProfile(p);
-    setDraft({ display_name: p.display_name || '', email: p.email || '' });
+    setDraft(draftFromProfile(p));
+    setFieldError({});
   }, []);
 
   useEffect(() => {
@@ -66,23 +75,17 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
   const isAdmin = String(profile?.role || fallback?.role || '').toLowerCase() === 'admin';
   const name = (profile?.display_name || '') || username;
   const editable = new Set(profile?.editable_fields || []);
-  const dirty = Boolean(profile) && (
-    draft.display_name.trim() !== (profile?.display_name || '') || draft.email.trim() !== (profile?.email || '')
-  );
+  const dirty = isDirty(profile, draft);
+  const mail = emailNotification(profile);
+  // 已经打开的开关总能关掉，即使部署后来撤掉了邮件配置。
+  const canToggleNotify = Boolean(profile) && editable.has('notify_run_complete')
+    && (mail.available || profile?.notify_run_complete === true);
 
   async function save() {
     if (!profile) return;
-    const errors: { display_name?: string; email?: string } = {};
-    const displayName = draft.display_name.trim();
-    const email = draft.email.trim();
-    if (!displayName) errors.display_name = '显示名称不能为空';
-    else if (displayName.length > 255) errors.display_name = '最多 255 个字符';
-    if (email && (email.length > 320 || !EMAIL.test(email))) errors.email = '邮箱格式不正确';
+    const { patch, errors } = buildProfilePatch(profile, draft);
     setFieldError(errors);
     if (Object.keys(errors).length) return;
-    const patch: { display_name?: string; email?: string | null } = {};
-    if (displayName !== (profile.display_name || '')) patch.display_name = displayName;
-    if (email !== (profile.email || '')) patch.email = email || null;
     setSaving(true);
     setNotice(null);
     try {
@@ -90,7 +93,9 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
       setNotice('已保存。侧栏里的名称在下次打开页面时更新。');
     } catch (err) {
       // The server re-validates; keep the draft so nothing typed is lost.
-      setNotice((err as Error).message || '保存失败');
+      const fieldErrors = err instanceof ApiError ? fieldErrorForProfileCode(err.code) : null;
+      if (fieldErrors) setFieldError(fieldErrors);
+      else setNotice((err as Error).message || '保存失败');
     } finally {
       setSaving(false);
     }
@@ -135,6 +140,25 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
             aria-invalid={Boolean(fieldError.email)}
           />
           {fieldError.email ? <small className={s.fieldError}>{fieldError.email}</small> : <small>留空表示不设置</small>}
+        </label>
+        <label className={s.check}>
+          <input
+            type="checkbox"
+            checked={draft.notify_run_complete}
+            disabled={!canToggleNotify || saving}
+            onChange={(e) => setDraft((d) => ({ ...d, notify_run_complete: e.target.checked }))}
+            aria-invalid={Boolean(fieldError.notify_run_complete)}
+          />
+          <span>
+            长任务完成邮件通知
+            {fieldError.notify_run_complete
+              ? <small className={s.fieldError}>{fieldError.notify_run_complete}</small>
+              : <small>{!profile
+                ? '—'
+                : mail.available
+                  ? `运行超过 ${mail.threshold ?? '0 秒'}的任务结束（完成、失败或取消）时发邮件到上面的邮箱`
+                  : '部署未配置邮件发送，暂不可用'}</small>}
+          </span>
         </label>
         <div className={s.formActions}>
           {notice ? <span className={s.muted} role="status">{notice}</span> : null}

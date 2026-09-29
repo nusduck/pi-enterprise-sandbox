@@ -705,6 +705,33 @@ done
 
 已提交文档中的应用 DSN 示例一律不带口令（口令经 DBPM 下发）；测试用 `TEST_*` 连接串只使用开发占位口令。勿把真实生产密码写进仓库。
 
+### 长任务完成邮件通知（[design](design/run-completion-email.md)）
+
+Run 进入终态（完成 / 失败 / 取消）时，`applyRunTransitionInTxn` 在同一事务里多写一行
+`domain_outbox`（`aggregate_type = run_notification`）；agent-worker 的通知循环认领这些行，按账本决定是否发信。
+收件人只来自 `runs.user_id → users.email`，模型不参与；用户在账户页自己打开开关（`users.notify_run_complete`，默认关）。
+子 Run（委派 / 子 Agent）不单独通知；提交到结束不足阈值的 Run 不发。每个 Run 至多一封：投递账
+`tbl_agsvc_notification_deliveries` 以 `(run_id, kind)` 唯一，只存收件地址的 sha256。
+
+**agent 与 agent-worker 必须配同样的值**：HTTP 进程据此告诉账户页能力是否可用，worker 据此真正发信。
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `NOTIFY_EMAIL_ENABLED` | `false` | 总开关。开了但下列必填项缺失或非法 = 能力关闭，启动日志写 `run completion email disabled: <原因>`；不回退默认地址 |
+| `SMTP_HOST` | — | 必填。SMTP 服务器或企业邮件中继 |
+| `SMTP_PORT` | `587`（`SMTP_SECURE=true` 时 `465`） | 1–65535 |
+| `SMTP_SECURE` | `false` | `true` = 隐式 TLS；`false` 时服务器支持则 STARTTLS |
+| `SMTP_USER` | 空 | 为空表示不认证（内网中继）；设了就必须有 `SMTP_PASSWORD_FILE` |
+| `SMTP_PASSWORD_FILE` | — | SMTP 口令文件路径（挂载 secret）；读不到或为空 = 能力关闭。不接受明文口令变量 |
+| `NOTIFY_EMAIL_FROM` | — | 必填。发件人，可写 `名称 <地址>` |
+| `NOTIFY_EMAIL_TIMEOUT_MS` | `10000` | 单封总超时，1000–30000；上限小于 outbox 60s 的过期重认领窗口，避免同一封被两个 worker 重复发出 |
+| `NOTIFY_MIN_RUN_DURATION_MS` | `300000` | 从提交（`runs.created_at`）到结束不足该值的 Run 不发 |
+| `PUBLIC_WEB_BASE_URL` | — | 必填。邮件里的会话链接前缀（`<base>/c/<conversationId>`），须是 http(s)；链接进入后照常登录并做租户校验 |
+| `AGENT_NOTIFICATION_IDLE_MS` | `2000` | worker 通知循环空闲轮询间隔 |
+
+能力关闭时循环照常运行，只把终态通知行结清，不让它们在 `domain_outbox` 里堆积。发送失败的处理：SMTP 5xx 或信封被拒记为永久失败
+（投递账 `failed`，outbox `FAILED`）；超时、连接失败、认证失败按瞬时错误走 outbox 退避重试，重试用尽同样记 `failed`。
+
 ### 资源限制
 
 配置于 `docker-compose.prod.yml`：
