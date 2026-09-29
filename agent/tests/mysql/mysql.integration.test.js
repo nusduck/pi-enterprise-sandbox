@@ -308,7 +308,7 @@ describeMysql('mysql integration (TEST_MYSQL_URL)', () => {
     await knex('tbl_agsvc_agent_definitions').insert({
       agent_id: AGENT,
       org_id: ORG,
-      name: 'default',
+      name: '通用智能体',
       description: null,
       status: 'active',
       active_version_id: null,

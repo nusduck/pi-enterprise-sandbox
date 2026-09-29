@@ -262,10 +262,10 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `delegation.agents` | ✅ | `delegate_to_agent` 的白名单：同 org 的 Agent `name` 数组（≤20，去重）。保存时要求每个名字在本 org 存在（否则 `DELEGATION_AGENT_UNKNOWN`，别的 org 的同名 Agent 视为不存在）；运行时再判目标是否 active。省略或 `[]` = 不可委派。见 [design/agent-delegation.md](design/agent-delegation.md) |
 | `dataSources` | ✅ | 本 Agent 的 Run 可在沙箱里连接的业务库：`[{ "id": "<数据源 id>" }]`（≤16，不允许重复）。条目只接收 `id`，地址、账号、口令属于 `SANDBOX_DATA_SOURCES_JSON` 目录，写进来即 `CONFIG_UNKNOWN_FIELD`；保存时要求 id 在目录里（否则 `DATA_SOURCE_UNKNOWN`）。`platformConstraints.dataSources` 只返回 `id`/`label`/`description`/`engine`。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md) |
 | `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
-| `skills` | ❌ | 运行时的 skill 只来自**调用者自己的 skill 目录**；这里的值仅用于 A2A agent card 展示 |
-| `extensions` | ❌ | 旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
-| `sandboxPolicy` | ❌ | **保留字段，没有执行路径**。沙箱模式、网络模式、可写根都由 exec 的部署级配置决定，不按 Agent 分（ADR 0002 起就是如此） |
-| `a2a` / `contextPolicy` | ❌ | 无读取方 |
+| `skills` | ❌ | 已移除，写入即 `CONFIG_UNKNOWN_FIELD`。运行时的 skill 只来自**调用者自己的 skill 目录** |
+| `extensions` | ❌ | 已移除（同上）。旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
+| `sandboxPolicy` | ❌ | 已移除（同上），没有执行路径。沙箱模式、网络模式、可写根都由 exec 的部署级配置决定，不按 Agent 分（ADR 0002 起就是如此） |
+| `a2a` / `contextPolicy` | ❌ | 已移除（同上），无读取方 |
 
 ##### 配置契约（`schemaVersion: 1`）与配置面接口
 
@@ -289,8 +289,8 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
   任何 server）、`unknown`（还问不到）。`unknown` 时引用 MCP 一律拒绝
   （`MCP_CATALOG_UNAVAILABLE`），**不能把"读不到"渲染成"空清单"**。
 - legacy 记录升级到 v1 时，`modelPolicy` 里的旧模型引用必须能映射到当前模型目录，
-  否则 `LEGACY_MODEL_UNMAPPABLE` 阻止升级；非空的 `skills` / `extensions` / `sandboxPolicy`
-  / `a2a` 与未识别键返回 `LEGACY_FIELD_REQUIRES_MIGRATION`，要求管理员显式处理，
+  否则 `LEGACY_MODEL_UNMAPPABLE` 阻止升级；`skills` / `extensions` / `sandboxPolicy`
+  / `a2a` 与其他未识别键在 legacy 记录里返回 `LEGACY_FIELD_REQUIRES_MIGRATION`，要求管理员显式处理，
   **不会在表单/JSON 往返中被静默丢掉**。`effectiveSummary.migration.blockedPaths` 列出待处理项。
 
 ##### 激活的乐观并发

@@ -6,6 +6,7 @@
  * 只是让用户在按下按钮之前就看到 JSON 错在哪。
  */
 import type { Agent, AgentVersion } from '../../shared/api';
+import { DEFAULT_AGENT_NAME } from '../../widgets/conversation-sidebar/sidebarModel';
 
 export type ToolDecision = 'inherit' | 'allow' | 'require_approval' | 'deny';
 
@@ -355,8 +356,8 @@ export function activeVersionOf(
 /** 列表排序：默认 Agent 置顶，其余按名字。UI 稳定比"最近创建优先"更重要。 */
 export function sortAgentsForDisplay(agents: Agent[]): Agent[] {
   return [...agents].sort((a, b) => {
-    if (a.name === 'default' && b.name !== 'default') return -1;
-    if (b.name === 'default' && a.name !== 'default') return 1;
+    if (a.name === DEFAULT_AGENT_NAME && b.name !== DEFAULT_AGENT_NAME) return -1;
+    if (b.name === DEFAULT_AGENT_NAME && a.name !== DEFAULT_AGENT_NAME) return 1;
     return a.name.localeCompare(b.name);
   });
 }

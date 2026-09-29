@@ -75,7 +75,7 @@ describe('AgentCatalogService — 一个 org 下并列多个智能体', () => {
     const created = await catalog.createAgent(ADMIN_AUTH, {
       name: '数据分析助手',
       description: 'SQL + 图表',
-      config: { systemPrompt: '你是数据分析助手', skills: ['sql'] },
+      config: { systemPrompt: '你是数据分析助手' },
     });
 
     assert.equal(created.agent.name, '数据分析助手');
@@ -89,7 +89,7 @@ describe('AgentCatalogService — 一个 org 下并列多个智能体', () => {
     assert.equal(agents.length, 2);
     assert.deepEqual(
       agents.map((agent) => agent.name).sort(),
-      ['default', '数据分析助手'],
+      ['数据分析助手', '通用智能体'],
     );
   });
 
@@ -193,7 +193,7 @@ describe('会话与 Agent 的绑定', () => {
 
     const defaulted = await conversations.create(ADMIN_AUTH, { title: '没选' });
     const tenantDefault = world.tables.tbl_agsvc_agent_definitions.find(
-      (row) => row.name === 'default',
+      (row) => row.name === '通用智能体',
     );
     assert.equal(defaulted.agent_id, tenantDefault.agent_id);
   });

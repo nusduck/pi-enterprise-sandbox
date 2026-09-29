@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 type Loose = any;
 
 /** Default tenant agent definition name (stable per org). */
-export const DEFAULT_AGENT_DEFINITION_NAME = 'default';
+export const DEFAULT_AGENT_DEFINITION_NAME = '通用智能体';
 
 /**
  * @param err
@@ -71,14 +71,11 @@ export function hashAgentConfig(configJson: Record<string, unknown>) {
  */
 export function defaultAgentConfigJson() {
   return {
+    schemaVersion: 1,
     modelPolicy: {},
     systemPrompt: '',
-    extensions: [],
-    skills: [],
     mcpServers: [],
     toolPolicy: {},
-    sandboxPolicy: {},
-    a2a: {},
   };
 }
 
