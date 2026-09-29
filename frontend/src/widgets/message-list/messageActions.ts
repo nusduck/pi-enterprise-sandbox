@@ -67,10 +67,7 @@ export function messageFingerprint(message: ChatMessage): string {
   return [
     message.role || '',
     messagePlainText(message),
-    message.thinking ? `T${message.thinking.length}` : '',
-    message.thinkingStatus || '',
     message.interrupted ? 'I' : '',
-    message._fileLinks?.length ? `L${message._fileLinks.length}` : '',
     attachmentIds,
   ].join('|');
 }

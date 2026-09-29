@@ -636,7 +636,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           // 首轮就是建会话：这里选 Agent。既有会话不传——它的 Agent 已经钉死，
           // 换 Agent 要新建会话（D2）。
           agent_id: cur.conversationId ? null : selectedAgentId,
-          messages: [...cur.messages, userMsg],
+          messages: [userMsg],
         });
         if (!created.run_id) throw new Error('Run response is missing run_id');
         runId = created.run_id;
@@ -710,75 +710,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           console.warn('[chat] post-stream reconciliation failed:', reconcileErr);
         }
 
-        // Commit this run's assistant projection into ChatState so later turns
-        // keep history even if activeRunId moves to another server run.
-        const projected = bridge.projectRunMessages(runId);
-        const assistantCommitted = projected.filter(
-          (m) =>
-            m.role === 'assistant' &&
-            (m.content.some(
-              (p) =>
-                p.type === 'text' &&
-                'text' in p &&
-                String((p as { text?: unknown }).text || '').trim(),
-            ) ||
-              Boolean(m._hasRuntimeSteps) ||
-              Boolean(m.thinking) ||
-              Boolean(m._fileLinks?.length)),
-        );
         setState((s) => {
           if (!isActiveGeneration(s, generation)) return s;
-          let messages = s.messages;
-          if (assistantCommitted.length) {
-            messages = [...messages];
-            assistantCommitted.forEach((msg, assistantIndex) => {
-              const rid = String(runId);
-              const runAssistantIndexes = messages.flatMap((message, index) =>
-                message.role === 'assistant' && message._runId === rid
-                  ? [index]
-                  : [],
-              );
-              const durableMatch =
-                msg._messageId && msg._messageId !== ''
-                  ? messages.findIndex(
-                      (message) =>
-                        message.role === 'assistant' &&
-                        message._runId === rid &&
-                        message._messageId === msg._messageId,
-                    )
-                  : -1;
-              const existingIdx =
-                durableMatch >= 0
-                  ? durableMatch
-                  : (runAssistantIndexes[assistantIndex] ?? -1);
-              if (existingIdx >= 0) {
-                messages[existingIdx] = { ...msg, _runId: rid };
-                return;
-              }
-              // Insert after this run's user turn — never blind-append after a
-              // newer user message that was already sent while we streamed.
-              const userIdx = messages.findIndex(
-                (message) =>
-                  message.role === 'user' &&
-                  message._runId != null &&
-                  message._runId === rid,
-              );
-              const tagged = { ...msg, _runId: rid };
-              const lastAssistantIdx = runAssistantIndexes.at(-1);
-              if (lastAssistantIdx != null) {
-                messages.splice(lastAssistantIdx + 1, 0, tagged);
-              } else if (userIdx >= 0) {
-                messages.splice(userIdx + 1, 0, tagged);
-              } else {
-                messages.push(tagged);
-              }
-            });
-          }
-          return update(s, {
-            isStreaming: false,
-            abortCtrl: null,
-            messages,
-          });
+          return update(s, { isStreaming: false, abortCtrl: null });
         });
         await refreshConversations();
         await refreshArtifacts(currentSessionId());
@@ -1331,21 +1265,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   /**
    * Conversation transcript:
-   * - ChatState.messages holds user turns + committed server history
-   * - EntityStore holds live run projections (assistant/tools) per run
+   * - ChatState.messages holds the user turns (server history + optimistic sends)
+   * - EntityStore holds each Run's assistant output (text, thinking, tools)
    *
    * Project **all runs for this conversation** (not only activeRunId), so
    * starting a second turn does not drop the previous assistant reply.
    */
   const displayMessages = useMemo(() => {
     return projectConversationMessages({
-      serverMessages: state.messages,
+      userMessages: state.messages,
       conversationId: state.conversationId,
       store: entityStore,
       activeRunId,
-      projectRunMessages: bridge.projectRunMessages,
     });
-  }, [state.messages, state.conversationId, entityStore, activeRunId, bridge]);
+  }, [state.messages, state.conversationId, entityStore, activeRunId]);
 
   const canSend = canSendAttachments(state.attachments);
 

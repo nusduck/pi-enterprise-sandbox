@@ -1,363 +1,141 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEntityStore, createRun, upsertRun } from '../src/entities/index.ts';
-import { projectConversationMessages } from '../src/features/chat/projections/conversationMessages.ts';
+import {
+  createEntityStore,
+  createMessage,
+  createRun,
+  upsertMessage,
+  upsertRun,
+  type EntityStore,
+} from '../src/entities/index.ts';
+import {
+  projectConversationMessages,
+  runFailureReason,
+} from '../src/features/chat/projections/conversationMessages.ts';
 import type { ChatMessage } from '../src/shared/state/types.ts';
+
+const user = (text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+  role: 'user',
+  content: [{ type: 'text', text }],
+  ...extra,
+});
+
+function storeWith(
+  runs: Array<{ id: string; createdAt: string; status?: string; error?: string; text?: string; userText?: string }>,
+): EntityStore {
+  let store = createEntityStore();
+  for (const r of runs) {
+    store = upsertRun(store, createRun({
+      id: r.id,
+      conversationId: 'conv_1',
+      createdAt: r.createdAt,
+      status: (r.status ?? 'succeeded') as never,
+      error: r.error ?? null,
+    }));
+    if (r.text) {
+      store = upsertMessage(store, createMessage({
+        id: `${r.id}_a`, runId: r.id, role: 'assistant', text: r.text, status: 'completed',
+      }));
+    }
+    if (r.userText) {
+      store = upsertMessage(store, createMessage({
+        id: `${r.id}_u`, runId: r.id, role: 'user', text: r.userText, status: 'completed',
+      }));
+    }
+  }
+  return store;
+}
+
+const project = (userMessages: ChatMessage[], store: EntityStore, activeRunId: string | null = null) =>
+  projectConversationMessages({ userMessages, conversationId: 'conv_1', store, activeRunId });
 
 describe('conversation message projection', () => {
   it('does not project an old run after starting a new conversation', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_old',
-      conversationId: 'conv_old',
-    }));
-
     const projected = projectConversationMessages({
-      serverMessages: [],
+      userMessages: [],
       conversationId: null,
-      store,
+      store: storeWith([{ id: 'run_old', createdAt: '2026-07-14T00:00:01Z', text: 'old answer' }]),
       activeRunId: null,
-      projectRunMessages: () => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: 'old answer' }],
-      }],
     });
-
     assert.deepEqual(projected, []);
   });
 
-  it('keeps distinct runs when assistant text is identical', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_1',
-      conversationId: 'conv_1',
-      createdAt: '2026-07-14T00:00:01Z',
-    }));
-    store = upsertRun(store, createRun({
-      id: 'run_2',
-      conversationId: 'conv_1',
-      createdAt: '2026-07-14T00:00:02Z',
-    }));
-
-    const serverMessages: ChatMessage[] = [
-      { role: 'user', content: [{ type: 'text', text: 'first' }] },
-      { role: 'assistant', content: [{ type: 'text', text: 'same answer' }] },
-      { role: 'user', content: [{ type: 'text', text: 'second' }] },
-      { role: 'assistant', content: [{ type: 'text', text: 'same answer' }] },
-    ];
-    const projected = projectConversationMessages({
-      serverMessages,
-      conversationId: 'conv_1',
-      store,
-      activeRunId: 'run_2',
-      projectRunMessages: (runId) => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: 'same answer' }],
-        _runId: runId,
-        _hasRuntimeSteps: true,
-      }],
-    });
-
-    const assistants = projected.filter((message) => message.role === 'assistant');
-    assert.equal(assistants.length, 2);
-    assert.deepEqual(assistants.map((message) => message._runId), ['run_1', 'run_2']);
-  });
-
-  it('streams pure token text without waiting for tools', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_stream',
-      conversationId: 'conv_stream',
-      createdAt: '2026-07-16T00:00:01Z',
-    }));
-
-    const serverMessages: ChatMessage[] = [
-      { role: 'user', content: [{ type: 'text', text: 'hi' }] },
-    ];
-
-    // First token chunk: no tools yet
-    let projected = projectConversationMessages({
-      serverMessages,
-      conversationId: 'conv_stream',
-      store,
-      activeRunId: 'run_stream',
-      projectRunMessages: () => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Hel' }],
-        _runId: 'run_stream',
-      }],
-    });
-    assert.equal(projected.length, 2);
-    assert.equal(String((projected[1].content[0] as { text?: string }).text), 'Hel');
-
-    // Second token chunk must replace the same assistant slot (live stream)
-    projected = projectConversationMessages({
-      serverMessages: projected,
-      conversationId: 'conv_stream',
-      store,
-      activeRunId: 'run_stream',
-      projectRunMessages: () => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: 'Hello world' }],
-        _runId: 'run_stream',
-      }],
-    });
-    assert.equal(projected.length, 2);
-    assert.equal(
-      String((projected[1].content[0] as { text?: string }).text),
-      'Hello world',
-    );
-  });
-
-  it('merges a matching unlinked durable assistant row instead of duplicating it', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_attachment_read',
-      conversationId: 'conv_attachment_read',
-      createdAt: '2026-07-16T00:00:01Z',
-    }));
-
-    const projected = projectConversationMessages({
-      // Partial/legacy history has no linkage, so ordinal tagging is not safe.
-      serverMessages: [{
-        role: 'assistant',
-        content: [{ type: 'text', text: 'The attached file says hello.' }],
-      }],
-      conversationId: 'conv_attachment_read',
-      store,
-      activeRunId: 'run_attachment_read',
-      projectRunMessages: () => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: 'The attached file says hello.' }],
-        _runId: 'run_attachment_read',
-        _messageId: 'local_projection_message',
-        _hasRuntimeSteps: true,
-      }],
-    });
-
-    assert.equal(projected.filter((message) => message.role === 'assistant').length, 1);
-    assert.equal(projected[0]._runId, 'run_attachment_read');
-    assert.equal(projected[0]._hasRuntimeSteps, true);
-  });
-
-  it('merges the assistant messages of one run into a single bubble carrying the runtime steps', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_multi_assistant',
-      conversationId: 'conv_multi_assistant',
-      createdAt: '2026-07-22T13:32:47Z',
-    }));
-
-    const projected = projectConversationMessages({
-      serverMessages: [
-        {
-          role: 'user',
-          content: [{ type: 'text', text: 'send it to me' }],
-          _runId: 'run_multi_assistant',
-          _messageId: 'msg_user',
-          sequenceNo: 1,
-        },
-        {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'The artifact has been submitted.' }],
-          _runId: 'run_multi_assistant',
-          _messageId: 'msg_assistant_1',
-          sequenceNo: 2,
-        },
-        {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'You can download it from Artifacts.' }],
-          _runId: 'run_multi_assistant',
-          _messageId: 'msg_assistant_2',
-          sequenceNo: 3,
-        },
-      ],
-      conversationId: 'conv_multi_assistant',
-      store,
-      activeRunId: 'run_multi_assistant',
-      // Live events use a distinct synthetic message id, so fallback matching
-      // must retain the durable assistant ordinal rather than collapse rows.
-      projectRunMessages: () => [
-        {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'The artifact has been submitted.' }],
-          _runId: 'run_multi_assistant',
-          _messageId: 'assistant:run_multi_assistant:seq1',
-        },
-        {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'You can download it from Artifacts.' }],
-          _runId: 'run_multi_assistant',
-          _messageId: 'assistant:run_multi_assistant:seq2',
-          _hasRuntimeSteps: true,
-        },
-      ],
-    });
-
-    // The run is the turn: its assistant rows collapse into one bubble whose
-    // content parts stay in durable order. Exactly one bubble per run also
-    // means only one can claim the steps, so the runtime timeline can never
-    // render the same tools twice.
-    const assistants = projected.filter((message) => message.role === 'assistant');
-    assert.equal(assistants.length, 1);
-    assert.equal((assistants[0].content[0] as { text: string }).text, 'The artifact has been submitted.');
-    assert.equal((assistants[0].content[1] as { text: string }).text, 'You can download it from Artifacts.');
-    assert.equal(assistants[0]._hasRuntimeSteps, true);
-  });
-
-  it('keeps the full persisted assistant text while adding runtime tool details', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_full_text',
-      conversationId: 'conv_full_text',
-      createdAt: '2026-07-21T00:00:00Z',
-    }));
-
-    const fullText = 'A'.repeat(900);
-    const projected = projectConversationMessages({
-      serverMessages: [
-        { role: 'user', content: [{ type: 'text', text: 'summarize this' }], _runId: 'run_full_text' },
-        { role: 'assistant', content: [{ type: 'text', text: fullText }], _runId: 'run_full_text' },
-      ],
-      conversationId: 'conv_full_text',
-      store,
-      activeRunId: 'run_full_text',
-      projectRunMessages: () => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: `${'A'.repeat(512)}…` }],
-        _runId: 'run_full_text',
-        _hasRuntimeSteps: true,
-      }],
-    });
-
-    const assistant = projected.find((message) => message.role === 'assistant');
-    assert.ok(assistant);
-    assert.equal((assistant.content[0] as { text: string }).text, fullText);
-    assert.equal(assistant._hasRuntimeSteps, true);
-  });
-
-  it('orders persisted history by sequence number, never by role', () => {
-    const projected = projectConversationMessages({
-      serverMessages: [
-        {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'first answer' }],
-          _messageId: 'msg_02',
-          sequenceNo: 2,
-        },
-        {
-          role: 'user',
-          content: [{ type: 'text', text: 'first question' }],
-          _messageId: 'msg_01',
-          sequenceNo: 1,
-        },
-      ],
-      conversationId: 'conv_history',
-      store: createEntityStore(),
-      activeRunId: null,
-      projectRunMessages: () => [],
-    });
-
-    assert.deepEqual(projected.map((message) => message._messageId), [
-      'msg_01',
-      'msg_02',
+  it('gives every run exactly one assistant row right after its user turn', () => {
+    const store = storeWith([
+      { id: 'run_1', createdAt: '2026-07-14T00:00:01Z', text: 'same answer' },
+      { id: 'run_2', createdAt: '2026-07-14T00:00:02Z', text: 'same answer' },
+    ]);
+    const rows = project([
+      user('first', { _runId: 'run_1', sequenceNo: 1 }),
+      user('second', { _runId: 'run_2', sequenceNo: 3 }),
+    ], store);
+    assert.deepEqual(rows.map((m) => [m.role, m._runId]), [
+      ['user', 'run_1'], ['assistant', 'run_1'],
+      ['user', 'run_2'], ['assistant', 'run_2'],
     ]);
   });
 
-  it('keeps unlinked legacy history in its original order', () => {
-    const projected = projectConversationMessages({
-      serverMessages: [
-        { role: 'assistant', content: [{ type: 'text', text: 'answer one' }] },
-        { role: 'user', content: [{ type: 'text', text: 'question two' }] },
-        { role: 'assistant', content: [{ type: 'text', text: 'answer two' }] },
-      ],
-      conversationId: 'conv_legacy',
-      store: createEntityStore(),
-      activeRunId: null,
-      projectRunMessages: () => [],
-    });
-
-    assert.deepEqual(
-      projected.map((message) => String((message.content[0] as { text?: string }).text)),
-      ['answer one', 'question two', 'answer two'],
-    );
+  it('carries the joined answer text of the run for copy, not the transcript', () => {
+    const store = storeWith([{ id: 'run_1', createdAt: '2026-07-14T00:00:01Z', text: 'the answer' }]);
+    const [, assistant] = project([user('q', { _runId: 'run_1', sequenceNo: 1 })], store);
+    assert.equal(assistant.content[0] && 'text' in assistant.content[0] ? assistant.content[0].text : '', 'the answer');
   });
 
-  it('inserts an uncommitted projection after its run user turn', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_1',
-      conversationId: 'conv_live',
-      createdAt: '2026-07-18T06:00:00.000Z',
-    }));
-
-    const projected = projectConversationMessages({
-      serverMessages: [
-        {
-          role: 'user',
-          content: [{ type: 'text', text: 'first question' }],
-          _runId: 'run_1',
-          _messageId: 'msg_01',
-          sequenceNo: 1,
-        },
-        {
-          role: 'user',
-          content: [{ type: 'text', text: 'later question' }],
-          _runId: 'run_2',
-          _messageId: 'msg_02',
-          sequenceNo: 2,
-        },
-      ],
-      conversationId: 'conv_live',
-      store,
-      activeRunId: 'run_1',
-      projectRunMessages: () => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: 'live answer' }],
-        _runId: 'run_1',
-      }],
-    });
-
-    assert.deepEqual(
-      projected.map((message) => String((message.content[0] as { text?: string }).text)),
-      ['first question', 'live answer', 'later question'],
-    );
+  it('orders persisted user turns by sequence number and keeps unsequenced sends last', () => {
+    const rows = project([
+      user('optimistic', { sequenceNo: Number.NaN }),
+      user('second', { sequenceNo: 3 }),
+      user('first', { sequenceNo: 1 }),
+    ], createEntityStore());
+    assert.deepEqual(rows.map((m) => (m.content[0] as { text: string }).text), ['first', 'second', 'optimistic']);
   });
 
-  it('keeps durable thinking when live replay omitted thinking.delta', () => {
-    let store = createEntityStore();
-    store = upsertRun(store, createRun({
-      id: 'run_think',
-      conversationId: 'conv_think',
-      createdAt: '2026-07-16T00:00:01Z',
-      status: 'succeeded',
-    }));
+  it('shows the host row of an active run before any entity arrived', () => {
+    const store = storeWith([{ id: 'run_1', createdAt: '2026-07-14T00:00:01Z', status: 'running' }]);
+    const rows = project([user('q', { _runId: 'run_1' })], store, 'run_1');
+    assert.deepEqual(rows.map((m) => m.role), ['user', 'assistant']);
+  });
 
-    const projected = projectConversationMessages({
-      serverMessages: [
-        { role: 'user', content: [{ type: 'text', text: 'skills?' }], _runId: 'run_think' },
-        {
-          role: 'assistant',
-          content: [{ type: 'text', text: '13 skills' }],
-          thinking: 'Check /home/sandbox/skill.',
-          thinkingStatus: 'complete',
-          _runId: 'run_think',
-          _messageId: 'msg_asst',
-        },
-      ],
-      conversationId: 'conv_think',
-      store,
-      activeRunId: null,
-      projectRunMessages: () => [{
-        role: 'assistant',
-        content: [{ type: 'text', text: '13 skills' }],
-        _runId: 'run_think',
-        _messageId: 'msg_asst',
-      }],
-    });
+  it('shows nothing for a finished run that produced no output', () => {
+    const store = storeWith([{ id: 'run_1', createdAt: '2026-07-14T00:00:01Z' }]);
+    const rows = project([user('q', { _runId: 'run_1' })], store);
+    assert.deepEqual(rows.map((m) => m.role), ['user']);
+  });
 
-    const assistant = projected.find((message) => message.role === 'assistant');
-    assert.equal(assistant?.thinking, 'Check /home/sandbox/skill.');
-    assert.equal(assistant?.thinkingStatus, 'complete');
+  it('keeps a host row for a failed run so its reason can render', () => {
+    const store = storeWith([{ id: 'run_1', createdAt: '2026-07-14T00:00:01Z', status: 'failed', error: 'model down' }]);
+    const rows = project([user('q', { _runId: 'run_1' })], store);
+    assert.deepEqual(rows.map((m) => m.role), ['user', 'assistant']);
+    assert.equal(runFailureReason(store.runsById.run_1), 'model down');
+  });
+
+  it('flags cancelled and interrupted runs on the assistant row', () => {
+    const store = storeWith([{ id: 'run_1', createdAt: '2026-07-14T00:00:01Z', status: 'cancelled', text: 'partial' }]);
+    const [, assistant] = project([user('q', { _runId: 'run_1' })], store);
+    assert.equal(assistant.interrupted, true);
+  });
+
+  it('appends a run whose user turn is not in the transcript, using its own prompt', () => {
+    const store = storeWith([
+      { id: 'run_1', createdAt: '2026-07-14T00:00:01Z', text: 'a1' },
+      { id: 'run_2', createdAt: '2026-07-14T00:00:02Z', text: 'a2', userText: 'from another tab' },
+    ]);
+    const rows = project([user('first', { _runId: 'run_1', sequenceNo: 1 })], store);
+    assert.deepEqual(rows.map((m) => [m.role, m._runId]), [
+      ['user', 'run_1'], ['assistant', 'run_1'],
+      ['user', 'run_2'], ['assistant', 'run_2'],
+    ]);
+  });
+
+  it('never surfaces assistant transcript rows — only user rows survive', () => {
+    const rows = project([
+      user('q', { _runId: 'run_1', sequenceNo: 1 }),
+      { role: 'assistant', content: [{ type: 'text', text: 'server copy' }], _runId: 'run_1', sequenceNo: 2 },
+    ], storeWith([{ id: 'run_1', createdAt: '2026-07-14T00:00:01Z', text: 'entity copy' }]));
+    assert.equal(rows.filter((m) => m.role === 'assistant').length, 1);
+    assert.equal(
+      (rows[1].content[0] as { text: string }).text,
+      'entity copy',
+    );
   });
 });

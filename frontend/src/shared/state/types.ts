@@ -4,33 +4,16 @@ export type TextPart = { type: 'text'; text: string };
 
 export type ContentPart = TextPart | { type: string; [k: string]: unknown };
 
-export type FileLink = {
-  name: string;
-  url: string;
-  path?: string;
-  artifact_id?: string;
-  mime_type?: string;
-  size?: number;
-};
-
+/**
+ * A row of the conversation transcript: a user turn, or the single assistant
+ * row of a Run (whose body renders from the EntityStore, not from this row).
+ */
 export type ChatMessage = {
   role: 'user' | 'assistant' | string;
   content: ContentPart[];
-  /** Provider-emitted reasoning/thinking, shown collapsed by default. */
-  thinking?: string;
-  thinkingStatus?: 'idle' | 'streaming' | 'complete';
   attachments?: AttachmentManifestItem[];
   interrupted?: boolean;
   status?: string;
-  stopReason?: string;
-  _fileLinks?: FileLink[];
-  /**
-   * This turn owns tool / process / approval / artifact rows in the EntityStore.
-   * The runtime timeline renders them from those entities — the chat message
-   * only carries the marker so merge and commit logic can tell a text-only turn
-   * from one that did runtime work.
-   */
-  _hasRuntimeSteps?: boolean;
   /** Runtime identity used for stable merge/dedupe; never used as display text. */
   _runId?: string;
   _messageId?: string;

@@ -6,7 +6,6 @@ import {
   findRegenerateSource,
   shouldShowJumpToBottom,
 } from './messageActions';
-import { runHasTurnEntities } from '../turn-stream/TurnStream';
 import { conversationDisplay } from '../../features/chat/conversationLoading';
 import { isTerminalRunStatus } from '../../entities';
 import { IconChevronDown } from '../../shared/ui/Icons';
@@ -66,28 +65,6 @@ export function MessageList() {
     );
   }, [displayMessages]);
 
-  /**
-   * One linear turn stream per Run, on the first assistant row of that Run.
-   * The stream renders every text segment and tool call of the Run in event
-   * order, so any further assistant rows of the same Run are skipped.
-   */
-  const turnRows = useMemo(() => {
-    const first = new Set<number>();
-    const skip = new Set<number>();
-    const seen = new Set<string>();
-    displayMessages.forEach((msg, idx) => {
-      if (msg.role !== 'assistant' || !msg._runId) return;
-      const key = String(msg._runId);
-      if (seen.has(key)) {
-        if (runHasTurnEntities(entityStore, key)) skip.add(idx);
-        return;
-      }
-      seen.add(key);
-      if (runHasTurnEntities(entityStore, key)) first.add(idx);
-    });
-    return { first, skip };
-  }, [displayMessages, entityStore]);
-
   /** Regenerate is only offered on the last assistant bubble while idle. */
   const regen = useMemo(() => {
     const assistantIdx = lastAssistantIndex(displayMessages);
@@ -135,7 +112,6 @@ export function MessageList() {
         </div>
       ) : (
         visibleMessages.map((msg, idx) => {
-          if (turnRows.skip.has(idx)) return null;
           const canRegenerate =
             regen.allowed && idx === regen.assistantIdx;
           // Only the regenerating bubble gets the source text: handing it to
@@ -152,7 +128,6 @@ export function MessageList() {
               }
               msg={msg}
               idx={idx}
-              useTurnStream={turnRows.first.has(idx)}
               canRegenerate={canRegenerate}
               regenerateSource={regenerateSource}
               onRegenerate={handleRegenerate}

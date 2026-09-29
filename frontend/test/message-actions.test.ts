@@ -108,7 +108,7 @@ describe('messageFingerprint (memo comparator)', () => {
     );
   });
 
-  it('diverges on role, text, thinking or interruption changes', () => {
+  it('diverges on role, text or interruption changes', () => {
     const base = asstMsg('hello');
     assert.notEqual(
       messageFingerprint(base),
@@ -118,9 +118,6 @@ describe('messageFingerprint (memo comparator)', () => {
       messageFingerprint(base),
       messageFingerprint(userMsg('hello')),
     );
-    const thinking = asstMsg('hello');
-    thinking.thinking = 'reasoning…';
-    assert.notEqual(messageFingerprint(base), messageFingerprint(thinking));
     const interrupted = asstMsg('hello');
     interrupted.interrupted = true;
     assert.notEqual(messageFingerprint(base), messageFingerprint(interrupted));

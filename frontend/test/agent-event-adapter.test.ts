@@ -11,6 +11,7 @@ import {
 import { createEntityStore } from '../src/entities/index.ts';
 import { reduceRuntimeEventBatch } from '../src/shared/state/runReducer.ts';
 import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
+import { runHasTurnEntities } from '../src/features/chat/projections/turnItems.ts';
 
 describe('Agent event adapter', () => {
   it('maps token stream to message.started + message.delta', () => {
@@ -90,14 +91,10 @@ describe('Agent event adapter', () => {
     assert.ok(store.runsById[r1]);
     assert.ok(store.runsById[r2]);
 
-    const msgs1 = bridge.projectRunMessages(r1);
-    const msgs2 = bridge.projectRunMessages(r2);
-    assert.equal(msgs1[0]?.content[0] && 'text' in msgs1[0].content[0]
-      ? msgs1[0].content[0].text
-      : '', 'AA2');
-    assert.equal(msgs2[0]?.content[0] && 'text' in msgs2[0].content[0]
-      ? msgs2[0].content[0].text
-      : '', 'B');
+    const textOf = (runId: string) =>
+      store.runsById[runId].messageIds.map((id) => store.messagesById[id].text).join('');
+    assert.equal(textOf(r1), 'AA2');
+    assert.equal(textOf(r2), 'B');
 
     bridge.dispose();
   });
@@ -116,7 +113,7 @@ describe('Agent event adapter', () => {
     bridge.dispose();
   });
 
-  it('projects tool rows as a marker only, never as chat content', () => {
+  it('keeps tool calls in the EntityStore, never as message text', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c-tools' });
     // Text → tool → text: the turn the duplicate-rendering bug came from.
@@ -125,28 +122,21 @@ describe('Agent event adapter', () => {
     bridge.ingestAgentEvent(runId, { type: 'tool_end', id: 't1', result: 'ok' });
     bridge.ingestAgentEvent(runId, { type: 'done' });
 
-    const msgs = bridge.projectRunMessages(runId);
-    const assistants = msgs.filter((m) => m.role === 'assistant');
-    assert.ok(assistants.length >= 1);
-    // Tools live in the EntityStore; the timeline is their only renderer.
-    for (const message of assistants) {
-      assert.equal(message.content.some((part) => part.type === 'tool_use'), false);
-    }
-    assert.equal(assistants.at(-1)?._hasRuntimeSteps, true);
+    const store = bridge.getStore();
+    const run = store.runsById[runId];
+    assert.deepEqual(run.toolExecutionIds, ['t1']);
+    const texts = run.messageIds.map((id) => store.messagesById[id].text).join('');
+    assert.equal(texts, 'Let me search.');
     bridge.dispose();
   });
 
-  it('keeps a host bubble for a run that only ran tools', () => {
+  it('keeps a run that only ran tools renderable through its tool entities', () => {
     const bridge = createEntityBridge();
     const runId = bridge.beginRun({ conversationId: 'c-tool-only' });
     bridge.ingestAgentEvent(runId, { type: 'tool_start', id: 't1', name: 'bash' });
     bridge.ingestAgentEvent(runId, { type: 'tool_end', id: 't1', result: 'ok' });
 
-    const assistants = bridge
-      .projectRunMessages(runId)
-      .filter((m) => m.role === 'assistant');
-    assert.equal(assistants.length, 1);
-    assert.equal(assistants[0]._hasRuntimeSteps, true);
+    assert.equal(runHasTurnEntities(bridge.getStore(), runId), true);
     bridge.dispose();
   });
 

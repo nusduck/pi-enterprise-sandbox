@@ -23,7 +23,6 @@ import {
   type ApprovalStatus,
   type DatasetEntity,
   type EntityStore,
-  type MessageEntity,
   type ProcessEntity,
   type ProcessStatus,
   type RunEntity,
@@ -55,11 +54,7 @@ import { listDatasets, type DatasetRow } from '../../shared/api/datasets';
 import { listProcesses, type ManagedProcess } from '../../shared/api/processes';
 import type { PersistedAgentEvent } from '../../shared/schemas/events';
 import { persistedEventPayload } from './persistedEventPayload';
-import type { ChatMessage } from '../../shared/state/types';
-import type { ContentPart } from '../../shared/state/types';
-import { getArtifactDownloadUrl } from '../../shared/api/client';
 import { makeRuntimeEvent } from '../../shared/schemas/events';
-import { isDurableArtifactId } from '../../shared/state/runReducer';
 import type {
   RunTraceResponse,
   TraceSpanWire,
@@ -251,8 +246,6 @@ export type EntityBridge = {
   rehydrateInProgress: (conversationId?: string | null) => Promise<RunEntity[]>;
   /** Restore the complete persisted timeline and reconnect non-terminal runs. */
   rehydrateConversation: (conversationId: string) => Promise<RunEntity[]>;
-  /** Project run assistant messages to ChatMessage[] for UI. */
-  projectRunMessages: (runId: string) => ChatMessage[];
   /** Adapter state for a run (tests). */
   getAgentEventAdapter: (runId: string) => AgentEventAdapterState | null;
   /** Mark an approval decided (optimistic UI after user action). */
@@ -1007,132 +1000,6 @@ export function createEntityBridge(
     return restored;
   }
 
-  function projectRunMessages(runId: string): ChatMessage[] {
-    const s = manager.getStore();
-    const run = s.runsById[runId];
-    if (!run) return [];
-    const messages: ChatMessage[] = run.messageIds
-      .map((id) => s.messagesById[id])
-      .filter((m): m is MessageEntity => Boolean(m))
-      .map((m) => ({
-        role: m.role,
-        content: [{ type: 'text' as const, text: m.text }],
-        thinking: m.thinking,
-        thinkingStatus: m.thinkingStatus,
-        _runId: runId,
-        _messageId: m.id,
-        createdAt: m.createdAt || undefined,
-        ...(m.status === 'interrupted'
-          ? { interrupted: true, status: 'interrupted' as const }
-          : {}),
-      }));
-    const content: ContentPart[] = [];
-    /** Skip assistant rows that are leaked tool envelopes (pre-fix clients). */
-    const looksLikeToolEnvelope = (text: string): boolean => {
-      const t = text.trim();
-      if (!t.startsWith('{')) return false;
-      return (
-        t.includes('"exitCode"') ||
-        t.includes('"stdout"') ||
-        t.includes('"stdoutTruncated"')
-      );
-    };
-    let assistant: ChatMessage | undefined;
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role !== 'assistant') continue;
-      const text = messages[i].content
-        .filter((p) => p.type === 'text' && 'text' in p)
-        .map((p) => String((p as { text?: unknown }).text || ''))
-        .join('');
-      if (looksLikeToolEnvelope(text)) continue;
-      assistant = messages[i];
-      break;
-    }
-    // If every assistant row was a tool leak, still keep an empty-text bubble
-    // so the run's timeline has a host.
-    if (assistant) content.push(...assistant.content);
-
-    // Tool / process / approval / artifact rows are never copied into chat
-    // content: the turn stream renders them straight from the EntityStore.
-    // Duplicating them here would render the same run twice whenever a turn
-    // produced more than one assistant message.
-    const hasRuntimeSteps = Boolean(
-      run.toolExecutionIds.length ||
-        run.processIds.length ||
-        run.approvalIds.length ||
-        run.artifactIds.length,
-    );
-
-    // Only surface run.error as a chat failure for terminal failed-like
-    // outcomes. Parked waits may still carry a status_reason like
-    // "approval pending" which must not render as `[Error: …]`.
-    const failedLike =
-      run.status === 'failed' ||
-      run.status === 'cancelled' ||
-      run.status === 'interrupted' ||
-      run.status === 'budget_exceeded' ||
-      run.status === 'orphaned';
-    if (
-      failedLike &&
-      run.error &&
-      !content.some(
-        (part) =>
-          part.type === 'text' &&
-          'text' in part &&
-          String((part as { text?: unknown }).text || '').includes(run.error || ''),
-      )
-    ) {
-      content.push({ type: 'text', text: `\n[Error: ${run.error}]` });
-    }
-
-    // Deliverables: only durable server artifact_id via artifact-download.
-    // Never fall back to workspace path download (submit_artifact only).
-    const fileLinks = run.artifactIds.flatMap((artifactId) => {
-      const artifact = s.artifactsById[artifactId];
-      if (!artifact) return [];
-      if (!isDurableArtifactId(artifact.id, runId)) return [];
-      if (artifact.source !== 'submit_artifact') return [];
-      const sessionId = artifact.sessionId || run.sandboxSessionId;
-      if (!sessionId) return [];
-      const url = getArtifactDownloadUrl(sessionId, artifact.id);
-      if (!url) return [];
-      return [{
-        name: artifact.name,
-        url,
-        path: artifact.path || undefined,
-        artifact_id: artifact.id,
-        mime_type: artifact.mimeType || undefined,
-        size: artifact.size ?? undefined,
-      }];
-    });
-
-    if (!assistant && (content.length || fileLinks.length || hasRuntimeSteps)) {
-      messages.push({ role: 'assistant', content: [], _runId: runId });
-    }
-    let projected: ChatMessage | undefined;
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'assistant') {
-        projected = messages[i];
-        break;
-      }
-    }
-    if (projected) {
-      projected.content = content;
-      projected._fileLinks = fileLinks;
-      projected._runId = runId;
-      projected._hasRuntimeSteps = hasRuntimeSteps;
-      if (
-        run.status === 'interrupted' ||
-        run.status === 'cancelled' ||
-        run.status === 'orphaned'
-      ) {
-        projected.interrupted = true;
-        projected.status = 'interrupted';
-      }
-    }
-    return messages;
-  }
-
   function markApproval(
     approvalId: string,
     status: Extract<ApprovalStatus, 'approved' | 'rejected'>,
@@ -1166,7 +1033,6 @@ export function createEntityBridge(
     dispose,
     rehydrateInProgress,
     rehydrateConversation,
-    projectRunMessages,
     getAgentEventAdapter: (runId) => eventAdapters.get(runId) || null,
     markApproval,
     recordDataset,

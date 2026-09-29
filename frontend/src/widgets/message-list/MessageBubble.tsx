@@ -9,7 +9,6 @@ import {
   isInterruptedMessage,
   splitAttachmentDisplay,
 } from '../../shared/state';
-import { MarkdownBody, SafeDownloadLink } from '../markdown/Markdown';
 import { safeApiUrl } from '../../shared/security/url';
 import { getWorkspaceFileUrl } from '../../shared/api/client';
 import { TurnStream } from '../turn-stream/TurnStream';
@@ -18,9 +17,6 @@ import { messageFingerprint, messagePlainText } from './messageActions';
 import {
   IconCopy,
   IconCheck,
-  IconBrain,
-  IconChevronDown,
-  IconChevronRight,
   IconAlertCircle,
   IconRefresh,
 } from '../../shared/ui/Icons';
@@ -129,42 +125,9 @@ function AttachmentCards({
     </div>
   );
 }
-function ThinkingBlock({
-  thinking,
-  isStreaming,
-}: {
-  thinking: string;
-  isStreaming?: boolean;
-}) {
-  const [open, setOpen] = useState(isStreaming);
-
-  return (
-    <div className={`message-thinking-box${open ? ' is-open' : ''}${isStreaming ? ' is-streaming' : ''}`}>
-      <button
-        type="button"
-        className="thinking-toggle-btn"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <IconBrain size={15} className="thinking-icon" />
-        <span className="thinking-label">
-          {isStreaming ? '正在思考…' : '思考过程'}
-        </span>
-        {isStreaming ? <span className="thinking-live-dot" /> : null}
-        <span className="thinking-chevron">
-          {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-        </span>
-      </button>
-      {open ? (
-        <div className="message-thinking-body">{thinking}</div>
-      ) : null}
-    </div>
-  );
-}
-
 function MessageBubbleBase({
   msg,
   idx,
-  useTurnStream = false,
   canRegenerate = false,
   regenerateSource = null,
   onRegenerate,
@@ -172,12 +135,6 @@ function MessageBubbleBase({
 }: {
   msg: ChatMessage;
   idx: number;
-  /**
-   * Render this assistant row as the Run's linear turn stream (thinking, text
-   * and tool activity in event order). Precomputed by MessageList so this
-   * component stays off the chat context and React.memo holds.
-   */
-  useTurnStream?: boolean;
   canRegenerate?: boolean;
   regenerateSource?: string | null;
   /** Stable callback from MessageList; identity must not change per render. */
@@ -191,51 +148,32 @@ function MessageBubbleBase({
   const interrupted = isInterruptedMessage(msg);
   const parts = msg.content || [];
   const runId = msg._runId || null;
-  const turnStream = useTurnStream && !isUser && Boolean(runId);
 
   let hasContent = false;
   const body: ReactNode[] = [];
   let visibleAttachments = msg.attachments || [];
 
-  if (turnStream && runId) {
+  if (!isUser && runId) {
+    // The assistant row is a Run: its whole body renders from the EntityStore.
     body.push(<TurnStream key="turn-stream" runId={runId} />);
     hasContent = true;
   }
 
-  // Legacy rows (no Run entities in the store): thinking, then text parts.
-  if (!turnStream && !isUser && msg.thinking) {
-    body.push(
-      <ThinkingBlock
-        key="thinking"
-        thinking={msg.thinking}
-        isStreaming={msg.thinkingStatus === 'streaming'}
-      />,
-    );
-    hasContent = true;
-  }
-
-  parts.forEach((p: ContentPart, i) => {
-    if (turnStream) return;
-    if (p.type === 'text' && 'text' in p && typeof p.text === 'string' && p.text) {
-      if (isUser) {
-        const display = splitAttachmentDisplay(p.text, visibleAttachments);
-        visibleAttachments = display.attachments;
-        if (display.text) {
-          body.push(
-            <span key={`t-${i}`} className="user-plain">
-              {display.text}
-            </span>,
-          );
-        }
-      } else {
-        let text = p.text;
-        const stars = (text.match(/\*\*/g) || []).length;
-        if (stars % 2 === 1) text = `${text}**`;
-        body.push(<MarkdownBody key={`t-${i}`} text={text} />);
+  if (isUser) {
+    parts.forEach((p: ContentPart, i) => {
+      if (p.type !== 'text' || !('text' in p) || typeof p.text !== 'string' || !p.text) return;
+      const display = splitAttachmentDisplay(p.text, visibleAttachments);
+      visibleAttachments = display.attachments;
+      if (display.text) {
+        body.push(
+          <span key={`t-${i}`} className="user-plain">
+            {display.text}
+          </span>,
+        );
       }
       hasContent = true;
-    }
-  });
+    });
+  }
 
   // 4. Attachments & File Links
   if (isUser && visibleAttachments.length) {
@@ -247,20 +185,6 @@ function MessageBubbleBase({
       />,
     );
     hasContent = true;
-  }
-
-  if (msg._fileLinks && !turnStream) {
-    for (const fl of msg._fileLinks) {
-      body.push(
-        <SafeDownloadLink
-          key={`fl-${fl.url}-${fl.name}`}
-          url={fl.url}
-          name={fl.name || 'file'}
-          path={fl.path}
-        />,
-      );
-      hasContent = true;
-    }
   }
 
   async function handleCopy() {
@@ -352,7 +276,6 @@ export const MessageBubble = memo(
   MessageBubbleBase,
   (prev, next) =>
     prev.idx === next.idx &&
-    prev.useTurnStream === next.useTurnStream &&
     prev.canRegenerate === next.canRegenerate &&
     prev.regenerateSource === next.regenerateSource &&
     prev.onRegenerate === next.onRegenerate &&
