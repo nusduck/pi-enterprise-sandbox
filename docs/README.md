@@ -63,6 +63,7 @@ Out-of-map directories:
 | [0009](./adr/0009-dsh-host-tools-and-application-steward.md) | 出厂工具挂 host；application 做 DSH 管家（改写 0007 D4 的审批组合、0006 P1 的闸门形状） |
 | [0010](./adr/0010-retain-custom-a2a-server-layer.md) | 保留自建 A2A 服务端协议面（**撤销 0007 D8**） |
 | [0011](./adr/0011-updrdb-upredis-dbpm-migration.md) | 持久化／协调拓扑迁移至 UPDRDB / UPRedis，口令改由 DBPM 下发 |
+| [0014](./adr/0014-sse-contract-is-the-platform-events.md) | SSE 契约以真实平台事件为准（**取代 0007 验证要求第 1 条**「逐字节不变」夹具） |
 
 **0003 is intentionally absent.** `0002-backend2712` and `0003-fronted0712` were
 07-12 task specs whose decisions `plan.md` superseded; they were removed on

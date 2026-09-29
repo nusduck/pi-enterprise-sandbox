@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **新增 ADR 0014：SSE 契约以真实平台事件为准**：取代 ADR 0007 验证要求第 1 条（「`sse_events.json` 逐字节不变、
+  api-server/frontend 零改动」）。该夹具描述的旧事件名已不存在，验证依据改为真实线上帧回放
+  （`frontend/test/fixtures/live-run-sse.json`）；0007 与 README/AGENTS 的索引同步加了取代说明。
+
 - **前端只认平台事件**：删除 `agentEventAdapter.ts`（把 `token` / `tool_start` / `tool_end` / `done` / `session` /
   `file_ready` 等旧 Agent 事件名翻译成 reducer 事件的整层适配器）、`ingestAgentEvent` 的旧事件回退分支、
   规范化器里「只有 type 的宽松事件」分支，以及 `getAgentEventAdapter`。Agent 事件流实际只发点分平台事件

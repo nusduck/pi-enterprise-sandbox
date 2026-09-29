@@ -7,7 +7,7 @@
 | 决策所有者 | Agent runtime maintainers |
 | 适用范围 | `agent/` 的 Runtime 层、新增 `runtime/` 与 `contract/` 包；`exec/` 见 [ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md) |
 | 取代 | **[ADR 0001](0001-pi-coding-agent-sdk.md)**、**[ADR 0002](0002-dsh-harness-evaluation.md)**、**[ADR 0005](0005-pi-session-jsonl-persistence.md)**（均转 Superseded） |
-| 关联决策 | [ADR 0004](0004-session-persistent-tmp.md)（不变）、[ADR 0006](0006-user-skill-enablement-gate.md)（不变）、[ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md)（同批交付） |
+| 关联决策 | [ADR 0014](0014-sse-contract-is-the-platform-events.md)（**取代本 ADR 验证要求第 1 条**）、[ADR 0004](0004-session-persistent-tmp.md)（不变）、[ADR 0006](0006-user-skill-enablement-gate.md)（不变）、[ADR 0008](0008-sandbox-isolation-and-fs-seam-redesign.md)（同批交付） |
 | 详细设计 | **[docs/design/dsh-rebuild.md](../design/dsh-rebuild.md)**；逐函数移植对照见 [design/waves/gap-audit.md](../design/waves/gap-audit.md) |
 | 上游基线 | `@deepseek-ai/*@0.1.1-rc.2`，**本次逐包下载核实**（非二手转述） |
 
@@ -210,6 +210,10 @@ policy 的文档标准。
 
 1. **SSE 契约逐字节不变**：`tests/fixtures/sse_events.json` 全量通过，
    `api-server/`、`frontend/` 零改动
+
+   > **2026-09-30 更新**：该条已由 [ADR 0014](0014-sse-contract-is-the-platform-events.md) **取代**。
+   > 线上事件流只有点分平台事件，夹具描述的旧事件名早已不存在（`projectToSse` 生产无调用方），
+   > 夹具随之删除；契约以真实平台事件与线上帧回放为准。下面第 2、3 条不变。
 2. **组合断言**：遥测、出网、凭据、本机 fs/shell/sandbox 各行**实际未挂载**——
    断言组合结果，不能断言配置意图
 3. **本机文件系统不可达**：等价今天 `assertSandboxShadowedTools` 的 fail-closed 断言

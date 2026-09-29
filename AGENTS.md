@@ -175,7 +175,8 @@ docker compose up -d
 1. **`docs/plan.md`** — 冻结的架构基线 + §32 验收标准。除非产品重新划定范围，否则视为只读。
 2. **`docs/adr/*`** — 与 plan 兼容的已锁定决策；按各文档状态及明确的 supersede 关系读取，
    不在此处维护易过期的“最新编号”。新增前检查目录并使用未占用编号。
-   [ADR 0010](docs/adr/0010-retain-custom-a2a-server-layer.md) 已撤销 0007 D8，保留自建 A2A 服务端。
+   [ADR 0010](docs/adr/0010-retain-custom-a2a-server-layer.md) 已撤销 0007 D8，保留自建 A2A 服务端；
+   [ADR 0014](docs/adr/0014-sse-contract-is-the-platform-events.md) 已取代 0007 验证要求第 1 条（SSE「逐字节不变」夹具）。
    0003 已删除，勿引用；0001/0002/0005 标着
    "Superseded by 0007"，但它们不是废纸——0002 的 DSH 调研与 seam 限制被 0007/0009 直接复用，
    引用时说明是"被取代文档中仍然有效的那部分"。
