@@ -30,10 +30,10 @@ describe('ConversationService MySQL authority', () => {
     const message = presentTranscriptMessage({
       messageId: 'msg_01',
       runId: 'run_01',
-      role: 'assistant',
-      messageType: 'chat',
+      role: 'user',
+      messageType: 'text',
       sequenceNo: 42,
-      contentJson: { text: 'durable answer' },
+      contentJson: { text: 'durable question', messages: [{ role: 'user', content: 'ignored context' }] },
       createdAt: '2026-07-18T06:00:00.123Z',
     });
 
@@ -41,97 +41,41 @@ describe('ConversationService MySQL authority', () => {
       id: 'msg_01',
       message_id: 'msg_01',
       run_id: 'run_01',
-      role: 'assistant',
-      content: [{ type: 'text', text: 'durable answer' }],
+      role: 'user',
+      content: [{ type: 'text', text: 'durable question' }],
       sequence_no: 42,
       created_at: '2026-07-18T06:00:00.123Z',
     });
   });
 
-  it('does not put reasoning parts into the assistant bubble text', () => {
-    const message = presentTranscriptMessage({
-      messageId: 'msg_reason',
-      runId: 'run_01',
-      role: 'assistant',
-      messageType: 'text',
-      sequenceNo: 2,
-      contentJson: {
-        content: [
-          { type: 'reasoning', text: 'The user says that is not what they meant.' },
-          { type: 'text', text: '明白了，我来确认一下。' },
-        ],
-      },
-      createdAt: '2026-07-18T06:00:00.123Z',
-    });
-    assert.equal(message.content[0].text, '明白了，我来确认一下。');
-    assert.equal(message.thinking, undefined);
-  });
-
-  it('surfaces persisted assistant thinking on the transcript', () => {
-    const message = presentTranscriptMessage({
-      messageId: 'msg_think',
-      runId: 'run_01',
-      role: 'assistant',
-      messageType: 'text',
-      sequenceNo: 2,
-      contentJson: { text: 'answer', thinking: 'I should look at the catalog.' },
-      createdAt: '2026-07-18T06:00:00.123Z',
-    });
-    assert.equal(message.thinking, 'I should look at the catalog.');
-  });
-
-  it('recovers thinking from sibling journal entries when assistant_ui omitted it', () => {
+  it('serves user turns only: assistant rows and journal rows never reach the browser', () => {
     const presented = presentConversation(
       { conversationId: '01ARZ3NDEKTSV4RRFFQ69G5FAV', title: 't', status: 'active' },
       [
+        { messageId: 'u1', runId: 'run_01', role: 'user', messageType: 'text', sequenceNo: 1, contentJson: { text: 'hi' } },
         {
           messageId: 'j1',
           role: 'system',
           messageType: 'message',
-          contentJson: {
-            kind: 'session_journal_entry',
-            entry: {
-              id: 'dsh:assistant:2:1',
-              type: 'message',
-              message: {
-                role: 'assistant',
-                content: [
-                  { type: 'reasoning', text: 'Check /home/sandbox/skill.' },
-                  { type: 'text', text: 'You have 13 skills.' },
-                ],
-              },
-            },
-          },
+          contentJson: { kind: 'session_journal_entry', entry: { id: 'e1', message: { role: 'assistant', content: [{ type: 'reasoning', text: 'secret thinking' }] } } },
         },
-        {
-          messageId: 'a1',
-          runId: 'run_01',
-          role: 'assistant',
-          messageType: 'text',
-          sequenceNo: 3,
-          contentJson: { kind: 'assistant_message', sessionEntryId: 'dsh:assistant:2:1', text: 'You have 13 skills.' },
-        },
+        { messageId: 'a1', runId: 'run_01', role: 'assistant', messageType: 'text', sequenceNo: 2, contentJson: { text: 'answer', thinking: 'hmm' } },
       ],
     );
-    const assistant = presented.messages.find((m) => m.role === 'assistant');
-    assert.equal(assistant.thinking, 'Check /home/sandbox/skill.');
+    assert.deepEqual(presented.messages.map((m) => [m.role, m.content[0].text]), [['user', 'hi']]);
+    assert.equal(JSON.stringify(presented).includes('thinking'), false);
   });
 
-  it('renders the current user turn from legacy full-context rows', () => {
-    const message = presentTranscriptMessage({
-      messageId: 'msg_legacy',
-      role: 'user',
-      messageType: 'text',
-      contentJson: {
-        messages: [
-          { role: 'user', content: [{ type: 'text', text: '你好呀' }] },
-          { role: 'assistant', content: [{ type: 'text', text: '你好！' }] },
-          { role: 'user', content: [{ type: 'text', text: '总结这个文档' }] },
-        ],
-      },
-    });
-
-    assert.equal(message.content[0].text, '总结这个文档');
+  it('skips a user row without canonical text instead of guessing from the prompt context', () => {
+    assert.equal(
+      presentTranscriptMessage({
+        messageId: 'msg_ctx',
+        role: 'user',
+        messageType: 'text',
+        contentJson: { messages: [{ role: 'user', content: [{ type: 'text', text: '总结这个文档' }] }] },
+      }),
+      null,
+    );
   });
 
   it('returns an empty list for a trusted owner that has not been provisioned', async () => {

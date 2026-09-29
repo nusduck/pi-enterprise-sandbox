@@ -281,13 +281,6 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'instance',
   },
   {
-    rel: 'application/conversation-service.ts',
-    match: /const\s+map\s*=\s*new\s+Map/,
-    purpose:
-      'Function-local journal-entry lookup while projecting conversation messages; database rows remain authoritative',
-    scope: 'local',
-  },
-  {
     rel: 'runtime/boot.ts',
     match: /const\s+byServer\s*=\s*new\s+Map/,
     purpose:
@@ -514,9 +507,10 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 2026-09-26: 36 → 39（mcp-per-agent-arguments.md）。validator 的宿主参数声明（读不出为空 =
     // 关闭）、domain 纯投影、每 Run 影子定义的两张索引（按钉死的 AgentVersion 推导，随 Run
     // scope 释放）。都没有 Run 事实。
+    // 2026-09-29: 39 → 38（会话转录只出用户行，删掉 conversation-service 的 journal thinking 查找表）。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      39,
+      38,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });
