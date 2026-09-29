@@ -456,7 +456,6 @@ Python `tests/` 现在只做**仓库卫生**（Python 执行面的契约测试�
 | `tests/test_redis_topology_config.py` | Redis 拓扑/compose/env 静态校验 |
 | `tests/test_builtin_skills.py` | 零 Skill 发行基线 |
 | `tests/test_skill_runtime_dependencies.py` | exec 镜像里的模型工具链 |
-| `tests/test_sse_contract.py` | `sse_events.json` 契约 |
 | `tests/test_backup_restore_scripts.py` | 备份/恢复脚本 |
 | `tests/test_a2a_edge_proxy.py` / `test_cross_service_smoke_config.py` | 边缘与 smoke 配置 |
 | `api-server/tests/*.test.js` | BFF agent-client / chat relay / listen smoke |

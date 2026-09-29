@@ -274,7 +274,7 @@ export function createRunSSEManager(
    * - SSE with `id:` field already consumed by caller as lastEventId
    */
   function coerceEvent(raw: SSEEvent, runId: string, conn: RunSSEState): RuntimeEvent | null {
-    // Prefer unified normalize (platform + legacy + BFF relay).
+    // Prefer unified normalize (platform envelope + BFF relay).
     const normalized = normalizeToRuntimeEvent(raw, runId);
     if (normalized) {
       // Fill synthetic sequence when stream omitted it but we are live-tailing
@@ -294,7 +294,7 @@ export function createRunSSEManager(
 
     // BFF relay envelope: { sequence, event, ts }. Preserve the outer
     // sequence so replay/dedupe remains stable even when Agent event IDs are
-    // absent from the inner legacy payload.
+    // absent from the inner payload.
     if (raw.event && typeof raw.event === 'object') {
       return coerceEvent(
         {

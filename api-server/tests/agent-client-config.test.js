@@ -20,27 +20,6 @@ describe('config exposes Agent base URL', () => {
   });
 });
 
-describe('shared SSE fixture is readable from Node', () => {
-  it('lists required frontend event types', () => {
-    const fixturePath = join(root, 'tests/fixtures/sse_events.json');
-    const data = JSON.parse(readFileSync(fixturePath, 'utf8'));
-    for (const t of [
-      'token',
-      'tool_start',
-      'tool_end',
-      'file_ready',
-      'error',
-      'done',
-      'session',
-      'approval_required',
-      'trace',
-      'session_closed',
-    ]) {
-      assert.ok(data.required_event_types.includes(t), `missing ${t}`);
-    }
-  });
-});
-
 describe('python agent path is gone', () => {
   it('BFF has no Python Agent proxy', async () => {
     const runs = await import('../src/routes/runs.js');

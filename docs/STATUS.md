@@ -83,7 +83,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| D1 | Refresh restores messages/tools/process/artifacts | `done` | **2026-07-19 offline matrix:** rehydrateConversation restores messages/tools/process/artifacts; WAITING_INPUT via rehydrateInProgress. Fixed durable history seq + flat platform payloads (`agentEventAdapter`, `platformEventNormalize`). FE suite 200 pass. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual non-blocking: browser F5 harness absent. |
+| D1 | Refresh restores messages/tools/process/artifacts | `done` | **2026-07-19 offline matrix:** rehydrateConversation restores messages/tools/process/artifacts; WAITING_INPUT via rehydrateInProgress. Fixed durable history seq + flat platform payloads (`platformEventNormalize`; the legacy `agentEventAdapter` was removed 2026-09-30). FE suite 200 pass. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual non-blocking: browser F5 harness absent. |
 | D2 | Show Run status | `done` | run UI + SSE |
 | D3 | Cancel Run | `done` | controls + API |
 | D4 | Upload Dataset | `done` | upload tests + BFF proxy |

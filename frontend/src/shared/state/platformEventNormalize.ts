@@ -1,6 +1,6 @@
 /**
- * Normalize platform envelopes (plan §15.3 / §19.3) and legacy Agent wire
- * shapes into a single RuntimeEvent form for the unified reducer.
+ * Normalize platform envelopes (plan §15.3 / §19.3) — including the BFF relay
+ * wrapper and flattened persisted rows — into the RuntimeEvent form the reducer takes.
  *
  * Live SSE and historical replay MUST share this path so UI projections match.
  */
@@ -335,29 +335,7 @@ export function normalizeToRuntimeEvent(
     context.run_id,
     fallbackRunId,
   );
-  if (!eventId || sequence == null || !typeRaw || !runId) {
-    // Last-chance: type-only loose event (Agent legacy)
-    if (typeRaw && runId) {
-      const seq = typeof sequence === 'number' ? sequence : 0;
-      const id = eventId || `synth_${runId}_${seq}_${typeRaw}`;
-      const mapped = mapPlatformEventType(typeRaw);
-      return makeRuntimeEvent({
-        event_id: id,
-        sequence: seq,
-        run_id: runId,
-        session_id: pickStr(obj.session_id, obj.sessionId, context.sandboxSessionId) || null,
-        type: mapped,
-        timestamp: pickStr(obj.timestamp, obj.ts) || null,
-        payload: normalizePayload(mapped, {
-          ...data,
-          type: undefined,
-          event_id: undefined,
-          sequence: undefined,
-        }, eventId),
-      });
-    }
-    return null;
-  }
+  if (!eventId || sequence == null || !typeRaw || !runId) return null;
 
   const mapped = mapPlatformEventType(typeRaw);
   const payload = normalizePayload(mapped, {

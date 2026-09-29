@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **前端只认平台事件**：删除 `agentEventAdapter.ts`（把 `token` / `tool_start` / `tool_end` / `done` / `session` /
+  `file_ready` 等旧 Agent 事件名翻译成 reducer 事件的整层适配器）、`ingestAgentEvent` 的旧事件回退分支、
+  规范化器里「只有 type 的宽松事件」分支，以及 `getAgentEventAdapter`。Agent 事件流实际只发点分平台事件
+  （`message.delta`、`tool.execution.*`、`run.*` …），无法规范化的帧现在被丢弃而不是猜测含义；
+  客户端本地的中断/失败标记的序号改由 Run 的 `lastSequence` 推进。测试改用真实线上帧形状。
+  同时删除只描述旧事件名的死契约：`tests/fixtures/sse_events.json`、`tests/test_sse_contract.py`、agent 的
+  `runtime/projection/sse.ts`（`projectToSse`，生产无调用方，只被测试引用）及其测试、api-server 里读取该夹具的用例；
+  `api.md`「SSE 事件协议」改为记录真实的平台事件（此前列的是旧事件名表）。
+
 - **会话转录接口只返回用户回合**：`GET /api/conversations/:id` 的 `messages` 不再带 assistant 行与 `thinking`
   （前端已改由 Run 时间线渲染，转录里的那份是第二个会漂移的副本）；用户文本只读 `content_json.text`，
   不再兼容只有完整 prompt 上下文的旧行。账本里 assistant 消息照常持久化，仅浏览器转录不再展示。

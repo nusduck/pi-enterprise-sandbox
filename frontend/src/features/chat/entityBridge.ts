@@ -33,11 +33,6 @@ import {
   createRunSSEManager,
   type RunSSEManager,
 } from '../../shared/sse/manager';
-import {
-  createAgentEventAdapterState,
-  agentEventToRuntime,
-  type AgentEventAdapterState,
-} from '../../shared/sse/agentEventAdapter';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { rehydrateRun, rehydrateToolExecutions } from '../../shared/state/runReducer';
 import { normalizeToRuntimeEvent } from '../../shared/state/platformEventNormalize';
@@ -246,8 +241,6 @@ export type EntityBridge = {
   rehydrateInProgress: (conversationId?: string | null) => Promise<RunEntity[]>;
   /** Restore the complete persisted timeline and reconnect non-terminal runs. */
   rehydrateConversation: (conversationId: string) => Promise<RunEntity[]>;
-  /** Adapter state for a run (tests). */
-  getAgentEventAdapter: (runId: string) => AgentEventAdapterState | null;
   /** Mark an approval decided (optimistic UI after user action). */
   markApproval: (
     approvalId: string,
@@ -348,7 +341,8 @@ export function createEntityBridge(
   onStoreChange?: (store: EntityStore) => void,
 ): EntityBridge {
   let store = createEntityStore();
-  const eventAdapters = new Map<string, AgentEventAdapterState>();
+  /** Sequence stamped on client-generated run events (interrupt / failure markers). */
+  const localSequences = new Map<string, number>();
   const transports = new Map<string, AbortController>();
   const reconcileInFlight = new Map<string, Promise<RunEntity | null>>();
   /** Invalidates late HTTP reconciliation results after logout/reset. */
@@ -435,44 +429,20 @@ export function createEntityBridge(
       };
     }
     manager.setStore(store);
-    eventAdapters.set(
-      runId,
-      createAgentEventAdapterState({
-        runId,
-        conversationId: opts.conversationId || null,
-        sessionId: opts.sessionId || null,
-      }),
-    );
     onStoreChange?.(store);
     return runId;
   }
 
+  /**
+   * Feed one wire event to the reducer. The Agent stream carries platform
+   * envelopes only (dotted types, durable sequence + event id), so there is
+   * exactly one write path: normalize → reducer → EntityStore. An event that
+   * does not normalize is dropped rather than guessed at.
+   */
   function ingestAgentEvent(runId: string, ev: SSEEvent): void {
-    // Platform envelopes already carry sequence/eventId — feed reducer directly
-    // so replay/live merge stays authoritative (no double sequence synthesis).
-    const asPlatform = normalizeToRuntimeEvent(ev, runId);
-    const eventType = String(ev.type || asPlatform?.type || '');
-    if (asPlatform && eventType.includes('.')) {
-      // Formal platform events use dotted names. Legacy Agent events such as
-      // tool_start also carry durable ids after history projection, but still
-      // need the adapter that maps them into normalized reducer events.
-      manager.handleRuntimeEvent(asPlatform);
-      store = manager.getStore();
-      return;
-    }
-
-    let adapter = eventAdapters.get(runId);
-    if (!adapter) {
-      adapter = createAgentEventAdapterState({
-        runId,
-        sequence: manager.getStore().runsById[runId]?.lastSequence || 0,
-      });
-      eventAdapters.set(runId, adapter);
-    }
-    const runtimeEvents = agentEventToRuntime(adapter, ev);
-    for (const re of runtimeEvents) {
-      manager.handleRuntimeEvent(re);
-    }
+    const event = normalizeToRuntimeEvent(ev, runId);
+    if (!event) return;
+    manager.handleRuntimeEvent(event);
     store = manager.getStore();
   }
 
@@ -507,21 +477,15 @@ export function createEntityBridge(
     type: 'run.status_changed' | 'run.failed',
     payload: Record<string, unknown>,
   ): void {
-    let adapter = eventAdapters.get(runId);
-    if (!adapter) {
-      adapter = createAgentEventAdapterState({
-        runId,
-        sequence: manager.getStore().runsById[runId]?.lastSequence || 0,
-      });
-      eventAdapters.set(runId, adapter);
-    }
-    adapter.sequence += 1;
+    const run = manager.getStore().runsById[runId];
+    const sequence = Math.max(localSequences.get(runId) ?? 0, run?.lastSequence ?? 0) + 1;
+    localSequences.set(runId, sequence);
     manager.handleRuntimeEvent(
       makeRuntimeEvent({
-        event_id: `local_${runId}_${adapter.sequence}`,
-        sequence: adapter.sequence,
+        event_id: `local_${runId}_${sequence}`,
+        sequence,
         run_id: runId,
-        session_id: adapter.sessionId,
+        session_id: run?.sandboxSessionId ?? null,
         type,
         payload,
       }),
@@ -756,7 +720,7 @@ export function createEntityBridge(
     for (const controller of transports.values()) controller.abort();
     transports.clear();
     manager.disconnectAll();
-    eventAdapters.clear();
+    localSequences.clear();
     reconcileInFlight.clear();
     store = createEntityStore();
     manager.setStore(store);
@@ -876,14 +840,6 @@ export function createEntityBridge(
       const resumable = status === 'waiting_approval' || status === 'waiting_input';
 
       const replayPersisted = () => {
-        eventAdapters.set(
-          runId,
-          createAgentEventAdapterState({
-            runId,
-            conversationId,
-            sessionId: detail.session_id || detail.sandbox_session_id || null,
-          }),
-        );
         for (const event of persisted) {
           ingestAgentEvent(runId, persistedEventPayload(event));
         }
@@ -1033,7 +989,6 @@ export function createEntityBridge(
     dispose,
     rehydrateInProgress,
     rehydrateConversation,
-    getAgentEventAdapter: (runId) => eventAdapters.get(runId) || null,
     markApproval,
     recordDataset,
   };

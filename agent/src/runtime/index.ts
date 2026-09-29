@@ -47,7 +47,6 @@ export type { InstallPolicyOptions, InstalledPolicy } from './policy/install.js'
 export { runGuards } from './policy/guards.js';
 export { RunBudget, wrapExecute } from './policy/run-budget.js';
 export { recordLedger, redactPostExecute } from './policy/post-execute.js';
-export { encodeSseStream, projectToSse } from './projection/sse.js';
 export {
   assembleSystemPrompt,
   buildPromptPlan,
