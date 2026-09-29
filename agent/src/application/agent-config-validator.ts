@@ -66,13 +66,6 @@ const TOP_LEVEL_V1_KEYS = Object.freeze([
   'dataSources',
 ]);
 
-const LEGACY_TOP_LEVEL_KEYS = Object.freeze([
-  'extensions',
-  'skills',
-  'sandboxPolicy',
-  'a2a',
-]);
-
 const MODEL_POLICY_V1_KEYS = Object.freeze([
   'modelId',
   'maxOutputTokens',
@@ -439,10 +432,6 @@ export class AgentConfigValidator {
         },
       },
       dataSources: { supported: true, type: 'array', maxItems: ENABLED_DATA_SOURCES_MAX, fields: { id: { supported: true, type: 'string' } } },
-      extensions: { supported: false, readOnly: true },
-      skills: { supported: false, readOnly: true },
-      sandboxPolicy: { supported: false, readOnly: true },
-      a2a: { supported: false, readOnly: true },
     };
     const platformConstraints = {
       models,
@@ -526,7 +515,7 @@ export class AgentConfigValidator {
     };
 
     for (const key of Object.keys(config)) {
-      if (TOP_LEVEL_V1_KEYS.includes(key) || LEGACY_TOP_LEVEL_KEYS.includes(key)) continue;
+      if (TOP_LEVEL_V1_KEYS.includes(key)) continue;
       if (legacy) {
         blockMigration(key, `Legacy field "${key}" has no schemaVersion 1 equivalent; remove it or keep running the existing version`);
       } else {
@@ -901,20 +890,6 @@ export class AgentConfigValidator {
 
     const dataSources = parseDataSourceConfig(config.dataSources);
     errors.push(...dataSources.errors, ...unknownDataSources(dataSources.ids ?? [], this.dataSources));
-    for (const key of LEGACY_TOP_LEVEL_KEYS) {
-      if (!Object.hasOwn(config, key)) continue;
-      const value = config[key];
-      const empty = value == null || value === '' || (Array.isArray(value) && value.length === 0) || (isPlainObject(value) && Object.keys(value).length === 0);
-      if (empty) {
-        // An empty placeholder carries no historical intent; v1 simply drops it.
-        warnings.push(diagnostic(key, 'LEGACY_FIELD_READ_ONLY', `${key} is read-only compatibility data and does not add runtime capability`));
-      } else if (legacy) {
-        blockMigration(key, `Legacy "${key}" is not an executable capability in schemaVersion 1; the upgraded version would drop it, so handle it explicitly`);
-      } else {
-        errors.push(diagnostic(key, 'CONFIG_FIELD_NOT_SUPPORTED', `${key} is not editable in schemaVersion 1`));
-      }
-    }
-
     const toolDecisions = decisionsOf(isPlainObject(toolPolicy) ? toolPolicy.tools : null);
     const summary = {
       model: {

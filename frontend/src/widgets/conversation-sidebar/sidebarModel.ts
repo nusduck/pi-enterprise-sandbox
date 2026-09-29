@@ -71,7 +71,9 @@ export function agentTone(agentId: string): number {
   return h % 6;
 }
 
+export const DEFAULT_AGENT_NAME = '通用智能体';
+
 /** The org's default agent carries no tag: most conversations use it. */
 export function isDefaultAgentName(name: string | null | undefined): boolean {
-  return !name || name.trim().toLowerCase() === 'default';
+  return !name || name.trim() === DEFAULT_AGENT_NAME;
 }

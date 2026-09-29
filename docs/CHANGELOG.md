@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   文本/序号猜测式的合并去重、`mergeAssistantTurns` 与对应样式；run 失败原因改在 `TurnStream` 内展示。
   不再兼容没有 Run 事件的旧会话（开发期，不迁移）；创建 Run 只发当前用户回合。
 
+- **租户默认 Agent 改名「通用智能体」并移除旧配置字段**：默认 Agent 的定义名从 `default` 改为
+  `通用智能体`（同名即查找键，开发期已有的 `default` 行不会被迁移，会另建新行）；新建默认版本
+  直接发 `schemaVersion: 1` 配置，不再带 `skills`/`extensions`/`sandboxPolicy`/`a2a`。
+  校验器不再把这四个字段当只读兼容数据，出现即 `CONFIG_UNKNOWN_FIELD`（legacy 记录里为
+  `LEGACY_FIELD_REQUIRES_MIGRATION`）。
+
 ### Added
 
 - **长任务完成邮件通知**：用户在「设置 → 账户」打开开关后，自己发起的 Run 运行超过阈值（默认 5 分钟）结束时——完成、失败或取消——

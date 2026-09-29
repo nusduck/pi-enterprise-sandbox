@@ -59,7 +59,7 @@ describe('agent tags', () => {
   });
 
   it('hides the default agent', () => {
-    assert.equal(isDefaultAgentName('default'), true);
+    assert.equal(isDefaultAgentName('通用智能体'), true);
     assert.equal(isDefaultAgentName(null), true);
     assert.equal(isDefaultAgentName('数据分析助手'), false);
   });
