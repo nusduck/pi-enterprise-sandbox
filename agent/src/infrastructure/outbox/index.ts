@@ -13,6 +13,8 @@ export {
   OUTBOX_STATUSES,
   isOutboxStatus,
   AGGREGATE_TYPE_RUN,
+  AGGREGATE_TYPE_RUN_NOTIFICATION,
+  EVENT_TYPE_RUN_TERMINAL_NOTIFICATION,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_STALE_CLAIM_MS,
   DEFAULT_BASE_DELAY_MS,
@@ -27,6 +29,7 @@ export { computeRetryDelayMs } from './retry-delay.js';
 export { mapDomainOutbox } from './map-outbox-row.js';
 export {
   RUN_STREAM_CLAIM_ELIGIBILITY,
+  RUN_NOTIFICATION_CLAIM_ELIGIBILITY,
   normalizeClaimEligibility,
   buildEligibilitySql,
   hasEligibilityFilter,

@@ -83,29 +83,45 @@ export class AuthCredentialRepository {
   }
 
   /**
-   * 修改本人的显示名称 / 邮箱。`auth_credentials` 与 `users` 各存一份（后者是
-   * 运行账本与通知收件人的来源），同一事务里一起改，不留下一半的状态。
-   * `patch` 里没出现的键保持不变。
+   * 修改本人的显示名称 / 邮箱 / 长任务完成邮件开关。显示名称与邮箱在
+   * `auth_credentials` 与 `users` 各存一份（后者是运行账本与通知收件人的来源），
+   * 开关只在 `users`。同一事务里一起改，不留下一半的状态。`patch` 里没出现的键保持不变。
+   *
+   * 要写开关而 users 行不存在（补建失败）时抛错，不让「保存成功」落空。
    */
   async updateProfile(
     externalUserId: string,
     userExternalSubject: string,
-    patch: { displayName?: string; email?: string | null },
+    patch: { displayName?: string; email?: string | null; notifyRunComplete?: boolean },
   ) {
     const now = toMysqlDateTime(this.now());
     const fields: Record<string, unknown> = {};
     if (patch.displayName !== undefined) fields.display_name = patch.displayName;
     if (patch.email !== undefined) fields.email = patch.email;
-    if (Object.keys(fields).length) {
+    const userFields: Record<string, unknown> = { ...fields };
+    if (patch.notifyRunComplete !== undefined) userFields.notify_run_complete = patch.notifyRunComplete;
+    if (Object.keys(userFields).length) {
       await this.db.transaction(async (trx: Loose) => {
-        await trx('tbl_agsvc_auth_credentials')
-          .where({ external_user_id: externalUserId })
-          .update({ ...fields, updated_at: now });
-        await trx('tbl_agsvc_users')
+        if (Object.keys(fields).length) {
+          await trx('tbl_agsvc_auth_credentials')
+            .where({ external_user_id: externalUserId })
+            .update({ ...fields, updated_at: now });
+        }
+        const updated = await trx('tbl_agsvc_users')
           .where({ external_subject: userExternalSubject })
-          .update({ ...fields, updated_at: now });
+          .update({ ...userFields, updated_at: now });
+        if (patch.notifyRunComplete !== undefined && Number(updated) === 0) {
+          throw new Error('user row missing for notification preference');
+        }
       });
     }
     return this.getByExternalUserId(externalUserId);
+  }
+
+  async getNotifyRunComplete(userExternalSubject: string) {
+    const row = await this.db('tbl_agsvc_users')
+      .where({ external_subject: userExternalSubject })
+      .first('notify_run_complete');
+    return Boolean(Number(row?.notify_run_complete ?? 0));
   }
 }

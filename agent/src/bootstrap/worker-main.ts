@@ -32,6 +32,8 @@ import {
 } from './worker-dependency-guard.js';
 import { assertWorkerTopologyDrained } from './worker-drain-gate.js';
 import { resolveDrainTimeout, runWorkerShutdown } from './worker-drain.js';
+import { startNotificationLoop } from './worker-notification.js';
+import { ulid } from '../domain/shared/ulid.js';
 
 /** Foreground durable subagents need a slot while their child Run executes. */
 export const DEFAULT_AGENT_WORKER_CONCURRENCY = 4;
@@ -50,6 +52,7 @@ export interface WorkerMainHooks {
   readonly createRunWorker?: (...args: any[]) => any;
   readonly startProbeServer?: typeof startWorkerProbeServer;
   readonly startDependencyGuard?: typeof startWorkerDependencyGuard;
+  readonly startNotificationLoop?: typeof startNotificationLoop;
 }
 
 export async function startWorkerMain(
@@ -201,8 +204,17 @@ async function runWorkerMain(
   if (typeof recoveryTimer.unref === 'function') recoveryTimer.unref();
 
   let publisher;
+  let notificationLoop: ReturnType<typeof startNotificationLoop>;
   try {
     publisher = await container.createOutboxPublisher();
+    // Run 终态邮件通知：独立认领 run_notification 行，与 outbox 循环互不阻塞。
+    // 与 publisher 同一个 try：装配失败时两个后台循环都还没启动，不会泄漏。
+    notificationLoop = (hooks.startNotificationLoop || startNotificationLoop)({
+      knex: container.knex,
+      env,
+      generateId: container.generateId ?? ulid,
+      now: container.now,
+    });
   } catch (err) {
     clearInterval(recoveryTimer);
     await cronScheduler?.shutdown().catch(() => {});
@@ -311,6 +323,7 @@ async function runWorkerMain(
     } catch {
       /* ignore */
     }
+    await notificationLoop.stop();
     await workerRuntime.shutdown().catch(() => {});
     await container.shutdown().catch(() => {});
     throw err;
@@ -360,6 +373,7 @@ async function runWorkerMain(
             dependencyGuard.stop().catch(() => {}),
             cronScheduler?.shutdown().catch(() => {}),
             outboxLoop.catch(() => {}),
+            notificationLoop.stop(),
           ]);
         },
         teardown: async () => {

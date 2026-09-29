@@ -223,10 +223,17 @@ describe('CancelRunService parked interaction transaction', () => {
         'run.cancelled',
       ],
     );
+    // Run 事件逐条进 outbox；终态另有一行只给邮件通知消费者认领（payload 不带 runId）。
     assert.deepEqual(
       state.tables.tbl_agsvc_domain_outbox.map((row) => row.event_type),
-      state.tables.tbl_agsvc_run_events.map((row) => row.event_type),
+      [
+        ...state.tables.tbl_agsvc_run_events.map((row) => row.event_type),
+        'notification.run_terminal',
+      ],
     );
+    const notification = state.tables.tbl_agsvc_domain_outbox.at(-1);
+    assert.equal(notification.aggregate_type, 'run_notification');
+    assert.equal(JSON.parse(notification.payload_json).status, RUN_STATUS.CANCELLED);
     assert.equal(cancelSignals.length, 0);
 
     const eventCount = state.tables.tbl_agsvc_run_events.length;

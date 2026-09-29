@@ -186,7 +186,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/auth/login` | 登录 |
 | `POST` | `/api/auth/logout` | 清理会话 |
 | `GET` | `/api/auth/me` | 当前用户 |
-| `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称与邮箱 |
+| `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称、邮箱与长任务完成邮件开关 |
 | `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation |
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
 | `GET` | `/api/conversations/{id}/events` | Conversation 维度 SSE |
@@ -355,12 +355,18 @@ Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不
 不签发或验证浏览器 JWT，也没有 `/auth/*` 路由。
 
 `/api/auth/profile`（账户页）：`GET` 在 `me` 之外返回 `organization_name`、`status`（`active` /
-`disabled`）、`created_at`、`last_login_at` 与 `editable_fields`（目前是 `display_name`、`email`）。
-它与 `me` 分开，因为 `me` 挂在 BFF 每个请求的鉴权上，不能多查库。`PATCH` 请求体只允许这两个键：
+`disabled`）、`created_at`、`last_login_at`、`editable_fields`（目前是 `display_name`、`email`、
+`notify_run_complete`）、`notify_run_complete`（布尔，长任务完成邮件开关，默认 `false`）与
+`notifications.email`（`{ available, min_run_duration_ms }`：部署是否配好了邮件发送、多长的 Run 才发；
+不可用时阈值为 `null`，前端据此禁用开关，不自行判断）。
+它与 `me` 分开，因为 `me` 挂在 BFF 每个请求的鉴权上，不能多查库。`PATCH` 请求体只允许这三个键：
 出现其他键返回 422 `PROFILE_FIELD_NOT_EDITABLE`（不静默忽略）；`display_name` 需 1–255 个字符；
 `email` 为 `null` 或空串表示清除，否则须是合法地址且不超过 320 个字符，不合法返回 422
-`AUTH_INPUT_INVALID`；token 无效返回 401。修改在同一事务里写 `auth_credentials` 与 `users` 两处——
-后者是运行账本、管理端用户列与运行完成通知收件人的来源。用户名、角色、机构、状态由部署或管理员决定。
+`AUTH_INPUT_INVALID`；`notify_run_complete` 须是布尔，否则 422 `AUTH_INPUT_INVALID`。打开开关时部署未配置
+邮件发送返回 422 `NOTIFICATION_UNAVAILABLE`；开关开着（或本次打开）却没有邮箱——包括单独清空邮箱——返回 422
+`NOTIFY_EMAIL_REQUIRED`（同一请求里一并关掉开关即可清空）。关闭开关总是允许。修改在同一事务里写
+`auth_credentials` 与 `users` 两处（开关只在 `users`）——后者是运行账本、管理端用户列与运行完成通知收件人的来源。
+用户名、角色、机构、状态由部署或管理员决定。
 
 #### 管理端运行查询
 

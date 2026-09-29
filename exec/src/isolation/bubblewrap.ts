@@ -166,10 +166,25 @@ export function resolveEffectiveMounts(
       continue;
     }
     const bind = mount;
-    if (bind.required) {
-      if (bind.ensureDir) {
+    // `ensureDir` 与 `required` 正交：它表达的是「这个源目录第一次用时还不存在，先建出来」。
+    // 典型的 `required: false` + `ensureDir: true` 就是按 owner 分目录的 Skill 草稿根
+    // （`<base>/<org>/<user>`）。早先把 mkdir 只放在 required 分支里，这类挂载就会在下面
+    // 那条 ENOENT 探测里被静默摘掉——目录永远建不出来，沙箱内也就永远看不见它，而模型
+    // 看到的现象只是「/home/sandbox/skill-draft: No such file」。所以建目录要在判定
+    // required 之前做，两条分支共用。
+    if (bind.ensureDir) {
+      try {
         mkdirSync(bind.source, { recursive: true });
-      } else {
+      } catch (error) {
+        // required: true 保持原语义——源建不出来是部署故障，必须炸在启动期；
+        // required: false 则与下面的探测一致：降级一次、摘掉这条挂载，不带走整次执行。
+        if (bind.required) throw error;
+        onDegraded(bind, error);
+        continue;
+      }
+    }
+    if (bind.required) {
+      if (!bind.ensureDir) {
         try {
           statSync(bind.source);
         } catch (error) {
