@@ -40,6 +40,7 @@ import {
   normalizeToRuntimeEvent,
 } from './platformEventNormalize';
 import { reduceMessageEvent } from './messageEvents';
+import { canFocusStartedRun } from './runFocusPolicy';
 
 export type ReduceOutcome =
   | 'applied'
@@ -263,13 +264,7 @@ export function reduceRuntimeEvent(
         traceId:
           str(payload.trace_id) || next.runsById[runId]?.traceId || null,
       });
-      // Replayed/background runs update their own entities, never the UI focus.
-      // In particular a null focus means the user detached during a switch.
-      if (
-        conversationId &&
-        next.activeRunId === runId &&
-        next.activeConversationId === conversationId
-      ) {
+      if (canFocusStartedRun(next, runId, conversationId)) {
         next = setActiveConversation(next, conversationId, { activeRunId: runId });
       }
       break;

@@ -54,6 +54,7 @@ import { getConversationEvents } from '../../shared/api/client';
 import { listDatasets, type DatasetRow } from '../../shared/api/datasets';
 import { listProcesses, type ManagedProcess } from '../../shared/api/processes';
 import type { PersistedAgentEvent } from '../../shared/schemas/events';
+import { persistedEventPayload } from './persistedEventPayload';
 import type { ChatMessage } from '../../shared/state/types';
 import type { ContentPart } from '../../shared/state/types';
 import { getArtifactDownloadUrl } from '../../shared/api/client';
@@ -851,19 +852,6 @@ export function createEntityBridge(
 
     onStoreChange?.(store);
     return rehydrated;
-  }
-
-  function persistedEventPayload(event: PersistedAgentEvent): SSEEvent {
-    return {
-      ...(event.payload || {}),
-      type: event.type,
-      eventId: event.event_id,
-      event_id: event.event_id,
-      sequence: event.sequence,
-      persisted_event_id: event.event_id,
-      persisted_sequence: event.sequence,
-      timestamp: event.created_at || undefined,
-    } as SSEEvent;
   }
 
   async function rehydrateConversation(conversationId: string): Promise<RunEntity[]> {
