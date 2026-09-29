@@ -19,8 +19,6 @@ const PLATFORM_TYPE_ALIASES: Record<string, string> = {
   'run.accepted': 'run.created',
   'run.queued': 'run.created',
   'run.status.changed': 'run.status_changed',
-  // Messages
-  'message.created': 'message.started',
   // Tools
   'tool.call.proposed': 'tool.prepared',
   'tool.execution.started': 'tool.started',

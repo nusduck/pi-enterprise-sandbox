@@ -97,22 +97,15 @@ describe('normalizeToRuntimeEvent', () => {
     const { store } = reducePlatformEventBatch(createEntityStore(), [
       platform({ eventId: 'preview_1', sequence: 1, type: 'run.started', runId }),
       platform({
-        eventId: 'preview_2',
-        sequence: 2,
-        type: 'message.created',
-        runId,
-        data: { messageId: 'msg_preview', role: 'assistant' },
-      }),
-      platform({
         eventId: 'preview_3',
-        sequence: 3,
+        sequence: 2,
         type: 'message.delta',
         runId,
         data: { messageId: 'msg_preview', delta: fullText },
       }),
       platform({
         eventId: 'preview_4',
-        sequence: 4,
+        sequence: 3,
         type: 'message.completed',
         runId,
         data: {

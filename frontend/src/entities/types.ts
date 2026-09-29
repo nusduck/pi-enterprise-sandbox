@@ -45,8 +45,6 @@ export type ApprovalStatus =
   | 'expired'
   | 'cancelled';
 
-export type AgentSessionStatus = 'active' | 'compacted' | 'failed' | 'archived';
-
 export type MessageRole = 'user' | 'assistant' | 'system';
 
 export type MessageStatus = 'streaming' | 'complete' | 'interrupted' | 'error';
@@ -60,18 +58,6 @@ export type ConversationEntity = {
   sandboxSessionId: string | null;
   runIds: string[];
   messageIds: string[];
-  createdAt: string | null;
-  updatedAt: string | null;
-};
-
-export type AgentSessionEntity = {
-  id: string;
-  conversationId: string;
-  sandboxSessionId: string | null;
-  workspaceId: string | null;
-  status: AgentSessionStatus;
-  modelId: string | null;
-  runIds: string[];
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -278,7 +264,6 @@ export type EntityMap<T> = Record<string, T>;
 
 export type EntityStore = {
   conversationsById: EntityMap<ConversationEntity>;
-  agentSessionsById: EntityMap<AgentSessionEntity>;
   runsById: EntityMap<RunEntity>;
   messagesById: EntityMap<MessageEntity>;
   toolExecutionsById: EntityMap<ToolExecutionEntity>;

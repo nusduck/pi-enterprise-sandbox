@@ -148,7 +148,7 @@ function modelBlocks(message: Json | null, fallbackText: string | null, thinking
 }
 
 const TERMINAL_EVENTS = new Set(['run.completed', 'run.failed', 'run.cancelled']);
-const MODEL_OUTPUT_EVENTS = new Set(['thinking.started', 'thinking.delta', 'message.started', 'message.delta']);
+const MODEL_OUTPUT_EVENTS = new Set(['thinking.started', 'thinking.delta', 'message.delta']);
 
 export function buildRunTimeline(input: {
   runId: string;

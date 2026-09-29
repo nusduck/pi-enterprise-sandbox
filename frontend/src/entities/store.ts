@@ -3,7 +3,6 @@
  * Pure functions — no React, no I/O.
  */
 import type {
-  AgentSessionEntity,
   ApprovalEntity,
   ArtifactEntity,
   ConversationEntity,
@@ -22,7 +21,6 @@ export function createEntityStore(
 ): EntityStore {
   return {
     conversationsById: { ...(initial.conversationsById || {}) },
-    agentSessionsById: { ...(initial.agentSessionsById || {}) },
     runsById: { ...(initial.runsById || {}) },
     messagesById: { ...(initial.messagesById || {}) },
     toolExecutionsById: { ...(initial.toolExecutionsById || {}) },
@@ -43,7 +41,6 @@ export function createEntityStore(
 export function cloneEntityStore(store: EntityStore): EntityStore {
   return {
     conversationsById: { ...store.conversationsById },
-    agentSessionsById: { ...store.agentSessionsById },
     runsById: { ...store.runsById },
     messagesById: { ...store.messagesById },
     toolExecutionsById: { ...store.toolExecutionsById },
@@ -80,21 +77,6 @@ export function createConversation(
     sandboxSessionId: null,
     runIds: [],
     messageIds: [],
-    createdAt: null,
-    updatedAt: null,
-    ...partial,
-  };
-}
-
-export function createAgentSession(
-  partial: Partial<AgentSessionEntity> & { id: string; conversationId: string },
-): AgentSessionEntity {
-  return {
-    sandboxSessionId: null,
-    workspaceId: null,
-    status: 'active',
-    modelId: null,
-    runIds: [],
     createdAt: null,
     updatedAt: null,
     ...partial,
@@ -276,15 +258,6 @@ export function upsertConversation(
   return next;
 }
 
-export function upsertAgentSession(
-  store: EntityStore,
-  entity: AgentSessionEntity,
-): EntityStore {
-  const next = cloneEntityStore(store);
-  next.agentSessionsById = upsert(next.agentSessionsById, entity);
-  return next;
-}
-
 export function upsertRun(store: EntityStore, entity: RunEntity): EntityStore {
   const next = cloneEntityStore(store);
   next.runsById = upsert(next.runsById, entity);
@@ -300,17 +273,6 @@ export function upsertRun(store: EntityStore, entity: RunEntity): EntityStore {
       sandboxSessionId: entity.sandboxSessionId || conv.sandboxSessionId,
       agentSessionId: entity.agentSessionId || conv.agentSessionId,
     });
-  }
-
-  // Link run → agent session
-  if (entity.agentSessionId) {
-    const sess = next.agentSessionsById[entity.agentSessionId];
-    if (sess) {
-      next.agentSessionsById = upsert(next.agentSessionsById, {
-        ...sess,
-        runIds: appendUnique(sess.runIds, entity.id),
-      });
-    }
   }
 
   return next;
