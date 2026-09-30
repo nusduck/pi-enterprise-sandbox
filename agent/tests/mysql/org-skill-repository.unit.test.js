@@ -199,3 +199,12 @@ describe('OrgSkillRepository.setCurrent', () => {
     assert.deepEqual(group.versions.map((v) => v.status), ['active', 'active']);
   });
 });
+
+describe('OrgSkillRepository 时间戳', () => {
+  it('publishedAt 是带时区的 ISO（UTC），不是库里的无时区串', async () => {
+    // 连接用 dateStrings：库里读回的是 `2026-09-30 00:00:00.000`，按本地时间解析会差出时区偏移。
+    const { repo } = makeRepo();
+    const row = await publish(repo);
+    assert.equal(row.publishedAt, '2026-09-30T00:00:00.000Z');
+  });
+});

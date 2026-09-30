@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   （provider 报的逻辑根是 `/home/sandbox/skill-org/<name>`）与沙箱里能 `read` 的位置不一致，
   正是 ADR 0015 要消掉的「发现与挂载不同构」。现在按 `ref.scope` 显式给 `kind: 'org'`，
   exec 的 fs 围栏、可读根与挂载目标随之对到同一个逻辑根。
+- **ADR 0015 浏览器实测修复（2026-09-30）**：
+  - **共享申请审阅页的摘要行显示成「个文件 · 字节 · 摘要 —」**：申请清单接口只返回
+    `{ request, files, skillMd, truncated }`，前端与 org 版本清单共用的类型要的是顶层
+    `name / contentDigest / fileCount / totalBytes`。服务与 HTTP 层都补上这四个字段（增量，旧字段不变）。
+  - **共享申请与 org 版本的时间差 8 小时**：两个新账本把 `dateStrings` 读回的无时区 UTC 串原样给出，
+    浏览器按本地时间解析。现在与其它账本一样输出带 `Z` 的 ISO（`createdAt` / `decidedAt` / `publishedAt`）。
+  - **「我的 Skills」里「停用」「撤回」按钮被拉成整行宽**：行是两列网格，第三个子元素折行进了宽列；
+    右侧控件改为包在一组里。技能分类说明里的 `**具体版本**` 原样显示星号，改为加粗。
 
 ### Added
 

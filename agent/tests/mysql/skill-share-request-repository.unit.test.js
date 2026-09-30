@@ -198,3 +198,15 @@ describe('SkillShareRequestRepository.listForOrg', () => {
     assert.deepEqual(rejected.map((row) => row.name), ['first']);
   });
 });
+
+describe('SkillShareRequestRepository 时间戳', () => {
+  it('createdAt / decidedAt 是带时区的 ISO（UTC），不是库里的无时区串', async () => {
+    const { repo } = makeRepo();
+    const row = await request(repo);
+    assert.equal(row.createdAt, '2026-09-30T00:00:00.000Z');
+    const decided = await repo.decide({
+      requestId: row.requestId, status: 'approved', decidedByUserId: ADMIN, note: '',
+    });
+    assert.equal(decided.decidedAt, '2026-09-30T00:00:00.000Z');
+  });
+});

@@ -168,7 +168,7 @@ org 作用域、状态机合法性都在 Agent；浏览器的同名 `X-Acting-Ro
 | `GET` | `/api/capabilities/skills/share-requests` | 本人的申请列表 |
 | `POST` | `/api/capabilities/skills/share-requests/{id}/withdraw` | 撤回本人的 `pending` |
 | `GET` | `/api/admin/skills/share-requests?status=` | **admin**：本 org 的申请队列 |
-| `GET` | `/api/admin/skills/share-requests/{id}/manifest` | **admin**：被申请版本的文件清单与截断 `SKILL.md`（只看这一个版本，不开放浏览作者的其他 Skill） |
+| `GET` | `/api/admin/skills/share-requests/{id}/manifest` | **admin**：被申请版本的文件清单与截断 `SKILL.md`（只看这一个版本，不开放浏览作者的其他 Skill）。响应 `{ request, name, contentDigest, fileCount, totalBytes, files[], skillMd, truncated }`，摘要字段与 org 版本清单同形 |
 | `POST` | `/api/admin/skills/share-requests/{id}/approve` | **admin**：body `{ setCurrent?, note? }`。复制作者**已发布**版本到 org 层并重算摘要，不一致即拒绝 |
 | `POST` | `/api/admin/skills/share-requests/{id}/reject` | **admin**：body `{ note }`，**必填**（没有原因的驳回在审计里等于没解释） |
 

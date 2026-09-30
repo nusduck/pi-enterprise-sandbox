@@ -20,7 +20,7 @@
  * 里、锁内进行，所以它与并发发布互斥。
  */
 import { physicalTableName } from '../schema-tables.js';
-import { toMysqlDateTime } from '../row-mappers.js';
+import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 
 type Loose = any;
 
@@ -81,7 +81,8 @@ function mapVersion(row: Loose): OrgSkillVersionRow {
         ? 'deprecated'
         : 'active',
     publishedByUserId: String(row.published_by_user_id ?? ''),
-    publishedAt: String(row.published_at ?? ''),
+    // 连接开了 dateStrings，读回的是无时区的 UTC 串；统一转成带 Z 的 ISO，否则浏览器按本地时间解析。
+    publishedAt: formatDateTime(row.published_at) ?? '',
   };
 }
 

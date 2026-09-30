@@ -26,7 +26,7 @@
  * `pending` 置为 `superseded`，再插新行。
  */
 import { physicalTableName } from '../schema-tables.js';
-import { toMysqlDateTime } from '../row-mappers.js';
+import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 
 type Loose = any;
 
@@ -80,9 +80,10 @@ function mapRow(row: Loose): ShareRequestRow {
     note: String(row.note ?? ''),
     status,
     decidedByUserId: String(row.decided_by_user_id ?? ''),
-    decidedAt: row.decided_at == null ? null : String(row.decided_at),
+    // dateStrings 读回无时区的 UTC 串；转成带 Z 的 ISO，与其它账本 DTO 一致。
+    decidedAt: formatDateTime(row.decided_at),
     decisionNote: String(row.decision_note ?? ''),
-    createdAt: String(row.created_at ?? ''),
+    createdAt: formatDateTime(row.created_at) ?? '',
   };
 }
 

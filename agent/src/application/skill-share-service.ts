@@ -368,6 +368,10 @@ export class SkillShareService {
     requestId: string;
   }): Promise<{
     request: ShareRequestRow;
+    name: string;
+    contentDigest: string;
+    fileCount: number;
+    totalBytes: number;
     files: Array<{ path: string; bytes: number }>;
     skillMd: string;
     truncated: boolean;
@@ -390,8 +394,13 @@ export class SkillShareService {
         400,
       );
     }
+    // 摘要行与 org 版本清单（`OrgSkillAdminService`）同形：前端两处共用一个 SkillManifest。
     return {
       request,
+      name: request.name,
+      contentDigest: request.contentDigest,
+      fileCount: manifest.files.length,
+      totalBytes: manifest.files.reduce((sum, file) => sum + file.bytes, 0),
       files: manifest.files,
       skillMd: manifest.skillMd,
       truncated: manifest.truncated,
@@ -566,6 +575,10 @@ export function createSkillShareHandler(
           status: 200,
           body: {
             request: review.request,
+            name: review.name,
+            contentDigest: review.contentDigest,
+            fileCount: review.fileCount,
+            totalBytes: review.totalBytes,
             files: review.files,
             skillMd: review.skillMd,
             truncated: review.truncated,
