@@ -209,6 +209,7 @@ export class OrgSkillAdminService {
     files: Array<{ path: string; bytes: number }>;
     skillMd: string;
     truncated: boolean;
+    affectedAgentVersionIds: string[];
   }> {
     const actor = await this.#admin(input.actor);
     const version = await this.deps.orgSkills.getVersion({
@@ -242,6 +243,13 @@ export class OrgSkillAdminService {
       skillMd: string;
       truncated: boolean;
     };
+    const affectedAgentVersionIds = typeof this.deps.affectedAgentVersions === 'function'
+      ? await this.deps.affectedAgentVersions({
+        orgId: actor.externalOrgId,
+        name: input.name,
+        contentDigest: input.contentDigest,
+      })
+      : [];
     return {
       name: version.name,
       contentDigest: version.contentDigest,
@@ -250,6 +258,7 @@ export class OrgSkillAdminService {
       files: ok.files,
       skillMd: ok.skillMd,
       truncated: ok.truncated,
+      affectedAgentVersionIds,
     };
   }
 

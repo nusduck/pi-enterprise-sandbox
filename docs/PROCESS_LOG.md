@@ -1218,3 +1218,10 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   全部后端镜像重建，实际 K8s/Compose 消费者更新；真实模型完成文件交付、失败读取、后台进程 logs/SIGTERM、
   跨组织 6×404 与同会话续聊；两条持久 request header 包含新约定。详见
   [证据](evidence/prompt-assembly-contract-2026-09-30.md)。
+
+## 2026-09-30 — Skill 管理弹窗复审后续修复
+
+- **Context：** 用户授权直接修复复审发现的两个问题；保留 agy 既有未提交改动。
+- **Action：** 吊销请求处理中阻止原生 dialog 的 Esc cancel，空闲时仍允许关闭；移除完整引用集合的虚假截断标记，保留 SKILL.md 的真实截断提示。新增真实浏览器回归脚本，覆盖失败草稿保留、重试、焦点与 1001 条列表；同步 webui / development / CHANGELOG。
+- **STATUS IDs：** 无状态变化，本次不关闭 §32 条目。
+- **验证：** 浏览器回归修复前 1 pass / 2 fail，修复后与部署版各 3/3；六套测试最终通过（exec 459 pass / 3 skipped，BFF 首轮在 Node 22.19.0 有 2 cancelled，Node 22.23.2 全套 185/185），所有类型检查及前端 build 通过。全部镜像重建并更新实际 K8s / Compose 消费者；真实模型 Run、进程 logs / SIGTERM 与跨组织 6×404 通过。边界与初次失败见[证据](evidence/skill-admin-dialog-followup-2026-09-30.md)。

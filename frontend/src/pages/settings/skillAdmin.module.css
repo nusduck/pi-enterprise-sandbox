@@ -1,0 +1,297 @@
+/* SkillAdminPage specific styles: native dialog, drawer, affected version chips, action button groups */
+
+.dialog {
+  /* app.css resets every margin to 0; <dialog> centres itself with auto margins. */
+  margin: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  padding: 0;
+  width: min(600px, calc(100% - 32px));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.dialogWide {
+  width: min(720px, calc(100% - 32px));
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+}
+
+.dialogContent {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: 85vh;
+}
+
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.modalTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.closeBtn {
+  background: transparent;
+  border: 0;
+  font-size: 18px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.closeBtn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+
+.modalBody {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13.5px;
+}
+
+.modalFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg);
+  flex-shrink: 0;
+}
+
+.alertDanger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  border: 1px solid var(--color-danger-text);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.alertSuccess {
+  background: var(--color-success-soft);
+  color: var(--color-success-text);
+  border: 1px solid var(--color-success-text);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.alertWarning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning-text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.affectedSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.affectedHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--color-text);
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.affectedList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.affectedItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.copyBtn {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.copyBtn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+
+.actionsGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.tableActionBtn {
+  padding: 3px 9px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.metaPills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.metaChip {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.fileListContainer {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.fileListTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.fileListTable th {
+  background: var(--color-bg-card);
+  padding: 6px 10px;
+  font-size: 11.5px;
+  text-align: left;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+}
+
+.fileListTable td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.fileListTable tr:last-child td {
+  border-bottom: 0;
+}
+
+.requestCard {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.requestNoteBox {
+  background: var(--color-bg);
+  border-left: 3px solid var(--color-primary-tint);
+  padding: 8px 12px;
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.decisionNoteBox {
+  background: var(--color-bg);
+  border-left: 3px solid var(--color-text-muted);
+  padding: 8px 12px;
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.actionForm {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-top: 1px dashed var(--color-border);
+}
+
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-hover);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}

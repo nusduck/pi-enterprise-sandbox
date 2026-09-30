@@ -9,7 +9,12 @@
  * 用原生 `<select>` 而不是 ModelPicker 那套自绘菜单：选项是短名字，没有
  * 每项的价格/上下文窗口要排版，原生控件的键盘与移动端行为反而更好。
  */
+import { useMemo } from 'react';
 import type { Agent } from '../../shared/api';
+import {
+  normalizeSelectedAgentPickerValue,
+  resolveAgentPickerOptions,
+} from './agentPickerHelpers';
 
 export type AgentPickerProps = {
   agents: Agent[];
@@ -24,23 +29,27 @@ export function AgentPicker({
   onSelect,
   disabled = false,
 }: AgentPickerProps) {
-  const selected = agents.find((agent) => agent.agent_id === selectedAgentId);
+  const { defaultAgent, options } = useMemo(
+    () => resolveAgentPickerOptions(agents),
+    [agents],
+  );
+  const selectValue = normalizeSelectedAgentPickerValue(selectedAgentId, defaultAgent);
+  const selected = agents.find((agent) => agent.agent_id === selectedAgentId) || defaultAgent;
+
   return (
     <label className="agent-picker">
       <span className="agent-picker-label">智能体</span>
       <select
         className="agent-picker-select"
-        value={selectedAgentId ?? ''}
+        value={selectValue}
         disabled={disabled}
         title={selected?.description || '新会话使用的智能体，会话开始后不可更改'}
         aria-label="新会话使用的智能体"
         onChange={(event) => onSelect(event.target.value || null)}
       >
-        {/* 空值 = 不传 agent_id，服务端用租户默认 Agent（向后兼容）。 */}
-        <option value="">默认智能体</option>
-        {agents.map((agent) => (
-          <option key={agent.agent_id} value={agent.agent_id}>
-            {agent.name}
+        {options.map((opt) => (
+          <option key={opt.value || '__default'} value={opt.value}>
+            {opt.label}
           </option>
         ))}
       </select>

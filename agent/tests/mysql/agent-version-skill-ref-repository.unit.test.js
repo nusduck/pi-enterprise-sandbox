@@ -93,6 +93,22 @@ describe('AgentVersionSkillRefRepository 吊销影响面', () => {
     );
   });
 
+  it('未指定 limit 时返回全部版本（支持 100+ 条引用不被截断漏报）', async () => {
+    const { repo } = makeRepo();
+    for (let i = 1; i <= 101; i++) {
+      const verId = `01K0G2PAV8FPMVC9QHJG7JP${String(i).padStart(3, '0')}`;
+      await repo.insertForVersion({
+        agentVersionId: verId, orgId: ORG,
+        refs: [{ scope: 'org', name: 'shared', contentDigest: DIGEST }],
+      });
+    }
+    const all = await repo.listVersionsForSkill({ orgId: ORG, name: 'shared', contentDigest: DIGEST });
+    assert.equal(all.length, 101);
+
+    const limited = await repo.listVersionsForSkill({ orgId: ORG, name: 'shared', contentDigest: DIGEST, limit: 50 });
+    assert.equal(limited.length, 50);
+  });
+
   it('system 引用不算进「引用某个 org 版本」（系统层不按 Agent 吊销）', async () => {
     const { repo } = makeRepo();
     await repo.insertForVersion({

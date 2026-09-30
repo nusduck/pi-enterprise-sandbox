@@ -11,6 +11,10 @@ import {
   type Frequency,
   type ScheduleForm,
 } from './scheduleModel';
+import {
+  normalizeSelectedAgentPickerValue,
+  resolveAgentPickerOptions,
+} from '../../widgets/composer/agentPickerHelpers';
 import s from './schedules.module.css';
 
 const FREQUENCIES: Array<[Frequency, string]> = [
@@ -101,6 +105,10 @@ export function ScheduleDialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<Draft>(() => draftFor(job));
+  const { defaultAgent, options: agentOptions } = useMemo(
+    () => resolveAgentPickerOptions(agents),
+    [agents],
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -171,9 +179,16 @@ export function ScheduleDialog({
             </label>
             <label className={s.field}>
               <span>智能体</span>
-              <select id="cj-agent" value={draft.agentId} onChange={(e) => setDraft({ ...draft, agentId: e.target.value })}>
-                <option value="">默认智能体</option>
-                {agents.map((a) => <option key={a.agent_id} value={a.agent_id}>{a.name}</option>)}
+              <select
+                id="cj-agent"
+                value={normalizeSelectedAgentPickerValue(draft.agentId, defaultAgent)}
+                onChange={(e) => setDraft({ ...draft, agentId: e.target.value })}
+              >
+                {agentOptions.map((opt) => (
+                  <option key={opt.value || '__default'} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
