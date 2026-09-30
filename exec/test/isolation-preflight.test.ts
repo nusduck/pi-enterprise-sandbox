@@ -52,19 +52,18 @@ test('preflight profile drops exactly the session-specific mounts: workspace, te
     );
     const keptTargets = new Set(preflight.mounts.map((m) => m.target));
 
-    assert.deepEqual(
-      droppedTargets,
-      new Set([
-        '/home/sandbox/workspace',
-        '/tmp',
-        '/home/sandbox/.config',
-        '/home/sandbox/.cache',
-        '/home/sandbox/.local/share',
-        '/home/sandbox/skill-user/pkg-a',
-        '/home/sandbox/skill-user/pkg-b',
-      ]),
-    );
-    for (const target of droppedTargets) {
+    // 逐包 skill 挂载（含系统层）都是 sessionSpecific，因此都不进探针——
+    // 探针不带任何清单（design §6.4）。
+    for (const target of [
+      '/home/sandbox/workspace',
+      '/tmp',
+      '/home/sandbox/.config',
+      '/home/sandbox/.cache',
+      '/home/sandbox/.local/share',
+      '/home/sandbox/skill-user/pkg-a',
+      '/home/sandbox/skill-user/pkg-b',
+    ]) {
+      assert.ok(droppedTargets.has(target), `${target} must be session-specific`);
       assert.ok(!keptTargets.has(target), `${target} must not survive into the preflight profile`);
     }
   } finally {
@@ -111,10 +110,9 @@ test('preflight profile keeps every static mount build.ts produces — including
     ]) {
       assert.ok(targets.has(path), `missing static /etc file mount: ${path}`);
     }
-    // 系统 skill 树：今天 Python 版 preflight 这条是对的，继续保持。
-    assert.ok(targets.has('/home/sandbox/skill'));
-    const systemSkill = bindMounts(preflight.mounts).find((m) => m.target === '/home/sandbox/skill');
-    assert.equal(systemSkill?.required, true);
+    // 系统 skill 层**不在探针里**：它现在是逐包的、sessionSpecific 的挂载
+    // （design §6.4「探针不变」——它本就不带清单），整树挂载的静态条目已删除。
+    assert.ok(!targets.has('/home/sandbox/skill'));
   } finally {
     await ws.cleanup();
   }
@@ -147,7 +145,11 @@ test('preflight profile forces fail-safe launch policy regardless of what the so
 
 test('buildPreflightProfile(): synthesizes a probe profile without needing a real session on disk', () => {
   const preflight = buildPreflightProfile({ systemSkillRoot: '/opt/skills' });
-  assert.ok(preflight.mounts.some((m) => m.target === '/home/sandbox/skill'));
+  // 探针不带系统名单：整个系统根作为非会话的硬绑定进 profile，启动时就能发现
+  // 「系统 Skill 根缺失或绑不上」（design §6.4 / §8）。逐包的用户/org 层不在探针里。
+  const systemSkill = preflight.mounts.find((m) => m.target === '/home/sandbox/skill');
+  assert.ok(systemSkill && systemSkill.kind === 'ro_bind' && systemSkill.required === true);
+  assert.ok(!preflight.mounts.some((m) => m.target.startsWith('/home/sandbox/skill-')));
   assert.ok(!preflight.mounts.some((m) => m.sessionSpecific));
   assert.deepEqual(preflight.launch.argv, ['/usr/bin/true']);
   assert.ok(preflight.namespace.namespaces.includes('net'));

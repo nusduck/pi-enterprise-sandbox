@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import { useChat } from '../../features/chat/ChatContext';
 import { listSkills, setSkillEnabled, uploadSkillDraft, type SkillItem } from '../../shared/api/capabilities';
+import {
+  listMySkillShareRequests,
+  requestSkillShare,
+  withdrawSkillShare,
+  type SkillShareRequest,
+  type ShareRequestStatus,
+} from '../../shared/api/skillSharing';
 import { splitSkillTiers } from '../../pages/settings/skillHelpers';
 import { usePreference, type Preferences } from '../../shared/ui/preferences';
 import { getProfile, updateProfile, type Profile } from '../../shared/api/account';
@@ -19,6 +26,15 @@ import s from './settings.module.css';
 type Tab = 'account' | 'general' | 'skills';
 
 const MAX_SKILL_BYTES = 50 * 1024 * 1024;
+
+/** 共享申请的状态文案（ADR 0015 §7.1 状态机）。 */
+const SHARE_STATUS_ZH: Record<ShareRequestStatus, string> = {
+  pending: '待管理员处理',
+  approved: '已批准',
+  rejected: '已驳回',
+  withdrawn: '已撤回',
+  superseded: '已被新申请取代',
+};
 
 function Seg<V extends string>({ value, options, onChange, label }: {
   value: V;
@@ -204,7 +220,9 @@ function GeneralPane() {
 
 function SkillsPane({ active }: { active: boolean }) {
   const [items, setItems] = useState<SkillItem[] | null>(null);
+  const [requests, setRequests] = useState<SkillShareRequest[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -215,18 +233,37 @@ function SkillsPane({ active }: { active: boolean }) {
     setItems(res.items);
   }, []);
 
+  const loadRequests = useCallback(async () => {
+    try {
+      setRequests(await listMySkillShareRequests());
+    } catch {
+      // 申请列表读不到不该把「我能用哪些 Skill」也一起弄没：退化成「未知」，
+      // 而不是显示成「没有申请」——后者会让人以为申请丢了。
+      setRequests(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (active && items == null) void load();
-  }, [active, items, load]);
+    if (active && requests == null) void loadRequests();
+  }, [active, items, requests, load, loadRequests]);
 
   async function run(key: string, fn: () => Promise<unknown>) {
     setBusy(key);
     setError(null);
+    setNotice(null);
     try {
       await fn();
-      await load();
+      await Promise.all([load(), loadRequests()]);
     } catch (err) {
-      setError((err as Error).message || '操作失败');
+      const api = err as { code?: string | null };
+      if (api.code === 'SKILL_NAME_RESERVED_BY_ORG') {
+        setError('这个名字已被组织共享层占用，不能启用同名的个人 Skill。');
+      } else if (api.code === 'SKILL_NOT_ENABLED') {
+        setError('只有已启用的版本才能申请共享。');
+      } else {
+        setError((err as Error).message || '操作失败');
+      }
     } finally {
       setBusy(null);
     }
@@ -241,6 +278,13 @@ function SkillsPane({ active }: { active: boolean }) {
   }
 
   const tiers = splitSkillTiers(items || []);
+  // 同名已有一条 pending 时按钮换成「申请中」：重复点会 supersede 掉旧申请，
+  // 那会让「我上次写了什么说明」无声消失。
+  const pendingNames = new Set(
+    (requests || []).filter((r) => r.status === 'pending').map((r) => r.name),
+  );
+  const myPending = (requests || []).filter((r) => r.status === 'pending');
+
   return (
     <section>
       <div
@@ -263,6 +307,7 @@ function SkillsPane({ active }: { active: boolean }) {
         />
       </div>
       {error ? <p className={s.err} role="alert">{error}</p> : null}
+      {notice ? <p className={s.muted} role="status">{notice}</p> : null}
       {items == null ? <p className={s.muted}>正在读取…</p> : null}
 
       <h3 className={s.sub}>草稿</h3>
@@ -277,17 +322,58 @@ function SkillsPane({ active }: { active: boolean }) {
 
       <h3 className={s.sub}>已启用</h3>
       {tiers.user.length === 0 && items ? <p className={s.muted}>还没有启用自己的 Skill</p> : null}
-      {tiers.user.map((skill) => (
-        <div key={`u-${skill.name}`} className={s.skill}>
-          <span className={s.skillName}>
-            {skill.name}
-            {tiers.publishedFromDraft.has(skill.name) ? <span className={s.tag}>来自草稿</span> : null}
-          </span>
-          <button type="button" className={s.btn} disabled={busy === skill.name} onClick={() => void run(String(skill.name), () => setSkillEnabled(String(skill.name), false))}>停用</button>
-          {skill.description ? <small>{skill.description}</small> : null}
+      {tiers.user.map((skill) => {
+        const name = String(skill.name || '');
+        const requested = pendingNames.has(name);
+        return (
+          <div key={`u-${name}`} className={s.skill}>
+            <span className={s.skillName}>
+              {name}
+              {tiers.publishedFromDraft.has(name) ? <span className={s.tag}>来自草稿</span> : null}
+            </span>
+            <button
+              type="button"
+              className={s.btn}
+              disabled={busy !== null || requested}
+              title={requested ? '已有一条待处理的申请' : '把这个版本提升到组织共享层'}
+              onClick={() => void run(`share-${name}`, async () => {
+                await requestSkillShare(name);
+                setNotice(`已提交「${name}」的共享申请，等管理员处理。`);
+              })}
+            >
+              {requested ? '申请中' : '申请共享'}
+            </button>
+            <button type="button" className={s.btn} disabled={busy === name} onClick={() => void run(name, () => setSkillEnabled(name, false))}>停用</button>
+            {skill.description ? <small>{skill.description}</small> : null}
+          </div>
+        );
+      })}
+      <p className={s.muted}>要重新发布改过的草稿，先停用，草稿会回到上面的列表。</p>
+
+      <h3 className={s.sub}>我的共享申请</h3>
+      {requests == null ? <p className={s.muted}>申请列表现不可用</p> : null}
+      {requests && requests.length === 0 ? <p className={s.muted}>还没有提交过共享申请</p> : null}
+      {requests?.map((request) => (
+        <div key={request.requestId} className={s.skill}>
+          <span className={s.skillName}>{request.name}</span>
+          <span className={s.tag}>{SHARE_STATUS_ZH[request.status] || request.status}</span>
+          {request.status === 'pending' ? (
+            <button
+              type="button"
+              className={s.btn}
+              disabled={busy === request.requestId}
+              onClick={() => void run(request.requestId, async () => {
+                await withdrawSkillShare(request.requestId);
+                setNotice(`已撤回「${request.name}」的共享申请。`);
+              })}
+            >
+              撤回
+            </button>
+          ) : null}
+          {request.decisionNote ? <small>管理员说明：{request.decisionNote}</small> : null}
         </div>
       ))}
-      <p className={s.muted}>要重新发布改过的草稿，先停用，草稿会回到上面的列表。</p>
+      {myPending.length > 0 ? <p className={s.muted}>申请由本组织管理员审批；批准后进入组织共享层，与你的草稿不再联动。</p> : null}
     </section>
   );
 }

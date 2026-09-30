@@ -87,25 +87,36 @@ function discoverSkills(skillRoots: string[], userSkillRoot: string | null = nul
 function mergePublishedUserSkills(
   systemSkills: Record<string, any>[],
   userSkills: ReadonlyArray<{ name: string, packageDir: string }>,
+  orgSkills: ReadonlyArray<{ name: string, packageDir: string }> = [],
 ) {
   const byName = new Map(systemSkills.map((skill) => [skill.name, skill]));
-  for (const pkg of userSkills) {
-    if (byName.has(pkg.name)) continue;
-    try {
-      const metadata = validateSkillPackage(pkg.packageDir, { expectedName: pkg.name });
-      byName.set(pkg.name, {
-        name: metadata.name,
-        description: metadata.description,
-        enabled: true,
-        status: 'configured',
-        source: 'user-skill-root',
-        path: null,
-        dynamic: true,
-      });
-    } catch {
-      // Invalid packages are not executable and must not be advertised.
+  // 顺序即优先级（ADR 0015 D7）：系统已经占了名字就跳过；org 在 user 之前，
+  // 与 Run 解析的 system > org > user 同序。展示层与运行层同一条规则，
+  // 否则用户在能力页看到的集合会与他实际能用的不一致。
+  const merge = (
+    packages: ReadonlyArray<{ name: string, packageDir: string }>,
+    source: 'org-skill-root' | 'user-skill-root',
+  ) => {
+    for (const pkg of packages) {
+      if (byName.has(pkg.name)) continue;
+      try {
+        const metadata = validateSkillPackage(pkg.packageDir, { expectedName: pkg.name });
+        byName.set(pkg.name, {
+          name: metadata.name,
+          description: metadata.description,
+          enabled: true,
+          status: 'configured',
+          source,
+          path: null,
+          dynamic: true,
+        });
+      } catch {
+        // Invalid packages are not executable and must not be advertised.
+      }
     }
-  }
+  };
+  merge(orgSkills, 'org-skill-root');
+  merge(userSkills, 'user-skill-root');
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -232,7 +243,7 @@ function projectMcpServers(
  *   now?: () => Date,
  * }} [options]
  */
-export function getExtensionDiagnostics(options: { profileId?: string, skillRoots?: string[], userSkillRoot?: string | null, userSkills?: ReadonlyArray<{ name: string, packageDir: string }>, draftSkillRoot?: string | null, mcpServers?: Record<string, any>[] | string, mcpDiscovery?: { servers?: Record<string, any>[], ready?: boolean, toolCount?: number }, models?: Iterable<Record<string, any>>, toolRiskPolicy?: Record<string, any>, now?: () => Date, } = {}) {
+export function getExtensionDiagnostics(options: { profileId?: string, skillRoots?: string[], userSkillRoot?: string | null, userSkills?: ReadonlyArray<{ name: string, packageDir: string }>, orgSkills?: ReadonlyArray<{ name: string, packageDir: string }>, draftSkillRoot?: string | null, mcpServers?: Record<string, any>[] | string, mcpDiscovery?: { servers?: Record<string, any>[], ready?: boolean, toolCount?: number }, models?: Iterable<Record<string, any>>, toolRiskPolicy?: Record<string, any>, now?: () => Date, } = {}) {
   const profileId = String(
     options.profileId || DEFAULT_PROFILE_ID,
   ).trim();
@@ -243,6 +254,7 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
   const skills = mergePublishedUserSkills(
     discoverSkills(options.skillRoots || [], options.userSkillRoot ?? null),
     options.userSkills ?? [],
+    options.orgSkills ?? [],
   );
   const skillDrafts = discoverDraftSkills(
     options.draftSkillRoot ?? null,

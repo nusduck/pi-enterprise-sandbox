@@ -38,6 +38,7 @@ function cfgFor(tenant: string, root: string): ExecRpcConfig {
     userId: `user-${tenant}`,
     workspaceId: `ws-${tenant}`,
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: [root],
   } as ExecRpcConfig;
 }

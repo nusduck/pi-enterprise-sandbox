@@ -40,6 +40,7 @@ import {
   resolveMysqlUrlFromEnv,
   resolveRedisUrlFromEnv,
   resolveWorkerExecutorFactory,
+  defaultSystemSkillRoots,
 } from './container-env.js';
 import {
   buildDshRunExecutorFactory,
@@ -538,8 +539,13 @@ export class ServiceContainer {
         // per-caller, so the executor passes `additionalSkillPaths` per Run —
         // scanning the whole user base here would put every tenant's skills
         // into every prompt.
+        //
+        // 形状是**结构化 + 显式名单**（ADR 0015 D4）：design §8 收紧后 exec 要求
+        // `systemSkills` 必修，而发现侧也只认按名过滤的清单——裸目录字符串会被
+        // 读成「解析不出名单」，两条消费面会一起丢掉系统层。名字取自与配置面/
+        // Run 解析共用的那份系统目录（同一个 TTL 缓存，不会两份说法）。
         const { systemRoot } = resolveSkillMountRoots(this.env);
-        const skillRoots = [systemRoot];
+        const skillRoots = await defaultSystemSkillRoots(this.env, systemRoot);
         const { createSessionTitleProjector } = await import('../application/session-title-projection.js');
         return new DshRuntimeFactory({
           // DSH 会话存储的 MySQL 口令同样来自 DBPM，不从连接串读。
@@ -556,7 +562,7 @@ export class ServiceContainer {
           // Progressive skill disclosure: scan formal skill mount into loader
           // → formatSkillsForPrompt (not package docs under node_modules).
           additionalSkillPaths: skillRoots,
-          skillRoot: primarySkillRoot(skillRoots),
+          skillRoot: primarySkillRoot([systemRoot]),
           workspaceRoot:
             this.env.AGENT_SESSION_WORKSPACE_CWD || '/home/sandbox/workspace',
         });

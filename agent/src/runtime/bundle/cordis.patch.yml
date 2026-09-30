@@ -84,6 +84,13 @@
 - id: session-query-sqlite
   disabled: true
 
+# 全局层 skill provider 绕过 AgentVersion 的 skillPolicy：默认根
+# （project/user 的 .dsh、.agents、DSH_BUNDLED_SKILL_DIR）不经过任何绑定过滤，
+# 而 collectFresh 的「全局层 → agent scope 链」合并不会让后者盖掉它。
+# 每个 Run 的系统层由 runtime-factory 在 agent scope 注册的 run-filesystem 承担。
+- id: skill-filesystem
+  disabled: true
+
 # 出网面不进 agent 进程：`web_search` 让模型直接联网，而
 # plan.md §12 要求业务数据只经受控的数据库 MCP。
 - id: web

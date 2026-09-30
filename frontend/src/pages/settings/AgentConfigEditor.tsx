@@ -31,6 +31,15 @@ import {
   dataSourceStructureIssues,
   setDataSources,
 } from './dataSourceHelpers';
+import { SkillPolicyFields } from './SkillPolicyFields';
+import {
+  orgSkillCandidates,
+  setSkillPolicy,
+  skillCandidates,
+  skillLayerMaxItems,
+  skillPolicyOf,
+  skillPolicyStructureIssues,
+} from './skillPolicyHelpers';
 import { McpArgumentFields } from './McpArgumentFields';
 import { hostArgumentsFor, setToolArgument, toolArgumentsIssue, toolArgumentsOf } from './mcpArgumentHelpers';
 import {
@@ -46,7 +55,15 @@ import s from './agents.module.css';
 export type { CatalogState };
 
 /** Which part of the configuration the editor shows (one tab at a time). */
-export type EditorSection = 'basic' | 'model' | 'tools' | 'mcp' | 'delegation' | 'dataSources' | 'json';
+export type EditorSection =
+  | 'basic'
+  | 'model'
+  | 'tools'
+  | 'mcp'
+  | 'delegation'
+  | 'dataSources'
+  | 'skills'
+  | 'json';
 
 export type AgentConfigEditorProps = {
   section: EditorSection;
@@ -403,7 +420,12 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
   const parsed = parseAgentConfigDraft(value);
   const config = parsed.ok ? parsed.config : null;
   const issues = config
-    ? [...structuredEditorIssues(config), ...delegationStructureIssues(config), ...dataSourceStructureIssues(config)]
+    ? [
+      ...structuredEditorIssues(config),
+      ...delegationStructureIssues(config),
+      ...dataSourceStructureIssues(config),
+      ...skillPolicyStructureIssues(config),
+    ]
     : [];
   const paused = (prefix: string) => disabled || issues.some((issue) => issue.startsWith(prefix));
 
@@ -460,6 +482,27 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
           errors={errors}
           disabled={paused('delegation')}
           onChange={(field, next) => commitConfig(value, onChange, (current) => setDelegationList(current, field, next))}
+        />
+      ) : null}
+      {section === 'skills' ? (
+        <SkillPolicyFields
+          view={skillPolicyOf(config)}
+          system={{
+            items: skillCandidates(options?.platformConstraints),
+            available: options != null,
+            loading: false,
+            error: options ? null : '配置能力读取失败',
+          }}
+          org={{
+            items: orgSkillCandidates(options?.platformConstraints),
+            available: options != null,
+            loading: false,
+            error: options ? null : '配置能力读取失败',
+          }}
+          max={skillLayerMaxItems(options?.fieldSupport)}
+          errors={errors}
+          disabled={paused('skills')}
+          onChange={(next) => commitConfig(value, onChange, (current) => setSkillPolicy(current, next))}
         />
       ) : null}
       {section === 'dataSources' ? (

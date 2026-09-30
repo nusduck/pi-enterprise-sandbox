@@ -57,11 +57,24 @@ export async function canonicalWritableRoots(
  * 就是 2026-09-01 那次「bash 能 ls、read 报 path escape」的成因。
  */
 export function readableRoots(ctx: WorkspaceContext): readonly string[] {
-  const roots = [ctx.workspaceRoot, ctx.tempRoot, ctx.systemSkillRoot];
+  // 系统根整体只在「没带名单」时可读（兼容期旧 Agent、公共面）。带了名单时
+  // 只登记名单里的包：否则包内一条指向兄弟包的符号链接，canonical 之后仍落在
+  // 系统根内，会绕过逐包围栏（ADR 0015 D4）。
+  const roots = ctx.systemSkillPackages === undefined
+    ? [ctx.workspaceRoot, ctx.tempRoot, ctx.systemSkillRoot]
+    : [ctx.workspaceRoot, ctx.tempRoot];
   if (ctx.draftSkillRoot !== undefined && ctx.draftSkillRoot !== '') {
     roots.push(ctx.draftSkillRoot);
   }
+  // 三个逐包 Skill 层都要登记（ADR 0015 D4/D5）。漏掉一层就会在该层包上抛
+  // 「resolves outside workspace」——挂载对了但读不到，症状很容易被误判成挂载问题。
   for (const pkg of ctx.enabledSkillPackages) {
+    roots.push(pkg.sourcePath);
+  }
+  for (const pkg of ctx.orgSkillPackages ?? []) {
+    roots.push(pkg.sourcePath);
+  }
+  for (const pkg of ctx.systemSkillPackages ?? []) {
     roots.push(pkg.sourcePath);
   }
   return roots;

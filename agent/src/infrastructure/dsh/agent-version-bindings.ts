@@ -12,6 +12,11 @@
 
 import { DshRuntimeFactoryError } from './errors.js';
 import { resolveToolNameAlias } from './constants.js';
+import {
+  isSchemaVersionedConfig,
+  unknownTopLevelKeys,
+} from './agent-config-key-vocabulary.js';
+import { parseSkillPolicy } from '@dsh/contract/skill-policy.js';
 import { parseDelegationConfig } from '../../domain/agent/delegation-config.js';
 import { parseDataSourceConfig } from '../../domain/agent/data-source-config.js';
 import type { HostArgumentValues } from '../../domain/agent/mcp-host-arguments.js';
@@ -409,6 +414,35 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     deepFreezeClone(JSON.parse(JSON.stringify(rawConfig)))
   );
 
+  // 滚动升级护栏（ADR 0015 后果；design §8）：`schemaVersion: 1` 的记录出现本进程
+  // 不认识的顶层键，只可能是「更新的写入方 + 更旧的 Worker」。把它当作「省略」继续跑
+  // 会让绑定静默失效（配置说只带 pdf，实际带全部），所以 fail-closed。
+  // legacy 记录（无 schemaVersion）本来就带 v1 已删除的键，维持现状。
+  const unknownKeys = unknownTopLevelKeys(configJson);
+  if (unknownKeys.length > 0) {
+    throw new DshRuntimeFactoryError(
+      `AgentVersion config declares schemaVersion and carries top-level key(s) this runtime does not support: ${unknownKeys.join(', ')}. ` +
+        'Refusing to bind: a newer writer produced this record and ignoring the field would silently disable the configured behavior.',
+      { code: 'DSH_CONFIG_UNSUPPORTED' },
+    );
+  }
+
+  // `skillPolicy` 内部同样 fail-closed：形状解析失败时若回落到默认策略，就是
+  // 「配置说只带 xlsx、实际带全部系统 + 用户 Skill」——与上面顶层未知键是同一种
+  // 静默失效，只是低一层（2026-09-30 复审在运行栈上复现）。写入路径已按同一份
+  // 形状校验拒绝坏配置，所以这里出错只可能是更新的写入方或库内被改写。
+  const skillPolicyParsed = parseSkillPolicy(configJson.skillPolicy);
+  if (skillPolicyParsed.policy === null) {
+    const detail = skillPolicyParsed.errors
+      .map((entry) => `${entry.path}: ${entry.message}`)
+      .join('; ');
+    throw new DshRuntimeFactoryError(
+      `AgentVersion skillPolicy is not supported by this runtime (${detail}). ` +
+        'Refusing to bind instead of falling back to the default policy, which would expose every skill.',
+      { code: 'DSH_CONFIG_UNSUPPORTED' },
+    );
+  }
+
   const modelPolicy =
     configJson.modelPolicy && typeof configJson.modelPolicy === 'object'
       ? (configJson.modelPolicy as Record<string, unknown>)
@@ -500,6 +534,11 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     skills: Array.isArray(configJson.skills)
       ? Object.freeze([...configJson.skills])
       : Object.freeze([]),
+    /**
+     * 这个 Agent 的 Skill 绑定（ADR 0015 D2）。省略时是默认策略（全部系统 +
+     * 用户启用），形状非法在上面已 fail-closed，不会走到这里。
+     */
+    skillPolicy: skillPolicyParsed.policy,
     mcpServers: Array.isArray(configJson.mcpServers)
       ? Object.freeze([...configJson.mcpServers])
       : Object.freeze([]),

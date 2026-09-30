@@ -18,6 +18,7 @@ const SECTIONS: Array<{ title: string; items: Array<{ to: string; label: string;
     items: [
       { to: '/admin/agents', label: '智能体' },
       { to: '/admin/capabilities', label: '能力' },
+      { to: '/admin/skills', label: 'Skill 共享' },
       { to: '/admin/a2a', label: 'A2A 接入' },
     ],
   },

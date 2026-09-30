@@ -147,6 +147,17 @@ export interface SkillManagerOptions {
    * 省略时回退到旧行为（直接装），并在审计里标出来。
    */
   draftSkillRoot?: string | null;
+  /**
+   * 本 org 被 org 层**占用**的名字（ADR 0015 D7 / design §7.3）。
+   *
+   * 由调用方注入，因为这个集合必须**已经排除原作者自己**——被提升过的 Skill 的原作者
+   * 要能继续启用新版本，否则他没法迭代。谁算作者是账本的事，不该由这里猜。
+   *
+   * 省略即不检查。**不要**省略它来实现「以后再说」：那样同名包会被挂进 `skill-user/`，
+   * 与 `/home/sandbox/skill-org/` 下的同名包撞名，而 Run 解析只保留 org 版本——
+   * 作者会以为自己的新版本生效了。
+   */
+  reservedOrgNames?: Iterable<string> | null;
   downloadArchive?:
     | ((input: { attachmentId: string; signal?: AbortSignal }) => Promise<unknown>)
     | null;
@@ -217,6 +228,11 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
       throw error;
     }
     fs.mkdirSync(userRoot, { recursive: true, mode: 0o700 });
+  }
+
+  /** 本 org 保留名（调用方已排除原作者）。省略时返回空集合。 */
+  function reservedOrgNames() {
+    return options.reservedOrgNames ? new Set([...options.reservedOrgNames].map(String)) : new Set<string>();
   }
 
   function systemSkillNames() {
@@ -452,6 +468,7 @@ export function createSkillManager(options: SkillManagerOptions = {}) {
           publishedRoot: userRoot,
           expectedName: name,
           systemSkillNames: systemSkillNames(),
+          reservedOrgNames: reservedOrgNames(),
         });
         audit({
           action: 'enable',

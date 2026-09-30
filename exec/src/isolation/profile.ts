@@ -174,6 +174,14 @@ export class IsolationConfigError extends Error {
 
 export const AGENT_SKILL_PATH = '/home/sandbox/skill';
 export const AGENT_USER_SKILL_PATH = '/home/sandbox/skill-user';
+/**
+ * org 层 Skill 的逻辑根（ADR 0015 D5）。
+ *
+ * 与用户层分开是**审计与脱敏的需要**：两者字节来源不同（本 org 管理员背书 vs 本人
+ * 启用），一个 Run 里同时出现时日志要能分辨来源。物理上共用同一份发布存储，只是
+ * owner 根不同（`<orgId>/_org` vs `<orgId>/<userId>`）。
+ */
+export const AGENT_ORG_SKILL_PATH = '/home/sandbox/skill-org';
 export const AGENT_WORKSPACE_PATH = '/home/sandbox/workspace';
 /**
  * 用户侧 skill 的**草稿根**（ADR 0009 D7 / 计划 H6.2）。

@@ -166,6 +166,9 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       tempRoot: deps.workspaceManager.physicalTempPath(workspaceId),
       systemSkillRoot: deps.systemSkillRoot,
       enabledSkillPackages: [],
+      // MCP 窄桥**不带系统名单**（`systemSkillPackages` 省略 = 整树只读）：它没有
+      // AgentVersion 绑定，外部 MCP 客户端一直能读全部系统 Skill。是否收窄它是
+      // 对外行为变化，需要产品决定，不随 ADR 0015 顺带改变。
     };
   }
 

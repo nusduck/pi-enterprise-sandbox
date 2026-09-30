@@ -69,6 +69,12 @@ import path from 'node:path';
 
 const OWNER_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
+/**
+ * org 层的 owner 段（ADR 0015 D5）。首字符是 `_`，**不满足** `OWNER_SEGMENT_RE`，
+ * 因此不可能与任何真实 `userId` 目录（必须以字母数字开头）冲突。
+ */
+const ORG_SKILL_OWNER_SEGMENT = '_org';
+
 function packageUnavailable(name: string): ContractError {
   return new ContractError('SKILL_PACKAGE_UNAVAILABLE', `skill package unavailable: ${name}`);
 }
@@ -82,7 +88,7 @@ function classifySkillStoreError(err: unknown, name: string): ContractError {
 }
 
 /**
- * 按请求携带的启用清单解析这个 owner 要挂载的包（design §3.3 S1）。
+ * 按请求携带的启用清单解析这个 owner 要挂载的包（design §3.3 S1；org 层见 ADR 0015 D5）。
  *
  * 只核对清单点名的版本目录与侧车，**从不扫目录**；清单为空时不触碰存储。
  * 以前这里扫 owner 目录并在任何异常时返回 `[]`：挂载掉线被当成「用户没有 Skill」，
@@ -90,6 +96,14 @@ function classifySkillStoreError(err: unknown, name: string): ContractError {
  * - 版本目录不是普通目录（含符号链接）、缺 SKILL.md、侧车缺失或与清单不符
  *   → `SKILL_PACKAGE_UNAVAILABLE`；
  * - 存储未配置、无权限或 I/O 失败 → `SKILL_STORE_UNAVAILABLE`。
+ *
+ * **owner 根按 `scope` 选**（ADR 0015 D5）：`user`（缺省）是 `<orgId>/<userId>`，
+ * `org` 是 `<orgId>/_org`。`_org` 不满足 `OWNER_SEGMENT_RE`（首字符须为字母数字），
+ * 所以它不可能与任何 `userId` 目录冲突——这里只校验 `orgId`，`_org` 是常量。
+ *
+ * `systemSkills`（ADR 0015 D4）与它们**不是同一回事**：系统包在 release 目录里、
+ * 没有侧车也没有摘要，只按名核对 `<systemRoot>/<name>/SKILL.md`。结果带
+ * `kind: 'system'`，由调用方挂到 `/home/sandbox/skill/<name>`。
  */
 export function enabledSkillPackagesFromManifest(
   base: string,
@@ -102,8 +116,12 @@ export function enabledSkillPackagesFromManifest(
   if (!OWNER_SEGMENT_RE.test(orgId) || !OWNER_SEGMENT_RE.test(userId)) {
     throw new ContractError('ENVELOPE_INVALID', 'owner identity is invalid');
   }
-  const ownerRoot = path.join(path.resolve(base), orgId, userId);
+  const baseRoot = path.resolve(base);
   const packages = manifest.map((ref) => {
+    // org 层与用户层在同一份发布存储下、不同 owner 根（ADR 0015 D5）。
+    const ownerRoot = ref.scope === 'org'
+      ? path.join(baseRoot, orgId, ORG_SKILL_OWNER_SEGMENT)
+      : path.join(baseRoot, orgId, userId);
     const paths = skillVersionPaths(ownerRoot, ref.name, ref.contentDigest);
     let sidecarText: string;
     try {
@@ -118,7 +136,47 @@ export function enabledSkillPackagesFromManifest(
     if (sidecar === null || sidecar.name !== ref.name || sidecar.contentDigest !== ref.contentDigest) {
       throw packageUnavailable(ref.name);
     }
-    return { name: ref.name, sourcePath: paths.packageDir };
+    // `kind` 必须**显式**给出：调用方按它把包分到 `skill-user` 与 `skill-org` 两个逻辑
+    // 根（`internal-shell.ts` 的 `enabledSkillPackages` / `orgSkillPackages`）。
+    // 漏掉它时 org 包会以 `kind === undefined` 混进用户层——字节挂上了、路径却错一层，
+    // 于是 Agent 侧发现（`/home/sandbox/skill-org/<name>`）与沙箱里能 `read` 的位置
+    // 不一致。这正是 ADR 0015 要消掉的「发现与挂载不同构」，而且它**不报错**。
+    return {
+      name: ref.name,
+      sourcePath: paths.packageDir,
+      ...(ref.scope === 'org' ? { kind: 'org' as const } : {}),
+    };
+  });
+  return packages.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * 系统层逐包解析（ADR 0015 D4）。
+ *
+ * 与用户/org 层不同的三件事：
+ * - 源在 `<systemRoot>/<name>`，**没有** `.v/<digest>` 与侧车（系统层按 release 交付，
+ *   不按摘要分版本）；
+ * - 名字已经在 Agent 侧与 release 求过交，所以这里缺失只可能是部署漂移；
+ * - 包名以**目录名**为准，与 Agent 侧 provider 的过滤规则一致。
+ *
+ * 返回带 `kind: 'system'` 的包，调用方据此挂到 `/home/sandbox/skill/<name>`。
+ */
+export function systemSkillPackagesFromManifest(
+  systemSkillRoot: string,
+  names: readonly string[],
+): readonly EnabledSkillPackage[] {
+  if (names.length === 0) return [];
+  const root = path.resolve(systemSkillRoot);
+  const packages = names.map((name) => {
+    const sourcePath = path.join(root, name);
+    try {
+      const pkg = fs.lstatSync(sourcePath);
+      const skillMd = fs.lstatSync(path.join(sourcePath, 'SKILL.md'));
+      if (!pkg.isDirectory() || !skillMd.isFile()) throw packageUnavailable(name);
+    } catch (err) {
+      throw classifySkillStoreError(err, name);
+    }
+    return { name, sourcePath, kind: 'system' as const };
   });
   return packages.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -190,6 +248,9 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: skills,
+    // 系统层与用户/org 层分开解析：系统包没有 `.v/<digest>` 与侧车（ADR 0015 D4）。
+    systemSkillPackagesFor: (names) =>
+      systemSkillPackagesFromManifest(deps.systemSkillRoot, names),
     ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
     bwrapExecutable: deps.bwrapExecutable,
     modeFor,

@@ -22,8 +22,16 @@ import {
   installUserQuestionBridge,
   runWithInteractionRequester,
 } from '../../runtime/index.js';
-import { FileSystemSkillProvider } from '@deepseek-ai/dsh-skill-filesystem';
-import { createPublishedSkillsProvider, isPublishedSkillVersion } from './published-skills-provider.js';
+import {
+  createFilteredSystemSkillsProvider,
+  createPublishedSkillsProvider,
+} from './published-skills-provider.js';
+import {
+  effectiveSystemSkills,
+  splitRunSkillPaths,
+  ORG_SKILL_LOGICAL_ROOT,
+  USER_SKILL_LOGICAL_ROOT,
+} from '../../skills/run-skills.js';
 import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { DshRuntimeFactoryError } from './errors.js';
 import { waitForPendingTitle } from './session-title-grace.js';
@@ -91,10 +99,20 @@ export function buildExecRpcConfig(
   const physicalRoots = Array.isArray(input.physicalRoots)
     ? input.physicalRoots.map(String)
     : [String(input.cwd)];
-  // 本 Run 的启用清单（design §3.3 S1）：随每个 exec 请求进入签名覆盖的请求体 / query。
-  const enabledSkills = (Array.isArray(input.additionalSkillPaths) ? input.additionalSkillPaths : [])
-    .filter(isPublishedSkillVersion)
-    .map((version) => ({ name: version.name, contentDigest: version.contentDigest }));
+  // 本 Run 的清单（ADR 0015 D1 / design §6.3）：随每个 exec 请求进入签名覆盖的
+  // 请求体 / query。系统层走 `systemSkills`（`undefined` = 旧 Agent，exec 整树挂载），
+  // 按摘要分版本的走 `enabledSkills`，各自带 `scope` 让 exec 选 owner 根。
+  const { published: publishedSkills } = splitRunSkillPaths(
+    Array.isArray(input.additionalSkillPaths) ? input.additionalSkillPaths : [],
+  );
+  const enabledSkills = publishedSkills.map((version) => ({
+    name: version.name,
+    contentDigest: version.contentDigest,
+    ...(version.kind === 'org' ? { scope: 'org' as const } : {}),
+  }));
+  const systemSelection = effectiveSystemSkills(
+    Array.isArray(input.additionalSkillPaths) ? input.additionalSkillPaths : [],
+  );
   return {
     baseUrl: String(env.SANDBOX_BASE_URL || 'http://sandbox:8081').replace(/\/+$/, ''),
     keyring,
@@ -106,6 +124,10 @@ export function buildExecRpcConfig(
     ...(sandboxSessionId ? { sandboxSessionId } : {}),
     fenceToken: Number(ctx.executionFenceToken ?? ctx.fenceToken ?? 0) || 0,
     physicalRoots,
+    // 系统清单**总是**下发（含空数组）：缺省在 exec 那边是兼容期旧 Agent 的整树挂载
+    // （design §8）。`names === null` 是裸目录旧形状，生产路径不产出它（只在测试注入里
+    // 出现），按空名单处理，见 `effectiveSystemSkills`。
+    systemSkills: systemSelection.names === null ? [] : [...systemSelection.names],
     ...(enabledSkills.length > 0 ? { enabledSkills } : {}),
     ...(dataSources.length > 0 ? { dataSources: [...dataSources] } : {}),
     ...(typeof input.fetchImpl === 'function' ? { fetchImpl: input.fetchImpl } : {}),
@@ -415,33 +437,41 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
 
           // DSH's default skill filesystem provider does not consume the
           // resourceLoaderOptions passed by this factory. Register this Run's
-          // providers in the agent scope: the system tier by directory, the
-          // user tier from ledger-verified published versions (design §3.3 S1),
-          // which the published provider exposes at exec's logical mount path.
+          // providers in the agent scope: the system tier **filtered by the
+          // bound name list** (ADR 0015 D4), plus the ledger-verified published
+          // versions (design §3.3 S1), which the published provider exposes at
+          // exec's logical mount path.
           const configuredSkillPaths = Array.isArray(input.additionalSkillPaths)
             ? input.additionalSkillPaths
             : opts.additionalSkillPaths;
           const configuredSkills = Array.isArray(configuredSkillPaths) ? configuredSkillPaths : [];
-          const skillPaths = configuredSkills.filter((path) => typeof path === 'string' && path.trim());
-          const publishedSkills = configuredSkills.filter(isPublishedSkillVersion);
-          if (skillPaths.length > 0 || publishedSkills.length > 0) {
+          const { published: publishedSkills } = splitRunSkillPaths(configuredSkills);
+          const systemSelection = effectiveSystemSkills(configuredSkills);
+          // 只注册**按名过滤**的系统 provider：`names === null` 表示这份清单只有
+          // 裸目录字符串（解析不出名字集），design §8 收紧后那种形状既不能整树挂载
+          // （`buildExecRpcConfig` 下发空数组），也就不能整树进发现——否则模型在
+          // prompt 里看到一堆沙箱里根本不存在的系统包，发现与挂载反着不同构。
+          const systemRoot = systemSelection.names === null ? null : systemSelection.root;
+          if (systemRoot !== null || publishedSkills.length > 0) {
             const skillCtx = localSkillContext(agentCtx);
             const skillsFiber = agentCtx.inject(['skills'], (scoped) => {
-              if (skillPaths.length > 0) {
+              if (systemRoot !== null && systemSelection.names !== null) {
+                const names = systemSelection.names;
                 scoped.skills.registerProvider((control) =>
-                  new FileSystemSkillProvider(skillCtx, control, {
-                    providerName: 'run-filesystem',
-                    includeDefaultRoots: false,
-                    customSkillDirs: skillPaths,
-                    dshHome: '/home/sandbox',
-                    agentsHome: '/home/sandbox',
-                    watch: false,
+                  createFilteredSystemSkillsProvider(skillCtx, control, {
+                    root: systemRoot,
+                    names,
                   }),
                 );
               }
-              if (publishedSkills.length > 0) {
+              for (const kind of ['user', 'org'] as const) {
+                const group = publishedSkills.filter((entry) => entry.kind === kind);
+                if (group.length === 0) continue;
                 scoped.skills.registerProvider((control) =>
-                  createPublishedSkillsProvider(skillCtx, control, publishedSkills),
+                  createPublishedSkillsProvider(skillCtx, control, group, {
+                    providerName: kind === 'org' ? 'run-org-published' : 'run-published',
+                    logicalRoot: kind === 'org' ? ORG_SKILL_LOGICAL_ROOT : USER_SKILL_LOGICAL_ROOT,
+                  }),
                 );
               }
             });

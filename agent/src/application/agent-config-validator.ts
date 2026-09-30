@@ -12,6 +12,23 @@ import {
   resolveDefaultModelId,
   type ModelEntry,
 } from '../infrastructure/model-registry.js';
+import {
+  LEGACY_MODEL_REF_KEYS,
+  MCP_ENTRY_V1_KEYS,
+  MCP_TOOL_POLICY_KEYS,
+  MODEL_POLICY_V1_KEYS,
+  SIMPLE_NAME,
+  TOOL_POLICY_V1_KEYS,
+  canonicalObject,
+  decisionsOf,
+  legacyModelReference,
+  loadHostArgumentDeclarations,
+  loadPlatformMcpServers,
+  modelIdOf,
+  safeMcpServers,
+  safeModel,
+  type McpReadiness,
+} from './agent-config-projection.js';
 import { selectableReasoningEfforts } from '../infrastructure/dsh/reasoning-efforts.js';
 import { ENTERPRISE_DEFAULT_TOOLS } from '../runtime/policy/tool-names.js';
 import { RISK_CLASSES } from '../infrastructure/dsh/tool-risk-policy.js';
@@ -29,6 +46,15 @@ import {
   readHostArgumentDeclarations,
   type HostArgumentSpec,
 } from '../domain/agent/mcp-host-arguments.js';
+import { SystemSkillCatalog, type SystemSkillEntry } from '../skills/system-catalog.js';
+import { parseSkillPolicy, SKILL_POLICY_LAYER_MAX } from '@dsh/contract/skill-policy.js';
+import {
+  resolveSystemSkillRoot,
+  skillPlatformConstraints,
+  validateSkillPolicySemantics,
+  type OrgSkillEntry,
+  type SkillConfigDiagnostic,
+} from './skill-policy-config.js';
 
 export const AGENT_CONFIG_SCHEMA_VERSION = 1 as const;
 
@@ -64,34 +90,8 @@ const TOP_LEVEL_V1_KEYS = Object.freeze([
   'mcpServers',
   'delegation',
   'dataSources',
-]);
-
-const MODEL_POLICY_V1_KEYS = Object.freeze([
-  'modelId',
-  'maxOutputTokens',
-  'thinkingLevel',
-  'temperature',
-]);
-
-const TOOL_POLICY_V1_KEYS = Object.freeze([
-  'tools',
-  'riskLevels',
-  'classRiskLevels',
-  'riskApproval',
-]);
-
-const MCP_ENTRY_V1_KEYS = Object.freeze([
-  'serverId',
-  'enabledTools',
-  'toolPolicy',
-  'toolArguments',
-]);
-
-const MCP_TOOL_POLICY_KEYS = Object.freeze([
-  'default',
-  'tools',
-  'riskLevel',
-  'toolRiskLevels',
+  // ADR 0015：Skill 目录与绑定。v1 增量可选字段，不升 schemaVersion。
+  'skillPolicy',
 ]);
 
 const MCP_FORBIDDEN_V1_KEYS = Object.freeze([
@@ -113,7 +113,6 @@ const MCP_FORBIDDEN_V1_KEYS = Object.freeze([
 
 const DECISIONS = Object.freeze(['allow', 'require_approval', 'deny']);
 const RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
-const SIMPLE_NAME = /^[A-Za-z0-9._-]+$/;
 /** `mcp__server__tool`, plus the trailing-`*` prefix form the resolver accepts. */
 const RISK_TOOL_KEY = /^[A-Za-z0-9._-]+(::[A-Za-z0-9._-]+)?\*?$/;
 
@@ -151,184 +150,6 @@ function pushUnknown(
   ));
 }
 
-function canonicalObject(
-  value: unknown,
-  preferred: readonly string[] = [],
-): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalObject(item));
-  if (!isPlainObject(value)) return value;
-  const rank = new Map(preferred.map((key, index) => [key, index]));
-  const keys = Object.keys(value).sort((left, right) => {
-    const l = rank.has(left) ? rank.get(left)! : Number.MAX_SAFE_INTEGER;
-    const r = rank.has(right) ? rank.get(right)! : Number.MAX_SAFE_INTEGER;
-    return l === r ? left.localeCompare(right) : l - r;
-  });
-  const out: Record<string, unknown> = {};
-  for (const key of keys) {
-    const nestedPreferred = key === 'modelPolicy'
-      ? MODEL_POLICY_V1_KEYS
-      : key === 'toolPolicy'
-        ? TOOL_POLICY_V1_KEYS
-        : key === 'mcpServers'
-          ? MCP_ENTRY_V1_KEYS
-          : key === 'tools'
-            ? []
-            : key === 'riskLevels' || key === 'classRiskLevels' || key === 'riskApproval'
-              ? []
-              : key === 'toolPolicy'
-                ? MCP_TOOL_POLICY_KEYS
-                : [];
-    out[key] = canonicalObject(value[key], nestedPreferred);
-  }
-  return out;
-}
-
-/**
- * Shapes older snapshots used to name a model before `modelPolicy.modelId`
- * existed. They are read-only history; §3 of the integration plan only allows
- * upgrading one when it maps onto the current model catalog.
- */
-const LEGACY_MODEL_REF_KEYS = Object.freeze([
-  'model',
-  'reference',
-  'modelRef',
-  'model_ref',
-  'id',
-]);
-
-/** Extract the model id a legacy reference names, or null when unreadable. */
-function legacyModelReference(value: unknown): string | null {
-  if (typeof value === 'string') return value.trim() || null;
-  if (!isPlainObject(value)) return null;
-  for (const key of ['modelId', 'model_id', 'id', 'name']) {
-    const candidate = value[key];
-    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
-  }
-  return null;
-}
-
-function modelIdOf(entry: ModelEntry | null | undefined): string | null {
-  return entry?.model_id ? String(entry.model_id) : null;
-}
-
-function safeModel(entry: ModelEntry) {
-  return {
-    modelId: entry.model_id,
-    provider: entry.provider,
-    maxOutputTokens: entry.max_output_tokens,
-    contextWindow: entry.context_window,
-    thinkingLevels: [...selectableReasoningEfforts(entry)],
-    supportsReasoning: Boolean(entry.supports_reasoning),
-    // The current DSH loop has no temperature call-config seam.  Keep this
-    // explicit so a future adapter must opt in before the UI exposes it.
-    supportsTemperature: Boolean((entry as Loose).supports_temperature),
-    ...(Number.isFinite(Number((entry as Loose).temperature_min))
-      ? { temperatureMin: Number((entry as Loose).temperature_min) }
-      : {}),
-    ...(Number.isFinite(Number((entry as Loose).temperature_max))
-      ? { temperatureMax: Number((entry as Loose).temperature_max) }
-      : {}),
-  };
-}
-
-function safeMcpServers(raw: unknown): Array<{
-  serverId: string;
-  toolNames: string[];
-}> {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const output: Array<{ serverId: string; toolNames: string[] }> = [];
-  for (const value of raw) {
-    if (!isPlainObject(value)) continue;
-    const serverId = String(value.serverId ?? value.server_id ?? value.id ?? '').trim();
-    if (!SIMPLE_NAME.test(serverId) || seen.has(serverId)) continue;
-    seen.add(serverId);
-    const candidates = value.tools ?? value.toolNames ?? value.tool_names;
-    const toolNames = Array.isArray(candidates)
-      ? [...new Set(candidates.map((item) => {
-          if (typeof item === 'string') return item.trim();
-          return isPlainObject(item)
-            ? String(item.name ?? item.toolName ?? item.tool_name ?? '').trim()
-            : '';
-        }).filter((name) => SIMPLE_NAME.test(name)))]
-      : [];
-    output.push({ serverId, toolNames });
-  }
-  return output;
-}
-
-export type McpReadiness = {
-  /**
-   * `ready`   — the process knows the full server/tool inventory.
-   * `not_configured` — the deployment declares no MCP server at all.
-   * `unknown` — discovery has not completed or failed; the inventory below is
-   *             *not* evidence that a server or tool is absent.
-   */
-  readonly status: 'ready' | 'not_configured' | 'unknown';
-  /**
-   * 稳定原因码，供 UI 与文档映射文案。**不放进程环境变量名或连接材料**——
-   * 这个 DTO 是给组织管理员看的，不是运维排障日志。
-   */
-  readonly reason?: 'DISCOVERY_PENDING' | 'INVENTORY_UNREADABLE' | 'NO_SERVER_DECLARED';
-};
-
-/**
- * Project the process MCP inventory *with* its readiness. An empty array and
- * "we could not ask yet" are different facts: the first authorizes nothing,
- * the second must block edits that depend on the catalog rather than be
- * rendered as an empty capability set.
- */
-function loadPlatformMcpServers(env: Record<string, string | undefined>): {
-  servers: Array<{ serverId: string; toolNames: string[] }>;
-  readiness: McpReadiness;
-} {
-  const raw = env.MCP_SERVERS_JSON;
-  if (raw === undefined) {
-    return { servers: [], readiness: { status: 'unknown', reason: 'DISCOVERY_PENDING' } };
-  }
-  if (!String(raw).trim()) {
-    return { servers: [], readiness: { status: 'not_configured', reason: 'NO_SERVER_DECLARED' } };
-  }
-  try {
-    const servers = safeMcpServers(JSON.parse(String(raw)));
-    return {
-      servers,
-      readiness: servers.length > 0
-        ? { status: 'ready' }
-        : { status: 'not_configured', reason: 'NO_SERVER_DECLARED' },
-    };
-  } catch {
-    // Startup already rejects malformed MCP_SERVERS_JSON. Here the inventory
-    // is simply unknown; it must not read as "no MCP server exists".
-    return { servers: [], readiness: { status: 'unknown', reason: 'INVENTORY_UNREADABLE' } };
-  }
-}
-
-/**
- * 运维声明的宿主参数（`MCP_SERVERS_JSON[].hostArguments`）。启动期已拒绝非法声明；
- * 这里读不出来时返回空表——于是任何 `toolArguments` 键都报 MCP_ARGUMENT_UNKNOWN，
- * 是关闭而不是放行。
- */
-function loadHostArgumentDeclarations(env: Record<string, string | undefined>): Map<string, HostArgumentSpec> {
-  try {
-    const parsed = JSON.parse(String(env.MCP_SERVERS_JSON ?? '').trim() || '[]');
-    return Array.isArray(parsed) ? readHostArgumentDeclarations(parsed) : new Map();
-  } catch {
-    return new Map();
-  }
-}
-
-function decisionsOf(value: unknown): Record<string, string> {
-  if (!isPlainObject(value)) return {};
-  const out: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    const decision = isPlainObject(raw) ? raw.decision : raw;
-    const normalized = String(decision ?? '').trim().toLowerCase();
-    if (normalized) out[key] = normalized;
-  }
-  return out;
-}
-
 export class AgentConfigValidator {
   readonly registry: Map<string, ModelEntry>;
   readonly mcpServers: Array<{ serverId: string; toolNames: string[] }>;
@@ -340,7 +161,15 @@ export class AgentConfigValidator {
   readonly hostArguments: ReadonlyMap<string, HostArgumentSpec>;
   /** 数据源目录投影（`SANDBOX_DATA_SOURCES_JSON`，与 exec 同一解析规则）；目录写错构造即抛。 */
   readonly dataSources: readonly DataSourceCatalogEntry[];
-  readonly optionsDto: AgentConfigOptions;
+  /** 系统层 Skill 目录（ADR 0015 D4）：`skillPolicy.system` 的「什么名字存在」权威。 */
+  readonly systemSkillCatalog: SystemSkillCatalog;
+  /** 上一次 `refreshSkills()` 投影到的系统包。 */
+  private systemSkills: readonly SystemSkillEntry[] = Object.freeze([]);
+  // 注意：**没有** org 层实例字段。它每 org 不同，而本对象是进程级单例；
+  // 存成字段会让并发的两个 org 互相看到对方的 org 技能（跨租户泄漏）。
+  // 见 `refreshSkills()` 的说明。
+  /** 每次 `refreshSkills()` 重建，因此不是 readonly。 */
+  optionsDto: AgentConfigOptions;
 
   constructor(opts: {
     registry?: Map<string, ModelEntry>;
@@ -355,6 +184,11 @@ export class AgentConfigValidator {
     remoteAgents?: ReadonlyArray<{ id: string; name?: string; description?: string }>;
     hostArguments?: ReadonlyMap<string, HostArgumentSpec>;
     dataSources?: readonly DataSourceCatalogEntry[];
+    /**
+     * 系统层 Skill 目录（ADR 0015 D4）。默认从 `SKILLS_ROOT`（compose 是 `./skills`）
+     * 扫盘；配置面与 Run 解析必须用**同一份**目录。
+     */
+    systemSkillCatalog?: SystemSkillCatalog;
   } = {}) {
     const env = opts.env ?? process.env;
     this.registry = opts.registry ?? buildRegistry({ env });
@@ -393,7 +227,56 @@ export class AgentConfigValidator {
     this.platformToolNames = Object.freeze([
       ...new Set((opts.platformToolNames ?? ENTERPRISE_DEFAULT_TOOLS).map(String)),
     ]);
+    this.systemSkillCatalog = opts.systemSkillCatalog ?? new SystemSkillCatalog({ root: resolveSystemSkillRoot(env) });
+    // 系统目录是异步扫盘的，构造期只建一个空投影。HTTP 面在每次
+    // `options()` / `validate()` 之前 `await refreshSkills()` 把它刷成最新；
+    // **不刷新**时 `skillPolicy.system` 会看到空目录（合法名字一律
+    // `SKILL_SYSTEM_UNKNOWN`），这是刻意的 fail-closed 方向——不会把未知名字
+    // 当成可用，只会把可用名字暂时报成未知。
+    this.refreshSkillProjection([]);
+    // 构造期先建一份**空 org 层**的投影：没有调用者上下文时就等于「本 org 没有
+    // org 技能」。HTTP 面随后按调用者现算（`options(orgSkills)`）。
+    this.buildOptionsDto([]);
+  }
 
+  /**
+   * 刷新**系统层**目录投影（ADR 0015 §4.2）。
+   *
+   * HTTP 面在每次 `options()` / `validate()` 之前 await 一次：目录是异步扫盘，
+   * 而这两个方法本身是同步的（保持既有契约）。
+   *
+   * **org 层不在这里**：它是**每 org 不同**的数据，而这个校验器是进程级单例
+   * （`createHttpServices()` 在启动时建一次）。把 org 层放进实例状态，两个 org 的并发
+   * 请求会在 `await` 之间互相覆盖——A 的 `options()` 可能读到 B 的 org 技能列表，
+   * 那是跨租户泄漏。所以 org 层作为**参数**逐次传入 `options()` / `validate()`。
+   */
+  async refreshSkills(): Promise<void> {
+    const system = await this.systemSkillCatalog.list();
+    this.refreshSkillProjection(system);
+  }
+
+  /** 上一次投影到的系统包（`resolveRunSkills` 与配置面共用同一份事实）。 */
+  systemSkillEntries(): readonly SystemSkillEntry[] {
+    return this.systemSkills;
+  }
+
+  /**
+   * 当前 release 的系统包名。
+   *
+   * `skillPolicy.system.mode: all` 要展开成这批名字才能写引用账本——账本记的是
+   * 「这个版本实际点名了哪些包」，只有展开后才知道 release 删包时谁受影响。
+   */
+  systemSkillNames(): readonly string[] {
+    return this.systemSkills.map((entry) => entry.name);
+  }
+
+  /**
+   * 组装 `fieldSupport` + `platformConstraints` + `capabilityRevision`。
+   *
+   * 构造期与每次 `refreshSkills()` 都走这一条，避免「options() 与 validate() 各自
+   * 拼一份平台投影」。
+   */
+  private buildOptionsDto(orgSkills: readonly OrgSkillEntry[]): void {
     const models = [...this.registry.values()]
       .filter((entry) => entry.enabled)
       .map(safeModel);
@@ -432,6 +315,15 @@ export class AgentConfigValidator {
         },
       },
       dataSources: { supported: true, type: 'array', maxItems: ENABLED_DATA_SOURCES_MAX, fields: { id: { supported: true, type: 'string' } } },
+      skillPolicy: {
+        supported: true,
+        type: 'object',
+        fields: {
+          system: { supported: true, type: 'object' },
+          org: { supported: true, type: 'array', maxItems: SKILL_POLICY_LAYER_MAX },
+          user: { supported: true, type: 'string' },
+        },
+      },
     };
     const platformConstraints = {
       models,
@@ -442,6 +334,9 @@ export class AgentConfigValidator {
       mcpReadiness: { ...this.mcpReadiness },
       remoteAgents: this.remoteAgents.map((agent) => ({ ...agent })),
       dataSources: this.dataSources.map((entry) => ({ ...entry })),
+      // 只返回本 org 的 org 层与系统层；**不返回**任何用户的个人 Skill、
+      // 物理路径或文件内容（design §4.2）。
+      skills: skillPlatformConstraints(this.systemSkills, orgSkills),
       maxConfigBytes: 256 * 1024,
     };
     const revisionMaterial = canonicalObject({
@@ -460,7 +355,28 @@ export class AgentConfigValidator {
     });
   }
 
-  options(): AgentConfigOptions {
+  /** 用一次扫盘结果替换系统目录投影。 */
+  private refreshSkillProjection(system: readonly SystemSkillEntry[]): void {
+    this.systemSkills = Object.freeze(system.map((entry) => Object.freeze({ ...entry })));
+  }
+
+  /**
+   * `platformConstraints` 与 `capabilityRevision` 的一次性投影。
+   *
+   * **每次调用现算、不落实例**：org 层随调用者不同，落成字段就会被并发的另一个 org
+   * 覆盖（跨租户泄漏）。`capabilityRevision` 因此也按本次的 org 层计算——它描述的是
+   * 「调用者此刻看到的能力集」，这正是 design §4.2 要的语义。
+   */
+  private optionsProjection(orgSkills: readonly OrgSkillEntry[]): {
+    readonly dto: AgentConfigOptions;
+  } {
+    this.buildOptionsDto(orgSkills);
+    return { dto: this.optionsDto };
+  }
+
+  options(orgSkills: readonly OrgSkillEntry[] = []): AgentConfigOptions {
+    // 现算一次：org 层是调用者维度的事实，不能沿用上一次调用留下的状态。
+    this.buildOptionsDto(orgSkills);
     // Return a fresh object so callers cannot mutate the process capability
     // projection held by this validator.
     return {
@@ -471,7 +387,10 @@ export class AgentConfigValidator {
     };
   }
 
-  validate(rawConfig: unknown): AgentConfigValidation {
+  validate(
+    rawConfig: unknown,
+    orgSkills: readonly OrgSkillEntry[] = [],
+  ): AgentConfigValidation {
     if (!isPlainObject(rawConfig)) {
       throw new Error('config must be an object');
     }
@@ -890,6 +809,23 @@ export class AgentConfigValidator {
 
     const dataSources = parseDataSourceConfig(config.dataSources);
     errors.push(...dataSources.errors, ...unknownDataSources(dataSources.ids ?? [], this.dataSources));
+
+    // ── skillPolicy（ADR 0015 D2，design §4.1）───────────────────────────────
+    //
+    // 形状校验在 contract（两侧共用），语义校验抽在 `validateSkillPolicySemantics`，
+    // 与落库前的 `AgentCatalogService.#validateConfig()` 共用同一套判定。
+    const skillPolicyParsed = parseSkillPolicy(config.skillPolicy);
+    errors.push(...skillPolicyParsed.errors);
+    const skillPolicy = skillPolicyParsed.policy;
+    const skillSemantics = validateSkillPolicySemantics(
+      skillPolicy,
+      this.systemSkills,
+      orgSkills,
+    );
+    errors.push(...skillSemantics.errors);
+    const effectiveSystemSkills = skillSemantics.effective.system;
+    const effectiveOrgSkills = skillSemantics.effective.org;
+
     const toolDecisions = decisionsOf(isPlainObject(toolPolicy) ? toolPolicy.tools : null);
     const summary = {
       model: {
@@ -913,6 +849,14 @@ export class AgentConfigValidator {
         remoteAgents: delegation.config ? [...delegation.config.remoteAgents] : [],
       },
       dataSources: dataSources.ids ? [...dataSources.ids] : [],
+      // 展开后的有效 Skill 清单（design §4.2）：`system` 是展开后的名单，
+      // `org` 是钉住的 (name, digest)，`user` 是开关本身。**不含** user 层具体包名——
+      // 它随调用者变化，配置面不为某个用户做投影。
+      skills: {
+        system: [...effectiveSystemSkills],
+        org: effectiveOrgSkills.map((entry) => ({ ...entry })),
+        user: skillPolicy ? skillPolicy.user : 'allow',
+      },
       persona: {
         configured: typeof config.systemPrompt === 'string' && config.systemPrompt.length > 0,
         chars: typeof config.systemPrompt === 'string' ? config.systemPrompt.length : 0,
@@ -953,6 +897,20 @@ export class AgentConfigValidator {
     if (normalizedDelegationConfig) normalized.delegation = normalizedDelegationConfig;
     const dataSourceList = normalizedDataSources(dataSources.ids ?? []);
     if (dataSourceList) normalized.dataSources = dataSourceList;
+    // 只有显式给出 `skillPolicy` 才写回：省略 = 当前行为，写回一个等价对象会让
+    // 既有版本的 `config_hash` 变化（ADR 0015 D2「既有 AgentVersion 不迁移」）。
+    if (skillPolicy && Object.hasOwn(config, 'skillPolicy')) {
+      normalized.skillPolicy = {
+        system: {
+          mode: skillPolicy.system.mode,
+          ...(skillPolicy.system.mode === 'allowlist'
+            ? { names: [...skillPolicy.system.names] }
+            : {}),
+        },
+        org: skillPolicy.org.map((entry) => ({ ...entry })),
+        user: skillPolicy.user,
+      };
+    }
     return {
       valid: true,
       errors: [],
@@ -965,6 +923,7 @@ export class AgentConfigValidator {
         'mcpServers',
         'delegation',
         'dataSources',
+        'skillPolicy',
       ]) as Record<string, unknown>,
       effectiveSummary: summary,
       capabilityRevision: this.optionsDto.capabilityRevision,

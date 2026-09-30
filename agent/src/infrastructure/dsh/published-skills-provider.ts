@@ -15,39 +15,24 @@
  */
 import path from 'node:path';
 import { FileSystemSkillProvider } from '@deepseek-ai/dsh-skill-filesystem';
+import type { PublishedSkillRootEntry } from '../../skills/run-skills.js';
 
 type Loose = any;
 
 /** exec 挂载已启用包的逻辑根（exec `AGENT_USER_SKILL_PATH`）。 */
 export const USER_SKILL_LOGICAL_ROOT = '/home/sandbox/skill-user';
 
-/** 一个已核对的已发布版本。 */
-export interface PublishedSkillVersion {
-  readonly name: string;
-  readonly contentDigest: string;
-  /** `.v/<digest>`，发现根。 */
-  readonly versionRoot: string;
-  /** `.v/<digest>/<name>`，包目录。 */
-  readonly packageDir: string;
+function logicalDirectory(name: string, logicalRoot: string): string {
+  return `${logicalRoot}/${name}`;
 }
 
-export function isPublishedSkillVersion(value: unknown): value is PublishedSkillVersion {
-  if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v['name'] === 'string' &&
-    typeof v['contentDigest'] === 'string' &&
-    typeof v['versionRoot'] === 'string' &&
-    typeof v['packageDir'] === 'string'
-  );
-}
-
-function logicalDirectory(name: string): string {
-  return `${USER_SKILL_LOGICAL_ROOT}/${name}`;
-}
-
-function withLogicalPaths<T extends object>(item: T, name: string, providerName: string): T {
-  const dir = logicalDirectory(name);
+function withLogicalPaths<T extends object>(
+  item: T,
+  name: string,
+  providerName: string,
+  logicalRoot: string,
+): T {
+  const dir = logicalDirectory(name, logicalRoot);
   return {
     ...item,
     provider: providerName,
@@ -59,10 +44,13 @@ function withLogicalPaths<T extends object>(item: T, name: string, providerName:
 export function createPublishedSkillsProvider(
   ctx: Loose,
   control: Loose,
-  versions: readonly PublishedSkillVersion[],
-  opts: { providerName?: string } = {},
+  versions: readonly PublishedSkillRootEntry[],
+  opts: { providerName?: string; logicalRoot?: string } = {},
 ): Loose {
   const providerName = opts.providerName ?? 'run-published';
+  // org 层挂在 `/home/sandbox/skill-org/<name>`（ADR 0015 D5），必须与 exec 的
+  // `AGENT_ORG_SKILL_PATH` 一致；否则模型按 resourceBase 去 `read` 会被围栏拒。
+  const logicalRoot = opts.logicalRoot ?? USER_SKILL_LOGICAL_ROOT;
   const byName = new Map(versions.map((version) => [version.name, version]));
   const inner = new FileSystemSkillProvider(ctx, control, {
     providerName,
@@ -88,7 +76,7 @@ export function createPublishedSkillsProvider(
         if (version === undefined || typeof directory !== 'string') continue;
         if (path.resolve(directory) !== path.resolve(version.packageDir)) continue;
         originals.set(version.name, candidate);
-        listed.push(withLogicalPaths(candidate, version.name, providerName));
+        listed.push(withLogicalPaths(candidate, version.name, providerName, logicalRoot));
       }
       return Array.isArray(raw) ? listed : { candidates: listed, complete: raw.complete };
     },
@@ -97,7 +85,71 @@ export function createPublishedSkillsProvider(
       const original = originals.get(candidate?.name);
       if (version === undefined || original === undefined) return undefined;
       const loaded = await inner.get(original, options);
-      return loaded ? withLogicalPaths(loaded, version.name, providerName) : undefined;
+      return loaded ? withLogicalPaths(loaded, version.name, providerName, logicalRoot) : undefined;
+    },
+    dispose() {
+      return inner.dispose();
+    },
+  };
+}
+
+/**
+ * 系统层 provider：扫系统根，但**只暴露本 Run 名单里的包**（ADR 0015 D4）。
+ *
+ * 为什么必须过滤两侧（list 与 get）：只过滤 `list` 的话，模型仍能用
+ * `get`/`read` 直接点名未绑定的包——而「发现与挂载同构」要求模型能看见、能
+ * `ls`/`read`/执行的恰好是有效清单。包名以**目录名**为准（与 DSH loader 的发现
+ * 规则一致：`<root>/<name>/SKILL.md`），frontmatter 里改个名字冒充不了别的包。
+ *
+ * `names` 为 `null` 表示不过滤（旧形状的滚动升级兼容，由 runtime-factory 决定；
+ * 那种情况根本不注册这个包装，直接给裸 provider）。
+ */
+export function createFilteredSystemSkillsProvider(
+  ctx: Loose,
+  control: Loose,
+  input: { root: string; names: readonly string[]; providerName?: string },
+): Loose {
+  const providerName = input.providerName ?? 'run-filesystem';
+  const allowed = new Set(input.names);
+  const inner = new FileSystemSkillProvider(ctx, control, {
+    providerName,
+    includeDefaultRoots: false,
+    customSkillDirs: [input.root],
+    dshHome: '/home/sandbox',
+    agentsHome: '/home/sandbox',
+    watch: false,
+  });
+  /** 最近一次 list 通过名单的候选：get 只能加载这里面的名字。 */
+  const originals = new Map<string, Loose>();
+
+  /** 候选的目录名是不是本 Run 名单里的包。 */
+  function allowedCandidate(candidate: Loose): boolean {
+    const directory = candidate?.locator?.directory;
+    if (typeof directory !== 'string') return false;
+    return allowed.has(path.basename(directory));
+  }
+
+  return {
+    name: providerName,
+    async list(options: Loose) {
+      const raw = await inner.list(options);
+      const candidates: readonly Loose[] = Array.isArray(raw) ? raw : raw.candidates;
+      const listed: Loose[] = [];
+      originals.clear();
+      for (const candidate of candidates) {
+        if (!allowedCandidate(candidate)) continue;
+        const directory = candidate.locator.directory as string;
+        const name = path.basename(directory);
+        originals.set(name, candidate);
+        listed.push(candidate);
+      }
+      return Array.isArray(raw) ? listed : { candidates: listed, complete: raw.complete };
+    },
+    async get(candidate: Loose, options: Loose) {
+      const name = typeof candidate?.name === 'string' ? candidate.name : '';
+      const original = originals.get(name);
+      if (original === undefined) return undefined;
+      return inner.get(original, options);
     },
     dispose() {
       return inner.dispose();

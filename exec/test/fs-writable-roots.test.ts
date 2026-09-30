@@ -44,6 +44,16 @@ describe('writableRoots', () => {
     assert.equal(writableRoots(ctx, 'workspace-write').includes(ctx.systemSkillRoot), false);
   });
 
+  test('带系统名单时只登记名单里的包，不登记整个系统根（ADR 0015 D4）', () => {
+    const pdf = '/opt/skills/system/pdf';
+    const scoped: WorkspaceContext = {
+      ...ctx,
+      systemSkillPackages: [{ name: 'pdf', sourcePath: pdf, kind: 'system' }],
+    };
+    assert.deepEqual(readableRoots(scoped), [ctx.workspaceRoot, ctx.tempRoot, pdf]);
+    assert.deepEqual(readableRoots({ ...ctx, systemSkillPackages: [] }), [ctx.workspaceRoot, ctx.tempRoot]);
+  });
+
 });
 
 describe('canonicalWritableRoots', () => {
@@ -273,5 +283,50 @@ describe('已启用 Skill 的生产装配（按清单）', () => {
     const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
     const ref = [{ name: 'alpha', contentDigest: A }];
     assert.equal(codeOf(() => enabledSkillPackagesFromManifest('/base', '../etc', 'user1', ref)), 'ENVELOPE_INVALID');
+  });
+
+  test('scope: org 走 <orgId>/_org owner 根，不碰用户目录（ADR 0015 D5）', async () => {
+    await withRoot(async (root) => {
+      // 同名同摘要既存在于 org 层，也存在于用户层：必须只取 org 那一个。
+      const orgPackage = await publish(path.join(root, 'org1', '_org'), 'shared', A);
+      const userPackage = await publish(path.join(root, 'org1', 'user1'), 'shared', A);
+      assert.notEqual(orgPackage, userPackage);
+      const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
+      // `kind: 'org'` 是**必需**的：调用方按它把包分到 `skill-org` / `skill-user`
+      // 两个逻辑根。真实链路 2026-09-30 抓到过漏标 kind 的版本——org 包以
+      // `kind === undefined` 混进用户层，字节挂上了、路径错一层，而**不报错**；
+      // Agent 侧发现在 `/home/sandbox/skill-org/<name>`，沙箱里却只在
+      // `/home/sandbox/skill-user/<name>` 找得到。
+      assert.deepEqual(
+        enabledSkillPackagesFromManifest(root, 'org1', 'user1', [
+          { name: 'shared', contentDigest: A, scope: 'org' },
+        ]),
+        [{ name: 'shared', sourcePath: orgPackage, kind: 'org' }],
+      );
+      // 缺省 scope 仍是用户根（旧 Agent 语义不变），且**不带** kind。
+      assert.deepEqual(
+        enabledSkillPackagesFromManifest(root, 'org1', 'user1', [{ name: 'shared', contentDigest: A }]),
+        [{ name: 'shared', sourcePath: userPackage }],
+      );
+    });
+  });
+
+  test('层之间不互相兜底：只有 org 层有时，缺省 scope 取不到', async () => {
+    await withRoot(async (root) => {
+      await publish(path.join(root, 'org1', '_org'), 'only-org', A);
+      const { enabledSkillPackagesFromManifest } = await import('../src/http/app.js');
+      assert.equal(
+        codeOf(() => enabledSkillPackagesFromManifest(root, 'org1', 'user1', [
+          { name: 'only-org', contentDigest: A },
+        ])),
+        'SKILL_PACKAGE_UNAVAILABLE',
+      );
+      assert.deepEqual(
+        enabledSkillPackagesFromManifest(root, 'org1', 'user1', [
+          { name: 'only-org', contentDigest: A, scope: 'org' },
+        ]).map((p) => p.name),
+        ['only-org'],
+      );
+    });
   });
 });

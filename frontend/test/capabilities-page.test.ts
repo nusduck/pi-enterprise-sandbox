@@ -9,7 +9,7 @@ import {
   skillSourceLabel,
   splitSkillTiers,
 } from '../src/pages/settings/skillHelpers.ts';
-import { mcpStatus } from '../src/pages/settings/capabilityFormat.ts';
+import { mcpStatus, usageTitle } from '../src/pages/settings/capabilityFormat.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -54,8 +54,37 @@ describe('capabilities tables', () => {
     assert.match(settings, /uploadSkillDraft/);
     assert.match(settings, /accept="\.zip,\.skill"/);
     assert.match(settings, /setSkillEnabled\(String\(skill\.name\), true\)/);
-    assert.match(settings, /setSkillEnabled\(String\(skill\.name\), false\)/);
+    // 停用那一侧用的是同一行的局部 `name`（分享按钮也要用）。断言跟着代码走，
+    // 而不是反过来迁就断言——否则以后一次重命名会被当成功能回归。
+    assert.match(settings, /setSkillEnabled\(name, false\)/);
     assert.match(settings, /role="alert"/);
+  });
+
+  it('申请共享的入口在个人 Skill 上，且带上「申请中」与撤回', () => {
+    const settings = readFileSync(join(__dirname, '../src/widgets/settings/SettingsDialog.tsx'), 'utf8');
+    // ADR 0015 §7.2 用户侧：已启用的 Skill 才能申请（未启用由服务端 409 拦）。
+    assert.match(settings, /requestSkillShare\(name\)/);
+    assert.match(settings, /withdrawSkillShare\(request\.requestId\)/);
+    // 同名的 pending 申请还在时按钮不能还能再点（再点会 supersede 掉旧说明）。
+    assert.match(settings, /pendingNames\.has\(name\)/);
+    assert.match(settings, /申请中/);
+    // 名字被组织层占用是可操作的拒绝原因，不能只显示「操作失败」。
+    assert.match(settings, /SKILL_NAME_RESERVED_BY_ORG/);
+    assert.match(settings, /SKILL_NOT_ENABLED/);
+  });
+
+  it('管理员 Skill 页在管理控制台里可达，并覆盖加载失败与并发冲突', () => {
+    const shell = readFileSync(join(__dirname, '../src/app/layout/AdminShell.tsx'), 'utf8');
+    assert.match(shell, /\/admin\/skills/);
+    const router = readFileSync(join(__dirname, '../src/app/router/index.tsx'), 'utf8');
+    assert.match(router, /path="\/admin\/skills"/);
+    const page = readFileSync(join(__dirname, '../src/pages/settings/SkillAdminPage.tsx'), 'utf8');
+    // 读取失败不能显示成空队列（那看起来像「没人申请」）。
+    assert.match(page, /读取申请队列失败/);
+    // 批准失败时申请保持 pending，页面只报错、不把行拿掉。
+    assert.match(page, /setError\(\(err as Error\)\.message \|\| '操作失败'\)/);
+    assert.match(page, /只支持 \.zip 或 \.skill 包/);
+    assert.match(page, /单个包不能超过 50 MB/);
   });
 
   it('lists admin pages in the admin console and keeps /settings links working', () => {
@@ -78,6 +107,8 @@ describe('skill tiers', () => {
     ({ name, source: 'user-skill-root', enabled: true }) as never;
   const system = (name: string) =>
     ({ name, source: 'shared-skill-root', enabled: true }) as never;
+  const org = (name: string) =>
+    ({ name, source: 'org-skill-root', enabled: true }) as never;
 
   it('启用后的草稿不再列进 Drafts —— 否则同一个名字出现两次', () => {
     // 启用是复制字节，草稿不删（skills/enablement.ts），所以后端一直会返回它。
@@ -105,5 +136,65 @@ describe('skill tiers', () => {
     assert.equal(skillSourceLabel(draft('a')), 'Draft');
     assert.equal(skillSourceLabel(user('a')), 'User');
     assert.equal(skillSourceLabel(system('a')), 'System');
+    // org 层（ADR 0015 D5）：设计期的旧名 `shared-skill-root` 是系统层，不是共享层。
+    assert.equal(skillSourceLabel(org('a')), 'Organization');
+  });
+});
+
+describe('capabilities skill tiers（ADR 0015 D1）', () => {
+  const draft = (name: string, published?: boolean) =>
+    ({ name, source: 'draft-skill-root', enabled: false, ...(published === undefined ? {} : { published }) }) as never;
+  const user = (name: string) =>
+    ({ name, source: 'user-skill-root', enabled: true }) as never;
+  const org = (name: string) =>
+    ({ name, source: 'org-skill-root', enabled: true }) as never;
+  const system = (name: string) =>
+    ({ name, source: 'shared-skill-root', enabled: true }) as never;
+
+  it('org 层单独成组，不并进用户层也不并进系统层', () => {
+    const split = splitSkillTiers([
+      system('pdf'),
+      org('sales-weekly'),
+      user('mine'),
+      draft('wip', false),
+    ]);
+    assert.deepEqual(split.org.map((s) => s.name), ['sales-weekly']);
+    assert.deepEqual(split.user.map((s) => s.name), ['mine']);
+    assert.deepEqual(split.system.map((s) => s.name), ['pdf']);
+    assert.deepEqual(split.drafts.map((s) => s.name), ['wip']);
+  });
+
+  it('同名同时出现在 org 与 user 层时两层各列一次（Run 里取 org，页面要看得见两处）', () => {
+    const split = splitSkillTiers([org('dup'), user('dup')]);
+    assert.deepEqual(split.org.map((s) => s.name), ['dup']);
+    assert.deepEqual(split.user.map((s) => s.name), ['dup']);
+    assert.deepEqual(split.system, []);
+  });
+
+  it('页面的来源筛选把 org 与用户分开，且分层规则取自 skillHelpers', () => {
+    // 页面自己再判一次 `item.source` 就会与 skillHelpers 漂开——那正是
+    // `shared-skill-root` 当初落到兜底分支的原因。
+    assert.match(pageSrc, /isOrgSkill\(item\)/);
+    assert.match(pageSrc, /\['org', '组织'\]/);
+  });
+});
+
+describe('skill usage 分层（ADR 0015 §7.4）', () => {
+  it('tooltip 只列出出现过的层', () => {
+    assert.equal(
+      usageTitle({ calls: 5, byScope: { system: 5, org: 0, user: 0 } }),
+      '全组织近 7 天 skill 工具的调用次数；直接读取 Skill 文件不计入\n分层：系统 5',
+    );
+    assert.match(
+      usageTitle({ calls: 7, byScope: { system: 2, org: 3, user: 2 } }),
+      /分层：系统 2、组织 3、用户 2/,
+    );
+  });
+
+  it('没有数据时只给基础说明，不编一个「分层：无」', () => {
+    assert.equal(
+      usageTitle(undefined),
+      '全组织近 7 天 skill 工具的调用次数；直接读取 Skill 文件不计入',
+    );
   });
 });

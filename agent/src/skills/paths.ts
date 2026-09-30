@@ -65,6 +65,27 @@ function assertIdentitySegment(value: unknown, field: string) {
 }
 
 /**
+ * org 层共享 Skill 的 owner 根：`<base>/<orgId>/_org`（ADR 0015 D5）。
+ *
+ * **不能复用 `userSkillRootFor`**：它用 `assertIdentitySegment` 校验 `userId`，而 `_org`
+ * 首字符是 `_`，不满足那条正则（首字符须为字母数字）。这正是不冲突的原因——`_org`
+ * 永远不可能与任何真实 `userId` 目录撞名。所以这里只校验 `orgId`。
+ *
+ * 与用户层共用同一份发布存储基根（`SKILLS_USER_ROOT`），只是最后一段不同；
+ * 字节布局（`<name>/.v/<digest>/<name>/` + 侧车）完全一致，发布逻辑因此可以复用。
+ */
+export function orgSkillRootFor(
+  identity: { orgId: unknown },
+  base: string = USER_SKILL_ROOT,
+) {
+  const orgId = assertIdentitySegment(identity?.orgId, 'orgId');
+  return path.join(path.resolve(base), orgId, ORG_SKILL_OWNER_SEGMENT);
+}
+
+/** org 层的 owner 段。首字符 `_`，见 `orgSkillRootFor`。 */
+export const ORG_SKILL_OWNER_SEGMENT = '_org';
+
+/**
  * The one directory a given user's installs live in.
  *
  * Org is included so the path is unique even if user ids were ever reissued

@@ -1,14 +1,14 @@
 /**
- * 已启用用户 Skill 的清单与版本目录规则（design §3.3 S1）。
+ * 已启用 Skill 的清单与版本目录规则（design §3.3 S1；三层见 ADR 0015 D1）。
  *
- * 启用权威在 Agent 的 `user_skill_enablements`。Agent 在 Run 开始时按账本得到
- * `[{ name, contentDigest }]`，随每个内部请求交给 exec；exec 只挂载清单点名、且版本
- * 目录与侧车文件核对通过的包——不读 Agent 账本，也不再扫 owner 目录。
+ * 启用权威在 Agent 的 `user_skill_enablements`。Agent 在 Run 开始时按账本与**绑定**
+ * 得到一份有效清单，随每个内部请求交给 exec；exec 只挂载清单点名、且版本目录与侧车
+ * 文件核对通过的包——不读 Agent 账本，也不再扫 owner 目录。
  *
  * 清单跟随请求体（POST）或规范化 query（GET）进入 `body_sha256`，与信封一样受 HMAC
  * 覆盖，这就是「由 Agent 鉴权输出的清单」。
  *
- * 发布布局（每个 owner 一个根 `<base>/<orgId>/<userId>`）：
+ * 发布布局（每个 owner 一个根 `<base>/<orgId>/<userId>`，org 层是 `<orgId>/_org`）：
  *
  *   <name>/.v/<digest>/<name>/SKILL.md   版本目录：内层再套一层包名，
  *                                         使 `.v/<digest>` 本身是只含一个包的发现根
@@ -19,10 +19,15 @@
 
 import { ContractError } from './errors.js';
 
+/** 清单里一项的层。缺省 `user`：旧 Agent 发出的清单语义不变（ADR 0015 D1）。 */
+export type EnabledSkillScope = 'user' | 'org';
+
 /** 清单中的一项。 */
 export interface EnabledSkillRef {
   readonly name: string;
   readonly contentDigest: string;
+  /** `org` 走 `<orgId>/_org` owner 根；省略 = `user`。 */
+  readonly scope?: EnabledSkillScope;
 }
 
 /** 与 agent `SKILL_NAME_RE` 同一条规则：小写开头，不含 `.`，因此 `.v` 不会与包名冲突。 */
@@ -31,6 +36,8 @@ export const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export const SKILL_DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 /** 单个请求可携带的清单条数上限，防止用超长清单放大 exec 的核对开销。 */
 export const ENABLED_SKILLS_MAX = 256;
+/** 系统层清单（`systemSkills`）的条数上限。 */
+export const SYSTEM_SKILLS_MAX = 256;
 /** 版本目录所在的子目录名。 */
 export const SKILL_VERSIONS_DIRNAME = '.v';
 
@@ -57,17 +64,78 @@ export function parseEnabledSkills(value: unknown): readonly EnabledSkillRef[] {
     const record = item as Record<string, unknown>;
     const name = record['name'];
     const contentDigest = record['contentDigest'];
+    const scope = record['scope'];
     if (typeof name !== 'string' || !SKILL_NAME_PATTERN.test(name)) {
       throw invalid('enabledSkills[].name is invalid');
     }
     if (typeof contentDigest !== 'string' || !SKILL_DIGEST_PATTERN.test(contentDigest)) {
       throw invalid('enabledSkills[].contentDigest must be a sha256 hex digest');
     }
+    // 省略 = `user`。未知取值是错误而不是「当作 user」：写错 scope 会让包挂到错的
+    // owner 根下，而 exec 只会静默找不到它。
+    if (scope !== undefined && scope !== 'user' && scope !== 'org') {
+      throw invalid('enabledSkills[].scope must be "user" or "org"');
+    }
     if (seen.has(name)) throw invalid('enabledSkills must not repeat a name');
     seen.add(name);
-    out.push(Object.freeze({ name, contentDigest }));
+    out.push(Object.freeze(
+      scope === 'org'
+        ? { name, contentDigest, scope: 'org' as const }
+        : { name, contentDigest },
+    ));
   }
   return Object.freeze(out);
+}
+
+/**
+ * 运行时校验系统层清单（`systemSkills`，ADR 0015 D4 / design §6.3、§8）。
+ *
+ * **滚动升级兼容期**（design §8）：缺省（`undefined` / `null`）返回 `null`，表示
+ * 「这是一个还不会发名单的旧 Agent」，exec 按旧行为整树挂载系统根并记告警。
+ * 部署顺序是 exec → Worker → API：exec 先升级时，旧 Worker 的 Run 不能因此全部失败。
+ * 全部 Worker 升级、告警计数为 0 之后，才把缺省改成 `ENVELOPE_INVALID`（收紧）。
+ *
+ * **空数组是合法值**，表示「这个 Run 一个系统包都不带」——它与「没带这个字段」
+ * 是两件事，调用方必须区分 `null` 与 `[]`。
+ *
+ * @returns 规范化后的名字数组（可能为空）；字段缺省时为 `null`
+ */
+export function parseSystemSkills(value: unknown): readonly string[] | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) throw invalid('systemSkills must be an array');
+  if (value.length > SYSTEM_SKILLS_MAX) {
+    throw invalid(`systemSkills must not exceed ${SYSTEM_SKILLS_MAX} entries`);
+  }
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !SKILL_NAME_PATTERN.test(entry)) {
+      throw invalid('systemSkills[] must be a valid skill name');
+    }
+    if (seen.has(entry)) throw invalid('systemSkills must not repeat a name');
+    seen.add(entry);
+  }
+  return Object.freeze([...value] as string[]);
+}
+
+/**
+ * 同一名字不能同时出现在 `systemSkills` 与 `enabledSkills` 里。
+ *
+ * Agent 侧的有效清单已经按 system > org > user 去过重（ADR 0015 D7），所以同时出现
+ * 只可能是调用方拼错了请求——不能静默按某个顺序取胜者。
+ */
+export function assertNoDuplicateSkillScopes(
+  systemSkills: readonly string[] | null,
+  enabledSkills: readonly EnabledSkillRef[],
+): void {
+  if (systemSkills === null || systemSkills.length === 0) return;
+  const system = new Set(systemSkills);
+  for (const entry of enabledSkills) {
+    if (system.has(entry.name)) {
+      throw invalid(
+        `skill "${entry.name}" appears in both systemSkills and enabledSkills`,
+      );
+    }
+  }
 }
 
 /**

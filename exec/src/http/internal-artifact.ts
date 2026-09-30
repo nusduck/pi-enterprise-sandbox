@@ -11,16 +11,28 @@
 import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@dsh/contract/errors.js';
 import { parseEnvelope } from '@dsh/contract/envelope.js';
-import { parseEnabledSkills, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
+import {
+  assertNoDuplicateSkillScopes,
+  parseEnabledSkills,
+  parseSystemSkills,
+  type EnabledSkillRef,
+} from '@dsh/contract/skill-manifest.js';
 import type { ArtifactService } from '../artifact/service.js';
 import { ArtifactError } from '../artifact/service.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
-import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
+import { skillPackagesForRequest } from './skill-context.js';
+import type {
+  EnabledSkillPackagesResolver,
+  SystemSkillPackagesResolver,
+  WorkspaceContext,
+} from '../types.js';
 
 export interface InternalArtifactDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
+  /** 系统层逐包解析（ADR 0015 D4）；与上面那条分开，系统包没有摘要。 */
+  readonly systemSkillPackagesFor: SystemSkillPackagesResolver;
   readonly artifactService: ArtifactService;
 }
 
@@ -35,6 +47,8 @@ function buildContext(
   deps: InternalArtifactDeps,
   env: Envelope,
   enabledSkills: readonly EnabledSkillRef[],
+  /** `null` = 请求没带系统名单（兼容期旧 Agent，design §8）。 */
+  systemSkills: readonly string[] | null,
 ): WorkspaceContext {
   return {
     orgId: env.orgId,
@@ -43,22 +57,29 @@ function buildContext(
     workspaceRoot: deps.workspaceManager.physicalWorkspacePath(env.workspaceId),
     tempRoot: deps.workspaceManager.physicalTempPath(env.workspaceId),
     systemSkillRoot: deps.systemSkillRoot,
-    enabledSkillPackages: [...deps.enabledSkillPackagesFor(env.orgId, env.userId, enabledSkills)],
+    ...skillPackagesForRequest(deps, env, enabledSkills, systemSkills),
   };
 }
 
-async function parseBody(
-  c: import('hono').Context,
-): Promise<{ envelope: unknown; payload: Record<string, unknown>; enabledSkills: readonly EnabledSkillRef[] }> {
+async function parseBody(c: import('hono').Context): Promise<{
+  envelope: unknown;
+  payload: Record<string, unknown>;
+  enabledSkills: readonly EnabledSkillRef[];
+  systemSkills: readonly string[] | null;
+}> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     throw new ContractError('ENVELOPE_INVALID', 'body must be object');
   }
   const b = body as Record<string, unknown>;
+  const systemSkills = parseSystemSkills(b['systemSkills']);
+  const enabledSkills = parseEnabledSkills(b['enabledSkills']);
+  assertNoDuplicateSkillScopes(systemSkills, enabledSkills);
   return {
     envelope: b['envelope'],
     payload: (b['payload'] ?? {}) as Record<string, unknown>,
-    enabledSkills: parseEnabledSkills(b['enabledSkills']),
+    enabledSkills,
+    systemSkills,
   };
 }
 
@@ -71,10 +92,10 @@ function statusFor(err: unknown): number {
 export function registerInternalArtifactRoutes(app: Hono, deps: InternalArtifactDeps): void {
   app.post('/internal/v1/artifacts/submit', async (c) => {
     try {
-      const { envelope: rawEnv, payload, enabledSkills } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills, systemSkills } = await parseBody(c);
       parseEnvelope(rawEnv);
       const env = rawEnv as Envelope;
-      const workspace = buildContext(deps, env, enabledSkills);
+      const workspace = buildContext(deps, env, enabledSkills, systemSkills);
       const sourcePath = typeof payload['sourcePath'] === 'string' ? payload['sourcePath'] : '';
       if (!sourcePath) throw new ContractError('ENVELOPE_INVALID', 'sourcePath required');
 

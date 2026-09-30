@@ -49,6 +49,7 @@ import {
 import { AgentConfigEditor, type EditorSection } from './AgentConfigEditor';
 import { delegationOf } from './delegationHelpers';
 import { dataSourcesOf } from './dataSourceHelpers';
+import { skillPolicyCount } from './skillPolicyHelpers';
 import { AgentValidationPanel, validationSummary } from './AgentValidationPanel';
 import { IconRefresh } from '../../shared/ui/Icons';
 import { agentTone } from '../../widgets/conversation-sidebar/sidebarModel';
@@ -540,6 +541,7 @@ export function AgentsPage() {
   const delegation = draftConfig.ok ? delegationOf(draftConfig.config) : null;
   const delegationCount = delegation ? delegation.agents.length + delegation.remoteAgents.length : 0;
   const dataSourceCount = draftConfig.ok ? dataSourcesOf(draftConfig.config).length : 0;
+  const skillCount = draftConfig.ok ? skillPolicyCount(draftConfig.config) : 0;
   const tabs: Array<[AgentTab, string, number?]> = [
     ['basic', '基本信息'],
     ['model', '模型'],
@@ -547,6 +549,7 @@ export function AgentsPage() {
     ['mcp', 'MCP', mcpCount],
     ['delegation', '协作', delegationCount],
     ['dataSources', '数据源', dataSourceCount],
+    ['skills', '技能', skillCount],
     ...(creating ? [] : [['versions', '版本历史'] as [AgentTab, string]]),
     ['json', 'JSON'],
   ];

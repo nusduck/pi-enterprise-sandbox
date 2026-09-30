@@ -58,6 +58,7 @@ async function makeHarness(
     jobRegistry: new MySqlJobRegistry(new InMemoryJobStore()),
     systemSkillRoot: join(base, 'skills'),
     enabledSkillPackagesFor: () => [],
+    systemSkillPackagesFor: () => [],
     bwrapExecutable: '/unused',
     modeFor: () => 'workspace-write',
     resourceLimits: overrides.resourceLimits ?? DEFAULT_SHELL_RESOURCE_LIMITS,
@@ -67,13 +68,52 @@ async function makeHarness(
   return { app, cleanup: () => rm(base, { recursive: true, force: true }) };
 }
 
+/** 带系统名单（空数组 = 一个系统包都不挂）发一个内部请求，与新 Agent 的形状一致。 */
 function post(app: Hono, path: string, payload: unknown): Promise<Response> {
   return app.request(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ envelope: ENVELOPE, payload }),
+    body: JSON.stringify({ envelope: ENVELOPE, payload, systemSkills: [] }),
   });
 }
+
+test('systemSkills：缺省是兼容期旧 Agent（整树），空数组一个不挂，名单逐包（ADR 0015 design §8）', async () => {
+  const h = await makeHarness();
+  try {
+    const postRaw = (body: Record<string, unknown>) =>
+      h.app.request('/internal/v1/shell/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const seen: Array<IsolatedShellExecutor['workspace']['systemSkillPackages']> = [];
+    const run = (body: Record<string, unknown>) => captureRun(
+      async function (this: IsolatedShellExecutor, spec) {
+        seen.push(this.workspace.systemSkillPackages);
+        return emptyResult(spec);
+      },
+      () => postRaw(body),
+    );
+
+    // 缺省：exec 先于 Worker 升级时旧 Worker 就是这个形状。拒绝它会让旧 Worker 的
+    // 每个 Run 都失败，所以兼容期内接受，并按整树处理（`systemSkillPackages` 省略）。
+    const missing = await run({ envelope: ENVELOPE, payload: { command: 'true' } });
+    assert.equal(missing.status, 200);
+    assert.equal(seen.at(-1), undefined);
+
+    // 空数组：一个系统包都不挂——与缺省可区分。
+    const empty = await run({ envelope: ENVELOPE, payload: { command: 'true' }, systemSkills: [] });
+    assert.equal(empty.status, 200);
+    assert.deepEqual(seen.at(-1), []);
+
+    // 形状非法仍是 400，不因兼容期放宽。
+    const bad = await postRaw({ envelope: ENVELOPE, payload: { command: 'true' }, systemSkills: 'pdf' });
+    assert.equal(bad.status, 400);
+    assert.equal(((await bad.json()) as { error?: { code?: string } }).error?.code, 'ENVELOPE_INVALID');
+  } finally {
+    await h.cleanup();
+  }
+});
 
 /** 替换执行入口，记录路由真正交给执行器的 spec 与执行器自身的限额。 */
 async function captureRun<T>(
@@ -250,7 +290,7 @@ test('run: 请求断开进入执行的 AbortSignal', async () => {
         h.app.request('/internal/v1/shell/run', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ envelope: ENVELOPE, payload: { command: 'sleep 60' } }),
+          body: JSON.stringify({ envelope: ENVELOPE, payload: { command: 'sleep 60' }, systemSkills: [] }),
           signal: client.signal,
         }),
     );

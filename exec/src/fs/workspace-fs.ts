@@ -25,6 +25,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { ParsedSandboxPath, SandboxPathScope } from './path-policy.js';
+import type { EnabledSkillPackage } from '../types.js';
 import {
   FsError,
   FsTargetKey,
@@ -281,25 +282,50 @@ export class WorkspaceFileSystem extends LocalFileSystem {
         'FS_SANDBOX_DENIED',
       );
     }
+    if (scope === 'skill-org') {
+      throw new FsError(
+        'skill-org root is per-package; address /home/sandbox/skill-org/<package>/...',
+        'FS_SANDBOX_DENIED',
+      );
+    }
     return this.workspace.workspaceRoot;
+  }
+
+  /**
+   * 该逻辑作用域下的逐包集合；`null` 表示这个作用域不按包寻址。
+   *
+   * 系统层只在请求带了名单时逐包（ADR 0015 D4）：bwrap 那一侧此时只挂名单里的包，
+   * fs RPC（`read` / `glob` / `grep`）必须给出同一个答案，否则模型绕开 bash 就能
+   * 读到未绑定的系统包。没带名单（兼容期旧 Agent、公共面）维持整树可读。
+   */
+  private packagesForScope(scope: SandboxPathScope): readonly EnabledSkillPackage[] | null {
+    if (scope === 'skill-user') return this.workspace.enabledSkillPackages;
+    if (scope === 'skill-org') return this.workspace.orgSkillPackages ?? [];
+    if (scope === 'skill') return this.workspace.systemSkillPackages ?? null;
+    return null;
   }
 
   /** 逻辑路径 → 该次操作要用的物理根 + 根内相对路径。 */
   private locate(parsed: ParsedSandboxPath): { physicalRoot: string; relative: string } {
-    if (parsed.scope !== 'skill-user') {
+    const packages = this.packagesForScope(parsed.scope);
+    if (packages === null) {
       return { physicalRoot: this.physicalRootFor(parsed.scope), relative: parsed.relative };
     }
+    const label = parsed.scope === 'skill-org'
+      ? 'skill-org'
+      : parsed.scope === 'skill' ? 'skill' : 'skill-user';
     if (parsed.relative === '.') {
       throw new FsError(
-        'skill-user root is per-package; address /home/sandbox/skill-user/<package>/...',
+        `${label} root is per-package; address /home/sandbox/${label}/<package>/...`,
         'FS_SANDBOX_DENIED',
       );
     }
     const slash = parsed.relative.indexOf('/');
     const pkgName = slash < 0 ? parsed.relative : parsed.relative.slice(0, slash);
     const rest = slash < 0 ? '.' : parsed.relative.slice(slash + 1);
-    const pkg = this.workspace.enabledSkillPackages.find((item) => item.name === pkgName);
+    const pkg = packages.find((item) => item.name === pkgName);
     if (pkg === undefined) {
+      // 未绑定的包在沙箱里根本不存在（逐包挂载），所以这是越界而不是「文件没找到」。
       throw new FsError(`skill package not enabled: ${pkgName}`, 'FS_SANDBOX_DENIED');
     }
     return { physicalRoot: pkg.sourcePath, relative: rest === '' ? '.' : rest };
@@ -400,6 +426,8 @@ export class WorkspaceFileSystem extends LocalFileSystem {
       this.workspace.tempRoot,
       this.workspace.systemSkillRoot,
       ...this.workspace.enabledSkillPackages.map((pkg) => pkg.sourcePath),
+      ...(this.workspace.orgSkillPackages ?? []).map((pkg) => pkg.sourcePath),
+      ...(this.workspace.systemSkillPackages ?? []).map((pkg) => pkg.sourcePath),
     ];
     const canonical = await Promise.all(configured.map((root) => canonicalizePath(root)));
     return [...configured, ...canonical];

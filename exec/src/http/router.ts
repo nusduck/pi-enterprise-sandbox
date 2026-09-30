@@ -26,7 +26,11 @@ import { Context as CordisContext } from '@deepseek-ai/cordis';
 import type { ShellResourceLimits } from '../shell/resource-limits.js';
 import type { ChildQuotaConfig } from '../workspace/child-quota.js';
 import type { QuotaStore } from '../workspace/quota-store.js';
-import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
+import type {
+  EnabledSkillPackagesResolver,
+  SystemSkillPackagesResolver,
+  WorkspaceContext,
+} from '../types.js';
 import type { DataSourceService } from '../datasource/service.js';
 
 export interface InternalRouterDeps {
@@ -35,6 +39,7 @@ export interface InternalRouterDeps {
   /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。 */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
+  readonly systemSkillPackagesFor: SystemSkillPackagesResolver;
   readonly bwrapExecutable: string;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
   readonly jobRegistry: MySqlJobRegistry;
@@ -123,6 +128,7 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    systemSkillPackagesFor: deps.systemSkillPackagesFor,
     ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
   });
   registerInternalShellRoutes(app, {
@@ -130,6 +136,7 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     jobRegistry: deps.jobRegistry,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    systemSkillPackagesFor: deps.systemSkillPackagesFor,
     ...(deps.draftSkillRootFor ? { draftSkillRootFor: deps.draftSkillRootFor } : {}),
     bwrapExecutable: deps.bwrapExecutable,
     modeFor: deps.modeFor,
@@ -143,6 +150,7 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    systemSkillPackagesFor: deps.systemSkillPackagesFor,
     artifactService:
       deps.artifactService ??
       new ArtifactService(

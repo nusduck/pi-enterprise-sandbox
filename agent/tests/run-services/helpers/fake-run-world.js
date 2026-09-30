@@ -69,6 +69,7 @@ function cmp(left, op, right) {
 export function createFakeRunWorld(opts = {}) {
   /** @type {Record<string, Record<string, unknown>[]>} */
   const tables = {
+    tbl_agsvc_agent_version_skill_refs: [],
     tbl_agsvc_organizations: [],
     tbl_agsvc_users: [],
     tbl_agsvc_organization_memberships: [],
@@ -534,6 +535,43 @@ export function createFakeRunWorld(opts = {}) {
       },
       idempotency: new IdempotencyRepository(db, { now }),
       outbox: new OutboxRepository(db, { now }),
+      /**
+       * org 层共享 Skill 账本（ADR 0015 D5）。这个假世界没有 org 层数据，
+       * 但**必须存在**：`AgentCatalogService` 在保存配置时要读它来校验
+       * `skillPolicy.org`。缺了它会让「org 绑定」在保存时静默失效（抛错或空集），
+       * 而生产容器总是提供它——测试替身不该比生产更宽松。
+       */
+      /**
+       * AgentVersion → Skill 引用账本（ADR 0015 D5）。必须存在：版本创建时要在同一个
+       * 事务里登记引用，缺了它版本创建会直接失败（生产容器总是提供它）。
+       */
+      agentVersionSkillRefs: {
+        async insertForVersion({ refs }) {
+          for (const ref of refs ?? []) {
+            tables.tbl_agsvc_agent_version_skill_refs.push({ scope: ref.scope, skill_name: ref.name });
+          }
+        },
+        async listVersionsForSkill() {
+          return [];
+        },
+        async isReferenced() {
+          return false;
+        },
+        async listForVersion() {
+          return [];
+        },
+      },
+      orgSkills: {
+        async listForOrg() {
+          return opts.orgSkillGroups ?? [];
+        },
+        async listBindableVersions() {
+          return [];
+        },
+        async getVersion() {
+          return null;
+        },
+      },
     };
   }
 

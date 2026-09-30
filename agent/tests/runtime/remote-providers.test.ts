@@ -93,6 +93,7 @@ test('remote-fs: 本机零文件操作，resolve 转发且错误无条件脱敏'
     userId: 'user-1',
     workspaceId: 'ws-1',
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: ['/var/sandbox/workspaces/secret'],
     fetchImpl: fakeFetchForFs(calls),
   });
@@ -165,6 +166,7 @@ test('remote-shell: run/start 本机零子进程，转发 exec', async () => {
     userId: 'user-1',
     workspaceId: 'ws-1',
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: [],
     fetchImpl: fakeFetchForFs(),
   });
@@ -211,6 +213,7 @@ test('remote-shell: 后台句柄轮询 exec 结算并保留增量输出', async 
     userId: 'user-1',
     workspaceId: 'ws-1',
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: [],
     fetchImpl,
   });
@@ -231,6 +234,7 @@ test('remote-jobs: start/list/get/read/kill 均转发 exec 且不抛未脱敏错
     userId: 'user-1',
     workspaceId: 'ws-1',
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: [],
     fetchImpl: fakeFetchForFs(),
   });
@@ -269,6 +273,7 @@ test('remote-jobs: 本地 registry 兑现 wait/read 与完成状态', async () =
     userId: 'user-1',
     workspaceId: 'ws-1',
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: [],
     fetchImpl: fakeFetchForFs(),
   });
@@ -300,6 +305,7 @@ test('remote providers register as ctx.fs/shell/jobs (Cordis plugin contract)', 
     userId: 'placeholder',
     workspaceId: 'placeholder',
     fenceToken: 0,
+    systemSkills: [],
     physicalRoots: ['/var/sandbox/workspaces/secret'],
     fetchImpl: fakeFetchForFs(),
   };
@@ -329,6 +335,7 @@ test('runWithExecRpc overlays tenant onto HMAC envelope', async () => {
     userId: 'placeholder-user',
     workspaceId: 'placeholder-ws',
     fenceToken: 0,
+    systemSkills: [],
     physicalRoots: ['/var/sandbox/workspaces/secret'],
     fetchImpl,
   });
@@ -341,6 +348,7 @@ test('runWithExecRpc overlays tenant onto HMAC envelope', async () => {
       userId: 'user-live',
       workspaceId: 'ws-live',
       fenceToken: 9,
+      systemSkills: [],
       physicalRoots: ['/var/sandbox/workspaces/secret'],
       fetchImpl,
     },
@@ -380,6 +388,7 @@ test('rebind updates HMAC envelope without ALS', async () => {
     userId: 'placeholder-user',
     workspaceId: 'placeholder-ws',
     fenceToken: 0,
+    systemSkills: [],
     physicalRoots: ['/var/sandbox/workspaces/secret'],
     fetchImpl,
   });
@@ -391,6 +400,7 @@ test('rebind updates HMAC envelope without ALS', async () => {
     userId: 'user-live',
     workspaceId: 'ws-live',
     fenceToken: 4,
+    systemSkills: [],
     physicalRoots: ['/var/sandbox/workspaces/secret'],
     fetchImpl,
   });
@@ -443,6 +453,7 @@ function shellWith(fetchImpl: typeof fetch, monitor: Record<string, number> = {}
     userId: 'user-1',
     workspaceId: 'ws-1',
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: [],
     fetchImpl,
     monitor,
@@ -527,6 +538,7 @@ test('exec-rpc: getStream 在响应头之后卡住也会超时，而不是永远
     userId: 'user-1',
     workspaceId: 'ws-1',
     fenceToken: 1,
+    systemSkills: [],
     physicalRoots: [],
     fetchImpl,
     timeoutMs: 150,
@@ -567,7 +579,7 @@ test('exec-rpc: 令牌的 htm/scope/tool_name 与真实请求逐字一致', asyn
   const cfg = {
     baseUrl: 'http://exec', keyring, activeKid: 'test',
     orgId: 'org-1', userId: 'user-1', workspaceId: 'ws-1',
-    fenceToken: 1, physicalRoots: [], fetchImpl,
+    fenceToken: 1, systemSkills: [], physicalRoots: [], fetchImpl,
   };
   const fs = new RemoteFileSystem(new Context() as unknown as Context, cfg as unknown as Partial<ExecRpcConfig>);
   await fs.resolve('notes.txt');

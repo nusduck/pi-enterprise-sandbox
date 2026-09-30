@@ -28,7 +28,12 @@
 import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@dsh/contract/errors.js';
 import { parseEnvelope } from '@dsh/contract/envelope.js';
-import { parseEnabledSkills, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
+import {
+  assertNoDuplicateSkillScopes,
+  parseEnabledSkills,
+  parseSystemSkills,
+  type EnabledSkillRef,
+} from '@dsh/contract/skill-manifest.js';
 import { parseEnabledDataSources } from '@dsh/contract/data-sources.js';
 import {
   parseShellRunPayload,
@@ -49,10 +54,15 @@ import {
   type GuardedExecutionDeps,
 } from '../shell/guarded-execution.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
-import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
+import type {
+  EnabledSkillPackagesResolver,
+  SystemSkillPackagesResolver,
+  WorkspaceContext,
+} from '../types.js';
 import type { DataSourceService } from '../datasource/service.js';
 import { openExecutionDataSources, redactRunResult, redactingReader } from '../datasource/execution.js';
 import { internalClaimsByRequest } from './internal-claims.js';
+import { skillPackagesForRequest } from './skill-context.js';
 
 export interface InternalShellDeps extends GuardedExecutionDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -66,6 +76,8 @@ export interface InternalShellDeps extends GuardedExecutionDeps {
    */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
+  /** 系统层逐包解析（ADR 0015 D4）；与上面那条分开，系统包没有摘要。 */
+  readonly systemSkillPackagesFor: SystemSkillPackagesResolver;
   readonly modeFor: (workspaceId: string) => 'read-only' | 'workspace-write';
   /** 数据源（design `sandbox-data-sources.md`）。省略即未配置：带清单的请求一律拒绝。 */
   readonly dataSources?: DataSourceService;
@@ -89,6 +101,8 @@ function buildContext(
   deps: InternalShellDeps,
   env: { orgId: string; userId: string; workspaceId: string },
   enabledSkills: readonly EnabledSkillRef[],
+  /** 请求携带的 `systemSkills`：`[]` = 一个系统包都不挂，`null` = 兼容期旧 Agent。 */
+  systemSkills: readonly string[] | null,
 ): WorkspaceContext {
   const draft = deps.draftSkillRootFor?.(env.orgId, env.userId) ?? null;
   return {
@@ -98,7 +112,7 @@ function buildContext(
     workspaceRoot: deps.workspaceManager.physicalWorkspacePath(env.workspaceId),
     tempRoot: deps.workspaceManager.physicalTempPath(env.workspaceId),
     systemSkillRoot: deps.systemSkillRoot,
-    enabledSkillPackages: [...deps.enabledSkillPackagesFor(env.orgId, env.userId, enabledSkills)],
+    ...skillPackagesForRequest(deps, env, enabledSkills, systemSkills),
     ...(draft !== null && draft !== '' ? { draftSkillRoot: draft } : {}),
   };
 }
@@ -112,6 +126,8 @@ function rootsOf(ctx: WorkspaceContext): readonly string[] {
     // 写当成越界——挂载对了但写不进去，症状是「路径存在却 permission denied」。
     ...(ctx.draftSkillRoot ? [ctx.draftSkillRoot] : []),
     ...ctx.enabledSkillPackages.map((p) => p.sourcePath),
+    ...(ctx.orgSkillPackages ?? []).map((p) => p.sourcePath),
+    ...(ctx.systemSkillPackages ?? []).map((p) => p.sourcePath),
   ];
 }
 
@@ -119,15 +135,22 @@ async function parseBody(c: import('hono').Context): Promise<{
   envelope: unknown;
   payload: unknown;
   enabledSkills: readonly EnabledSkillRef[];
+  /** 空数组 = 一个系统包都不挂；`null` = 请求没带（兼容期旧 Agent，design §8）。 */
+  systemSkills: readonly string[] | null;
   dataSources: readonly string[];
 }> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') throw new ContractError('ENVELOPE_INVALID', 'body must be object');
   const b = body as Record<string, unknown>;
+  const systemSkills = parseSystemSkills(b['systemSkills']);
+  const enabledSkills = parseEnabledSkills(b['enabledSkills']);
+  // Agent 侧已按 system > org > user 去过重；同名同时出现在两层只可能是拼错了请求。
+  assertNoDuplicateSkillScopes(systemSkills, enabledSkills);
   return {
     envelope: b['envelope'],
     payload: b['payload'],
-    enabledSkills: parseEnabledSkills(b['enabledSkills']),
+    enabledSkills,
+    systemSkills,
     dataSources: parseEnabledDataSources(b['dataSources']),
   };
 }
@@ -155,13 +178,13 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
 
   app.post('/internal/v1/shell/run', async (c) => {
     try {
-      const { envelope: rawEnv, payload, enabledSkills, dataSources } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills, systemSkills, dataSources } = await parseBody(c);
       parseEnvelope(rawEnv);
       const env = rawEnv as ShellEnvelope;
       const parsed = parseShellRunPayload(payload, payloadLimits);
       const session = await openFor(deps, c, env, dataSources);
       try {
-        const ctx: WorkspaceContext = { ...buildContext(deps, env, enabledSkills), dataSources: session.mounts };
+        const ctx: WorkspaceContext = { ...buildContext(deps, env, enabledSkills, systemSkills), dataSources: session.mounts };
         const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
 
         const spec = executor.resolve({
@@ -197,7 +220,7 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
 
   app.post('/internal/v1/shell/start', async (c) => {
     try {
-      const { envelope: rawEnv, payload, enabledSkills, dataSources } = await parseBody(c);
+      const { envelope: rawEnv, payload, enabledSkills, systemSkills, dataSources } = await parseBody(c);
       parseEnvelope(rawEnv);
       const env = rawEnv as ShellEnvelope;
       const parsed = parseShellStartPayload(payload, payloadLimits);
@@ -205,7 +228,7 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
       // 作业没起成（准入、账本失败）时在下面的 catch 里关闭。close 幂等。
       const session = await openFor(deps, c, env, dataSources);
       try {
-        const ctx: WorkspaceContext = { ...buildContext(deps, env, enabledSkills), dataSources: session.mounts };
+        const ctx: WorkspaceContext = { ...buildContext(deps, env, enabledSkills, systemSkills), dataSources: session.mounts };
         const roots = rootsOf(ctx);
         const executor = makeLimitedExecutor(deps, ctx, deps.modeFor(env.workspaceId));
         const spec = executor.resolve({

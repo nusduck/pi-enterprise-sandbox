@@ -66,6 +66,85 @@ async function provisionOwner(world, auth = ADMIN_AUTH) {
   return createConversations(world).create(auth, { title: 'bootstrap' });
 }
 
+describe('skillPolicy.org 对着本 org 的账本校验（ADR 0015 D5/D8）', () => {
+  const DIGEST = 'a'.repeat(64);
+  const REVOKED = 'b'.repeat(64);
+
+  function orgGroup(versions) {
+    return [{
+      name: 'sales-weekly',
+      currentDigest: versions.find((v) => v.status === 'active')?.contentDigest ?? '',
+      versions: versions.map((v) => ({ ...v, description: '周报' })),
+    }];
+  }
+
+  it('钉住本 org 已发布的 active 版本 → 保存成功', async () => {
+    const world = createFakeRunWorld({
+      orgSkillGroups: orgGroup([
+        { name: 'sales-weekly', contentDigest: DIGEST, status: 'active', publishedAt: '2026-09-30T00:00:00.000Z' },
+      ]),
+    });
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    const created = await catalog.createAgent(ADMIN_AUTH, {
+      name: '带共享技能的助手',
+      config: { skillPolicy: { system: { mode: 'none' }, org: [{ name: 'sales-weekly', contentDigest: DIGEST }], user: 'allow' } },
+    });
+    assert.equal(created.version.config.skillPolicy.org[0].contentDigest, DIGEST);
+  });
+
+  it('钉一个不存在的版本 → 保存被拒（不能在 Run 期才发现）', async () => {
+    const world = createFakeRunWorld({ orgSkillGroups: [] });
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, {
+        name: 'x',
+        config: { skillPolicy: { org: [{ name: 'sales-weekly', contentDigest: DIGEST }] } },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'SKILL_ORG_VERSION_UNKNOWN',
+    );
+  });
+
+  it('revoked 在配置面等于不存在：引用它会被拒，而不是静默排除', async () => {
+    const world = createFakeRunWorld({
+      orgSkillGroups: orgGroup([
+        { name: 'sales-weekly', contentDigest: REVOKED, status: 'revoked', publishedAt: '2026-09-30T00:00:00.000Z' },
+      ]),
+    });
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, {
+        name: 'x',
+        config: { skillPolicy: { org: [{ name: 'sales-weekly', contentDigest: REVOKED }] } },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'SKILL_ORG_VERSION_UNKNOWN',
+    );
+  });
+
+  it('deprecated 不允许**新绑定**（但已钉住的照常运行）', async () => {
+    const world = createFakeRunWorld({
+      orgSkillGroups: orgGroup([
+        { name: 'sales-weekly', contentDigest: DIGEST, status: 'deprecated', publishedAt: '2026-09-30T00:00:00.000Z' },
+      ]),
+    });
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    await assert.rejects(
+      () => catalog.createAgent(ADMIN_AUTH, {
+        name: 'x',
+        config: { skillPolicy: { org: [{ name: 'sales-weekly', contentDigest: DIGEST }] } },
+      }),
+      (err) => err instanceof ValidationError && err.details?.code === 'SKILL_ORG_VERSION_DEPRECATED',
+    );
+  });
+});
+
 describe('AgentCatalogService — 一个 org 下并列多个智能体', () => {
   it('createAgent 建出 definition + v1，并把 active_version_id 指向 v1', async () => {
     const world = createFakeRunWorld();

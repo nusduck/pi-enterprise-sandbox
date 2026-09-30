@@ -236,7 +236,10 @@ test('plan assertion: workspace/temp are still mounted (read-only) in read-only 
 });
 
 test('plan assertion: skill layer is entirely ro_bind, never writable', async () => {
-  const ws = await makeTestWorkspace({ enabledPackages: ['pkg-a', 'pkg-b'] });
+  const ws = await makeTestWorkspace({
+    systemSkillNames: ['sys-a'],
+    enabledPackages: ['pkg-a', 'pkg-b'],
+  });
   try {
     const profile = buildIsolationProfile({
       context: ws.context,
@@ -246,7 +249,7 @@ test('plan assertion: skill layer is entirely ro_bind, never writable', async ()
     const skillMounts = bindMounts(profile.mounts).filter(
       (m) => m.target.startsWith('/home/sandbox/skill'),
     );
-    assert.ok(skillMounts.length >= 3, 'expected system tier + 2 package mounts');
+    assert.equal(skillMounts.length, 3, 'expected 1 system package + 2 user package mounts');
     for (const m of skillMounts) {
       assert.equal(m.kind, 'ro_bind', `${m.target} must be read-only`);
     }
@@ -302,32 +305,42 @@ test('skill binding: only enabled packages are mounted; installed-but-not-enable
   }
 });
 
-test('skill binding: no enabled packages means system tier only, no skill-user mounts at all', async () => {
-  const ws = await makeTestWorkspace();
+test('skill binding: 空名单 + 无启用包 → 沙箱里没有任何 skill 挂载（没有整树兜底）', async () => {
+  const ws = await makeTestWorkspace({ systemPackagesNotSelected: ['pdf'] });
   try {
     const profile = buildIsolationProfile({
       context: ws.context,
       mode: 'workspace-write',
       command: ['true'],
     });
-    assert.ok(!profile.mounts.some((m) => m.target.startsWith('/home/sandbox/skill-user')));
-    assert.ok(profile.mounts.some((m) => m.target === '/home/sandbox/skill'));
+    const skillTargets = profile.mounts
+      .map((m) => m.target)
+      .filter((t) => t.startsWith('/home/sandbox/skill'));
+    // 收紧前这里会有一条 `target === /home/sandbox/skill` 的整树挂载，
+    // 于是名单外的 `pdf` 依然可见。那条兜底已删除。
+    assert.deepEqual(skillTargets, []);
   } finally {
     await ws.cleanup();
   }
 });
 
-test('skill binding: system tier is required=true, package mounts are required=false (a single bad package cannot break the launch)', async () => {
-  const ws = await makeTestWorkspace({ enabledPackages: ['pkg-a'] });
+test('skill binding: 系统包是硬绑定，用户/org 包不是 —— 系统缺包要在启动前说清楚', async () => {
+  const ws = await makeTestWorkspace({
+    systemSkillNames: ['sys-a'],
+    enabledPackages: ['pkg-a'],
+  });
   try {
     const profile = buildIsolationProfile({
       context: ws.context,
       mode: 'workspace-write',
       command: ['true'],
     });
-    const system = bindMounts(profile.mounts).find((m) => m.target === '/home/sandbox/skill');
+    const system = bindMounts(profile.mounts).find((m) => m.target === '/home/sandbox/skill/sys-a');
     const pkg = bindMounts(profile.mounts).find((m) => m.target === '/home/sandbox/skill-user/pkg-a');
+    // 系统层字节随 release 交付、运行期不可变（design §6.4）：缺包是部署故障，
+    // 要炸在启动前，而不是让模型拿着一个静默残缺的能力集继续跑。
     assert.equal(system?.required, true);
+    // 用户层反之：一个包挂不上不能让这个用户连 `pwd` 都用不了。
     assert.equal(pkg?.required, false);
   } finally {
     await ws.cleanup();
@@ -553,7 +566,7 @@ test('草稿根：workspace-write 下是可写 bind，read-only 下退成 ro_bin
 });
 
 test('三个 skill 根职责分开：只有草稿是可写的', async () => {
-  const ws = await makeTestWorkspace({ enabledPackages: ['pkg'] });
+  const ws = await makeTestWorkspace({ systemSkillNames: ['sys'], enabledPackages: ['pkg'] });
   try {
     const context = { ...ws.context, draftSkillRoot: `${ws.root}/skill-draft` };
     const profile = buildIsolationProfile({
@@ -562,9 +575,9 @@ test('三个 skill 根职责分开：只有草稿是可写的', async () => {
       command: ['bash', '-c', 'pwd'],
     });
     const byTarget = new Map(profile.mounts.map((m) => [m.target, m]));
-    // 系统 skill：永远只读。ADR 0009 D7 引的原话是「an installed skill must never
-    // be able to shadow or overwrite one the platform vouches for」。
-    assert.equal(byTarget.get('/home/sandbox/skill')?.kind, 'ro_bind');
+    // 系统 skill：逐包只读（ADR 0015 D4 / ADR 0009 D7 引的原话是「an installed
+    // skill must never be able to shadow or overwrite one the platform vouches for」）。
+    assert.equal(byTarget.get('/home/sandbox/skill/sys')?.kind, 'ro_bind');
     // 已启用包：逐包只读（ADR 0008 D4）。模型改草稿动不了它——
     // 这正是 ADR 0006 P1 (B) 点名的那条绕过被消掉的地方。
     assert.equal(byTarget.get('/home/sandbox/skill-user/pkg')?.kind, 'ro_bind');

@@ -27,6 +27,9 @@ import {
   type AgentConfigOptions,
   type AgentConfigValidation,
 } from './agent-config-validator.js';
+import { validateSkillPolicySemantics } from './skill-policy-config.js';
+import { parseSkillPolicy } from '@dsh/contract/skill-policy.js';
+import type { OrgSkillEntry } from './skill-policy-config.js';
 import {
   ExternalIdentityResolver,
   type ExternalAuth,
@@ -200,10 +203,68 @@ export class AgentCatalogService {
   }
 
   /**
+   * 从配置算出这个 AgentVersion 的 Skill 引用集合（ADR 0015 D5，design §5.2）。
+   *
+   * **用户层不进引用账本**：它属于调用者、随启用账本变化，不随 AgentVersion 固定。
+   * 所以这里只产出 `system` 与 `org` 两种 scope。
+   *
+   * `system.mode: all` 要展开成当前 release 的全部名字——引用账本记的是「这个版本实际
+   * 点名了哪些包」，而不是「它说的是 all」：只有展开后才能回答「release 删掉某个包时
+   * 谁受影响」，而那个问题在设计 §12 里是明确要能回答的。
+   */
+  async #skillRefsFor(configJson: Record<string, unknown>): Promise<Array<{
+    scope: 'system' | 'org';
+    name: string;
+    contentDigest?: string;
+  }>> {
+    const policy = parseSkillPolicy(configJson.skillPolicy).policy;
+    // 形状非法时保存路径已经在别处拒绝过；这里返回空集合而不是抛错，
+    // 免得一个引用账本的问题把版本创建整个带下去。
+    if (!policy) return [];
+    const refs: Array<{ scope: 'system' | 'org'; name: string; contentDigest?: string }> = [];
+    if (policy.system.mode === 'allowlist') {
+      for (const name of policy.system.names) refs.push({ scope: 'system', name });
+    } else if (policy.system.mode === 'all') {
+      for (const name of await this.configValidator.systemSkillNames()) {
+        refs.push({ scope: 'system', name });
+      }
+    }
+    for (const entry of policy.org) {
+      refs.push({ scope: 'org', name: entry.name, contentDigest: entry.contentDigest });
+    }
+    return refs;
+  }
+
+  /**
+   * 本 org 可被新绑定的 org 层版本，投影成配置面校验要的形状（ADR 0015 D5/D8）。
+   *
+   * 只取 `active` / `deprecated`：`revoked` 在配置面**等于不存在**——它必须在保存时
+   * 就被判成「没这个版本」，而不是等到 Run 解析才静默排除。`currentDigest` 取自
+   * `org_skills` 的当前指针，供 UI 默认选中（**不影响已钉住的版本**，D3）。
+   */
+  async #orgSkillEntries(repos: Loose, orgId: string): Promise<OrgSkillEntry[]> {
+    const rows = await repos.orgSkills.listForOrg({ orgId });
+    return rows.flatMap((group) => group.versions
+      .filter((version) => version.status !== 'revoked')
+      .map((version) => ({
+        name: version.name,
+        contentDigest: version.contentDigest,
+        status: version.status,
+        description: version.description,
+        currentDigest: group.currentDigest,
+        publishedAt: version.publishedAt,
+      })));
+  }
+
+  /**
    * 写入即校验：非法 config 在这里失败，不允许落库后在 Run 期爆炸。
    * `agentVersionId` 只是让 binding 的必填校验成立，并不落库。
+   *
+   * `skillPolicy` 的语义（名字在不在当前 release）与配置面校验**共用**
+   * `validateSkillPolicySemantics`：只在一处判，另一处就会把「保存成功但起 Run 必失败」
+   * 的配置写进库。这里依赖 `refreshSkills()` 已经刷过目录投影，所以是 async。
    */
-  #validateConfig(config: unknown): Record<string, unknown> {
+  async #validateConfig(config: unknown, repos: Loose, orgId: string): Promise<Record<string, unknown>> {
     if (config == null) return defaultAgentConfigJson();
     if (typeof config !== 'object' || Array.isArray(config)) {
       throw new ValidationError('config must be an object');
@@ -232,6 +293,23 @@ export class AgentCatalogService {
     );
     if (unknownSource) {
       throw new ValidationError(`${unknownSource.path}: ${unknownSource.message}`, { code: unknownSource.code });
+    }
+    // Skill 目录是异步扫盘 + 读 org 账本，刷新后再判——否则「今天合法、明天 release
+    // 换掉」的名字会被静默写库。
+    const orgSkillEntries = await this.#orgSkillEntries(repos, orgId);
+    await this.configValidator.refreshSkills();
+    const skillPolicyParsed = parseSkillPolicy(configJson.skillPolicy);
+    const [skillError] = skillPolicyParsed.errors;
+    if (skillError) {
+      throw new ValidationError(`${skillError.path}: ${skillError.message}`, { code: skillError.code });
+    }
+    const [semanticError] = validateSkillPolicySemantics(
+      skillPolicyParsed.policy,
+      this.configValidator.systemSkillEntries(),
+      orgSkillEntries,
+    ).errors;
+    if (semanticError) {
+      throw new ValidationError(`${semanticError.path}: ${semanticError.message}`, { code: semanticError.code });
     }
     return configJson;
   }
@@ -276,8 +354,13 @@ export class AgentCatalogService {
     this.#requireAdmin(auth);
     // 归属仍要解析：没有 provision 的调用方不该拿到平台目录。
     const repos = this.createRepositories(this.db);
-    await this.#resolveOwner(auth, repos);
-    return this.configValidator.options();
+    const owner = await this.#resolveOwner(auth, repos);
+    // Skill 目录是异步扫盘 + 读 org 账本，`options()` 本身是同步的（保持既有契约），
+    // 所以在这里先刷一次投影。`capabilityRevision` 随之反映当前系统包名集合与 org 层
+    // `(name, digest, status)` 集合（design §4.2）。
+    const orgSkillEntries = await this.#orgSkillEntries(repos, owner.orgId);
+    await this.configValidator.refreshSkills();
+    return this.configValidator.options(orgSkillEntries);
   }
 
   /**
@@ -300,9 +383,13 @@ export class AgentCatalogService {
     if (input.config == null || typeof input.config !== 'object' || Array.isArray(input.config)) {
       throw new ValidationError('config must be an object');
     }
+    // 与 `configOptions` 同源：校验 `skillPolicy.system` 的名字是否在**当前** release 里、
+    // `skillPolicy.org` 的版本是否可绑，依赖的是同一份刷新过的目录投影。
+    const orgSkillEntries = await this.#orgSkillEntries(repos, owner.orgId);
+    await this.configValidator.refreshSkills();
     let result: AgentConfigValidation;
     try {
-      result = this.configValidator.validate(input.config);
+      result = this.configValidator.validate(input.config, orgSkillEntries);
     } catch (err) {
       // 结构性问题（非 JSON 可序列化等）是 400；字段级语义结果走 200 + valid=false。
       throw new ValidationError(
@@ -379,7 +466,14 @@ export class AgentCatalogService {
     this.#requireAdmin(auth);
     const name = requireName(input.name);
     const description = normalizeDescription(input.description);
-    const configJson = this.#validateConfig(input.config);
+    // 归属在事务外先解析：`skillPolicy.org` 的校验要读本 org 的账本，而账本读取
+    // 不该被创建事务的成败影响（失败回滚也不该让校验看到半个状态）。
+    const owner = await this.#resolveOwner(auth, this.createRepositories(this.db));
+    const configJson = await this.#validateConfig(
+      input.config,
+      this.createRepositories(this.db),
+      owner.orgId,
+    );
 
     return this.tx.run(async (trx: Loose) => {
       const repos = this.createRepositories(trx);
@@ -415,6 +509,13 @@ export class AgentCatalogService {
         status: 'active',
         createdBy: owner.userId,
       });
+      // 引用账本与版本**同一个事务**（design §5.3）：分开写会留下「版本存在但引用
+      // 缺失」的中间态，而那时 GC 会认为某个 org 版本没人引用并回收它。
+      await repos.agentVersionSkillRefs.insertForVersion({
+        agentVersionId: version.agentVersionId,
+        orgId: owner.orgId,
+        refs: await this.#skillRefsFor(configJson),
+      });
       definition = await repos.catalog.setActiveVersion(
         definition.agentId,
         version.agentVersionId,
@@ -440,7 +541,12 @@ export class AgentCatalogService {
     } = {},
   ) {
     this.#requireAdmin(auth);
-    const configJson = this.#validateConfig(input.config);
+    const owner = await this.#resolveOwner(auth, this.createRepositories(this.db));
+    const configJson = await this.#validateConfig(
+      input.config,
+      this.createRepositories(this.db),
+      owner.orgId,
+    );
     const activate = input.activate !== false;
 
     let lastConflict: unknown = null;
@@ -465,6 +571,12 @@ export class AgentCatalogService {
             configHash: hashAgentConfig(configJson),
             status: 'active',
             createdBy: owner.userId,
+          });
+          // 与版本同一个事务：引用缺失会让 GC 误回收还在用的 org 版本。
+          await repos.agentVersionSkillRefs.insertForVersion({
+            agentVersionId: version.agentVersionId,
+            orgId: owner.orgId,
+            refs: await this.#skillRefsFor(configJson),
           });
           if (activate) {
             definition = await repos.catalog.setActiveVersion(

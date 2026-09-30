@@ -16,10 +16,20 @@ import type { Context } from 'hono';
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs';
 import { ContractError, toWireError } from '@dsh/contract/errors.js';
 import { parseEnvelope } from '@dsh/contract/envelope.js';
-import { parseEnabledSkills, type EnabledSkillRef } from '@dsh/contract/skill-manifest.js';
+import {
+  assertNoDuplicateSkillScopes,
+  parseEnabledSkills,
+  parseSystemSkills,
+  type EnabledSkillRef,
+} from '@dsh/contract/skill-manifest.js';
 import { WorkspaceFileSystem } from '../fs/workspace-fs.js';
+import { skillPackagesForRequest } from './skill-context.js';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
-import type { EnabledSkillPackagesResolver, WorkspaceContext } from '../types.js';
+import type {
+  EnabledSkillPackagesResolver,
+  SystemSkillPackagesResolver,
+  WorkspaceContext,
+} from '../types.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import { fileSearchService } from '../search/index.js';
 import type { SearchRoot } from '../search/index.js';
@@ -30,6 +40,8 @@ export interface InternalFsDeps {
   /** 该用户的 skill 草稿根（ADR 0009 D7 / 计划 H6.2）。按 owner 解析，每用户一个。 */
   readonly draftSkillRootFor?: (orgId: string, userId: string) => string | null;
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
+  /** 系统层逐包解析（ADR 0015 D4）；与上面那条分开，系统包没有摘要。 */
+  readonly systemSkillPackagesFor: SystemSkillPackagesResolver;
 }
 
 function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
@@ -41,6 +53,8 @@ function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
     // 挂载对了但写不进去，症状是「路径存在却 permission denied」。
     ...(ctx.draftSkillRoot ? [ctx.draftSkillRoot] : []),
     ...ctx.enabledSkillPackages.map((p) => p.sourcePath),
+    ...(ctx.orgSkillPackages ?? []).map((p) => p.sourcePath),
+    ...(ctx.systemSkillPackages ?? []).map((p) => p.sourcePath),
   ];
 }
 
@@ -48,6 +62,8 @@ function buildWorkspaceContext(
   deps: InternalFsDeps,
   envelope: { orgId: string; userId: string; workspaceId: string },
   enabledSkills: readonly EnabledSkillRef[],
+  /** `null` = 请求没带系统名单（滚动升级兼容期的旧 Agent）。 */
+  systemSkills: readonly string[] | null,
 ): WorkspaceContext {
   const workspaceRoot = deps.workspaceManager.physicalWorkspacePath(envelope.workspaceId);
   const tempRoot = deps.workspaceManager.physicalTempPath(envelope.workspaceId);
@@ -59,7 +75,7 @@ function buildWorkspaceContext(
     workspaceRoot,
     tempRoot,
     systemSkillRoot: deps.systemSkillRoot,
-    enabledSkillPackages: [...deps.enabledSkillPackagesFor(envelope.orgId, envelope.userId, enabledSkills)],
+    ...skillPackagesForRequest(deps, envelope, enabledSkills, systemSkills),
     ...(draft !== null && draft !== '' ? { draftSkillRoot: draft } : {}),
   };
 }
@@ -72,13 +88,24 @@ function jsonError(c: Context, status: number, code: string, message: string): R
   return c.json({ ok: false, error: { code, message } }, status as never);
 }
 
-async function parseJsonBody(
-  c: Context,
-): Promise<{ envelope: unknown; payload: unknown; enabledSkills: readonly EnabledSkillRef[] }> {
+async function parseJsonBody(c: Context): Promise<{
+  envelope: unknown;
+  payload: unknown;
+  enabledSkills: readonly EnabledSkillRef[];
+  systemSkills: readonly string[] | null;
+}> {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') throw new ContractError('ENVELOPE_INVALID', 'body must be object');
   const b = body as Record<string, unknown>;
-  return { envelope: b['envelope'], payload: b['payload'], enabledSkills: parseEnabledSkills(b['enabledSkills']) };
+  const systemSkills = parseSystemSkills(b['systemSkills']);
+  const enabledSkills = parseEnabledSkills(b['enabledSkills']);
+  assertNoDuplicateSkillScopes(systemSkills, enabledSkills);
+  return {
+    envelope: b['envelope'],
+    payload: b['payload'],
+    enabledSkills,
+    systemSkills,
+  };
 }
 
 /** GET 的清单放在 query 里（base64url JSON），同样经规范化 query 进入签名。 */
@@ -93,6 +120,21 @@ function enabledSkillsFromQuery(raw: string | undefined): readonly EnabledSkillR
   return parseEnabledSkills(decoded);
 }
 
+/**
+ * 系统清单同理走 query（base64url JSON）。缺省返回 `null`：滚动升级兼容期的
+ * 旧 Agent（design §8），由调用方维持整树挂载并记告警。
+ */
+function systemSkillsFromQuery(raw: string | undefined): readonly string[] | null {
+  if (raw === undefined || raw === '') return null;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    throw new ContractError('ENVELOPE_INVALID', 'systemSkills query is not valid JSON');
+  }
+  return parseSystemSkills(decoded);
+}
+
 function makeFs(ctx: WorkspaceContext): WorkspaceFileSystem {
   return makeWorkspaceFs(ctx);
 }
@@ -100,10 +142,10 @@ function makeFs(ctx: WorkspaceContext): WorkspaceFileSystem {
 /** 通用 handler 包装：信封校验 + 错误脱敏 + 物理Roots 无条件传递。 */
 async function withFs<T>(c: Context, deps: InternalFsDeps, fn: (fs: WorkspaceFileSystem, ctx: WorkspaceContext, payload: T) => Promise<unknown>): Promise<Response> {
   try {
-    const { envelope: rawEnv, payload: rawPayload, enabledSkills } = await parseJsonBody(c);
+    const { envelope: rawEnv, payload: rawPayload, enabledSkills, systemSkills } = await parseJsonBody(c);
     parseEnvelope(rawEnv);
     const env = rawEnv as { workspaceId: string; orgId: string; userId: string };
-    const ctx = buildWorkspaceContext(deps, env, enabledSkills);
+    const ctx = buildWorkspaceContext(deps, env, enabledSkills, systemSkills);
     const fs = makeFs(ctx);
     const result = await fn(fs, ctx, rawPayload as T);
     return c.json({ ok: true, data: result });
@@ -174,7 +216,12 @@ export function registerInternalFsRoutes(app: import('hono').Hono, deps: Interna
       if (!targetParam || !envelopeParam) throw new ContractError('ENVELOPE_INVALID', 'target and envelope query required');
       const env = JSON.parse(Buffer.from(envelopeParam, 'base64url').toString('utf8'));
       parseEnvelope(env);
-      const ctx = buildWorkspaceContext(deps, env as never, enabledSkillsFromQuery(c.req.query('enabledSkills')));
+      const ctx = buildWorkspaceContext(
+        deps,
+        env as never,
+        enabledSkillsFromQuery(c.req.query('enabledSkills')),
+        systemSkillsFromQuery(c.req.query('systemSkills')),
+      );
       const fs = makeFs(ctx);
       const target = JSON.parse(Buffer.from(targetParam, 'base64url').toString('utf8')) as FsTarget;
       const iterable = await fs.streamText(target);

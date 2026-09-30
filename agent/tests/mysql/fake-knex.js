@@ -230,8 +230,25 @@ function createQuery(state, tableName, opts = {}) {
     },
     insert(row) {
       ctx.type = 'insert';
+      // 保留数组形状：`{ ...array }` 会变成 `{0:…,1:…}`，批量插入就此静默丢行。
       ctx.insertRow = row;
-      return Promise.resolve(run());
+      // `onConflict(...).merge(...)` 是 MySQL 的 `INSERT … ON DUPLICATE KEY UPDATE`
+      // 在 knex 里的写法；仓储用它做 upsert（先占位再锁）。返回一个可链式的
+      // thenable，既支持 `await insert(...)` 也支持 `insert(...).onConflict(...)`。
+      const chain = {
+        onConflict(columns) {
+          ctx.conflictColumns = Array.isArray(columns) ? columns : [columns];
+          return chain;
+        },
+        merge(patch) {
+          ctx.conflictMerge = patch ?? true;
+          return Promise.resolve(run());
+        },
+        then(resolve, reject) {
+          return Promise.resolve(run()).then(resolve, reject);
+        },
+      };
+      return chain;
     },
     update(patch) {
       ctx.type = 'update';
@@ -271,8 +288,43 @@ function createQuery(state, tableName, opts = {}) {
     }
 
     if (ctx.type === 'insert') {
-      const row = { ...ctx.insertRow };
       const bareTable = tableName.replace(/ as .*$/, '');
+      // 批量插入（`insert([rowA, rowB])`）是生产写法之一。不支持它会让「一次插多行」
+      // 的仓储在单测里静默插入 undefined 并全部丢失，测试看起来只是数据对不上。
+      if (Array.isArray(ctx.insertRow)) {
+        for (const item of ctx.insertRow) {
+          const batchRow = { ...item };
+          const dup = table.some((r) =>
+            r.agent_version_id === batchRow.agent_version_id &&
+            r.scope === batchRow.scope &&
+            r.skill_name === batchRow.skill_name);
+          if (dup) {
+            const err = new Error('Duplicate entry for pk_agent_version_skill_refs');
+            // @ts-ignore
+            err.code = 'ER_DUP_ENTRY';
+            // @ts-ignore
+            err.errno = 1062;
+            throw err;
+          }
+          table.push(batchRow);
+        }
+        return ctx.insertRow.length;
+      }
+      const row = { ...ctx.insertRow };
+      // ON DUPLICATE KEY UPDATE：按冲突列找既有行，找到就合并（`merge(true)` 用插入值，
+      // `merge(patch)` 用 patch）。与 MySQL 一致：冲突判定只看那几个列。
+      if (Array.isArray(ctx.conflictColumns) && ctx.conflictColumns.length > 0) {
+        const existing = table.find((r) =>
+          ctx.conflictColumns.every((col) => r[col] === row[col]));
+        if (existing) {
+          const patch = ctx.conflictMerge === true || ctx.conflictMerge == null ? row : ctx.conflictMerge;
+          for (const [key, value] of Object.entries(patch)) {
+            if (ctx.conflictColumns.includes(key)) continue;
+            existing[key] = value;
+          }
+          return { rowCount: 1, affectedRows: 1 };
+        }
+      }
       // Unique key simulation for agent_session_snapshots (session + version).
       if (bareTable === 'tbl_agsvc_agent_session_snapshots') {
         const dup = table.some(

@@ -359,6 +359,7 @@ describe('内部 shell 路由接线', () => {
       jobRegistry,
       systemSkillRoot: join(dir, 'skills'),
       enabledSkillPackagesFor: () => [],
+      systemSkillPackagesFor: () => [],
       bwrapExecutable: '/unused',
       modeFor: () => 'workspace-write',
       resourceLimits: DEFAULT_SHELL_RESOURCE_LIMITS,

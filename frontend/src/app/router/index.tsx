@@ -9,13 +9,14 @@ import { ApprovalsPage } from '../../pages/approvals/ApprovalsPage';
 import { CapabilitiesPage } from '../../pages/settings/CapabilitiesPage';
 import { A2aPage } from '../../pages/settings/A2aPage';
 import { AgentsPage } from '../../pages/settings/AgentsPage';
+import { SkillAdminPage } from '../../pages/settings/SkillAdminPage';
 import { SchedulesPage } from '../../pages/schedules/SchedulesPage';
 import { ArtifactsPage } from '../../pages/artifact-library/ArtifactsPage';
 
 /** /settings/<tab> moved to /admin/<tab>; keep old links and bookmarks working. */
 function LegacySettingsRedirect() {
   const { tab } = useParams();
-  const known = ['runs', 'approvals', 'agents', 'capabilities', 'a2a'];
+  const known = ['runs', 'approvals', 'agents', 'capabilities', 'skills', 'a2a'];
   return <Navigate to={`/admin/${known.includes(String(tab)) ? tab : 'runs'}`} replace />;
 }
 
@@ -36,6 +37,7 @@ export function AppRouter() {
         <Route path="/admin/approvals" element={admin(<ApprovalsPage />)} />
         <Route path="/admin/agents" element={admin(<AgentsPage />)} />
         <Route path="/admin/capabilities" element={admin(<CapabilitiesPage />)} />
+        <Route path="/admin/skills" element={admin(<SkillAdminPage />)} />
         <Route path="/admin/a2a" element={admin(<A2aPage />)} />
 
         {/* Backward-compatible redirects */}

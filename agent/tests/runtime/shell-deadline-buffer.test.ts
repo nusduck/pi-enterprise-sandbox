@@ -30,6 +30,7 @@ const BASE = {
   userId: 'user-1',
   workspaceId: 'ws-1',
   fenceToken: 1,
+  systemSkills: [],
   physicalRoots: [] as readonly string[],
 };
 
