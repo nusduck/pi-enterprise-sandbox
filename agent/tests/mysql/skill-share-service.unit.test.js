@@ -354,3 +354,24 @@ describe('org 层保留名与作者豁免（ADR 0015 D7 / design §7.3）', () =
     return { repo: new OrgSkillRepository(createFakeKnex(state)) };
   }
 });
+
+describe('SkillShareService.reviewManifest', () => {
+  it('返回与 org 版本清单同形的摘要行（name / contentDigest / fileCount / totalBytes）', async () => {
+    // 前端 ManifestView 两处共用一个 SkillManifest 类型；这里少字段会让审阅页显示「个文件 · 字节」。
+    const { service } = makeService({
+      manifestOfRequestedVersion: async () => ({
+        files: [{ path: 'SKILL.md', bytes: 238 }, { path: 'scripts/run.py', bytes: 12 }],
+        skillMd: '---\nname: sales-weekly\n---\n',
+        truncated: false,
+      }),
+    });
+    const row = await pendingRequest(service);
+    const manifest = await service.reviewManifest({ actor: ADMIN_ACTOR, requestId: row.requestId });
+    assert.equal(manifest.name, 'sales-weekly');
+    assert.equal(manifest.contentDigest, DIGEST);
+    assert.equal(manifest.fileCount, 2);
+    assert.equal(manifest.totalBytes, 250);
+    assert.equal(manifest.files.length, 2);
+    assert.equal(manifest.request.requestId, row.requestId);
+  });
+});

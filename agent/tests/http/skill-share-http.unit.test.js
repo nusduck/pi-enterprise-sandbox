@@ -131,6 +131,11 @@ describe('共享申请路由 (/internal/skills/share-requests*)', () => {
     })).json();
     assert.deepEqual(review.files, [{ path: 'SKILL.md', bytes: 42 }]);
     assert.match(review.skillMd, /enabled-skill/);
+    // 摘要行：前端 ManifestView 与 org 版本清单共用一个类型，HTTP 层不能把它们挑掉。
+    assert.equal(review.fileCount, 1);
+    assert.equal(review.totalBytes, 42);
+    assert.equal(review.contentDigest, queue.requests[0].contentDigest);
+    assert.equal(review.name, queue.requests[0].name);
   });
 
   it('驳回必须带原因（没有原因的驳回在审计里等于没解释）', async () => {

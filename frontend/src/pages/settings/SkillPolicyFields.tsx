@@ -86,7 +86,7 @@ export function SkillPolicyFields({
     <>
       <p className={s.hint}>
         选择这个智能体每次运行带哪些技能。系统技能随平台发布更新；组织共享技能由管理员发布，
-        绑定的是**具体版本**——升级要生成新的智能体版本，运行中的会话不受影响。
+        绑定的是<strong>具体版本</strong>——升级要生成新的智能体版本，运行中的会话不受影响。
       </p>
       {topError ? <small className={s.fieldError}>{topError}</small> : null}
       {view === null ? (

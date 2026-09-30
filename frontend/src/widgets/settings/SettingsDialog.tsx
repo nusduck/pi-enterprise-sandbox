@@ -331,19 +331,21 @@ function SkillsPane({ active }: { active: boolean }) {
               {name}
               {tiers.publishedFromDraft.has(name) ? <span className={s.tag}>来自草稿</span> : null}
             </span>
-            <button
-              type="button"
-              className={s.btn}
-              disabled={busy !== null || requested}
-              title={requested ? '已有一条待处理的申请' : '把这个版本提升到组织共享层'}
-              onClick={() => void run(`share-${name}`, async () => {
-                await requestSkillShare(name);
-                setNotice(`已提交「${name}」的共享申请，等管理员处理。`);
-              })}
-            >
-              {requested ? '申请中' : '申请共享'}
-            </button>
-            <button type="button" className={s.btn} disabled={busy === name} onClick={() => void run(name, () => setSkillEnabled(name, false))}>停用</button>
+            <span className={s.actions}>
+              <button
+                type="button"
+                className={s.btn}
+                disabled={busy !== null || requested}
+                title={requested ? '已有一条待处理的申请' : '把这个版本提升到组织共享层'}
+                onClick={() => void run(`share-${name}`, async () => {
+                  await requestSkillShare(name);
+                  setNotice(`已提交「${name}」的共享申请，等管理员处理。`);
+                })}
+              >
+                {requested ? '申请中' : '申请共享'}
+              </button>
+              <button type="button" className={s.btn} disabled={busy === name} onClick={() => void run(name, () => setSkillEnabled(name, false))}>停用</button>
+            </span>
             {skill.description ? <small>{skill.description}</small> : null}
           </div>
         );
@@ -356,20 +358,22 @@ function SkillsPane({ active }: { active: boolean }) {
       {requests?.map((request) => (
         <div key={request.requestId} className={s.skill}>
           <span className={s.skillName}>{request.name}</span>
-          <span className={s.tag}>{SHARE_STATUS_ZH[request.status] || request.status}</span>
-          {request.status === 'pending' ? (
-            <button
-              type="button"
-              className={s.btn}
-              disabled={busy === request.requestId}
-              onClick={() => void run(request.requestId, async () => {
-                await withdrawSkillShare(request.requestId);
-                setNotice(`已撤回「${request.name}」的共享申请。`);
-              })}
-            >
-              撤回
-            </button>
-          ) : null}
+          <span className={s.actions}>
+            <span className={s.tag}>{SHARE_STATUS_ZH[request.status] || request.status}</span>
+            {request.status === 'pending' ? (
+              <button
+                type="button"
+                className={s.btn}
+                disabled={busy === request.requestId}
+                onClick={() => void run(request.requestId, async () => {
+                  await withdrawSkillShare(request.requestId);
+                  setNotice(`已撤回「${request.name}」的共享申请。`);
+                })}
+              >
+                撤回
+              </button>
+            ) : null}
+          </span>
           {request.decisionNote ? <small>管理员说明：{request.decisionNote}</small> : null}
         </div>
       ))}

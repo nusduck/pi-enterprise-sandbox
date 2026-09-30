@@ -97,6 +97,8 @@
   border-bottom: 1px solid var(--color-border);
 }
 .skillName { font: 500 13px var(--font-mono); display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; }
+/* 行是两列网格：名字 + 右侧一组控件。多个控件必须包在 .actions 里，否则第三个子元素会折到下一行、被拉成整行宽。 */
+.actions { display: flex; align-items: center; gap: 8px; }
 .skill small { grid-column: 1 / -1; color: var(--color-text-muted); font-size: 12px; }
 .tag { font: 11px var(--font-sans); padding: 1px 6px; border-radius: 5px; background: var(--color-bg-hover); color: var(--color-text-muted); }
 
