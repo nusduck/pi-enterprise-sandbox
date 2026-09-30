@@ -277,7 +277,7 @@ key 前缀保存 `context_id` 映射，并通过 Sandbox 私有桥接执行。�
 | `SANDBOX_JWT_SECRET` | — | **Agent HTTP 进程**签发/校验浏览器 JWT 的 HMAC 密钥；变量名为迁移兼容保留，生产必须是强密钥且不会传给 exec |
 | `SANDBOX_JWT_TTL_SECONDS` / `SANDBOX_JWT_ISSUER` / `SANDBOX_JWT_AUDIENCE` | `86400` / `dsh-enterprise-sandbox` | Agent 浏览器会话 token 的有效期与签发约束 |
 | `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 注册入口开关；生产 compose 强制 `false` |
-| `SANDBOX_AUTH_ADMIN_USERNAMES` | — | 注册即晋升 admin 的用户名列表（逗号分隔）。注册始终忽略客户端提供的 role/organization_id，这是真实部署上创建首个管理员的唯一途径 |
+| `SANDBOX_AUTH_ADMIN_USERNAMES` | — | **首个管理员的引导与锁定**（逗号分隔，大小写不敏感）。语义自 RBAC 一期起变化：只授予、不降级——名单内的用户名在登录或 `me` 时若本 org 还没有它的 `admin` 授予，就补一条（`source=bootstrap`）并记审计；已有授予时不再写库。**从名单里移除某人不会自动降级**，他的授予留在 `tbl_agsvc_member_roles`，由 admin 在界面撤销；移除并重启后该账号在界面上解除「部署锁定」，可以撤销。名单为空的部署不引导任何人，既有 admin 不受影响。注册始终忽略客户端提供的 role/organization_id |
 | `AGENT_REQUEST_TIMEOUT_MS` | `15000` | BFF → Agent 出站调用超时（SSE 长连接除外）；防止挂起的依赖拖垮无关路由 |
 | `SANDBOX_REQUEST_TIMEOUT_MS` | `15000` | BFF → Sandbox 出站调用超时（SSE 长连接除外） |
 | `AGENT_ALLOW_UNAUTHENTICATED_INTERNAL` | dev `true` / 生产禁止 | Agent `/internal/*` 平面的鉴权开关。token 未配置且未显式设为 true 时启动即失败（fail-closed）；生产配置校验拒绝 true |
@@ -957,6 +957,22 @@ Node / DSH / 模型工具链版本钉以根目录 `runtime-versions.json` 为准
 
 库里有一个值有意保留：会话 journal 的 header 行 `session_entry_id = '__pi_session_header__'`。journal digest 按
 `<entry_id>:<payloadHash>` 计算，已持久化的 protected manifest 绑定了这些 digest，改写会让所有存量会话无法恢复。
+
+## 升级到 RBAC 一期
+
+角色权威从 `auth_credentials.role`（单值、每个请求按环境变量重算）改为
+`tbl_agsvc_member_roles`（`(org_id, user_id, role)` 的集合，由 admin 在界面管理）。
+升级只需跑迁移，**不需要停写窗口**：新表是新增的，没有破坏性 DDL。
+
+| 项 | 动作 |
+|---|---|
+| 新表 | 迁移 `20261001000001_member_roles.js` 建 `tbl_agsvc_member_roles` 与 `tbl_agsvc_member_role_events`，并把已有的 `auth_credentials.role = 'admin'` 且**已 provisioning**（`users` + `organization_external_refs` + `organization_memberships` 三张映射齐全）的账号落成一条 `source = migration` 的 `admin` 授予，同时写审计。迁移幂等：重跑不会写出重复的授予或审计行 |
+| 未登录过的账号 | 没有 `users` 行，不迁移。它们在首次登录时走 `SANDBOX_AUTH_ADMIN_USERNAMES` 引导 |
+| `auth_credentials.role` | 停止作为权威，本期保留列并写 `me` 算出的兼容主角色（**废弃**，删列在后续清理 PR）。不要在库里手工改它来授权——不再生效 |
+| `organization_memberships.role` | 语义收窄为「成员类型」（新行写 `member`），**不参与授权**；历史行不迁移（没有任何代码读它做判定） |
+| `SANDBOX_AUTH_ADMIN_USERNAMES` | 语义变化见 [环境变量](#auth) 与 [CHANGELOG](CHANGELOG.md)。**从名单移除不再自动降级**：那人的授予留在库里，需要 admin 在「成员与角色」页撤销 |
+| `X-Acting-Role` | 由单值变为逗号分隔的角色集合。自建编排若在该头上做字符串相等判断，需改成按集合判定；漏改的旧判定遇到集合只会**拒绝**，不会误放行 |
+| schema 清单 | 改了迁移就必须按 [runbooks/schema-manifest-regenerate.md](runbooks/schema-manifest-regenerate.md) 重新生成 `contract/schema/schema-manifest.json`，否则 Agent/Worker/exec 启动时按清单核对会失败 |
 
 ## Backup
 

@@ -3,7 +3,7 @@
  *
  * ## 这一层负责的三件事
  *
- * 1. **鉴权**：只有 `role === 'admin'` 能做这些操作（非 admin 403）。判定沿用既有
+ * 1. **鉴权**：只有持有 `admin` 的调用者能做这些操作（非 admin 403）。判定沿用既有
  *    机制——`AuthSubjects.role` 由 BFF 服务端写入的 `X-Acting-*` 头解析而来，
  *    不是浏览器能自己声明的（AGENTS.md §1 的纪律）。
  * 2. **作用域**：所有操作都在调用者**当前 org** 内。跨 org 的资源一律**不存在**
@@ -28,6 +28,7 @@ import {
   publishOrgSkillArchive,
   type OrgSkillPublishDeps,
 } from '../skills/org-publish.js';
+import { ROLE_ADMIN, hasRole } from '../domain/identity/roles.js';
 
 /** 与 `AuthSubjects` 兼容的最小形状。 */
 export interface AdminActor {
@@ -47,7 +48,9 @@ export class AdminRequiredError extends Error {
 }
 
 function requireAdmin(actor: AdminActor | null | undefined): AdminActor {
-  if (!actor || actor.role !== 'admin') throw new AdminRequiredError();
+  // `hasRole` 解析的是逗号分隔的角色集合（`admin,reviewer` 也算 admin）：
+  // 字面比较遇到集合只会误拒，见 domain/identity/roles.ts。
+  if (!actor || !hasRole(actor, ROLE_ADMIN)) throw new AdminRequiredError();
   if (!String(actor.externalOrgId ?? '').trim()) throw new AdminRequiredError();
   return actor;
 }

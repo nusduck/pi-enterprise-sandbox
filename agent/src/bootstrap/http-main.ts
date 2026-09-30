@@ -49,6 +49,7 @@ import { isDataPlaneReachable } from './worker-probe.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { BrowserAuthService } from '../application/browser-auth-service.js';
+import { createMemberRoleService } from './member-role-wiring.js';
 import {
   emailNotificationCapability,
   resolveEmailNotificationConfig,
@@ -607,6 +608,18 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       }
     : null;
 
+  // 平台角色账本（design rbac-roles）：admin HTTP 面才需要它，所以在这里装配而不是
+  // 在容器里——`container.ts` 是行数棘轮盯着的热点，新增职责按 design §11 放新模块。
+  const memberRoleService = httpServices
+    ? createMemberRoleService({
+        env,
+        db: httpServices.knex,
+        createRepositories: httpServices.createRepositories,
+        transactionManager: httpServices.transactionManager,
+        generateId: container.generateId,
+      })
+    : null;
+
   let browserAuthService = null;
   if (httpServices) {
     const repos = httpServices.createRepositories(httpServices.knex);
@@ -614,6 +627,8 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       credentials: repos.authCredentials,
       organizations: repos.organizations,
       externalRefs: repos.externalRefs,
+      // 角色权威是 member_roles；名单引导与「部署锁定」判定都在服务里（design §3）。
+      memberRoles: memberRoleService,
       generateId: container.generateId,
       secret: env.SANDBOX_JWT_SECRET,
       issuer: env.SANDBOX_JWT_ISSUER,
@@ -621,7 +636,6 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       ttlSeconds: Number(env.SANDBOX_JWT_TTL_SECONDS),
       allowPublicRegister:
         String(env.SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER || 'true').toLowerCase() !== 'false',
-      adminUsernames: String(env.SANDBOX_AUTH_ADMIN_USERNAMES || '').split(','),
       // 与 worker 同一份判定：配置不全时账户页的开关禁用，打开会被 422 拒绝。
       notificationCapability: emailNotificationCapability(resolveEmailNotificationConfig(env)),
     });
@@ -774,6 +788,7 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     agentCatalogService: httpServices?.agentCatalogService ?? null,
     adminRunQueryService: httpServices?.adminRunQueryService ?? null,
     ownerIdentityService: httpServices?.ownerIdentityService ?? null,
+    memberRoleService,
     listRuns,
     listToolExecutions,
     browserAuthService,

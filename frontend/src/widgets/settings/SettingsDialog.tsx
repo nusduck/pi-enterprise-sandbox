@@ -12,6 +12,7 @@ import { splitSkillTiers } from '../../pages/settings/skillHelpers';
 import { usePreference, type Preferences } from '../../shared/ui/preferences';
 import { getProfile, updateProfile, type Profile } from '../../shared/api/account';
 import { ApiError } from '../../shared/api/client';
+import { hasAdminRole } from '../../shared/security/roles';
 import {
   buildProfilePatch,
   draftFromProfile,
@@ -88,7 +89,8 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
   }, [active, profile, adopt]);
 
   const username = profile?.username || String(fallback?.username || '');
-  const isAdmin = String(profile?.role || fallback?.role || '').toLowerCase() === 'admin';
+  // 两个来源任一为 admin 即 admin：profile 是权威读，fallback 是已加载的 me。
+  const isAdmin = hasAdminRole(profile) || hasAdminRole(fallback);
   const name = (profile?.display_name || '') || username;
   const editable = new Set(profile?.editable_fields || []);
   const dirty = isDirty(profile, draft);

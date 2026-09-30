@@ -9,8 +9,9 @@
  * 三条不可退让的约束（AGENTS.md §2）：
  * - **跨租户一律 404**：别的 org 的 agentId 与不存在的 agentId 返回同一个响应，
  *   存在性本身不能泄漏。
- * - **fail-closed 的角色判定**：写操作要求 `X-Acting-Role: admin`；角色解析不出
- *   来时拒绝，不回退到「默认允许」。校验放在这一层而不是 handler，因为
+ * - **fail-closed 的角色判定**：写操作要求 `X-Acting-Role` 集合里含 `admin`
+ *   （`hasRole()`：白名单 + 大小写不敏感，`admin,reviewer` 也算）；解析不出来时
+ *   拒绝，不回退到「默认允许」。校验放在这一层而不是 handler，因为
  *   agent/ 才是目录的权威——换个入口挂上来也绕不过它。
  * - **写入即校验**：config 在建版本时就跑一遍 `bindAgentVersionConfig()`，
  *   非法配置在这里失败，而不是等到 Run 起不来。
@@ -43,6 +44,7 @@ import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import { parseDelegationConfig } from '../domain/agent/delegation-config.js';
 import { parseDataSourceConfig, unknownDataSources } from '../domain/agent/data-source-config.js';
+import { ROLE_ADMIN, hasRole } from '../domain/identity/roles.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -161,7 +163,7 @@ export class AgentCatalogService {
    * 那种情况下放行等于把管理面开给任何登录用户。
    */
   #requireAdmin(auth: CatalogAuth) {
-    if (String(auth?.role || '').toLowerCase() !== 'admin') {
+    if (!hasRole(auth, ROLE_ADMIN)) {
       throw new AdminRoleRequiredError();
     }
   }

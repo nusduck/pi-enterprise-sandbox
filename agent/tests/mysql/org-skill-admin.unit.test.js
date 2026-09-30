@@ -125,6 +125,21 @@ describe('OrgSkillAdminService 权限', () => {
     }
   });
 
+  it('X-Acting-Role 是集合：admin,reviewer 放行，纯 reviewer 拒绝（design §4.3）', async () => {
+    const h = await makeService();
+    try {
+      // 正向对照：一个人可以同时持有两个角色，集合里的 admin 必须被认出来。
+      // 旧的字面比较 `role === 'admin'` 会把这种调用者误拒，这条用例锁住它。
+      await h.service.list({ actor: { ...ADMIN_ACTOR, role: 'admin,reviewer' } });
+      await assert.rejects(
+        () => h.service.list({ actor: { ...ADMIN_ACTOR, role: 'reviewer' } }),
+        AdminRequiredError,
+      );
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it('admin 成功对照（避免「全部拒绝」假通过）', async () => {
     const h = await makeService();
     try {

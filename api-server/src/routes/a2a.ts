@@ -1,6 +1,7 @@
 import type { ServerResponse } from 'node:http';
 import { resolveTrustedAuth, type ReqWithTrace, type TrustedAuthContext } from '../application/run-access-service.js';
 import { HttpError } from '../http/errors.js';
+import { ROLE_ADMIN, hasRole } from '../domain/roles.js';
 import { sendError, sendJson } from '../http/response.js';
 import {
   getAgentA2aConfig,
@@ -11,7 +12,7 @@ import {
 
 async function resolveAdmin(req: ReqWithTrace | null | undefined): Promise<TrustedAuthContext> {
   const auth = await resolveTrustedAuth(req);
-  if (String(auth.actingRole || '').toLowerCase() !== 'admin') {
+  if (!hasRole(auth, ROLE_ADMIN)) {
     throw new HttpError(403, 'ADMIN_REQUIRED', 'Administrator role is required');
   }
   return auth;

@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
 import { listActiveRuns } from '../../entities';
+import { hasAdminRole } from '../../shared/security/roles';
 import { IconArrowLeft } from '../../shared/ui/Icons';
 import s from './adminShell.module.css';
 
@@ -20,6 +21,7 @@ const SECTIONS: Array<{ title: string; items: Array<{ to: string; label: string;
       { to: '/admin/capabilities', label: '能力' },
       { to: '/admin/skills', label: 'Skill 共享' },
       { to: '/admin/a2a', label: 'A2A 接入' },
+      { to: '/admin/members', label: '成员与角色' },
     ],
   },
 ];
@@ -31,7 +33,7 @@ const SECTIONS: Array<{ title: string; items: Array<{ to: string; label: string;
  */
 export function AdminShell({ children }: { children: ReactNode }) {
   const { state, entityStore } = useChat();
-  const isAdmin = String(state.authUser?.role || '').toLowerCase() === 'admin';
+  const isAdmin = hasAdminRole(state.authUser);
   const activeRuns = useMemo(() => listActiveRuns(entityStore).length, [entityStore]);
   const pending = useMemo(
     () => Object.values(entityStore.approvalsById || {}).filter((a) => a.status === 'pending').length,

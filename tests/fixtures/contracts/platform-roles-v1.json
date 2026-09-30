@@ -1,0 +1,48 @@
+{
+  "contract": "platform-roles-v1",
+  "description": "平台角色解析口径的跨包夹具：agent/src/domain/identity/roles.ts 与 api-server/src/domain/roles.ts 两份实现读同一组用例。任一份漂移（大小写、空格、未知值、重复项、空值）都会让其中一边的测试变红。设计依据 docs/design/rbac-roles.md §4.2/§4.3。",
+  "knownRoles": ["admin", "reviewer"],
+  "noRole": "user",
+  "parse": [
+    { "name": "空字符串没有角色", "input": "", "roles": [] },
+    { "name": "null 没有角色", "input": null, "roles": [] },
+    { "name": "undefined 没有角色", "input": null, "roles": [] },
+    { "name": "数字不是角色", "input": 7, "roles": [] },
+    { "name": "逗号集合按字典序", "input": "reviewer,admin", "roles": ["admin", "reviewer"] },
+    { "name": "重复项去重", "input": "admin,admin", "roles": ["admin"] },
+    { "name": "大小写不敏感", "input": "ADMIN,Reviewer", "roles": ["admin", "reviewer"] },
+    { "name": "两侧空格被忽略", "input": " admin , reviewer ", "roles": ["admin", "reviewer"] },
+    { "name": "空片段被忽略", "input": "admin,,reviewer,", "roles": ["admin", "reviewer"] },
+    { "name": "未知值被丢弃", "input": "root,admin,superuser", "roles": ["admin"] },
+    { "name": "全是未知值等于没有角色", "input": "root,superuser", "roles": [] },
+    { "name": "普通用户哨兵不是一条授权", "input": "user", "roles": [] },
+    { "name": "单值旧格式仍然解析（新版只读集合，但兼容旧值）", "input": "admin", "roles": ["admin"] },
+    { "name": "数组入参同样归一化", "input": ["reviewer", "admin", "root"], "roles": ["admin", "reviewer"] },
+    { "name": "数组里的非字符串被忽略", "input": ["admin", 3, null], "roles": ["admin"] }
+  ],
+  "hasRole": [
+    { "name": "admin 集合里的 admin", "input": "admin", "query": "admin", "expected": true },
+    { "name": "admin,reviewer 里的 admin", "input": "admin,reviewer", "query": "admin", "expected": true },
+    { "name": "admin,reviewer 里的 reviewer", "input": "admin,reviewer", "query": "reviewer", "expected": true },
+    { "name": "纯 reviewer 不是 admin", "input": "reviewer", "query": "admin", "expected": false },
+    { "name": "大写 ADMIN 仍是 admin", "input": "ADMIN", "query": "admin", "expected": true },
+    { "name": "带空格的集合", "input": " admin , reviewer ", "query": "reviewer", "expected": true },
+    { "name": "null 角色一律拒绝", "input": null, "query": "admin", "expected": false },
+    { "name": "空字符串一律拒绝", "input": "", "query": "admin", "expected": false },
+    { "name": "未知角色一律拒绝", "input": "root", "query": "admin", "expected": false },
+    { "name": "普通用户哨兵不是 admin", "input": "user", "query": "admin", "expected": false },
+    { "name": "只有空片段视为无角色", "input": ",,", "query": "admin", "expected": false }
+  ],
+  "primaryRole": [
+    { "name": "含 admin 时是 admin", "input": ["admin", "reviewer"], "expected": "admin" },
+    { "name": "只有 reviewer 时是 user", "input": ["reviewer"], "expected": "user" },
+    { "name": "没有角色时是 user", "input": null, "expected": "user" },
+    { "name": "未知角色时是 user", "input": "root", "expected": "user" }
+  ],
+  "actingRole": [
+    { "name": "集合按字典序输出", "input": ["reviewer", "admin"], "expected": "admin,reviewer" },
+    { "name": "没有角色时是 user 哨兵", "input": [], "expected": "user" },
+    { "name": "null 时是 user 哨兵", "input": null, "expected": "user" },
+    { "name": "未知值不进入线格式", "input": "root,admin", "expected": "admin" }
+  ]
+}

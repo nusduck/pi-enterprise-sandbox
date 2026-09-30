@@ -217,6 +217,31 @@ admin 检查，而且这个参数由 BFF 写死（浏览器不能拿它换到别
 是**终态**（不能改回来，也不能用同一摘要重新发布）。已钉住的 AgentVersion 在吊销后
 **不被中途撤掉挂载**，但它的**下一个 Run** 会排除该版本并写诊断。
 
+### 成员与角色管理（RBAC 一期：admin / reviewer）
+
+角色权威是 `tbl_agsvc_member_roles`（挂在 `(org_id, user_id)` 上，即组织成员关系）。
+`admin` 与 `reviewer` 是**固定角色**，一个人可以同时持有两者；普通用户是默认身份，
+不是一条授权。判定用 `hasRole()` 解析 `X-Acting-Role`——那是**逗号分隔的角色集合**
+（`admin,reviewer`），不是单值。非 admin → 403 `ADMIN_REQUIRED`；作用域是调用者的
+当前 org，跨 org 的 `userId` 与不存在的 `userId` 返回**同一个 404**。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/admin/users?q=&role=&cursor=&limit=` | 本 org 成员列表（只含已 provisioning、至少登录过一次的账号）。响应 `{ members: [{ user_id, username, display_name, email, roles[], pinned_roles[], last_login_at }], next_cursor }`；`q` 匹配用户名或显示名，`role` 只接受白名单值，`limit` 默认 50、上限 200 |
+| `PUT` | `/api/admin/users/{userId}/roles/{role}` | 授予，**幂等**（已有该角色返回 200，内容与当前一致，不重复写审计）。响应是上面单个成员对象 |
+| `DELETE` | `/api/admin/users/{userId}/roles/{role}` | 撤销，**幂等**（本来就没有该角色返回 200）。删除的是授予行，审计由只追加的 `tbl_agsvc_member_role_events` 承担 |
+| `GET` | `/api/admin/users/{userId}/role-events?limit=` | 该成员的角色变更记录（新到旧，`limit` 默认 50、上限 200）：`{ events: [{ event_id, role, action, source, actor_user_id, actor_username, actor_display_name, created_at }] }`，`source` ∈ `console` / `bootstrap` / `migration` |
+
+错误语义：未知角色 → 422 `ROLE_UNKNOWN`；撤销本 org 的**最后一个** `admin`（含撤销自己）
+→ 409 `LAST_ADMIN`；撤销**部署锁定**的 admin → 409 `ROLE_PINNED_BY_DEPLOYMENT`。
+`pinned_roles` 里的角色在界面上置灰：它的授予由 `SANDBOX_AUTH_ADMIN_USERNAMES` 引导，
+撤销后下一个请求又会被引导回来。
+
+「最后一个 admin」的判定在事务里对该 org 的 admin 授予行加 `SELECT … FOR UPDATE` 后计数：
+两个 admin 同时互相撤销时，后提交的一方必须得到 409，不能出现 0 个 admin。
+
+内部面对应 `/internal/admin/members*`（`members` 与 `users` 是同一个东西：对内叫成员，对外叫用户）。
+
 ### 能力页里的 org 层
 
 `GET /api/capabilities/skills` 按层投影，本 org 的 org 层项 `source` 为 `org-skill-root`
@@ -305,6 +330,9 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate\|revoke` | 弃用 / 吊销某版本，返回完整 `affectedAgentVersionIds`（**admin**） |
 | `GET` | `/api/admin/skills/share-requests` | 本 org 的共享申请队列（**admin**） |
 | `GET` `POST` | `/api/admin/skills/share-requests/{id}/manifest\|approve\|reject` | 审阅清单 / 批准 / 驳回（**admin**） |
+| `GET` | `/api/admin/users` | 本 org 成员列表（含 `roles` / `pinned_roles`，**admin**） |
+| `PUT` `DELETE` | `/api/admin/users/{userId}/roles/{role}` | 授予 / 撤销角色，幂等（**admin**） |
+| `GET` | `/api/admin/users/{userId}/role-events` | 角色变更记录（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/runs` | 本人所有未删除任务的执行记录（`since` ISO，`limit` 1–1000，默认 500），每条带 `job_name` / `job_timezone` |
@@ -448,10 +476,18 @@ exec 公共适配器查询或控制；返回给浏览器时仍投影原 `session
 `cancel`，需要指定信号则在 body 传 `signal`。Agent 不提供
 `/internal/processes*` 路由。
 
-admin 只有一个来源：`SANDBOX_AUTH_ADMIN_USERNAMES`（逗号分隔，大小写不敏感）。
-注册接口忽略客户端提交的 `role` / `organization_id`；名单内的用户名注册即为
-admin，已存在的账号在下次 login 或 `/auth/me` 时提升，移出名单则降级。
-`BFF_DEV_ACTING_ROLE` 只影响 `AUTH_ENABLED=false` 的开发身份，不会提升真实用户。
+`me` 与登录响应里的 **`roles: string[]`** 是角色的权威投影（按字典序，只含白名单值）；
+兼容字段 `role` 是主角色（含 `admin` 时为 `admin`，否则 `user`），前端改读 `roles`。
+服务端把角色集合写进 `X-Acting-Role`（逗号分隔，没有角色时仍是 `user`），并在
+**每个请求**重读账本——所以授予或撤销在下一个请求即生效，不必等 JWT 过期（JWT 里的
+`role` 只作展示）。
+
+角色由 admin 在「成员与角色」页配置，见上文「成员与角色管理」。
+`SANDBOX_AUTH_ADMIN_USERNAMES`（逗号分隔，大小写不敏感）只保留**引导与锁定**语义：
+只授予、不降级；从名单移除不会自动降级，需由 admin 在界面撤销。
+注册接口忽略客户端提交的 `role` / `organization_id`。
+`BFF_DEV_ACTING_ROLE` 只影响 `AUTH_ENABLED=false` 的开发身份，不会提升真实用户；
+它接受与生产同一线格式的逗号集合（`admin,reviewer`），未知值被丢弃（等价于 `user`）。
 
 认证数据与 token 的唯一权威是 Agent：BFF 的 `/api/auth/*` 适配器调用
 Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不保存密码、

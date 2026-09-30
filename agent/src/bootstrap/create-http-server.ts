@@ -47,6 +47,7 @@ import {
 import { handleCronRoute } from '../presentation/http/cron-routes.js';
 import { handleAgentCatalogRoute } from '../presentation/http/agents-routes.js';
 import { handleAdminRunRoute } from '../presentation/http/admin-run-routes.js';
+import { handleMemberRoleRoute } from '../presentation/http/member-role-routes.js';
 import { handleIdentityRoute } from '../presentation/http/identity-routes.js';
 import { handleSkillRoute } from '../presentation/http/skill-routes.js';
 import { handleAuthRoute } from '../presentation/http/auth-routes.js';
@@ -112,6 +113,7 @@ export interface AgentHttpServerDeps {
   agentCatalogService?: import('../presentation/http/agents-routes.js').AgentCatalogServiceLike | null;
   adminRunQueryService?: import('../presentation/http/admin-run-routes.js').AdminRunQueryServiceLike | null;
   ownerIdentityService?: import('../presentation/http/identity-routes.js').OwnerIdentityServiceLike | null;
+  memberRoleService?: import('../presentation/http/member-role-routes.js').MemberRoleServiceLike | null;
   activeRunHint?: () => number;
   eventPollIntervalMs?: number;
   eventHeartbeatMs?: number;
@@ -232,6 +234,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         return;
       }
       if (await handleIdentityRoute({ req, res, path, ownerIdentityService: deps.ownerIdentityService || null })) {
+        return;
+      }
+      if (await handleMemberRoleRoute({ req, res, parsedUrl, path, memberRoleService: deps.memberRoleService || null })) {
         return;
       }
 

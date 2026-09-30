@@ -236,7 +236,7 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 | `/`、`/c/:conversationId` | 会话工作台；`/c/<id>` 可直接打开某个会话，新会话发出首条消息后地址自动变为 `/c/<id>` |
 | `/schedules` | 定时任务 |
 | `/artifacts` | 产物库 |
-| `/admin/runs`、`/admin/approvals`、`/admin/agents`、`/admin/capabilities`、`/admin/skills`、`/admin/a2a` | 管理控制台（admin） |
+| `/admin/runs`、`/admin/approvals`、`/admin/agents`、`/admin/capabilities`、`/admin/skills`、`/admin/a2a`、`/admin/members` | 管理控制台（admin） |
 | `/settings/*`、`/runs`、`/approvals` | 旧地址，重定向到对应的 `/admin/*` |
 
 地址与当前会话双向同步（`pages/workbench/WorkbenchPage.tsx`）：地址变化时选中对应会话，建会话、删除
@@ -288,6 +288,17 @@ reasoning 可能被截断）；tool-call 部件持久化后只剩 `type`，调�
 （DSH 在本轮 `message.completed` 之前发出它）。模型收到的完整 prompt 未持久化，页面上注明。
 进程日志列出该运行沙箱会话里的托管进程，可展开日志；沙箱按用户隔离，别人的运行只显示说明。
 「取消运行」「打开会话」走所有者接口，只在自己的运行上出现。
+
+**成员与角色**（`/admin/members`）— `pages/settings/MembersPage.tsx`，管理控制台「配置」分组下：
+本 org 已 provisioning 成员（至少登录过一次）的表格——成员（显示名 + 用户名）、最近登录、`admin` / `reviewer`
+两个开关。工具栏支持按用户名/显示名搜索与按角色筛选，`next_cursor` 走「加载更多」。
+开关**先乐观更新**，失败回滚并显示服务端原因的中文提示（`LAST_ADMIN` →「不能撤销本组织的最后一个管理员」；
+`ROLE_PINNED_BY_DEPLOYMENT` →「该管理员由部署锁定，不能撤销」）。`pinned_roles` 里的开关置灰，
+tooltip 说明是 `SANDBOX_AUTH_ADMIN_USERNAMES` 锁定。**列表加载失败显示错误态**（附重试），
+不会渲染成「无成员」；空态与错误态是两个分支（`pages/settings/memberRoles.ts` 的纯逻辑 + 单测）。
+撤销**自己**的 `admin` 要二次确认，成功后重读 `me`，AdminShell 的 `isAdmin` 闸门随即变 false，
+界面退出管理控制台。「变更记录」按钮拉 `/api/admin/users/{userId}/role-events` 并用右侧抽屉展示
+（授予/撤销、来源中文化、操作者显示名 → 用户名 →「系统」）。角色权威在服务端，页面只是投影。
 
 **审批**（`/admin/approvals`）：默认显示待审批；每条一张卡片（工具、风险、状态、原因、命令，可展开参数），
 待审批的卡片可直接批准 / 拒绝，效果与对话内审批卡相同。

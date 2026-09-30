@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **平台角色管理（RBAC 一期：`admin` / `reviewer`）**：角色权威从「登录时按环境变量用户名名单
+  重算的单值 `auth_credentials.role`」改为**挂在组织成员关系上的角色集合**
+  （`tbl_agsvc_member_roles`，主键 `(org_id, user_id, role)`，一个人可同时持有两个角色），
+  由 admin 在管理控制台新增的「成员与角色」页（`/admin/members`）授予/撤销，授予与撤销在同一事务里
+  写只追加的审计表 `tbl_agsvc_member_role_events`。新增 `/api/admin/users*`
+  四个接口（列表 / 授予 / 撤销 / 变更记录），错误语义：跨 org 与不存在同一个 404、
+  未知角色 422 `ROLE_UNKNOWN`、撤销最后一个 admin 409 `LAST_ADMIN`、
+  撤销部署锁定的 admin 409 `ROLE_PINNED_BY_DEPLOYMENT`。
+  `me` 与登录响应新增 `roles: string[]`（按字典序，只含白名单值），
+  `X-Acting-Role` 改为**逗号分隔的角色集合**（`admin,reviewer`），
+  `BFF_DEV_ACTING_ROLE` 接受同一格式。`reviewer` 本期只落账本与界面，不接能力。
+  设计见 [design/rbac-roles.md](design/rbac-roles.md)。
+
 ### Changed
+
+- **`SANDBOX_AUTH_ADMIN_USERNAMES` 语义变化：从「每次请求重算、会降级」改为「只授予、不降级、
+  名单内锁定」**。名单内账号在登录或 `me` 时若本 org 还没有它的 `admin` 授予就补一条
+  （`source=bootstrap`）并记审计；已有授予时不再写库（旧的 `reconcileRole` 每个请求写一次库）。
+  名单内账号的 `admin` 在界面上显示为「部署锁定」，撤销返回 409。**从名单里移除某人不再自动降级**：
+  授予留在库里，需 admin 在界面撤销；重启后该账号解除锁定即可撤销。升级影响见
+  [deployment.md](deployment.md#升级到-rbac-一期)。
+- **`organization_memberships.role` 语义收窄为「成员类型」**（写 `member`），不再参与授权，
+  历史行不迁移；`auth_credentials.role` 退化为兼容展示列（写 `me` 算出的主角色），
+  删列留给后续清理。
 
 - **租户默认「通用智能体」首个版本改为显式通用配置**：新建的默认版本带一段通用角色 persona
   （匹配 Skill 时先读 SKILL.md 再执行，文件类交付优先用对应 Skill），并显式绑定

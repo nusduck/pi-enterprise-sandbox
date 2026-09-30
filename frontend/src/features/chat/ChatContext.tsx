@@ -123,6 +123,12 @@ export type ChatController = {
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /**
+   * 重新读一次 `me`。角色权威在服务端（BFF 每个请求都重读账本），撤销自己的 admin
+   * 后必须重新拉一次，AdminShell 的 isAdmin 闸门才会立刻变 false。
+   * 返回 false 表示没刷新成功（调用方应提示手动刷新）。
+   */
+  refreshAuthUser: () => Promise<boolean>;
   // Flash
   clearFlash: () => void;
   // Display helpers
@@ -1076,6 +1082,29 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [setStatus, refreshConversations, refreshModels, refreshAgents],
   );
 
+  /**
+   * 角色权威在服务端：`me` 每次请求都重读账本。撤销自己的 admin 之后重新拉一次，
+   * 闸门立刻生效，不必整页刷新（design §6）。会话已经换人时结果直接丢弃。
+   */
+  const refreshAuthUser = useCallback(async (): Promise<boolean> => {
+    const generation = sessionGenerationRef.current;
+    try {
+      const user = await apiMe();
+      if (sessionGenerationRef.current !== generation) return false;
+      setState((s) => update(s, { authReady: true, authUser: user }));
+      return true;
+    } catch (error) {
+      if (sessionGenerationRef.current !== generation) return false;
+      if (error instanceof ApiError && error.status === 401) {
+        try { await apiLogout(); } catch { /* Anonymous logout is best-effort. */ }
+        setState((s) => update(s, { authReady: true, authUser: null }));
+        return false;
+      }
+      flashError((error as Error).message || '刷新账户信息失败');
+      return false;
+    }
+  }, [flashError]);
+
   const register = useCallback(
     async (username: string, password: string) => {
       sessionGenerationRef.current += 1;
@@ -1316,6 +1345,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     login,
     register,
     logout,
+    refreshAuthUser,
     clearFlash,
     displayMessages,
     canSend,
