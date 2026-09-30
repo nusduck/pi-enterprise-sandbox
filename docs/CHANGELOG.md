@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **租户默认「通用智能体」首个版本改为显式通用配置**：新建的默认版本带一段通用角色 persona
+  （匹配 Skill 时先读 SKILL.md 再执行，文件类交付优先用对应 Skill），并显式绑定
+  `skillPolicy: { system: all, org: [], user: allow }`——全部系统 Skill 加调用者已启用的个人 Skill，
+  配置页如实展示。org 层按 ADR 0015 D3 只能钉摘要，没有「全部」。已存在的默认版本不迁移；
+  用户新建的 Agent 仍从空配置起步。
+
 ### Fixed
 
 - **ADR 0015 复审修复（2026-09-30，均在运行栈或单测上先复现）**：

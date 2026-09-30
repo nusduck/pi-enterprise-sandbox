@@ -79,6 +79,37 @@ export function defaultAgentConfigJson() {
   };
 }
 
+/**
+ * 租户默认「通用智能体」首个版本的 persona：只讲角色与 Skill 用法，
+ * 通用做事规范在平台的 task-contract 节里，不在这里重复。
+ */
+export const TENANT_DEFAULT_AGENT_PERSONA = [
+  '你是企业内的通用智能体，面向日常办公、文档处理、数据分析与工程类任务。',
+  '- 本 Run 可用的 Skill（平台系统 Skill 与调用者已启用的个人 Skill）会列在技能目录中。任务与某个 Skill 的描述匹配时，先读取它的 SKILL.md，再按其中的步骤执行；没有匹配的 Skill 时直接用可用工具完成。',
+  '- Word、Excel、PowerPoint、PDF、Markdown/HTML 等文件类交付优先使用对应 Skill，产出后检查内容与格式。',
+  '- 多步骤或范围较大的任务先给出简短计划，再逐步执行。',
+].join('\n');
+
+/**
+ * 租户默认 Agent 的首个版本配置：显式绑定全部系统 Skill + 调用者已启用的个人 Skill
+ * （ADR 0015 D2；与省略 `skillPolicy` 的运行语义相同，但配置面能如实展示）。
+ * org 层按设计只能钉摘要（D3），没有「全部」，由管理员在配置页按需加入。
+ *
+ * 只用于 `ensureTenantDefaultAgent`；用户新建的 Agent 仍从 `defaultAgentConfigJson()` 起步，
+ * 不继承这份 persona。
+ */
+export function tenantDefaultAgentConfigJson() {
+  return {
+    ...defaultAgentConfigJson(),
+    systemPrompt: TENANT_DEFAULT_AGENT_PERSONA,
+    skillPolicy: {
+      system: { mode: 'all', names: [] },
+      org: [],
+      user: 'allow',
+    },
+  };
+}
+
 export class AgentCatalogRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   db: Loose;
@@ -313,7 +344,7 @@ export class AgentCatalogRepository {
           agentId,
           orgId,
           name,
-          description: 'Tenant default agent',
+          description: '通用智能体：带全部系统 Skill 与调用者已启用的个人 Skill',
           status: 'active',
           createdBy,
         });
@@ -345,7 +376,7 @@ export class AgentCatalogRepository {
           agentVersionId,
           agentId: def.agentId,
           versionNo: 1,
-          configJson: input.configJson ?? defaultAgentConfigJson(),
+          configJson: input.configJson ?? tenantDefaultAgentConfigJson(),
           status: 'active',
           createdBy,
         });
