@@ -25,6 +25,7 @@ import { parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import { joinContained } from '../../workspace/ids.js';
+import type { WorkspacePolicyStore } from '../../db/repositories/workspace-policies.js';
 import { fileSearchService } from '../../search/index.js';
 import type { SearchRoot } from '../../search/index.js';
 
@@ -33,6 +34,8 @@ export interface PublicFilesDeps {
   readonly systemSkillRoot: string;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
   readonly maxFileBytes?: number;
+  /** 工作区交付策略（ADR 0016 D1）；见 `requireOwnedSession`。 */
+  readonly workspacePolicies?: WorkspacePolicyStore | undefined;
 }
 
 const DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -206,7 +209,9 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
     const acting = parseActingHeaders(actingFrom(c));
     let roots: readonly string[] = [];
     try {
-      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      // E7：审核工作区**照常允许上传**——发起人要能提供材料，而写进去的东西
+      // 不会因此泄漏（他读不到这个工作区，见 `assertWorkspaceReadable`）。
+      const own = await requireOwnedSession(sessionId, deps, acting, roots, 'upload');
       roots = own.physicalRoots;
       const form = await c.req.parseBody().catch(() => null) as Record<string, unknown> | null;
       const file = form?.['file'] as File | undefined;

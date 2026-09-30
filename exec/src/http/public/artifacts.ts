@@ -27,6 +27,7 @@ import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { ArtifactService } from '../../artifact/service.js';
 import { ArtifactError, downloadMimeType } from '../../artifact/service.js';
 import type { ArtifactKind, ExecArtifactRecord } from '../../db/repositories/artifacts.js';
+import type { WorkspacePolicyStore } from '../../db/repositories/workspace-policies.js';
 import { newUlid } from '../../mcp/ulid.js';
 
 export interface PublicArtifactDeps {
@@ -37,6 +38,8 @@ export interface PublicArtifactDeps {
     userId: string,
   ) => readonly { name: string; sourcePath: string }[];
   readonly artifactService: ArtifactService;
+  /** 工作区交付策略（ADR 0016 D1）：产物可见性之外的兜底（E5/E6）。 */
+  readonly workspacePolicies?: WorkspacePolicyStore | undefined;
 }
 
 function actingFrom(c: import('hono').Context): Record<string, string | undefined> {
@@ -155,7 +158,9 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     const acting = parseActingHeaders(actingFrom(c));
     let roots: readonly string[] = [];
     try {
-      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      // E1：产物面。判据是产物可见性（服务只列 released），不是工作区策略——
+      // 设计 §3.3 要的是「只列 released」，不是 404。
+      const own = await requireOwnedSession(sessionId, deps, acting, roots, 'artifact');
       roots = own.physicalRoots;
       // 路径参数解析出来的是 workspace（`requireOwnedSession` 就是这么用的），
       // 所以列表也按 workspace 查——按 `session_id` 查会漏掉 MCP facade 提交的
@@ -179,7 +184,8 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     const acting = parseActingHeaders(actingFrom(c));
     let roots: readonly string[] = [];
     try {
-      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      // 写路径（E7 同族）：审核工作区照常允许，产物的可见性由服务按策略定。
+      const own = await requireOwnedSession(sessionId, deps, acting, roots, 'upload');
       roots = own.physicalRoots;
       const body = (await c.req.json().catch(() => null)) as {
         path?: string;
@@ -214,7 +220,8 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     const acting = parseActingHeaders(actingFrom(c));
     let roots: readonly string[] = [];
     try {
-      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      // 导入也是写路径：源产物的可见性由服务判（E4），工作区策略不额外拦。
+      const own = await requireOwnedSession(sessionId, deps, acting, roots, 'upload');
       roots = own.physicalRoots;
       const body = (await c.req.json().catch(() => null)) as {
         artifact_id?: string;
@@ -268,15 +275,17 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
     const acting = parseActingHeaders(actingFrom(c));
     let roots: readonly string[] = [];
     try {
-      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      // E2：产物面。非 released 与不存在由服务统一翻成同一个 404。
+      const own = await requireOwnedSession(sessionId, deps, acting, roots, 'artifact');
       roots = own.physicalRoots;
       if (!artifactId) throw notFound('Artifact not found');
 
-      const record = await deps.artifactService.get(artifactId, {
+      const record = await deps.artifactService.getOwnerVisible(artifactId, {
         orgId: own.workspace.orgId,
         userId: own.workspace.userId,
       });
-      // 归属不符与不存在给同一个 404：存在性本身不能泄漏。
+      // 归属不符、不存在、以及**非 released**（待审/撤回）三者给同一个 404：
+      // 存在性本身不能泄漏（design §3.3 E2）。
       // 按 **workspace** 比，不按 `session_id` 比：后者取决于是谁写的这条记录
       // （内部面写 sandbox session id，MCP facade 写 workspace id），拿它当门禁
       // 会让 facade 提交的产物永远下载不到。

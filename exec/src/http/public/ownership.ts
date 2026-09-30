@@ -19,6 +19,7 @@ import { HttpError, notFound } from './errors.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceContext } from '../../types.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
+import type { WorkspacePolicyStore } from '../../db/repositories/workspace-policies.js';
 
 export interface ActingHeaders {
   readonly orgId?: string | undefined;
@@ -31,8 +32,74 @@ export interface OwnershipContext {
   readonly physicalRoots: readonly string[];
 }
 
+/**
+ * 这次公共面请求要用工作区做什么（design `agent-output-review.md` §3.3）。
+ *
+ * 这张表是 E1–E7 的执行口径，三种模式对应**两组不同的判据**：
+ *
+ * - `read`（默认，最严）：工作区**字节**的读取——列表、读取、预览、下载、
+ *   `ls/find/grep`、进程日志、数据集读取。审核工作区里一律 404（E5/E6）。
+ *   不关的话发起人能直接下载 `submit_artifact` 的源文件，或者 `cat` 出交付物内容。
+ * - `artifact`：**产物面**（E1–E4）。判据不是工作区策略而是**产物可见性**
+ *   （`ArtifactService` 只列/只发 `released`）。这里放行不代表泄漏：review 会话
+ *   的产物列表本来就该是「只列 released 的空列表」，而不是 404——设计 §3.3 把
+ *   E1 写成「只列 released」，不是「拒绝」。
+ * - `upload`：写入。**照常允许**（E7）：发起人得能提供材料，而写进去的东西
+ *   不会因此泄漏（他读不到这个工作区）。
+ *
+ * 缺省是 `read`：忘了传模式只会更严，不会放行。
+ */
+export type WorkspaceAccess = 'read' | 'artifact' | 'upload';
+
+export interface OwnershipDeps {
+  readonly workspaceManager: WorkspaceManager;
+  readonly systemSkillRoot: string;
+  readonly enabledSkillPackagesFor: (
+    orgId: string,
+    userId: string,
+  ) => readonly { name: string; sourcePath: string }[];
+  /**
+   * 工作区交付策略（ADR 0016 D1）。省略 = 没有工作区需要审核（单测/本地装配）。
+   * `createExecApp` 生产与测试装配都会给。
+   */
+  readonly workspacePolicies?: WorkspacePolicyStore | undefined;
+}
+
 function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
   return [ctx.workspaceRoot, ctx.tempRoot, ctx.systemSkillRoot, ...ctx.enabledSkillPackages.map((p) => p.sourcePath)];
+}
+
+/**
+ * 审核工作区的**工作区字节**读路径一律 404（design §3.3 E5/E6）。
+ *
+ * 三个方向都是刻意的：
+ * - **404，不是 403**：请求方本来就该认为这个工作区"没有可读的东西"，用 403
+ *   等于确认它存在（AGENTS.md §2 跨租户一律 404 的同一条理由）。
+ * - **查询失败 → 503**：不能把「策略读不到」当成「不需要审核」，那是 fail-open。
+ * - **`artifact` / `upload` 不受影响**：E1–E4 由产物可见性判，E7 明确要求照常上传。
+ */
+async function assertWorkspaceReadable(
+  workspaceId: string,
+  deps: OwnershipDeps,
+  rawPhysicalRootsForRedact: readonly string[],
+  access: WorkspaceAccess,
+): Promise<void> {
+  if (access !== 'read') return;
+  const policies = deps.workspacePolicies;
+  if (policies === undefined) return;
+  let delivery: Awaited<ReturnType<WorkspacePolicyStore['deliveryOf']>>;
+  try {
+    delivery = await policies.deliveryOf(workspaceId);
+  } catch (err) {
+    // 不脱敏物理路径也没关系：这里不把底层错误文本透出去，只给一个稳定码。
+    void err;
+    const message = redactPhysicalRoots('Workspace not available', rawPhysicalRootsForRedact);
+    throw new HttpError(503, message, 'workspace_policy_unavailable');
+  }
+  if (delivery === 'review') {
+    const message = redactPhysicalRoots('Not found', rawPhysicalRootsForRedact);
+    throw new HttpError(404, message, 'not_found');
+  }
 }
 
 export function parseActingHeaders(headers: Record<string, string | undefined>): ActingHeaders {
@@ -44,9 +111,10 @@ export function parseActingHeaders(headers: Record<string, string | undefined>):
 
 export async function requireOwnedSession(
   sessionId: string,
-  deps: { workspaceManager: WorkspaceManager; systemSkillRoot: string; enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[] },
+  deps: OwnershipDeps,
   acting: ActingHeaders,
   rawPhysicalRootsForRedact: readonly string[] = [],
+  access: WorkspaceAccess = 'read',
 ): Promise<OwnershipContext> {
   if (!sessionId || typeof sessionId !== 'string' || sessionId.trim() === '') {
     throw notFound('session_id required');
@@ -56,6 +124,9 @@ export async function requireOwnedSession(
     const msg = redactPhysicalRoots('Process not found', rawPhysicalRootsForRedact);
     throw new HttpError(404, msg, 'not_found');
   }
+  // 交付策略必须**在**归属校验之前读：这是纵深防御的第二道，而 review 工作区
+  // 的读路径要在任何文件系统访问之前就被拒掉。
+  await assertWorkspaceReadable(sessionId, deps, rawPhysicalRootsForRedact, access);
   try {
     // 轻量校验：workspaceId 必须是 opaque token（W2-C 的 ids.ts），否则 404
     // WorkspaceManager.physicalWorkspacePath 会在非法 id 上抛 InvalidWorkspaceIdError

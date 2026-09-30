@@ -21,6 +21,7 @@ import { DatasetService } from '../../dataset/service.js';
 import type { ArtifactStore } from '../../db/repositories/artifacts.js';
 import { makeWorkspaceFs } from '../../fs/make-workspace-fs.js';
 import type { DatasetStore } from '../../db/repositories/datasets.js';
+import type { WorkspacePolicyStore } from '../../db/repositories/workspace-policies.js';
 
 import { registerPublicFilesRoutes } from './files.js';
 import { registerPublicArtifactRoutes } from './artifacts.js';
@@ -49,6 +50,11 @@ export interface PublicRouterDeps {
    * `createExecAppFromEnv` 永远给非空值。
    */
   readonly apiToken: string | null;
+  /**
+   * 工作区交付策略（ADR 0016 D1）。`createExecApp` 总会给一个：生产是 MySQL
+   * 实现，测试是内存实现。公共面**每一条**会话路由都靠它决定要不要 404。
+   */
+  readonly workspacePolicies?: WorkspacePolicyStore | undefined;
 }
 
 /** 常量时间比较（AGENTS.md §2：令牌比较必须常量时间）。 */
@@ -83,6 +89,7 @@ export function createPublicRouter(deps: PublicRouterDeps): Hono {
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     ...(deps.maxFileBytes !== undefined ? { maxFileBytes: deps.maxFileBytes } : {}),
+    ...(deps.workspacePolicies !== undefined ? { workspacePolicies: deps.workspacePolicies } : {}),
   });
   const artifactService =
     deps.artifactService ??
@@ -94,6 +101,7 @@ export function createPublicRouter(deps: PublicRouterDeps): Hono {
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     artifactService,
+    ...(deps.workspacePolicies !== undefined ? { workspacePolicies: deps.workspacePolicies } : {}),
   });
   const datasetService =
     deps.datasetService ??
@@ -106,12 +114,14 @@ export function createPublicRouter(deps: PublicRouterDeps): Hono {
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     datasetService,
     ...(deps.datasetMaxBytes !== undefined ? { datasetMaxBytes: deps.datasetMaxBytes } : {}),
+    ...(deps.workspacePolicies !== undefined ? { workspacePolicies: deps.workspacePolicies } : {}),
   });
   registerPublicProcessRoutes(app, {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
     jobRegistry: deps.jobRegistry,
+    ...(deps.workspacePolicies !== undefined ? { workspacePolicies: deps.workspacePolicies } : {}),
   });
 
   // 兜底：任何未捕获的抛错都经 contract 脱敏后 500，且不泄漏物理路径

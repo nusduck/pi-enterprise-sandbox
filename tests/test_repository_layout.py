@@ -43,7 +43,9 @@ HOTSPOT_LINE_BUDGETS = {
     # 纯判定），1_597 -> 1_526，预算收紧。改名 dsh-run-executor.ts。
     # 2026-09-06 又拆出 approved-replay-claim.ts（已批准调用的续跑查找与
     # 一次性消费 CAS），1_526 -> 1_505，预算继续收紧。
-    "agent/src/application/dsh-run-executor.ts": 1_505,
+    # 2026-10-01 交付物审核：沙箱会话确保（含绑定版本的交付策略传递）拆到
+    # run-sandbox-ensure.ts，1_505 -> 1_504，预算继续收紧。
+    "agent/src/application/dsh-run-executor.ts": 1_504,
     # 转 TS 时拆出 container-mcp.ts（MCP 发现状态机），1_178 -> 1_065，预算收紧。
     # 2026-09-16 拆出 container-run-queue.ts（分层 Run 队列的装配、路由与拆卸，
     # ADR 0012），1_065 -> 1_058，预算继续收紧。

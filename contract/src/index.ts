@@ -237,3 +237,23 @@ export {
   readDataSourceCatalog,
 } from './data-sources.js';
 export type { DataSourceCatalogEntry, DataSourceConfig, DataSourceEngine } from './data-sources.js';
+
+export {
+  DEFAULT_DELIVERY_POLICY,
+  DEFAULT_DELIVERY_POLICY_MODE,
+  DELIVERY_POLICY_FIELDS,
+  DELIVERY_POLICY_KEY,
+  DELIVERY_POLICY_MODES,
+  DeliveryPolicyError,
+  normalizedDeliveryPolicy,
+  parseDeliveryPolicy,
+  parseSessionDelivery,
+  SESSION_DELIVERY_FIELD,
+  sessionDeliveryField,
+} from './delivery-policy.js';
+export type {
+  DeliveryPolicy,
+  DeliveryPolicyDiagnostic,
+  DeliveryPolicyMode,
+  DeliveryPolicyParseResult,
+} from './delivery-policy.js';

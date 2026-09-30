@@ -393,6 +393,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `delegation.agents` | ✅ | `delegate_to_agent` 的白名单：同 org 的 Agent `name` 数组（≤20，去重）。保存时要求每个名字在本 org 存在（否则 `DELEGATION_AGENT_UNKNOWN`，别的 org 的同名 Agent 视为不存在）；运行时再判目标是否 active。省略或 `[]` = 不可委派。见 [design/agent-delegation.md](design/agent-delegation.md) |
 | `dataSources` | ✅ | 本 Agent 的 Run 可在沙箱里连接的业务库：`[{ "id": "<数据源 id>" }]`（≤16，不允许重复）。条目只接收 `id`，地址、账号、口令属于 `SANDBOX_DATA_SOURCES_JSON` 目录，写进来即 `CONFIG_UNKNOWN_FIELD`；保存时要求 id 在目录里（否则 `DATA_SOURCE_UNKNOWN`）。`platformConstraints.dataSources` 只返回 `id`/`label`/`description`/`engine`。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md) |
 | `skillPolicy` | ✅ | 这个 Agent 的 Run 带哪些 Skill（ADR 0015 D2，[design/skill-catalog-and-agent-binding.md](design/skill-catalog-and-agent-binding.md)）。`system`（`all`\|`allowlist`\|`none`，`names` 仅 `allowlist` 时允许且必填）、`org[]`（`{ name, contentDigest }`，钉摘要不跟随最新）、`user`（`allow`\|`deny`）。**省略 = 当前行为**（全部系统 + 用户启用），既有版本不迁移、`config_hash` 不变。保存时校验名字在当前 release（`SKILL_SYSTEM_UNKNOWN`）与 org 账本（`SKILL_ORG_VERSION_UNKNOWN` / `SKILL_ORG_VERSION_DEPRECATED`）；有效清单总量超 `ENABLED_SKILLS_MAX` → `SKILL_POLICY_TOO_LARGE` |
+| `deliveryPolicy` | ✅（P1–P2） | 交付物是否需人工审核（[ADR 0016](adr/0016-agent-output-human-review.md) D3）：`{ "mode": "direct" \| "review" }`。**省略 = `direct`**，既有版本行为与 `config_hash` 完全不变；写回时 `direct` 也被省略。未知取值 → 诊断码 `CONFIG_INVALID`。`review` 与 `delegation`（`agents`/`remoteAgents` 任一非空）互斥（`CONFIG_INVALID`），与 **A2A 暴露**双向互斥（本 Agent 有 `active` 的 A2A 凭据时保存 `review` → `CONFIG_INVALID`；给 `review` 模式的 Agent 签新 A2A 凭据也拒绝）。绑定（起 Run / 建会话）时再判一次，形状非法一律 `DSH_CONFIG_UNSUPPORTED`，**不回落成 `direct`**。策略随 AgentVersion 固定：会话绑定版本后不会漂移到新版本，所以**同一会话的策略终生不变** |
 | `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
 | `skills` | ❌ | 已移除，写入即 `CONFIG_UNKNOWN_FIELD`。运行时的 skill 绑定改用 `skillPolicy`（旧 `skills` 是展示用的描述，不能推断绑定意图，故不复用同名键） |
 | `extensions` | ❌ | 已移除（同上）。旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
@@ -421,6 +422,13 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
   合法请求的正常结果，返回 200 + `valid:false`**，`errors` 每条形如
   `{ path, code, message }`，`path` 精确到 `modelPolicy.thinkingLevel`、
   `mcpServers[0].enabledTools[1]`，UI 据此把错误标到具体控件上。
+- **预览与保存给同一个答案**：`deliveryPolicy` 与 A2A 暴露的互斥要读凭据账本，所以在
+  这个带 `agent_id` 的预览端点里也判一次——预览说 `valid:true`、保存却 400 是
+  AGENTS.md §3 禁止的「保存、预览、执行各自猜语义」。
+- **保存失败的诊断码出口**：创建/发布版本时字段级错误返回 400
+  `{ error, code: "VALIDATION_ERROR", reason_code }`。`code` 是稳定的通用码，
+  `reason_code` 是具体诊断码（如 `CONFIG_INVALID`、`DELEGATION_AGENT_UNKNOWN`），
+  **只在存在且与 `code` 不同时出现**。UI 优先展示 `reason_code`。
 - `valid:true` 必然带 `normalizedConfig`，`valid:false` 必然不带。创建/发布版本时服务端
   **重新校验**，不信任浏览器回传的 `normalizedConfig` / `valid` / `capabilityRevision`。
 - `mcpReadiness.status` 区分三种事实：`ready`（清单已知）、`not_configured`（部署没有声明
@@ -643,7 +651,17 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/internal/v1/jobs/status\|read\|kill\|signal\|stdin` | exec 作业查询与控制 |
 | `POST` | `/internal/v1/artifacts/submit` | `submit_artifact` |
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
+| `POST` | `/internal/v1/review/artifacts/snapshot` | 审核材料快照（恒 `withdrawn`，只供审核员读） |
+| `POST` | `/internal/v1/review/artifacts/get` | 审核员按 id 读取任一版本（含字节，org 作用域） |
+| `POST` | `/internal/v1/review/artifacts/revision` | 审核员修订上传（新产物 + `revision_of` 链，恒 `held`） |
+| `POST` | `/internal/v1/review/artifacts/visibility` | 放行 / 撤回状态变更（单事务、幂等，只接受 `held → released\|withdrawn`） |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
+
+`/internal/v1/review/*` 是**审核流程**的面，与上面那组**模型工具**的面刻意分开：它的作用域是
+**org**（审核员不是发起人），其中放行/撤回只由 agent 的 outbox 投递驱动，`held` 不是可以被外部
+设置的目标值（允许改回待审等于给了撤销放行的口子）。预发/放行的完整流程见
+[design/agent-output-review.md](design/agent-output-review.md) §5–§6——**审核员 API 与账本（P3–P7）
+尚未实现，本期只有上面四个端点与 exec 侧的可见性判定**。
 
 令牌的 `htm` / `htu` / `scope` / `tool_name` 四项都**逐字绑定**这张表（2026-09-04 起）：
 

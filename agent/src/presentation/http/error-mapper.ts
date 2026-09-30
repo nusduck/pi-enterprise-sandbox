@@ -45,12 +45,41 @@ interface ErrorLike {
   readonly name?: unknown;
   readonly status?: unknown;
   readonly httpStatus?: unknown;
-  readonly details?: { readonly resource?: unknown } | undefined;
+  readonly details?: { readonly resource?: unknown; readonly code?: unknown } | undefined;
+}
+
+/**
+ * 具体的诊断码（`details.code`），与通用的 `VALIDATION_ERROR` **并存**。
+ *
+ * 为什么需要它：`ValidationError` 的 `code` 一直是通用的 `VALIDATION_ERROR`，而各
+ * 写入路径早就把具体原因放进了 `details`（`DELEGATION_AGENT_UNKNOWN`、
+ * `CONFIG_INVALID`…）。在此之前那枚码**没有任何出口**——浏览器只看到「参数非法」，
+ * 拿不到「哪个字段为什么」。AGENTS.md §3 要求无效字段必须明确诊断，所以把它挂成
+ * `reason_code`，而不是改 `code`：`code` 是对外已文档化的稳定值，换掉它是破坏性
+ * 变更（`docs/api.md`）。
+ */
+function reasonCodeOf(error: unknown): string | null {
+  const code = (error as ErrorLike)?.details?.code;
+  return typeof code === 'string' && code !== '' ? code : null;
+}
+
+/** 需要带上 `reason_code` 的错误体（只在真有具体码时加字段）。 */
+function withReason(
+  error: unknown,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const reason = reasonCodeOf(error);
+  return reason !== null && reason !== body['code']
+    ? { ...body, reason_code: reason }
+    : body;
 }
 
 export function mapErrorToHttp(error: unknown): HttpErrorResponse {
   if (error instanceof ValidationError || error instanceof CanonicalJsonError) {
-    return { status: 400, body: { error: error.message, code: error.code } };
+    return {
+      status: 400,
+      body: withReason(error, { error: error.message, code: error.code }),
+    };
   }
   if (error instanceof AdminRoleRequiredError) {
     return { status: 403, body: { error: error.message, code: error.code } };

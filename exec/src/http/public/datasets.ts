@@ -20,6 +20,7 @@ import { Readable } from 'node:stream';
 import type { DatasetService } from '../../dataset/service.js';
 import { DatasetError } from '../../dataset/service.js';
 import type { ExecDatasetRecord } from '../../db/repositories/datasets.js';
+import type { WorkspacePolicyStore } from '../../db/repositories/workspace-policies.js';
 
 export interface PublicDatasetDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -27,6 +28,8 @@ export interface PublicDatasetDeps {
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
   readonly datasetMaxBytes?: number;
   readonly datasetService: DatasetService;
+  /** 工作区交付策略（ADR 0016 D1）：上传放行，读取 404。 */
+  readonly workspacePolicies?: WorkspacePolicyStore | undefined;
 }
 
 /** 对外 JSON。字段名与 Python `DatasetEntry.to_public()` 一致（含冗余别名）。 */
@@ -87,7 +90,8 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
       const declared = declaredRaw != null ? Number(declaredRaw) : null;
       if (declared !== null && declared > maxBytes) throw payloadTooLarge('Payload too large', 'dataset_too_large');
       const acting = parseActingHeaders(actingFrom(c));
-      const own = await requireOwnedSession(sessionId, deps, acting, roots);
+      // E7：数据集上传也是「提供材料」，审核工作区照常允许（读取仍然 404）。
+      const own = await requireOwnedSession(sessionId, deps, acting, roots, 'upload');
       roots = own.physicalRoots;
 
       // 真流式：请求体按块喂给三段式上传，整个文件不进内存。

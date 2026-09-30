@@ -18,6 +18,7 @@ import { registerInternalShellRoutes } from './internal-shell.js';
 import { registerInternalJobsRoutes } from './internal-jobs.js';
 import { registerInternalArtifactRoutes } from './internal-artifact.js';
 import { registerInternalSessionRoutes } from './internal-session.js';
+import { registerInternalReviewRoutes } from './internal-review.js';
 import type { WorkspaceManager } from '../workspace/manager.js';
 import type { MySqlJobRegistry } from '../shell/job-registry.js';
 import { ArtifactService } from '../artifact/service.js';
@@ -32,6 +33,22 @@ import type {
   WorkspaceContext,
 } from '../types.js';
 import type { DataSourceService } from '../datasource/service.js';
+import {
+  InMemoryWorkspacePolicyStore,
+  type WorkspacePolicyStore,
+} from '../db/repositories/workspace-policies.js';
+
+/**
+ * 策略仓储缺席时的兜底。
+ *
+ * 用内存实现而不是 `undefined`：`ensure` 的 `delivery=review` 分支必须有一个
+ * 能写的目标，否则装配漏了一处就变成「策略写了但没人记得」。生产装配由
+ * `createExecAppFromEnv` 传 MySQL 实现（`tests/test_exec_schema_migrations.py`
+ * 钉住"接了就必须有迁移"）。
+ */
+function requireWorkspacePolicies(store: WorkspacePolicyStore | undefined): WorkspacePolicyStore {
+  return store ?? new InMemoryWorkspacePolicyStore();
+}
 
 export interface InternalRouterDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -53,6 +70,14 @@ export interface InternalRouterDeps {
   readonly childQuota?: ChildQuotaConfig;
   /** 配额账本（读预留量）。 */
   readonly quotaStore?: QuotaStore;
+  /**
+   * 工作区交付策略（design `agent-output-review.md` §3.1）。
+   *
+   * `createExecApp` 总会给一个：生产装配传
+   * `MySqlWorkspacePolicyStore`，测试装配显式传内存实现。省略时**不能**
+   * 退回「谁都不用审核」——那等于把审核静默关掉。
+   */
+  readonly workspacePolicies?: WorkspacePolicyStore;
   /** 数据源（design `sandbox-data-sources.md`）。省略即未配置。 */
   readonly dataSources?: DataSourceService;
 }
@@ -157,7 +182,23 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
         (ws: WorkspaceContext) => new WorkspaceFileSystem(new CordisContext() as never, ws),
       ),
   });
-  registerInternalSessionRoutes(app, { workspaceManager: deps.workspaceManager });
+  registerInternalSessionRoutes(app, {
+    workspaceManager: deps.workspaceManager,
+    workspacePolicies: requireWorkspacePolicies(deps.workspacePolicies),
+  });
+  // 审核面（design `agent-output-review.md` §6.2）：快照 / 按 id 读取 / 修订上传 /
+  // 状态变更。与模型工具面分开，作用域是 org 而不是 owner。
+  registerInternalReviewRoutes(app, {
+    workspaceManager: deps.workspaceManager,
+    systemSkillRoot: deps.systemSkillRoot,
+    enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    systemSkillPackagesFor: deps.systemSkillPackagesFor,
+    artifactService:
+      deps.artifactService ??
+      new ArtifactService(
+        (ws: WorkspaceContext) => new WorkspaceFileSystem(new CordisContext() as never, ws),
+      ),
+  });
 
   // 兜底错误处理：任何未捕获的抛错都脱敏后 500
   app.onError((err, c) => {

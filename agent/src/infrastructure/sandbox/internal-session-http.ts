@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 
 import { assertUlid } from '../../domain/shared/ulid.js';
 import { issueInternalToken } from '@dsh/contract/hmac.js';
+import { parseSessionDelivery } from '@dsh/contract/delivery-policy.js';
 import { normalizeBaseUrl } from './transport-base-url.js';
 
 import {
@@ -80,8 +81,15 @@ export function createInternalSessionProvisioner(options: { baseUrl: string, key
         traceId: assertTraceId(input?.traceId),
         traceState: normalizeW3cTracestate(input?.traceState),
       };
+      // 交付策略（ADR 0016 D3）：只发 `review`。缺席 = direct，而且 exec 那边
+      // 的策略写入是 `INSERT IGNORE`——发不出"改回直接交付"的信号，这正是
+      // 「策略在会话创建时固定、只能设置不能撤销」的意思。
+      const delivery = parseSessionDelivery(input?.delivery);
       const body = Buffer.from(
-        JSON.stringify({ workspaceId: identity.workspaceId }),
+        JSON.stringify({
+          workspaceId: identity.workspaceId,
+          ...(delivery === 'review' ? { delivery } : {}),
+        }),
         'utf8',
       );
       const bodySha256 = sha256(body);

@@ -39,6 +39,12 @@ import {
   parseDelegationConfig,
 } from '../domain/agent/delegation-config.js';
 import { normalizedDataSources, parseDataSourceConfig, unknownDataSources } from '../domain/agent/data-source-config.js';
+import {
+  DEFAULT_DELIVERY_POLICY,
+  DELIVERY_POLICY_KEY,
+  normalizedDeliveryPolicy,
+  parseDeliveryPolicy,
+} from '@dsh/contract/delivery-policy.js';
 import { ENABLED_DATA_SOURCES_MAX, catalogEntryOf, readDataSourceCatalog, type DataSourceCatalogEntry } from '@dsh/contract/data-sources.js';
 import { parseRemoteAgentRegistry } from '../runtime/providers/a2a-remote-registry.js';
 import {
@@ -92,6 +98,8 @@ const TOP_LEVEL_V1_KEYS = Object.freeze([
   'dataSources',
   // ADR 0015：Skill 目录与绑定。v1 增量可选字段，不升 schemaVersion。
   'skillPolicy',
+  // ADR 0016：交付物人工审核。同样是 v1 增量可选字段。
+  'deliveryPolicy',
 ]);
 
 const MCP_FORBIDDEN_V1_KEYS = Object.freeze([
@@ -315,6 +323,11 @@ export class AgentConfigValidator {
         },
       },
       dataSources: { supported: true, type: 'array', maxItems: ENABLED_DATA_SOURCES_MAX, fields: { id: { supported: true, type: 'string' } } },
+      deliveryPolicy: {
+        supported: true,
+        type: 'object',
+        fields: { mode: { supported: true, type: 'string' } },
+      },
       skillPolicy: {
         supported: true,
         type: 'object',
@@ -810,6 +823,26 @@ export class AgentConfigValidator {
     const dataSources = parseDataSourceConfig(config.dataSources);
     errors.push(...dataSources.errors, ...unknownDataSources(dataSources.ids ?? [], this.dataSources));
 
+    // ── deliveryPolicy（ADR 0016 D3，design §2）────────────────────────────
+    //
+    // 审核模式一期与委派互斥：子 Agent 在自己的工作区提交产物，那些产物无法
+    // 归属到发起人的审核任务上，放行就绕过了审核。这里保存即拒绝，而不是
+    // 让它到运行期才发生。「A2A 暴露」是 agent 维度的运行时状态（凭据表），
+    // 没有 I/O 的本校验器看不到，由 `AgentCatalogService` 保存时另判。
+    const deliveryParsed = parseDeliveryPolicy(config[DELIVERY_POLICY_KEY]);
+    errors.push(...deliveryParsed.errors);
+    const deliveryPolicy = deliveryParsed.policy ?? DEFAULT_DELIVERY_POLICY;
+    if (deliveryParsed.policy?.mode === 'review') {
+      const delegated = delegation.config;
+      if (delegated && (delegated.agents.length > 0 || delegated.remoteAgents.length > 0)) {
+        errors.push(diagnostic(
+          DELIVERY_POLICY_KEY,
+          'CONFIG_INVALID',
+          'deliveryPolicy.mode "review" cannot be combined with delegation: a delegated sub-agent delivers artifacts outside this run\'s review',
+        ));
+      }
+    }
+
     // ── skillPolicy（ADR 0015 D2，design §4.1）───────────────────────────────
     //
     // 形状校验在 contract（两侧共用），语义校验抽在 `validateSkillPolicySemantics`，
@@ -849,6 +882,9 @@ export class AgentConfigValidator {
         remoteAgents: delegation.config ? [...delegation.config.remoteAgents] : [],
       },
       dataSources: dataSources.ids ? [...dataSources.ids] : [],
+      // 交付策略：`direct` 是省略即得的默认值，但仍显式投影出来——admin 界面
+      // 要能区分「这个版本配了审核」和「没配」。
+      delivery: { mode: deliveryPolicy.mode },
       // 展开后的有效 Skill 清单（design §4.2）：`system` 是展开后的名单，
       // `org` 是钉住的 (name, digest)，`user` 是开关本身。**不含** user 层具体包名——
       // 它随调用者变化，配置面不为某个用户做投影。
@@ -911,6 +947,10 @@ export class AgentConfigValidator {
         user: skillPolicy.user,
       };
     }
+    // 只有 review 才写回：`direct` 等价于省略，写回一个 `{mode:"direct"}` 只会
+    // 让既有版本的 `config_hash` 白白变化（与 `skillPolicy` 同一条理由）。
+    const normalizedDelivery = normalizedDeliveryPolicy(deliveryPolicy);
+    if (normalizedDelivery) normalized[DELIVERY_POLICY_KEY] = normalizedDelivery;
     return {
       valid: true,
       errors: [],
@@ -924,6 +964,7 @@ export class AgentConfigValidator {
         'delegation',
         'dataSources',
         'skillPolicy',
+        'deliveryPolicy',
       ]) as Record<string, unknown>,
       effectiveSummary: summary,
       capabilityRevision: this.optionsDto.capabilityRevision,

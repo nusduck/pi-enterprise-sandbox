@@ -519,6 +519,9 @@ export class ConversationService {
       agentSessionId: parents.agentSessionId,
       sandboxSessionId: parents.sandboxSessionId,
       workspaceId: parents.workspaceId,
+      // 交付策略随会话绑定的版本固定（ADR 0016 D3）：只有 review 才发出去，
+      // exec 那边是 `INSERT IGNORE`，所以这条信号只能把工作区置成审核。
+      ...(parents.deliveryMode === 'review' ? { delivery: 'review' } : {}),
       // @ts-expect-error 遗留JS占位类型object未展开，访问traceId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceId' does not exist on type 'object'.
       traceId: input.traceId,
     });

@@ -17,6 +17,7 @@ import {
   unknownTopLevelKeys,
 } from './agent-config-key-vocabulary.js';
 import { parseSkillPolicy } from '@dsh/contract/skill-policy.js';
+import { parseDeliveryPolicy } from '@dsh/contract/delivery-policy.js';
 import { parseDelegationConfig } from '../../domain/agent/delegation-config.js';
 import { parseDataSourceConfig } from '../../domain/agent/data-source-config.js';
 import type { HostArgumentValues } from '../../domain/agent/mcp-host-arguments.js';
@@ -507,6 +508,30 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     );
   }
 
+  // 交付策略（ADR 0016 D3）：形状坏了 fail-closed，**不回落到 direct**——
+  // 「配置说交付物要审核、实际直接放行」正是这个功能要防的静默失效。
+  // 与委派互斥在写入路径已拦；这里再判一次是纵深防御（库内被改写、或更新的
+  // 写入方绕过校验器时仍然拦得住）。
+  const deliveryParsed = parseDeliveryPolicy(configJson.deliveryPolicy);
+  if (!deliveryParsed.policy) {
+    const first = deliveryParsed.errors[0];
+    throw new DshRuntimeFactoryError(
+      `AgentVersion.${first?.path ?? 'deliveryPolicy'}: ${first?.message ?? 'invalid'}`,
+      { code: 'DSH_CONFIG_UNSUPPORTED' },
+    );
+  }
+  if (
+    deliveryParsed.policy.mode === 'review' &&
+    (delegationParsed.config.agents.length > 0 ||
+      delegationParsed.config.remoteAgents.length > 0)
+  ) {
+    throw new DshRuntimeFactoryError(
+      'AgentVersion.deliveryPolicy.mode "review" cannot be combined with delegation; ' +
+        'refusing to bind instead of delivering delegated artifacts outside review.',
+      { code: 'DSH_CONFIG_UNSUPPORTED' },
+    );
+  }
+
   return Object.freeze({
     agentVersionId,
     configJson,
@@ -547,6 +572,11 @@ export function bindAgentVersionConfig(agentVersion: Record<string, any>) {
     sandboxPolicy: Object.freeze({ ...sandboxPolicy }),
     delegation: delegationParsed.config,
     dataSources: dataSourcesParsed.ids,
+    /**
+     * 交付策略（ADR 0016 D3）。省略即 `direct`；审核模式随 AgentVersion 固定，
+     * 会话创建时经 `sessions/ensure` 告诉 exec。
+     */
+    deliveryPolicy: deliveryParsed.policy,
   });
 }
 

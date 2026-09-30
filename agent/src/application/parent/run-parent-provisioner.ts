@@ -25,6 +25,7 @@ import {
 } from '../../infrastructure/mysql/repositories/organization-repository.js';
 import { ConflictError } from '../../infrastructure/mysql/errors.js';
 import { DEFAULT_AGENT_DEFINITION_NAME } from '../../infrastructure/mysql/repositories/agent-catalog-repository.js';
+import { parseDeliveryPolicy } from '@dsh/contract/delivery-policy.js';
 import {
   assertNotExternalInUlidSlot,
   DEFAULT_EXTERNAL_PROVIDER,
@@ -520,6 +521,9 @@ export class RunParentProvisioner {
     // Run binds to the session's fixed agent_version_id (plan §4/§8).
     // Reusing a session must NOT drift to the tenant's current default active version.
     let boundAgentVersionId = agentVersionId;
+    // 会话绑定的那一份版本记录：新建时是刚解析/刚建的 `version`，复用时是
+    // 会话自带的版本。交付策略（ADR 0016 D3）从它读，绝不从「当前活跃版本」读。
+    let boundVersion: unknown = version;
     if (session) {
       agentSessionId = assertUlid(session.agentSessionId, 'agentSessionId');
       sandboxSessionId = assertUlid(
@@ -539,6 +543,7 @@ export class RunParentProvisioner {
           'Agent session version does not match conversation agent',
         );
       }
+      boundVersion = sessionVersion;
       // Logical ULIDs only — not Sandbox physical session ids.
       assertNotExternalInUlidSlot(sandboxSessionId, 'sandboxSessionId');
       assertNotExternalInUlidSlot(workspaceId, 'workspaceId');
@@ -574,6 +579,20 @@ export class RunParentProvisioner {
       });
     }
 
+    // 交付策略（ADR 0016 D3 / design agent-output-review §3.1）：随 AgentVersion
+    // 固定，由这里经 `sessions/ensure` 告诉 exec。形状非法在写入期就被
+    // `bindAgentVersionConfig` 拦下；真读到坏值时 fail-closed，不猜 direct——
+    // 「配置说产物要审核、实际直接放行」是这个功能最不能出的错。
+    const boundDelivery = parseDeliveryPolicy(
+      (boundVersion as { configJson?: Record<string, unknown> } | null)?.configJson
+        ?.deliveryPolicy,
+    );
+    if (!boundDelivery.policy) {
+      throw new ValidationError(
+        'Agent session delivery policy is invalid; refusing to provision',
+      );
+    }
+
     return {
       orgId,
       userId,
@@ -585,6 +604,8 @@ export class RunParentProvisioner {
       sandboxSessionId,
       workspaceId,
       created,
+      /** `direct` | `review`——调用方据此决定要不要告诉 exec 开审核工作区。 */
+      deliveryMode: boundDelivery.policy.mode,
     };
   }
 }

@@ -51,6 +51,7 @@ import {
   type DshRunExecutorDeps,
 } from './dsh-run-executor-deps.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
+import { ensureRunSandboxSession } from './run-sandbox-ensure.js';
 import { SessionRecoveryService } from './session-recovery-service.js';
 import { captureSessionSnapshotPayload } from './session-json-codec.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
@@ -398,33 +399,6 @@ export class DshRunExecutor {
         };
       }
 
-      // SandboxSession + Workspace must exist before recovery/runtime/tools.
-      // The HMAC endpoint verifies this exact tuple against the ACTIVE
-      // AgentSession row under the freshly acquired execution fence.
-      if (this.sandboxSessionProvisioner) {
-        try {
-          await this.sandboxSessionProvisioner.ensure({
-            orgId: scope.orgId,
-            userId: scope.userId,
-            conversationId,
-            agentSessionId,
-            sandboxSessionId: session.sandboxSessionId,
-            runId,
-            workspaceId: session.workspaceId,
-            executionFenceToken: fenceToken,
-            traceId,
-            ...(traceState ? { traceState } : {}),
-          });
-        } catch (error) {
-          return {
-            outcome: RUN_STATUS.FAILED,
-            statusReason:
-              sanitizeStatusReason(error) ??
-              'sandbox session provisioning failed',
-          };
-        }
-      }
-
       // 4) Exact AgentVersion + full model via resolver
       const agentVersion = await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -440,6 +414,31 @@ export class DshRunExecutor {
       // 之前这一步不存在，工厂读的 `input.systemPrompt` 永远是 undefined——
       // 版本钉对了，配的人格一个字也到不了模型。
       const boundVersion = bindAgentVersionConfig(agentVersion);
+
+      // SandboxSession + Workspace must exist before recovery/runtime/tools.
+      // The HMAC endpoint verifies this exact tuple against the ACTIVE
+      // AgentSession row under the freshly acquired execution fence.
+      //
+      // 这一段**在绑定之后**：审核工作区策略（ADR 0016 D3）只能从绑定的
+      // AgentVersion 读出来，而且它必须与 `submit_artifact` 可能发生的时刻
+      // 同序或更早——exec 侧是 `INSERT IGNORE`，晚一次就晚一整个 Run。
+      const provisionFailure = await ensureRunSandboxSession({
+        provisioner: this.sandboxSessionProvisioner,
+        scope,
+        conversationId,
+        agentSessionId,
+        sandboxSessionId: session.sandboxSessionId,
+        workspaceId: session.workspaceId,
+        runId,
+        fenceToken,
+        traceId,
+        traceState,
+        deliveryMode: boundVersion.deliveryPolicy.mode,
+        sanitizeStatusReason,
+      });
+      if (provisionFailure) {
+        return { outcome: RUN_STATUS.FAILED, statusReason: provisionFailure };
+      }
 
       const triggering = await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);

@@ -26,6 +26,7 @@ import {
 import { assertUlid } from '../../domain/shared/ulid.js';
 import { formatUserExternalSubject } from '../../infrastructure/mysql/repositories/organization-repository.js';
 import { OwnerScopedNotFoundError, ValidationError } from '../errors.js';
+import { parseDeliveryPolicy } from '@dsh/contract/delivery-policy.js';
 import {
   A2A_IDENTITY_PROVIDER,
   formatA2aExternalUserId,
@@ -34,6 +35,45 @@ import {
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
+
+/**
+ * 审核模式的 Agent 不能对外暴露 A2A（ADR 0016 D3、design §2）。
+ *
+ * 外部 A2A 调用方按契约直接取产物，而审核工作区里的产物在放行前对 owner 不可见：
+ * 签出凭据只会让每一次外部调用都拿到 404。这里与
+ * `AgentCatalogService.#assertNoA2aExposureForReview` 是**同一条规则的两个方向**，
+ * 只判一边等于留一条后门。
+ *
+ * 判定依据是这个 Agent 的**当前活跃版本**——凭据绑 agent 而非版本，所以只能按
+ * 活跃版本判。判不到定义/版本时放行：那是「这个 Agent 不存在」的情形，由调用方
+ * 自己的归属校验负责，不是这里的职责。
+ *
+ * 仓储面缺 `catalog`（只可能出现在测试替身里）时同样放行：这条是**纵深防御**，
+ * 权威判定在配置保存路径 `AgentCatalogService.#assertNoA2aExposureForReview`
+ * ——那条一定拿得到 catalog。生产装配的 `repos.catalog` 由
+ * `createRepositoryBundle` 固定提供，所以这里不会在真实链路上静默失效。
+ */
+export async function assertAgentNotUnderArtifactReview(
+  repos: Loose,
+  input: { orgId: string, agentId: string },
+) {
+  if (typeof repos?.catalog?.getDefinitionById !== 'function') return;
+  const definition = await repos.catalog
+    .getDefinitionById(input.agentId)
+    .catch(() => null);
+  if (!definition || definition.orgId !== input.orgId || !definition.activeVersionId) return;
+  if (typeof repos.catalog.getVersionById !== 'function') return;
+  const version = await repos.catalog
+    .getVersionById(definition.activeVersionId)
+    .catch(() => null);
+  if (!version) return;
+  if (parseDeliveryPolicy(version.configJson?.deliveryPolicy).policy?.mode !== 'review') return;
+  throw new ValidationError(
+    'This agent requires human review before its artifacts are delivered; ' +
+      'A2A callers would never receive them. Use a non-review agent for A2A exposure.',
+    { code: 'CONFIG_INVALID' },
+  );
+}
 
 /** Dummy hash for constant-time path when credential missing. */
 const DUMMY_SECRET_HASH =
@@ -146,6 +186,7 @@ export class A2aCredentialService {
 
     const write = async (db) => {
       const repos = this.createRepositories(db);
+      await assertAgentNotUnderArtifactReview(repos, { orgId, agentId });
       const serviceUserId = explicitServiceUserId ??
         await this.#resolveServiceUser(repos, { orgId, clientId });
       return repos.a2aCredentials.insert({

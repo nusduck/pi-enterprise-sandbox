@@ -33,7 +33,9 @@
     "20260928000001_run_completion_notifications.js",
     "20260930000001_org_skills.js",
     "20260930000002_agent_version_skill_refs.js",
-    "20261001000001_member_roles.js"
+    "20261001000001_member_roles.js",
+    "20261001000002_exec_workspace_policies.js",
+    "20261001000003_exec_artifact_visibility.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -3290,6 +3292,15 @@
           "collation": null,
           "generation": null
         },
+        "created_by_kind": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "agent",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
         "identity": {
           "type": "json",
           "nullable": true,
@@ -3320,6 +3331,15 @@
         "org_id": {
           "type": "char(26)",
           "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "revision_of": {
+          "type": "varchar(64)",
+          "nullable": true,
           "default": null,
           "extra": "",
           "charset": "utf8mb4",
@@ -3366,6 +3386,15 @@
           "type": "char(26)",
           "nullable": false,
           "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "visibility": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "released",
           "extra": "",
           "charset": "utf8mb4",
           "collation": "utf8mb4_unicode_ci",
@@ -3800,6 +3829,58 @@
           "type": "BTREE",
           "columns": [
             "status"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_exec_workspace_policies": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "delivery": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "review",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "workspace_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "workspace_id"
           ]
         }
       },

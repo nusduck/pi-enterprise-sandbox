@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **交付物人工审核（P1–P2：交付策略 + exec 可见性）**：AgentVersion 新增可选字段
+  `deliveryPolicy.mode`（`direct` 默认 / `review`），随版本固定、会话语义终生不变；
+  `review` 与**委派**互斥（保存即拒绝 `CONFIG_INVALID`，绑定期再判一次
+  `DSH_CONFIG_UNSUPPORTED`），与 **A2A 暴露**双向互斥（保存配置时按活跃 A2A 凭据拒绝，
+  给审核模式 Agent 签新凭据时也拒绝）。会话确保（HMAC 内部面
+  `POST /internal/v1/sessions/ensure`）新增 `delivery: "review"` 字段，exec 用
+  `INSERT IGNORE` 写入新的工作区策略表 `tbl_agsvc_exec_workspace_policies`
+  （**只能设置、不能撤销**）。
+  exec 产物新增 `visibility`（`released`/`held`/`withdrawn`，存量行默认 `released`）、
+  `revision_of`、`created_by_kind`：review 工作区里提交的产物一律 `held`，
+  owner 公共面（会话产物列表、下载、产物库、跨会话导入）只认 `released`；
+  review 工作区的**工作区字节读路径**（文件列表/读取/预览/下载/ls/find/grep、进程日志、
+  数据集读取）一律 404，上传照常；策略查询失败时读操作 503（fail-closed）。
+  新增 exec 内部审核端点（快照 / 按 id 读取 / 修订上传 / 状态变更，仅 HMAC 面）。
+  设计见 [design/agent-output-review.md](design/agent-output-review.md)，
+  决策见 [ADR 0016](adr/0016-agent-output-human-review.md)。
+  **审核员 API、审核账本、放行/驳回与前端工作面（P3–P7）尚未实现**——
+  本期只交付「review 工作区产物在放行前拿不到」这一可独立验收的切片。
+
 - **平台角色管理（RBAC 一期：`admin` / `reviewer`）**：角色权威从「登录时按环境变量用户名名单
   重算的单值 `auth_credentials.role`」改为**挂在组织成员关系上的角色集合**
   （`tbl_agsvc_member_roles`，主键 `(org_id, user_id, role)`，一个人可同时持有两个角色），
@@ -24,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 400 校验失败响应新增可选字段 `reason_code`：把 `ValidationError.details.code` 的
+  具体诊断码（如 `CONFIG_INVALID`、`DELEGATION_AGENT_UNKNOWN`）透出来，
+  解决「只报 `VALIDATION_ERROR`、具体原因没有出口」。`code` 仍是 `VALIDATION_ERROR`。
 - **`SANDBOX_AUTH_ADMIN_USERNAMES` 语义变化：从「每次请求重算、会降级」改为「只授予、不降级、
   名单内锁定」**。名单内账号在登录或 `me` 时若本 org 还没有它的 `admin` 授予就补一条
   （`source=bootstrap`）并记审计；已有授予时不再写库（旧的 `reconcileRole` 每个请求写一次库）。

@@ -423,6 +423,7 @@ Agent 与 exec 各自产生一份进程身份。
 | **ulimit** | CPU 300s、内存 512MB、进程数 20、文件大小 50MB |
 | **Path validation** | `resolve()` + `is_relative_to()` — 防止路径逃逸；每 session 物理根隔离 |
 | **Artifact-only delivery** | 仅 `submit_artifact` 向用户交付；`write` 不自动分享 |
+| **交付物可见性（可选）** | AgentVersion 可配 `deliveryPolicy.mode: "review"`：该工作区提交的产物先 `held`，owner 公共面（会话产物列表/下载/产物库/导入）只认 `released`，且该工作区的**字节读路径**（文件列表/读取/预览/下载/ls/find/grep、进程日志、数据集读取）一律 404，上传照常；策略记在 `tbl_agsvc_exec_workspace_policies`，由 agent 在会话确保时经 HMAC 内部面设置且**只能设置、不能撤销**；查询失败时读操作 503（fail-closed）。`direct`（默认）行为与之前完全一致。见 [ADR 0016](adr/0016-agent-output-human-review.md) |
 | **Command blocking** | 禁止 `sudo`, `su`, `rm -rf /`, `dd`, `mkfs`, `fdisk`, `chmod 777`（hard_deny） |
 | **Output limits** | stdout/stderr 上限 50K chars |
 | **Audit logging** | 每次执行记录 trace_id |
