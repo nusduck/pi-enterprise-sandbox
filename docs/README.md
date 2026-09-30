@@ -7,6 +7,7 @@ This directory is the **active** documentation set for DSH Enterprise Sandbox.
 - [`design/updrdb-dbpm-deployment.md`](./design/updrdb-dbpm-deployment.md) — UPDRDB / DBPM 与双集群 + VM 的统一迁移设计（未实施；共享 Skill 存储、HTTPS 入口及验收门槛）
 - [`design/skill-catalog-and-agent-binding.md`](./design/skill-catalog-and-agent-binding.md) — Skill 目录与 Agent 绑定、组织共享层（**已实施**；ADR 0015）
 - [`design/rbac-roles.md`](./design/rbac-roles.md) — 平台角色管理（RBAC 一期：`admin` / `reviewer`）（**已实施**；角色权威为 `tbl_agsvc_member_roles`）
+- [`design/agent-output-review.md`](./design/agent-output-review.md) — 智能体交付物（artifact）人工审核后交付（未实施；ADR 0016，依赖 RBAC `reviewer`）
 - [`design/waves/HANDOFF.md`](./design/waves/HANDOFF.md) — `refactor/dsh-rebuild` 当前进度与剩余项
 - [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
 - [`sandbox-mcp.md`](./sandbox-mcp.md) — independently deployed Sandbox Streamable HTTP MCP facade
@@ -67,6 +68,7 @@ Out-of-map directories:
 | [0011](./adr/0011-updrdb-upredis-dbpm-migration.md) | 持久化／协调拓扑迁移至 UPDRDB / UPRedis，口令改由 DBPM 下发 |
 | [0014](./adr/0014-sse-contract-is-the-platform-events.md) | SSE 契约以真实平台事件为准（**取代 0007 验证要求第 1 条**「逐字节不变」夹具） |
 | [0015](./adr/0015-skill-catalog-and-agent-binding.md) | Skill 拆成「目录」与「绑定」：AgentVersion `skillPolicy` + 组织共享层（**Accepted**） |
+| [0016](./adr/0016-agent-output-human-review.md) | 智能体交付物人工审核：exec 持有产物可见性，agent 持有审核账本（**Proposed**） |
 
 **0003 is intentionally absent.** `0002-backend2712` and `0003-fronted0712` were
 07-12 task specs whose decisions `plan.md` superseded; they were removed on
