@@ -200,7 +200,7 @@ admin 检查，而且这个参数由 BFF 写死（浏览器不能拿它换到别
 |---|---|---|
 | `POST` | `/api/admin/skills/org?filename=<name>.zip&set_current=true` | 管理员直传 `.zip` / `.skill`（流式二进制 body，上限 50MB）。解包与校验复用用户层同一套；落字节到 `<base>/<orgId>/_org/<name>/.v/<digest>/`，**先字节后账本**。名字与系统包冲突 → 400 |
 | `GET` | `/api/admin/skills/org` | 本 org 的 org 层列表：每名的版本、状态与 `currentDigest` |
-| `GET` | `/api/admin/skills/org/{name}/versions/{digest}/manifest` | 文件清单（相对路径 + 字节数）、截断的 `SKILL.md`、`truncated`。**不返回其它文件的内容** |
+| `GET` | `/api/admin/skills/org/{name}/versions/{digest}/manifest` | 文件清单（相对路径 + 字节数）、截断的 `SKILL.md`、`truncated` 与完整的 `affectedAgentVersionIds` 引用列表。**不返回其它文件的内容** |
 | `POST` | `/api/admin/skills/org/{name}/current` | body `{ contentDigest }`；改「当前推荐版本」。**不影响任何已钉住的 AgentVersion** |
 | `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate` | body `{ reason }`；只挡**新绑定**，已钉住的版本照常运行 |
 | `POST` | `/api/admin/skills/org/{name}/versions/{digest}/revoke` | body `{ reason }`；安全动作，**立刻**影响新 Run 的解析。响应带 `affectedAgentVersionIds` |
@@ -300,9 +300,9 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/admin/skill-usage` | 近 N 天（`days` 1–90，默认 7）全组织各 Skill 的 `skill` 工具调用次数，按 `(name, scope)` 分层（**admin**） |
 | `GET` | `/api/admin/skills/org` | 本 org 的 org 共享层列表（**admin**） |
 | `POST` | `/api/admin/skills/org` | 管理员直传 `.zip` / `.skill` 发布到 org 共享层（**admin**，流式，≤50MB） |
-| `GET` | `/api/admin/skills/org/{name}/versions/{digest}/manifest` | 该版本的文件清单与截断 `SKILL.md`（**admin**） |
+| `GET` | `/api/admin/skills/org/{name}/versions/{digest}/manifest` | 该版本的文件清单、截断 `SKILL.md` 与完整 `affectedAgentVersionIds` 引用列表（**admin**） |
 | `POST` | `/api/admin/skills/org/{name}/current` | 改「当前推荐版本」（**admin**） |
-| `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate\|revoke` | 弃用 / 吊销某版本（**admin**） |
+| `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate\|revoke` | 弃用 / 吊销某版本，返回完整 `affectedAgentVersionIds`（**admin**） |
 | `GET` | `/api/admin/skills/share-requests` | 本 org 的共享申请队列（**admin**） |
 | `GET` `POST` | `/api/admin/skills/share-requests/{id}/manifest\|approve\|reject` | 审阅清单 / 批准 / 驳回（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |

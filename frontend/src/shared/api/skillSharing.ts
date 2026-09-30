@@ -50,6 +50,7 @@ export interface SkillManifest {
   files: Array<{ path: string; bytes: number }>;
   skillMd: string;
   truncated: boolean;
+  affectedAgentVersionIds?: string[];
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

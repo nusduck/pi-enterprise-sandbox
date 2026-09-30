@@ -71,6 +71,19 @@ docker compose config -q
 node scripts/smoke-cross-service.mjs
 ```
 
+Skill 管理弹窗的浏览器回归（先运行前端 build）：
+
+```bash
+node --test scripts/smoke-skill-admin-ui.mjs
+```
+
+需要可导入的 Playwright 与 Chromium。若使用外部工具运行时，可用 `PLAYWRIGHT_MODULE`
+指定 Playwright 模块的绝对路径，`PLAYWRIGHT_EXECUTABLE_PATH` 指定已有浏览器可执行文件。
+脚本默认自动启动并关闭本地预览，也可通过 `SKILL_ADMIN_UI_BASE_URL` 指向已重建的部署版前端。
+它拦截全部 `/api/*` 请求为隔离夹具；覆盖处理中 Esc、失败草稿保留与重试、
+空闲关闭、焦点限制、完整 1001 条影响面的分页搜索，以及 `SKILL.md` 截断提示。
+它不验证服务端鉴权、持久化或真实模型链路，不能代替运行栈验收。
+
 ### 本地运行态目录
 
 宿主机生成的运行态统一位于 `.runtime/`，不得再在仓库根目录新增

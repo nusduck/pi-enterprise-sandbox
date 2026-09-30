@@ -89,15 +89,18 @@ export class AgentVersionSkillRefRepository {
     contentDigest: string;
     limit?: number;
   }): Promise<string[]> {
-    const rows: Loose[] = await this.db(REFS)
+    let q: Loose = this.db(REFS)
       .where({
         org_id: String(input.orgId),
         scope: 'org',
         skill_name: input.name,
         content_digest: input.contentDigest,
       })
-      .orderBy('agent_version_id', 'asc')
-      .limit(Math.max(1, Math.min(Number(input.limit) || 100, 500)));
+      .orderBy('agent_version_id', 'asc');
+    if (input.limit !== undefined) {
+      q = q.limit(Math.max(1, Math.min(Number(input.limit) || 100, 500)));
+    }
+    const rows: Loose[] = await q;
     return rows.map((row) => String(row.agent_version_id));
   }
 

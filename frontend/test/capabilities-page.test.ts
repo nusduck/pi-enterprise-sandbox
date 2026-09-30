@@ -85,6 +85,16 @@ describe('capabilities tables', () => {
     assert.match(page, /setError\(\(err as Error\)\.message \|\| '操作失败'\)/);
     assert.match(page, /只支持 \.zip 或 \.skill 包/);
     assert.match(page, /单个包不能超过 50 MB/);
+    // ADR 0015 D8：吊销时必须列出受影响的 AgentVersion 列表
+    assert.match(page, /受影响的智能体版本/);
+    assert.match(page, /affectedAgentVersionIds/);
+    // 使用原生 <dialog> 和 showModal() 限制焦点，避免焦点移出弹窗
+    assert.match(page, /<dialog/);
+    assert.match(page, /\.showModal\(\)/);
+    // 吊销失败时在弹窗内直接显示错误（不被弹窗遮盖），且保留原因输入草稿
+    assert.match(page, /<b>吊销失败：<\/b>/);
+    // 影响面支持分页；交互行为另由 smoke-skill-admin-ui.mjs 在浏览器验证。
+    assert.match(page, /totalPages/);
   });
 
   it('lists admin pages in the admin console and keeps /settings links working', () => {
