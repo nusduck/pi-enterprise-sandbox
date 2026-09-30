@@ -477,7 +477,11 @@ Exec internal plane (TypeScript)
   AgentVersion persona + Delegation（0）→ 工具指导（100 起）。顺序不授予权限，真实授权由 guard 保证。
   persona 通过变量值按字面量注入，不再次展开其中的 `{{...}}`；非空 persona 不会删除平台 section。
   `## Doing work` 由 `task-contract.ts` 定义，约定任务范围、关键澄清、事实与推断、结果验证、
-  不确定副作用、进度及最终交付，正文不点名工具。默认「通用智能体」的 persona 为空也获得这些约定。
+  不确定副作用、进度及最终交付，正文不点名工具。任何 persona（含空 persona）都获得这些约定。
+  租户默认「通用智能体」的首个版本由 `tenantDefaultAgentConfigJson()` 生成：简短的通用角色 persona
+  （只讲角色与「先读 SKILL.md 再执行」的 Skill 用法），并显式写出
+  `skillPolicy: { system: all, org: [], user: allow }`（运行语义与省略相同）；用户新建的 Agent
+  仍从空 persona、无 `skillPolicy` 起步。已存在的默认版本不迁移，需在配置页另存新版本或清库重建。
   每个模型步骤在 DSH `system-prompt/assemble` waterfall 后，按本次最终 `tools` schema 过滤
   `tool:<name>` 指导段；jobs 段须同时有 job_output/job_kill，write 段须有 write/read/edit，
   edit 段须有 edit/read（上游正文会引用这些工具）。缺依赖时整段省略，schema 与执行授权不变。
