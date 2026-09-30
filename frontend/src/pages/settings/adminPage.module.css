@@ -68,7 +68,7 @@
 .notice { margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13px; background: var(--color-warning-soft); color: var(--color-warning-text); }
 .empty { padding: 28px 12px; text-align: center; color: var(--color-text-muted); font-size: 13px; }
 
-.btn, .btnPri {
+.btn, .btnPri, .btnDanger {
   border: 1px solid var(--color-border-hover);
   background: var(--color-bg-card);
   color: var(--color-text);
@@ -79,7 +79,47 @@
 }
 .btn:hover { background: var(--color-bg-hover); }
 .btnPri { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
-.btn:disabled, .btnPri:disabled { opacity: 0.55; cursor: default; }
+.btnDanger { border-color: var(--color-danger-text); color: var(--color-danger-text); }
+.btn:disabled, .btnPri:disabled, .btnDanger:disabled { opacity: 0.55; cursor: default; }
+
+/* Skill 共享页：卡片式列表（申请与 org 层版本各是一张卡） */
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cardHead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cardActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.input {
+  border: 1px solid var(--color-border-hover);
+  border-radius: 7px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 5px 9px;
+  font-size: 13px;
+  min-width: 180px;
+}
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.note { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
+.error { margin: 0; font-size: 13px; color: var(--color-danger-text); }
+.manifest { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.files { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
 
 @media (max-width: 760px) {
   .page { padding: 16px; }

@@ -138,3 +138,47 @@ describe('exec RPC carries the list only on shell spawns', () => {
     assert.equal(payload.body_sha256, run.sha);
   });
 });
+
+describe('AgentConfigValidator 的 org 层是每调用维度，不是实例状态（跨租户）', () => {
+  const DIGEST = 'a'.repeat(64);
+
+  /**
+   * 复现过的缺陷形状：`AgentConfigValidator` 由 `createHttpServices()` 在**启动时建一次**
+   * 并复用，所以任何 org 维度的数据都不能存成它的实例字段。第一版把 org 层存进实例，
+   * 两个 org 的并发请求会在 `await` 之间互相覆盖——A 的 `options()` 读到 B 的 org 技能
+   * 列表，那是跨租户泄漏。
+   *
+   * 这条测试用**同一个实例**依次按两个 org 投影，第二次必须只看到自己的。
+   */
+  it('同一个校验器实例按 org 分别投影，不残留上一次的 org 层', async () => {
+    const validator = new AgentConfigValidator({ env: {}, mcpServers: [], remoteAgents: [] });
+    await validator.refreshSkills();
+
+    const orgA = [{ name: 'a-weekly', contentDigest: DIGEST, status: 'active' as const }];
+    const orgB = [{ name: 'b-weekly', contentDigest: DIGEST, status: 'active' as const }];
+
+    const first = validator.options(orgA) as unknown as {
+      platformConstraints: { skills: { org: Array<{ name: string }> } };
+    };
+    assert.deepEqual(first.platformConstraints.skills.org.map((o) => o.name), ['a-weekly']);
+
+    // 同一个实例、另一个 org：绝不能还带着 A。
+    const second = validator.options(orgB) as unknown as {
+      platformConstraints: { skills: { org: Array<{ name: string }> } };
+    };
+    assert.deepEqual(second.platformConstraints.skills.org.map((o) => o.name), ['b-weekly']);
+
+    // 不传 org 时是**空**，不是「上一次那个」。
+    const none = validator.options() as unknown as {
+      platformConstraints: { skills: { org: unknown[] } };
+    };
+    assert.deepEqual(none.platformConstraints.skills.org, []);
+  });
+
+  it('capabilityRevision 按本次的 org 层计算（它描述调用者此刻看到的能力集）', () => {
+    const validator = new AgentConfigValidator({ env: {}, mcpServers: [], remoteAgents: [] });
+    const a = validator.options([{ name: 'a', contentDigest: DIGEST, status: 'active' }]);
+    const b = validator.options([{ name: 'b', contentDigest: DIGEST, status: 'active' }]);
+    assert.notEqual(a.capabilityRevision, b.capabilityRevision);
+  });
+});

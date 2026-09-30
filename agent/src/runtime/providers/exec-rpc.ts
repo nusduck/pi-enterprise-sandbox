@@ -50,6 +50,14 @@ export interface ExecRpcConfig {
    */
   readonly enabledSkills?: readonly EnabledSkillRef[] | undefined;
   /**
+   * 本 Run 选中的**系统层**包名（ADR 0015 D4）。
+   *
+   * 与 `enabledSkills` 分开：系统包没有摘要与侧车，只按名核对。空数组是合法值
+   * （一个系统包都不挂）。exec 在滚动升级兼容期（design §8）把「缺这个字段」当旧
+   * Agent 整树挂载，所以新 Agent 必须总是带上它，否则绑定在 exec 侧不生效。
+   */
+  readonly systemSkills: readonly string[];
+  /**
    * 本 Run 可连的数据源 id（docs/design/sandbox-data-sources.md §4.1）。只随 shell run/start
    * 的请求体下发，同样进 `body_sha256`；exec 只挂清单点名且已登记的库。缺省即空。
    */
@@ -147,6 +155,10 @@ export function readExecRpcFromEnv(env: NodeJS.ProcessEnv = process.env): ExecRp
     userId: '01ARZ3NDEKTSV4RRFFQ69G5FAW',
     workspaceId: '01ARZ3NDEKTSV4RRFFQ69G5FAX',
     fenceToken: 0,
+    // 启动占位配置**不带任何系统包**：这份 config 的租户/围栏都是假的，真值由
+    // `runWithExecRpc()` 按 Run 覆盖。真被当成请求配置用的话，空名单是 fail-closed
+    // 的答案——宁可一个系统包都不挂，也不要拿「整树兜底」给一个身份不明的请求。
+    systemSkills: [],
     physicalRoots: [
       String(env['SANDBOX_WORKSPACES_ROOT'] ?? '/var/sandbox/workspaces'),
       String(env['SANDBOX_TEMP_ROOT'] ?? '/var/sandbox/tmp'),
@@ -287,6 +299,9 @@ export class ExecRpcClient {
     const bodyObj = {
       envelope,
       payload,
+      // 系统清单**总是**下发（含空数组）：缺了 exec 会按兼容期的旧 Agent 整树挂载
+      // （design §8），绑定就不生效了。
+      systemSkills: [...cfg.systemSkills],
       ...(enabledSkills.length > 0 ? { enabledSkills } : {}),
       ...(dataSources.length > 0 ? { dataSources } : {}),
     };
@@ -379,6 +394,8 @@ export class ExecRpcClient {
     if (enabledSkills.length > 0) {
       params['enabledSkills'] = Buffer.from(JSON.stringify(enabledSkills), 'utf8').toString('base64url');
     }
+    // 系统清单与 POST 体同一纪律：总是带（含空数组），进规范化 query 受签名覆盖。
+    params['systemSkills'] = Buffer.from(JSON.stringify([...cfg.systemSkills]), 'utf8').toString('base64url');
     // GET 没有请求体：body_sha256 覆盖规范化后的 query，与 exec `signedQueryBytes` 同一规则。
     // 以前这里是空串摘要，query 里的信封与目标都不在签名范围内。
     const bodySha = sha256Hex(canonicalQueryBytes(params));

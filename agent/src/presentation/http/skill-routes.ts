@@ -4,6 +4,44 @@ import { mapErrorToHttp } from './error-mapper.js';
 
 type Loose = any;
 
+/**
+ * 把 org 层操作的错误映射成 HTTP。
+ *
+ * 这一份是**给人看的兜底**：`orgSkillAdmin` 注入的实现自己也会映射（它知道
+ * `OrgSkillError` 的语义）。这里只保证「没有映射器时也不是 500 或静默成功」。
+ */
+/**
+ * 共享申请流程的兜底错误映射。
+ *
+ * 与 `mapOrgSkillError` 分开：两个域的错误码集合不同，合并会让一个域的新码悄悄落到
+ * 另一个域的默认分支上。注入的实现自己也会映射；这里只保证不会 500 或静默成功。
+ */
+function mapShareError(error: unknown): { status: number; body: { error: string; code: string } } {
+  const code = String((error as { code?: unknown } | null)?.code ?? '');
+  const message = (error as Error)?.message || 'Share operation failed';
+  if (code === 'ADMIN_REQUIRED') return { status: 403, body: { error: message, code } };
+  if (code === 'SKILL_SHARE_REQUEST_UNKNOWN') return { status: 404, body: { error: message, code } };
+  if (code === 'SKILL_NOT_ENABLED') return { status: 409, body: { error: message, code } };
+  if (code === 'SKILL_ORG_NAME_TAKEN') return { status: 409, body: { error: message, code } };
+  if (code === 'SKILL_SHARE_REQUEST_DECIDED') return { status: 409, body: { error: message, code } };
+  if (code.startsWith('SKILL_')) return { status: 400, body: { error: message, code } };
+  return {
+    status: 400,
+    body: { error: message, code: code || 'SKILL_SHARE_OPERATION_FAILED' },
+  };
+}
+
+function mapOrgSkillError(error: unknown): { status: number; body: { error: string; code: string } } {
+  const code = String((error as { code?: unknown } | null)?.code ?? '');
+  const message = (error as Error)?.message || 'Org skill operation failed';
+  if (code === 'ADMIN_REQUIRED') return { status: 403, body: { error: message, code } };
+  if (code === 'SKILL_ORG_VERSION_UNKNOWN') return { status: 404, body: { error: message, code } };
+  if (code.startsWith('SKILL_ORG_') || code.startsWith('SKILL_SHARE_')) {
+    return { status: 400, body: { error: message, code } };
+  }
+  return { status: 400, body: { error: message, code: code || 'SKILL_ORG_OPERATION_FAILED' } };
+}
+
 function readBuffer(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -39,6 +77,10 @@ export async function handleSkillRoute(input: {
   getExtensionDiagnostics?: Loose;
   mutateSkill?: Loose;
   uploadSkillDraft?: Loose;
+  /** org 层管理员操作面（ADR 0015 §7.2）。省略时这些路由返回 501。 */
+  orgSkillAdmin?: Loose;
+  /** 共享申请与审批流程（ADR 0015 §7.2/§7.3）。省略时这些路由返回 501。 */
+  skillShare?: Loose;
 }): Promise<boolean> {
   const { req, res, parsedUrl, path } = input;
   if (req.method === 'GET' && path === '/internal/extensions/diagnostics') {
@@ -84,6 +126,69 @@ export async function handleSkillRoute(input: {
         error: (error as Error)?.message || 'Failed to upload Skill draft',
         code: (error as any)?.code || 'SKILL_DRAFT_UPLOAD_FAILED',
       });
+    }
+    return true;
+  }
+
+  // ── 共享申请与审批（ADR 0015 §7.2/§7.3）─────────────────────────────────
+  //
+  // 用户侧与管理员共用 `/internal/skills/share-requests`，靠 `scope=org` 区分列表；
+  // **权限判定不靠这个参数**——`scope=org` 仍要过 admin 检查（在流程服务里）。
+  if (path.startsWith('/internal/skills/share-requests')) {
+    if (typeof input.skillShare !== 'function') {
+      json(res, 501, { error: 'Skill sharing is not configured', code: 'NOT_IMPLEMENTED' });
+      return true;
+    }
+    const auth = authSubjectsFromRequest(req);
+    if (!auth) {
+      json(res, 400, { error: 'Trusted acting identity required', code: 'AUTH_CONTEXT_REQUIRED' });
+      return true;
+    }
+    try {
+      const result = await input.skillShare({
+        method: req.method,
+        path,
+        auth,
+        query: parsedUrl.searchParams,
+        readBody: () => readBuffer(req, 64 * 1024),
+      });
+      if (result === null) return false;
+      json(res, result.status, result.body);
+    } catch (error) {
+      const mapped = mapShareError(error);
+      json(res, mapped.status, mapped.body);
+    }
+    return true;
+  }
+
+  // ── org 层管理员操作面（ADR 0015 §7.2）───────────────────────────────────
+  //
+  // 鉴权（role === 'admin'）与 org 作用域都在 `orgSkillAdmin` 里判，这里只做
+  // HTTP 形状与错误映射。跨 org 的资源由服务返回「不存在」→ 404，不是 403。
+  if (path.startsWith('/internal/skills/org')) {
+    if (typeof input.orgSkillAdmin !== 'function') {
+      json(res, 501, { error: 'Org skill administration not configured', code: 'NOT_IMPLEMENTED' });
+      return true;
+    }
+    const auth = authSubjectsFromRequest(req);
+    if (!auth) {
+      json(res, 400, { error: 'Trusted acting identity required', code: 'AUTH_CONTEXT_REQUIRED' });
+      return true;
+    }
+    try {
+      const result = await input.orgSkillAdmin({
+        method: req.method,
+        path,
+        auth,
+        query: parsedUrl.searchParams,
+        readBody: () => readBuffer(req, 50 * 1024 * 1024),
+        headers: req.headers,
+      });
+      if (result === null) return false;
+      json(res, result.status, result.body);
+    } catch (error) {
+      const mapped = mapOrgSkillError(error);
+      json(res, mapped.status, mapped.body);
     }
     return true;
   }

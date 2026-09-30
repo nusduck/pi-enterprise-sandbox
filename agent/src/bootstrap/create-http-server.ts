@@ -95,6 +95,10 @@ export interface AgentHttpServerDeps {
   getExtensionDiagnostics?: Loose;
   mutateSkill?: Loose;
   uploadSkillDraft?: Loose;
+  /** org 层管理员操作面（ADR 0015 §7.2）。省略时 `/internal/skills/org*` 返回 501。 */
+  orgSkillAdmin?: Loose;
+  /** 共享申请与审批（ADR 0015 §7.2）。省略时 `/internal/skills/share-requests*` 返回 501。 */
+  skillShare?: Loose;
   browserAuthService?: Loose;
   listRuns?: Loose;
   conversationService?: Loose;
@@ -196,7 +200,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
       if (await handleSkillRoute({ req, res, parsedUrl, path,
         getExtensionDiagnostics: deps.getExtensionDiagnostics,
         mutateSkill: deps.mutateSkill,
-        uploadSkillDraft: deps.uploadSkillDraft })) return;
+        uploadSkillDraft: deps.uploadSkillDraft,
+        orgSkillAdmin: deps.orgSkillAdmin,
+        skillShare: deps.skillShare })) return;
 
       if (
         await handleCronRoute({

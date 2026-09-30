@@ -50,7 +50,7 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
-    rel: 'application/agent-config-validator.ts',
+    rel: 'application/agent-config-projection.ts',
     match: /const\s+rank\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local key-order index while canonicalizing one config object; discarded with the call frame',
@@ -61,6 +61,69 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     match: /const\s+platformServers\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Function-local lookup over the process MCP inventory during one validate() call; not Run state',
+    scope: 'local',
+  },
+  {
+    rel: 'application/skill-policy-config.ts',
+    match: /const\s+orgByKey\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local (name@digest) -> org skill version index while validating one skillPolicy against the injected org catalog; the org ledger is authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/mysql/repositories/agent-version-skill-ref-repository.ts',
+    match: /const\s+out\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local name -> referenced digest set while listing one org refs for GC; the refs table is authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'skills/org-gc.ts',
+    match: /const\s+currentByName\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local name -> current_digest index for one GC pass; the org_skills table is authoritative and re-read after deletion',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/mysql/repositories/org-skill-repository.ts',
+    match: /const\s+current\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local name -> current_digest index while grouping one org listing; the org_skills table is authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/mysql/repositories/org-skill-repository.ts',
+    match: /const\s+byName\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local name -> version list index while grouping one org listing; discarded with the call frame',
+    scope: 'local',
+  },
+  {
+    rel: 'skills/run-skills.ts',
+    match: /const\s+winners\s*=\s*new\s+Map\s*</,
+    purpose:
+      'One Run effective-skill winner index (system > org > user, ADR 0015 D7) computed per resolveRunSkills() call; the enablement/org ledgers stay authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'bootstrap/http-main.ts',
+    match: /const\s+byName\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local name -> system skill index while deriving one Agent Card from skillPolicy; the release directory stays authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/mysql/repositories/admin-run-read-repository.ts',
+    match: /const\s+byVersion\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local (agent_version, scope) -> skill names index while layering one skill-usage query (ADR 0015 D1); the ref ledger stays authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/mysql/repositories/admin-run-read-repository.ts',
+    match: /const\s+totals\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local (skill, tier) -> call count accumulator for one admin skill-usage report; no Run fact is held here',
     scope: 'local',
   },
   {
@@ -218,7 +281,7 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'local',
   },
   {
-    rel: 'application/agent-config-validator.ts',
+    rel: 'application/agent-config-projection.ts',
     match: /readHostArgumentDeclarations\(parsed\)\s*:\s*new\s+Map\(\)|catch\s*\{\s*return\s+new\s+Map\(\)/,
     purpose:
       'Host-argument declarations parsed from MCP_SERVERS_JSON for save-time validation (empty when unreadable = fail closed); deployment config, no Run facts',
@@ -508,9 +571,18 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 关闭）、domain 纯投影、每 Run 影子定义的两张索引（按钉死的 AgentVersion 推导，随 Run
     // scope 释放）。都没有 Run 事实。
     // 2026-09-29: 39 → 38（会话转录只出用户行，删掉 conversation-service 的 journal thinking 查找表）。
+    // 2026-09-30: 38 → 45（ADR 0015 skillPolicy + org 层 + 引用账本 + 回收）。七张都是
+    // **每次调用重建、随调用栈释放**的索引：`skill-policy-config.ts` 的 (name@digest) →
+    // org 版本、`run-skills.ts` 的取胜者表、`http-main.ts` 出卡的包名索引、
+    // `org-skill-repository.ts` 出列表的 current 与按名分组、引用账本的
+    // name → 摘要集合、`org-gc.ts` 的 current 索引。权威仍是各张账本表与 release 目录。
+    // 2026-09-30: 45 → 47（P4 skill-usage 分层，design §7.4）。两张都在
+    // `admin-run-read-repository.ts` 的 `mergeSkillUsageTiers()` 里：一次报表归并的
+    // (agent_version, scope) → 名字索引与 (名字, 层) → 次数累加器，函数返回即丢。
+    // 权威是 `tool_executions` 与 `agent_version_skill_refs` 两张表。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      38,
+      47,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

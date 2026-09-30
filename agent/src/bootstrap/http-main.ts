@@ -12,9 +12,31 @@ import {
 } from '../../config.js';
 import { createServiceContainer } from './container.js';
 import {
+  publishedSkillBase,
   resolveRunSkillPaths,
   resolveSkillRootsForRun,
+  systemSkillCatalog,
 } from './container-env.js';
+import { parseSkillPolicy, type SkillPolicy } from '@dsh/contract/skill-policy.js';
+import {
+  OrgSkillAdminService,
+  createOrgSkillAdminHandler,
+} from '../application/org-skill-admin-service.js';
+import { collectStaleOrgSkillVersions } from '../skills/org-gc.js';
+import {
+  SkillShareService,
+  createSkillShareHandler,
+} from '../application/skill-share-service.js';
+import {
+  publishOrgSkillFromPublishedVersion,
+} from '../skills/org-publish.js';
+import { readPublishedVersion, readPublishedVersionManifest } from '../skills/enablement.js';
+import { emitSkillAudit } from '../skills/audit.js';
+import { listActiveOrgSkillPackages } from '../skills/org-catalog.js';
+import type {
+  PublishedSkillRootEntry,
+  SystemSkillRootEntry,
+} from '../skills/run-skills.js';
 import { ExternalIdentityResolver } from '../application/parent/external-identity-resolver.js';
 import { createSkillManager } from '../skills/manager.js';
 import { draftSkillRootFor } from '../skills/paths.js';
@@ -88,6 +110,40 @@ export function summarizeRunObservability(
         }
       : null,
   };
+}
+
+/**
+ * Agent Card 的 Skill 描述（ADR 0015 §4.3）：`skillPolicy.system` 展开成当前 release
+ * 里的名字与描述，`skillPolicy.org` 按钉住的摘要取描述。
+ *
+ * **`user` 层不进卡**：它随调用者变化，写进卡就是把「某个用户的私有能力」当成
+ * Agent 的对外能力播出去。系统名字在 release 里已消失时跳过（配置保存后 release
+ * 变了），与 Run 解析写 `not_in_release` 诊断是同一件事的两个出口。
+ */
+export async function skillsFromPolicy(
+  policy: SkillPolicy,
+  catalogEntries?: readonly { readonly name: string; readonly description: string }[],
+): Promise<unknown[]> {
+  const catalog = catalogEntries
+    ?? (await systemSkillCatalog(process.env).list());
+  const byName = new Map(catalog.map((entry) => [entry.name, entry]));
+  const out: Array<{ name: string; description: string }> = [];
+  const wanted = policy.system.mode === 'all'
+    ? catalog.map((entry) => entry.name)
+    : policy.system.mode === 'none'
+      ? []
+      : policy.system.names;
+  for (const name of wanted) {
+    const entry = byName.get(name);
+    if (entry) out.push({ name: entry.name, description: entry.description });
+  }
+  for (const binding of policy.org) {
+    out.push({
+      name: binding.name,
+      description: `Organization skill ${binding.name} (${binding.contentDigest.slice(0, 12)})`,
+    });
+  }
+  return out;
 }
 
 /**
@@ -240,17 +296,32 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
             httpServices.createRepositories(httpServices.knex).skillEnablements.listForOwner(owner),
         })
       : null;
+    // 用户层/org 层来自账本并核对过发布存储，与 Run 会加载的是同一份（ADR 0015 D1）。
+    // 系统层现在只贡献「根」：选中的名单由 provider 过滤，不再扫整棵树。
     const skillRoots = runSkills
-      ? runSkills.filter((entry): entry is string => typeof entry === 'string')
+      ? runSkills
+        .filter((entry): entry is SystemSkillRootEntry => entry.kind === 'system')
+        .map((entry) => entry.root)
       : config.SKILL_ROOTS;
+    // 按层分开：能力页要能分辨来源（用户自己启用的 vs 组织共享的）。
+    // 用户层来自该调用者的启用账本（与 Run 加载的是同一份）；org 层来自**本 org 的
+    // 已发布 active 版本**（design §7.2），不是某个 AgentVersion 的绑定——
+    // 绑定清单是每 Run 算的，用它会让刚发布、还没被绑定的共享 Skill 从页面上消失。
     const userSkills = runSkills
-      ? runSkills.filter((entry): entry is { name: string; packageDir: string } =>
-          typeof entry === 'object' && entry !== null)
+      ? runSkills.filter((entry): entry is PublishedSkillRootEntry => entry.kind === 'user')
+      : [];
+    const orgSkills = identity
+      ? await listActiveOrgSkillPackages({
+          orgId: String(identity.orgId),
+          publishedBase: publishedSkillBase(env),
+          orgSkills: httpServices.createRepositories(httpServices.knex).orgSkills,
+        })
       : [];
     return projectExtensionDiagnostics({
       ...options,
       skillRoots,
       userSkills,
+      orgSkills,
       draftSkillRoot: identity ? draftSkillRootFor(identity) : null,
       mcpServers: config.MCP_SERVERS,
       mcpDiscovery: container.getMcpReadiness(),
@@ -265,6 +336,10 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
           identity: owner,
           skillRoots: resolveSkillRootsForRun(env, owner),
           draftSkillRoot: draftSkillRootFor(owner),
+          // org 层保留名（ADR 0015 D7）：**排除原作者自己**——被提升过的 Skill 的
+          // 原作者要能继续启用新版本，否则他没法迭代（design §7.3）。别人占用同名会被
+          // 启用闸门拒掉，而不是让两个同名 Skill 撞在一条发现路径上。
+          reservedOrgNames: await reservedOrgSkillNames(owner),
         });
         return mutateSkillWithLedger({
           action,
@@ -276,6 +351,116 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
           graceMs: resolveSkillVersionGcGraceMs(env),
         });
       }
+    : null;
+
+  /**
+   * 本 org 被 org 层占用的名字，**排除调用者自己已提升的**（ADR 0015 D7 / design §7.3）。
+   *
+   * 作者豁免是刻意的：被提升过的 Skill 原作者要继续迭代草稿，就必须还能启用自己新版本；
+   * 没有豁免他就只能换名字。别人仍被挡住。
+   */
+  /**
+   * 外部主体 → **内部 ULID**（ADR 0015 P2/P3 的 org 层与共享申请账本）。
+   *
+   * 两张账本的 `org_id` 都是 `CHAR(26)` 且带 `→ organizations.org_id` 外键，`user_id`
+   * 与 `users.user_id` 同域；Run 期的 org 身份也是内部 ULID。BFF 投过来的
+   * `X-Acting-Organization-Id` 是**外部主体**（开发栈里是 `org_bootstrap`），直接写进
+   * 账本会被外键拒绝，而**查**会静默命中零行——申请看起来提交成功、队列里却什么也没有。
+   * 所以解析只在这一处做，服务内部一律拿内部 ULID。
+   */
+  const resolveSkillLedgerOwner = async (auth: {
+    externalOrgId: string;
+    externalUserId: string;
+    role?: string | null;
+  }): Promise<{ orgId: string; userId: string }> => {
+    if (!httpServices) throw new Error('Agent data plane not started');
+    const repos = httpServices.createRepositories(httpServices.knex);
+    const resolver = new ExternalIdentityResolver({
+      organizations: repos.organizations,
+      externalRefs: repos.externalRefs,
+    });
+    const owner = await resolver.resolveOwner(auth as never);
+    return { orgId: owner.orgId, userId: owner.userId };
+  };
+
+  const reservedOrgSkillNames = async (owner: { orgId: string; userId: string }) => {
+    if (!httpServices) return [];
+    const rows = await httpServices.createRepositories(httpServices.knex).orgSkills.reservedNamesForOrg({
+      orgId: owner.orgId,
+      excludeAuthorUserId: owner.userId,
+    });
+    return [...rows];
+  };
+
+  /**
+   * 共享申请与审批（ADR 0015 §7.2/§7.3）。
+   *
+   * 三个依赖各自对应流程里的一步事实，都不是顺手能算出来的：
+   * - `enabledVersionOf`：申请的是**已启用（已发布）**的摘要，不是草稿。草稿模型可写，
+   *   批准一个会变的目录等于批准移动目标；
+   * - `orgSkillOwnerOf`：一个名字在 org 层首次发布后只能由同一作者续版（design §7.1）；
+   * - `publishFromPublished`：复制字节到 org 层并在内部重算摘要，不一致即拒绝。
+   */
+  const skillShare = httpServices && resolveOwner
+    ? createSkillShareHandler(new SkillShareService({
+      resolveOwner: resolveSkillLedgerOwner,
+      requests: httpServices.createRepositories(httpServices.knex).skillShareRequests,
+      orgSkills: httpServices.createRepositories(httpServices.knex).orgSkills,
+      enabledVersionOf: async ({ orgId, userId, name }) => {
+        const row = await httpServices.createRepositories(httpServices.knex)
+          .skillEnablements.get(name, { orgId, userId });
+        return row ? { contentDigest: row.contentDigest } : null;
+      },
+      orgSkillOwnerOf: async ({ orgId, name }) => {
+        const versions = await httpServices.createRepositories(httpServices.knex)
+          .orgSkills.listBindableVersions({ orgId });
+        const [first] = versions.filter((entry) => entry.name === name);
+        return first ? { originUserId: first.originUserId } : null;
+      },
+      publishFromPublished: async (input) => publishOrgSkillFromPublishedVersion(
+        {
+          orgSkills: httpServices.createRepositories(httpServices.knex).orgSkills,
+          publishedBase: publishedSkillBase(env),
+          systemSkillNames: async () => (await systemSkillCatalog(env).names()),
+          resolvePublishedPackageDir: async ({ requesterUserId, name, contentDigest }) => {
+            const orgRoot = publishedSkillBase(env);
+            const ownerRoot = `${orgRoot.replace(/\/+$/, '')}/${input.orgId}/${requesterUserId}`;
+            const check = await readPublishedVersion(ownerRoot, name, contentDigest);
+            return check.ok ? { packageDir: check.paths.packageDir } : null;
+          },
+        },
+        {
+          orgId: input.orgId,
+          requesterUserId: input.requesterUserId,
+          name: input.name,
+          contentDigest: input.contentDigest,
+          originRequestId: input.originRequestId,
+          publishedByUserId: input.publishedByUserId,
+          ...(input.setCurrent !== undefined ? { setCurrent: input.setCurrent } : {}),
+        },
+      ).then((published) => ({ contentDigest: published.version.contentDigest })),
+      manifestOfRequestedVersion: async ({ orgId, requesterUserId, name, contentDigest }) => {
+        const ownerRoot = `${publishedSkillBase(env).replace(/\/+$/, '')}/${orgId}/${requesterUserId}`;
+        const listing = await readPublishedVersionManifest(ownerRoot, name, contentDigest);
+        if (!listing.ok) return null;
+        const ok = listing as {
+          files: Array<{ path: string; bytes: number }>;
+          skillMd: string;
+          truncated: boolean;
+        };
+        return { files: ok.files, skillMd: ok.skillMd, truncated: ok.truncated };
+      },
+      audit: (event) => {
+        emitSkillAudit({
+          action: event.action,
+          result: event.result,
+          skill_name: event.name,
+          summary: event.requestId ? `request=${event.requestId}` : undefined,
+          ...(event.reason ? { error: event.reason } : {}),
+          meta: { orgId: event.orgId, userId: event.userId },
+        });
+      },
+    }))
     : null;
 
   const uploadSkillDraft = resolveOwner
@@ -291,6 +476,45 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
           archiveName: filename,
         });
       }
+    : null;
+
+  /**
+   * org 层共享 Skill 的管理员操作面（ADR 0015 §7.2）。
+   *
+   * 依赖里有**两个物理根**，不要合并：
+   * - `publishedBase` 是用户层与 org 层共用的发布存储基根（`SKILLS_USER_ROOT`），
+   *   org 层取 `<base>/<orgId>/_org`；
+   * - `tmpRoot` 只是解包临时区，放在系统临时目录——放进发布存储会让半成品被列表
+   *   接口与 GC 当成一个真实的包。
+   */
+  const orgSkillAdmin = httpServices && resolveOwner
+    ? createOrgSkillAdminHandler(new OrgSkillAdminService({
+      resolveOwner: resolveSkillLedgerOwner,
+      orgSkills: httpServices.createRepositories(httpServices.knex).orgSkills,
+      // 与 Run 解析读的是同一个变量、同一个默认值：两处不一致会让「发布到 A、
+      // 运行读 B」，症状是发布成功但 Run 里看不到。
+      publishedBase: publishedSkillBase(env),
+      systemSkillNames: async () => (await systemSkillCatalog(env).names()),
+      // 吊销的影响面：谁的下一个 Run 会因为这个版本被吊销而丢挂载。读引用账本
+      // 而不是扫 `config_json`——后者既慢又不可靠（那是 JSON，不是可索引的事实），
+      // 而漏报会让运维以为没人受影响。
+      affectedAgentVersions: (input) =>
+        httpServices.createRepositories(httpServices.knex).agentVersionSkillRefs
+          .listVersionsForSkill(input),
+      // 每次发布 / 改指针 / 弃用 / 吊销之后跑一次回收（design §5.3 明说不加后台定时器）。
+      // 回收判定只认「引用 / current / 宽限期」三条，与吊销状态无关——`revoked` 的字节
+      // 保留到满足这三条才删，便于事后审计。
+      collectStaleVersions: async ({ orgId }) => {
+        const gc = await collectStaleOrgSkillVersions(
+          { db: httpServices.knex, publishedBase: publishedSkillBase(env) },
+          { orgId },
+        );
+        return {
+          removedCount: gc.removedCount,
+          racedDigests: gc.names.flatMap((entry) => entry.racedDigests),
+        };
+      },
+    }))
     : null;
 
   const notReady = async () => {
@@ -478,8 +702,18 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
             try {
               const ver = await repos.catalog.getVersionById(def.activeVersionId);
               const cfg = ver?.configJson;
-              if (cfg && typeof cfg === 'object' && Array.isArray(cfg.skills)) {
-                skills = cfg.skills;
+              if (cfg && typeof cfg === 'object') {
+                // ADR 0015 §4.3：有 `skillPolicy` 的版本按**有效绑定**出卡
+                // （system 展开名单 + org 条目），没有的沿用 legacy `skills`。
+                // user 层**不进**卡——它随调用者变化，不是 Agent 的对外能力。
+                const policy = parseSkillPolicy(
+                  (cfg as Record<string, unknown>)['skillPolicy'],
+                ).policy;
+                if (policy !== null) {
+                  skills = await skillsFromPolicy(policy);
+                } else if (Array.isArray((cfg as Record<string, unknown>)['skills'])) {
+                  skills = (cfg as Record<string, unknown>)['skills'] as unknown[];
+                }
               }
             } catch {
               skills = [];
@@ -552,6 +786,8 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     getExtensionDiagnostics,
     mutateSkill,
     uploadSkillDraft,
+    orgSkillAdmin,
+    skillShare,
     activeRunHint: () => 0,
   });
 

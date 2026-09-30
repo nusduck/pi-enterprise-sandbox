@@ -10,9 +10,10 @@ import {
   type SoftListResult,
   type ToolRegistryItem,
 } from '../../shared/api/capabilities';
-import { mcpStatus, toolStatus } from './capabilityFormat';
+import { mcpStatus, toolStatus, usageTitle } from './capabilityFormat';
+import { isDraftSkill, isOrgSkill, isUserSkill } from './skillHelpers';
 import { useChat } from '../../features/chat/ChatContext';
-import { getAdminSkillUsage } from '../../shared/api/adminRuns';
+import { getAdminSkillUsage, type SkillUsageEntry } from '../../shared/api/adminRuns';
 import s from './adminPage.module.css';
 
 type Tab = 'skills' | 'mcp' | 'tools' | 'models';
@@ -36,9 +37,20 @@ function Status({ value }: { value: string }) {
 }
 
 function skillSource(item: SkillItem): [string, string] {
-  if (item.source === 'user-skill-root') return ['用户', s.info];
-  if (item.source === 'draft-skill-root') return ['草稿', s.mute];
+  if (isUserSkill(item)) return ['用户', s.info];
+  if (isOrgSkill(item)) return ['组织', s.warn];
+  if (isDraftSkill(item)) return ['草稿', s.mute];
   return ['系统', s.mute];
+}
+
+/** 能力页的来源分类：系统 / 组织共享 / 用户（草稿也算用户自己的）。 */
+type SkillScope = 'system' | 'org' | 'user';
+
+/** 分层规则只写在 `skillHelpers.ts` 一处，页面上不再各判一次。 */
+function scopeOf(item: SkillItem): SkillScope {
+  if (isOrgSkill(item)) return 'org';
+  if (isUserSkill(item) || isDraftSkill(item)) return 'user';
+  return 'system';
 }
 
 const RISK_ZH: Record<string, [string, string]> = {
@@ -85,7 +97,7 @@ export function CapabilitiesPage() {
   const { state } = useChat();
   const me = String(state.authUser?.display_name || state.authUser?.username || '');
   // Admin-only statistic; without it the column is simply not shown.
-  const [usage, setUsage] = useState<Map<string, number> | null>(null);
+  const [usage, setUsage] = useState<Map<string, SkillUsageEntry> | null>(null);
   useEffect(() => {
     let alive = true;
     getAdminSkillUsage(7).then((m) => { if (alive) setUsage(m); }).catch(() => { if (alive) setUsage(null); });
@@ -93,7 +105,7 @@ export function CapabilitiesPage() {
   }, []);
   const [tab, setTab] = useState<Tab>('skills');
   const [query, setQuery] = useState('');
-  const [skillScope, setSkillScope] = useState<'all' | 'system' | 'user'>('all');
+  const [skillScope, setSkillScope] = useState<'all' | SkillScope>('all');
   const [skills, setSkills] = useState<SoftListResult<SkillItem>>(EMPTY);
   const [mcp, setMcp] = useState<SoftListResult<McpServerItem>>(EMPTY);
   const [tools, setTools] = useState<SoftListResult<ToolRegistryItem>>(EMPTY);
@@ -121,7 +133,7 @@ export function CapabilitiesPage() {
   const skillRows = useMemo(
     () =>
       skills.items.filter((item) => {
-        const src = item.source === 'user-skill-root' || item.source === 'draft-skill-root' ? 'user' : 'system';
+        const src = scopeOf(item);
         return (skillScope === 'all' || skillScope === src) && matches(query, item.name, item.description);
       }),
     [skills.items, skillScope, query],
@@ -147,13 +159,26 @@ export function CapabilitiesPage() {
                 <td className={s.mono}>{item.name || item.id || '—'}</td>
                 <td className={s.desc}><span className={s.clamp}>{item.description || '—'}</span></td>
                 <td><span className={`${s.pill} ${cls}`}>{label}</span></td>
-                <td className={s.muted}>{item.source === 'user-skill-root' || item.source === 'draft-skill-root' ? me || '—' : '—'}</td>
+                <td className={s.muted}>
+                  {item.source === 'org-skill-root'
+                    ? '本组织'
+                    : item.source === 'user-skill-root' || item.source === 'draft-skill-root'
+                      ? me || '—'
+                      : '—'}
+                </td>
                 <td>
                   {item.source === 'draft-skill-root'
                     ? <span className={`${s.pill} ${s.mute}`}>{item.published ? '已发布' : '草稿'}</span>
                     : <span className={`${s.pill} ${item.enabled === false ? s.mute : s.ok}`}>{item.enabled === false ? '已停用' : '可用'}</span>}
                 </td>
-                {usage ? <td className={`${s.right} ${s.num}`}>{usage.get(String(item.name || item.id || '')) ?? 0}</td> : null}
+                {usage ? (
+                  <td
+                    className={`${s.right} ${s.num}`}
+                    title={usageTitle(usage.get(String(item.name || item.id || '')))}
+                  >
+                    {usage.get(String(item.name || item.id || ''))?.calls ?? 0}
+                  </td>
+                ) : null}
               </tr>
             );
           })}
@@ -260,7 +285,7 @@ export function CapabilitiesPage() {
         <input className={s.search} id="cap-search" placeholder="搜索名称或说明" aria-label="搜索" value={query} onChange={(e) => setQuery(e.target.value)} />
         {tab === 'skills' ? (
           <div className={s.seg} role="group" aria-label="Skill 来源">
-            {([['all', '全部'], ['system', '系统'], ['user', '用户']] as const).map(([v, label]) => (
+            {([['all', '全部'], ['system', '系统'], ['org', '组织'], ['user', '用户']] as const).map(([v, label]) => (
               <button key={v} type="button" aria-pressed={skillScope === v} onClick={() => setSkillScope(v)}>{label}</button>
             ))}
           </div>

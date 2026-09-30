@@ -108,6 +108,9 @@ export function buildPreflightProfile(input: PreflightProfileInput): IsolationPr
     tempRoot: '/nonexistent/preflight/temp',
     systemSkillRoot: input.systemSkillRoot,
     enabledSkillPackages: [],
+    // 探针**不带系统名单**（design §6.4「探针不变」）：省略 = 整个系统根作为硬绑定
+    // 进 profile，启动时就能发现「系统 Skill 根缺失或绑不上」这类部署故障。
+    // 给 `[]` 会让探针不再覆盖系统根。
   };
   const mode: SandboxMode = 'workspace-write'; // 无关紧要：这两个根的挂载会被过滤掉。
   const full = buildIsolationProfile({

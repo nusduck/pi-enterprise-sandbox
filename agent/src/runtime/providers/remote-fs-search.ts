@@ -42,8 +42,17 @@ interface GrepResponse {
  *
  * 复用 `ctx.fs.resolve()`——围栏只有一处（ADR 0008 D2 的纪律），
  * 搜索不自己再算一遍路径。`path` 省略时交给 exec 侧默认到会话工作区。
+ *
+ * 参数类型是 `{ fs?: … } & Record<string, unknown>` 而不是裸的 `{ fs?: … }`：
+ * 后者是**弱类型**，而 `ctx` 的实际类型是 `Context & Record<string, any>`。类型检查器
+ * 对弱类型要求「至少有一个共同属性」，`resolve` 的返回类型稍有漂移就会把这里的调用
+ * 报成 TS2559（2026-09-30 加 `skillPolicy` 时撞到：与该模块无关的改动也会翻出来）。
+ * 用交叉类型保住 `ctx` 的开放性，同时 `ctx.fs` 仍受检。
  */
-async function targetOf(ctx: { fs?: { resolve(p: string): Promise<unknown> } }, path?: string): Promise<unknown> {
+async function targetOf(
+  ctx: { fs?: { resolve(p: string): Promise<unknown> } } & Record<string, unknown>,
+  path?: string,
+): Promise<unknown> {
   const fs = ctx.fs;
   if (fs === undefined) throw new Error('remote-fs-search: ctx.fs is not mounted');
   return fs.resolve(path === undefined || path === '' ? '.' : path);

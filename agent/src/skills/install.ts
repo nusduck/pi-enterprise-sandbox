@@ -270,6 +270,31 @@ function assertDoesNotShadowSystem(name, systemSkillNames) {
 }
 
 /**
+ * org 层保留名（ADR 0015 D7，design §7.3）。
+ *
+ * 用户启用一个与**本 org 任一非 revoked org 名**冲突的包 → `SKILL_NAME_RESERVED_BY_ORG`。
+ * 这个判定必须在**启用**这一刻做：草稿叫什么名字无所谓（它不进任何人的上下文），
+ * 危险的是同名包被挂进 `skill-user/` 之后与 `/home/sandbox/skill-org/` 下的那个撞名——
+ * 模型看到两个同名 Skill，而 Run 解析只保留 org 版本，作者会以为自己的新版本生效了。
+ *
+ * **作者豁免**不在这一层：调用方传进来的集合已经排除了原作者自己的名字（design §7.3
+ * 要求作者能继续迭代自己的草稿）。这里只用错误码把原因说清楚。
+ */
+function assertNotReservedByOrg(name, reservedOrgNames) {
+  const reserved = new Set(
+    reservedOrgNames ? [...reservedOrgNames].map(String) : [],
+  );
+  if (reserved.has(name)) {
+    const err = new Error(
+      `"${name}" is reserved by an organization-shared Skill; choose another name`,
+    );
+    // 稳定的机器可读码：HTTP 层据此给 409，而不是把它混进「包结构不合法」。
+    (err as { code?: string }).code = 'SKILL_NAME_RESERVED_BY_ORG';
+    throw err;
+  }
+}
+
+/**
  * Validate, digest and atomically install one prepared package directory.
  * @param {{
  *   packageSource: string,
@@ -279,10 +304,11 @@ function assertDoesNotShadowSystem(name, systemSkillNames) {
  *   systemSkillNames?: Iterable<string>,
  * }} input
  */
-async function installPreparedPackage(input: { packageSource: string, stagingPackage: string, skillRoot: string, deadlineAt: number, systemSkillNames?: Iterable<string>, sharedWritable?: boolean, }) {
+async function installPreparedPackage(input: { packageSource: string, stagingPackage: string, skillRoot: string, deadlineAt: number, systemSkillNames?: Iterable<string>, reservedOrgNames?: Iterable<string>, sharedWritable?: boolean, }) {
   const declaredName = readSkillPackageName(input.packageSource);
   const name = validateSkillName(declaredName);
   assertDoesNotShadowSystem(name, input.systemSkillNames);
+  assertNotReservedByOrg(name, input.reservedOrgNames);
 
   await copyTree(input.packageSource, input.stagingPackage, {
     deadlineAt: input.deadlineAt,
@@ -390,7 +416,7 @@ export function assertSkillArchiveName(raw: unknown, sourceType: 'upload' | 'san
  *   systemSkillNames?: Iterable<string>,
  * }} opts
  */
-export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveName: string, sourceType?: 'upload' | 'sandbox_build', attachmentId?: string, sourcePath?: string, skillRoot: string, timeoutMs?: number, systemSkillNames?: Iterable<string>, sharedWritable?: boolean, }) {
+export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveName: string, sourceType?: 'upload' | 'sandbox_build', attachmentId?: string, sourcePath?: string, skillRoot: string, timeoutMs?: number, systemSkillNames?: Iterable<string>, reservedOrgNames?: Iterable<string>, sharedWritable?: boolean, }) {
   const sourceType = normalizeArchiveSourceType(opts.sourceType);
   const archiveName = assertSkillArchiveName(opts.archiveName, sourceType);
   const attachmentId = String(opts.attachmentId || '').trim();
@@ -425,6 +451,7 @@ export async function installSkillArchive(opts: { archiveBytes: Buffer, archiveN
       skillRoot,
       deadlineAt,
       systemSkillNames: opts.systemSkillNames,
+      reservedOrgNames: opts.reservedOrgNames,
       sharedWritable: opts.sharedWritable,
     });
     await rmrf(stagingRoot);

@@ -5,6 +5,7 @@ This directory is the **active** documentation set for DSH Enterprise Sandbox.
 
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent / api-server / exec / frontend / contract)
 - [`design/updrdb-dbpm-deployment.md`](./design/updrdb-dbpm-deployment.md) — UPDRDB / DBPM 与双集群 + VM 的统一迁移设计（未实施；共享 Skill 存储、HTTPS 入口及验收门槛）
+- [`design/skill-catalog-and-agent-binding.md`](./design/skill-catalog-and-agent-binding.md) — Skill 目录与 Agent 绑定、组织共享层（**已实施**；ADR 0015）
 - [`design/waves/HANDOFF.md`](./design/waves/HANDOFF.md) — `refactor/dsh-rebuild` 当前进度与剩余项
 - [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
 - [`sandbox-mcp.md`](./sandbox-mcp.md) — independently deployed Sandbox Streamable HTTP MCP facade
@@ -64,6 +65,7 @@ Out-of-map directories:
 | [0010](./adr/0010-retain-custom-a2a-server-layer.md) | 保留自建 A2A 服务端协议面（**撤销 0007 D8**） |
 | [0011](./adr/0011-updrdb-upredis-dbpm-migration.md) | 持久化／协调拓扑迁移至 UPDRDB / UPRedis，口令改由 DBPM 下发 |
 | [0014](./adr/0014-sse-contract-is-the-platform-events.md) | SSE 契约以真实平台事件为准（**取代 0007 验证要求第 1 条**「逐字节不变」夹具） |
+| [0015](./adr/0015-skill-catalog-and-agent-binding.md) | Skill 拆成「目录」与「绑定」：AgentVersion `skillPolicy` + 组织共享层（**Accepted**） |
 
 **0003 is intentionally absent.** `0002-backend2712` and `0003-fronted0712` were
 07-12 task specs whose decisions `plan.md` superseded; they were removed on

@@ -52,6 +52,9 @@ export interface EnabledSkillRecord {
   readonly contentDigest: string;
   readonly fileCount: number;
   readonly totalBytes: number;
+  /** SKILL.md frontmatter 的 description。org 层的账本要存它供配置面展示， */
+  /** 不必为了列个表去读字节。 */
+  readonly description: string;
   /** 已发布版本的包目录（挂载源）。 */
   readonly publishedPath: string;
   /** 同一摘要此前已发布且完整，本次未重写字节。 */
@@ -109,6 +112,7 @@ export async function inspectDraftPackage(
   draftPackageDir: string,
   expectedName?: string,
   systemSkillNames: Iterable<string> = [],
+  reservedOrgNames: Iterable<string> = [],
 ) {
   // 结构校验复用既有实现：输入从「解包后的 zip 目录」换成「草稿目录」，
   // 两者本来就是同一种东西（ADR 0009 D7 / 计划 H6.4）。
@@ -128,6 +132,16 @@ export async function inspectDraftPackage(
     throw new Error(
       `Skill "${meta.name}" collides with a bundled system Skill and cannot be enabled`,
     );
+  }
+  // org 层保留名（ADR 0015 D7）：调用方传进来的集合**已经排除原作者自己**，
+  // 所以作者能继续迭代自己的草稿（design §7.3），别人不能占用这个名字。
+  const reservedByOrg = new Set([...reservedOrgNames].map(String));
+  if (reservedByOrg.has(meta.name)) {
+    const err = new Error(
+      `Skill "${meta.name}" is reserved by an organization-shared Skill and cannot be enabled`,
+    );
+    (err as { code?: string }).code = 'SKILL_NAME_RESERVED_BY_ORG';
+    throw err;
   }
 
   const files = await scanPackage(draftPackageDir);
@@ -204,15 +218,22 @@ export async function readPublishedVersion(
  */
 export async function publishDraftVersion(input: {
   draftPackageDir: string;
-  /** owner 根 `<base>/<orgId>/<userId>`。 */
+  /** owner 根 `<base>/<orgId>/<userId>`，或 org 层的 `<base>/<orgId>/_org`。 */
   publishedRoot: string;
   expectedName?: string;
   /** 平台背书的系统 skill 名；与之同名的包不得启用。 */
   systemSkillNames?: Iterable<string>;
+  /** 本 org 被 org 层占用的名字（已排除原作者）；与之同名的包不得启用。 */
+  reservedOrgNames?: Iterable<string>;
   now?: () => Date;
 }): Promise<EnabledSkillRecord> {
   const systemNames = [...(input.systemSkillNames ?? [])];
-  const draft = await inspectDraftPackage(input.draftPackageDir, input.expectedName, systemNames);
+  const draft = await inspectDraftPackage(
+    input.draftPackageDir,
+    input.expectedName,
+    systemNames,
+    input.reservedOrgNames ?? [],
+  );
 
   await ensureTraversableUserSkillRoot(input.publishedRoot);
   const versionsDir = path.join(input.publishedRoot, draft.name, SKILL_VERSIONS_DIRNAME);
@@ -230,7 +251,12 @@ export async function publishDraftVersion(input: {
       await fsp.chmod(target, 0o444);
     }
     // 摘要以暂存字节为准，并重新套用结构、大小与系统名校验。
-    const staged = await inspectDraftPackage(stagedPackage, draft.name, systemNames);
+    const staged = await inspectDraftPackage(
+      stagedPackage,
+      draft.name,
+      systemNames,
+      input.reservedOrgNames ?? [],
+    );
     const existing = await readPublishedVersion(input.publishedRoot, staged.name, staged.contentDigest);
     if (existing.ok) {
       await fsp.rm(staging, { recursive: true, force: true });
@@ -239,6 +265,7 @@ export async function publishDraftVersion(input: {
         contentDigest: staged.contentDigest,
         fileCount: staged.files.length,
         totalBytes: staged.totalBytes,
+        description: staged.description,
         publishedPath: existing.paths.packageDir,
         reused: true,
       };
@@ -263,6 +290,7 @@ export async function publishDraftVersion(input: {
       contentDigest: staged.contentDigest,
       fileCount: staged.files.length,
       totalBytes: staged.totalBytes,
+      description: staged.description,
       publishedPath: paths.packageDir,
       reused: false,
     };
@@ -333,4 +361,72 @@ export async function collectStaleSkillVersions(input: {
     }
   }
   return removed;
+}
+
+/** 管理员审阅用的清单上限：文件条数与 SKILL.md 截断长度。 */
+export const SKILL_MANIFEST_MAX_FILES = 512;
+export const SKILL_MANIFEST_SKILL_MD_MAX_BYTES = 64 * 1024;
+
+/**
+ * 列出一个**已发布**版本的文件清单与截断的 SKILL.md（design §7.2 的管理员审阅面）。
+ *
+ * 两条纪律：
+ * - 先核对版本完整性（`readPublishedVersion`），**再**列文件——一个没有侧车的目录
+ *   是中断的发布，把它列成「这个版本有什么文件」会让人以为它已经可用；
+ * - 只返回**相对路径与字节数**，不返回其它文件的内容。管理员要判断的是「这个包有
+ *   哪些文件」，把整个包的内容塞进 API 既没必要又会放大泄漏面。
+ */
+export async function readPublishedVersionManifest(
+  publishedRoot: string,
+  name: string,
+  contentDigest: string,
+): Promise<
+  | {
+    readonly ok: true;
+    readonly files: Array<{ path: string; bytes: number }>;
+    readonly skillMd: string;
+    readonly truncated: boolean;
+  }
+  | { readonly ok: false; readonly reason: 'missing' | 'mismatch' }
+> {
+  const check = await readPublishedVersion(publishedRoot, name, contentDigest);
+  // `strict: false` 关掉了 strictNullChecks，判别联合**不会**按 `.ok` 收窄——所以这里
+  // 按仓库既有写法显式取错误码，而不是指望 `check.reason`。
+  if (!check.ok) {
+    const reason = (check as { reason: 'missing' | 'mismatch' }).reason;
+    return { ok: false, reason };
+  }
+
+  const packageDir = (check as { paths: SkillVersionPaths }).paths.packageDir;
+  const files: Array<{ path: string; bytes: number }> = [];
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    if (files.length > SKILL_MANIFEST_MAX_FILES) return;
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (files.length > SKILL_MANIFEST_MAX_FILES) return;
+      const absolute = path.join(dir, entry.name);
+      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      // 不跟随符号链接：已发布副本按构造不该有，但列清单这一步也不该被一条链接带出去。
+      const stat = await fsp.lstat(absolute);
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) {
+        await walk(absolute, relative);
+        continue;
+      }
+      if (!stat.isFile()) continue;
+      files.push({ path: relative, bytes: stat.size });
+    }
+  };
+  await walk(packageDir, '');
+
+  const skillMdRaw = await fsp.readFile(path.join(packageDir, 'SKILL.md'), 'utf8');
+  const truncated = Buffer.byteLength(skillMdRaw, 'utf8') > SKILL_MANIFEST_SKILL_MD_MAX_BYTES;
+  return {
+    ok: true,
+    files,
+    skillMd: truncated
+      ? Buffer.from(skillMdRaw, 'utf8').subarray(0, SKILL_MANIFEST_SKILL_MD_MAX_BYTES).toString('utf8')
+      : skillMdRaw,
+    truncated,
+  };
 }

@@ -825,6 +825,23 @@ Skill 分三层：
 | 系统 | `/home/sandbox/skill` | 仓库 `./skills` | 所有人 | `:ro` |
 | 草稿 | `/home/sandbox/skill-draft/<orgId>/<userId>`（exec 物理根 `/var/sandbox/skill-draft`） | 模型 `write` / `bash` 或上传 | 仅该用户；不进 prompt | host bind |
 | 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>/<package>/.v/<digest>/<package>`（侧车 `.v/<digest>.json`）；模型侧路径 `/home/sandbox/skill-user/<package>` | 启用时从草稿复制 | 仅该用户；按启用清单逐包 `ro_bind` | named volume `agent_user_skills` |
+| org 共享（ADR 0015 D5） | `/home/sandbox/skill-user/<orgId>/_org/<package>/.v/<digest>/<package>`（与已启用层同一个 `SKILLS_USER_ROOT` 存储；侧车 `.v/<digest>.json`）；模型侧路径 `/home/sandbox/skill-org/<package>` | 本 org 管理员发布（复用同一份 `published/` 存储，owner 根 `<orgId>/_org`） | 本 org 内被 AgentVersion 钉住的 Run；按清单逐包 `ro_bind` | 同 `agent_user_skills` |
+
+> **系统层逐包挂载**（ADR 0015 D4）：Agent 在内部请求里带 `systemSkills` 名单时，exec 只把名单里的包
+> `ro_bind` 到 `/home/sandbox/skill/<name>`，fs 面（`read` / `glob` / `grep`）也只放行这些包——没进名单的包在
+> 沙箱里不存在，Agent 侧的 prompt 目录与沙箱里能读到的字节是同一份。系统包是**硬绑定**：字节随 release
+> 交付、运行期不可变，缺包是部署故障，要在 spawn 之前带路径说清楚；用户 / org 包仍是软绑定。
+>
+> **部署顺序：DDL → exec → Agent Worker → Agent HTTP / BFF / 前端**（design §8）。
+> - exec 先升级：旧 Worker 不带 `systemSkills`，exec 按兼容期整树挂载并按分钟汇总告警
+>   `[skills] … internal request(s) without systemSkills`，旧 Run 不受影响；
+> - Worker 再升级：它才开始下发名单与 `scope: org`（旧 exec 不认识 `scope`，所以 exec 必须先于 Worker）；
+> - 最后开放写入 `skillPolicy` 的 API：Worker 遇到自己不认识的 v1 顶层键或非法 `skillPolicy` 一律
+>   `DSH_CONFIG_UNSUPPORTED` 拒绝绑定，不会按「省略」静默放开。
+>
+> 收紧（缺 `systemSkills` 即 `ENVELOPE_INVALID`）只在全部 exec 上的上述告警归零后单独做，尚未执行。
+> 公共面、MCP 窄桥与隔离探针不带名单，维持整树只读挂载（与 ADR 0015 之前相同）。`_org` 目录随
+> `published/` 一起备份，不新增 export。
 
 Compose 通过 `SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft` 显式打开草稿写面；直接启动 exec 时变量缺失则能力关闭。模型不再拥有 Skill 变更工具，只能在自己的草稿根写文件。用户在 Capabilities 页点击启用后，Agent 在一个事务里锁住该 owner 的 membership 行，校验结构与系统同名遮蔽，按复制后字节的摘要发布只读版本并写 `user_skill_enablements`；停用只删账本行，字节保留给仍在运行的 Run。旧版本在同名包下次启停时回收：既不被事务前后的账本引用、又超过 `SKILL_VERSION_GC_GRACE_MS`（Agent HTTP 读取，非负整数毫秒，默认 `86400000` 即 24 小时）才删除。
 

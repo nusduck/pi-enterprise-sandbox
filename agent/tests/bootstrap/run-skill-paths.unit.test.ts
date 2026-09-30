@@ -44,9 +44,17 @@ test('system root plus ledger-verified versions; broken rows are excluded with a
       },
     );
 
-    assert.equal(result[0], systemRoot);
+    // ADR 0015 D1：系统层带**名单**（发现与挂载同构），用户层带 kind。
+    assert.deepEqual(result[0], {
+      kind: 'system',
+      root: systemRoot,
+      filtered: true,
+      // 没注入系统目录 → 展开为空。宁可少挂，不可静默多挂。
+      names: [],
+    });
     assert.equal(result.length, 2);
     assert.deepEqual(result[1], {
+      kind: 'user',
       name: 'good',
       contentDigest: published.contentDigest,
       versionRoot: path.dirname(published.publishedPath),
@@ -59,18 +67,27 @@ test('system root plus ledger-verified versions; broken rows are excluded with a
   }
 });
 
-test('a malformed identity degrades to the system root without reading the ledger', async () => {
+test('a malformed identity degrades to the system root with the release names spelled out', async () => {
   let listed = false;
   const result = await resolveRunSkillPaths(
     { SKILLS_ROOT: '/opt/system', SKILLS_USER_ROOT: '/opt/user' },
     { orgId: '../etc', userId: USER },
     {
+      // 不读用户账本，也不假装知道 release——名字由注入的目录给出。
+      systemSkillNames: ['pdf'],
       listEnabled: async () => {
         listed = true;
         return [];
       },
     },
   );
-  assert.deepEqual(result, ['/opt/system']);
+  // 身份不合法时仍然只给系统层，但系统名单**显式列出**：「不给名单」在 exec 那边
+  // 是兼容期旧 Agent 的整树挂载（design §8），新 Agent 不产出它。
+  assert.deepEqual(result, [{
+    kind: 'system',
+    root: '/opt/system',
+    filtered: true,
+    names: ['pdf'],
+  }]);
   assert.equal(listed, false);
 });

@@ -54,7 +54,10 @@ export interface DshRunExecutorDeps {
    * 本 Run 可见的 Skill：系统层目录（string）+ 账本核对过的用户已发布版本（对象），
    * 见 `container-env.ts` 的 `resolveRunSkillPaths`（design §3.3 S1）。
    */
-  skillRootsForRun?: (identity: Record<string, any>) => unknown[] | Promise<unknown[]>;
+  skillRootsForRun?: (
+    identity: Record<string, any>,
+    skillPolicy?: unknown,
+  ) => unknown[] | Promise<unknown[]>;
   /**
    * 运维层风险表（`config/agent/tool-risk.json` / `TOOL_RISK_POLICY_*` 经
    * `resolveToolRiskPolicy` 解析）。2026-08-31 之前这个字段被设在这里，

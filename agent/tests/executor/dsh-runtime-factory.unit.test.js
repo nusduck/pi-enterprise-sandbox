@@ -636,7 +636,16 @@ describe('createDshRuntimeFactory.create', () => {
       },
     });
     try {
-      const runtime = await factory.create(baseInput({ additionalSkillPaths: [skillRoot] }));
+      // 结构化 + 显式名单（ADR 0015 D4 / design §8）：裸目录字符串那条「整树」
+      // 形状已经没有消费方——exec 侧也不再接受缺省名单。
+      const runtime = await factory.create(baseInput({
+        additionalSkillPaths: [{
+          kind: 'system',
+          root: skillRoot,
+          filtered: true,
+          names: ['docx'],
+        }],
+      }));
       assert.equal(registered, true, 'setup must not resolve before the skill provider exists');
       const listed = await provider.list({ cwd: '/home/sandbox/workspace' });
       const candidates = Array.isArray(listed) ? listed : listed.candidates;

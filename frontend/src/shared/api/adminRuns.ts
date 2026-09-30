@@ -115,13 +115,42 @@ export async function listAdminRunTools(runId: string): Promise<ToolExecutionSna
   return parseApi(z.object({ tools: z.array(ToolExecutionSnapshotSchema).default([]) }), body, 'admin run tools').tools;
 }
 
-/** `skill` tool calls per Skill name over the last `days` days, org-wide (admin only). */
-export async function getAdminSkillUsage(days = 7): Promise<Map<string, number>> {
+/** 一个 Skill 名在近 N 天里的调用统计，按层拆开（ADR 0015 D1 / design §7.4）。 */
+export interface SkillUsageEntry {
+  readonly calls: number;
+  /** 只有出现过的层才带值；系统层优先的那条规则由服务端判定。 */
+  readonly byScope: { readonly system: number; readonly org: number; readonly user: number };
+}
+
+const SKILL_SCOPES = ['system', 'org', 'user'] as const;
+
+/**
+ * `skill` tool calls per Skill name over the last `days` days, org-wide (admin only).
+ *
+ * 服务端按 (名字, 层) 各出一行——同一个名字可能在不同 AgentVersion 下属于不同层。
+ * 这里按名字聚成一条：总量给表格用，分层给 tooltip 用。未知 scope 只计入总量，
+ * 不猜它是哪一层（猜错比不显示更糟）。
+ */
+export async function getAdminSkillUsage(days = 7): Promise<Map<string, SkillUsageEntry>> {
   const body = await getJson(`/skill-usage?days=${days}`, 'Skill usage');
   const parsed = parseApi(
-    z.object({ usage: z.array(z.object({ name: z.string(), calls: z.number() })).default([]) }),
+    z.object({
+      usage: z.array(z.object({
+        name: z.string(),
+        calls: z.number(),
+        scope: z.string().optional(),
+      })).default([]),
+    }),
     body,
     'skill usage',
   );
-  return new Map(parsed.usage.map((u) => [u.name, u.calls]));
+  const out = new Map<string, { calls: number; byScope: { system: number; org: number; user: number } }>();
+  for (const row of parsed.usage) {
+    const entry = out.get(row.name) ?? { calls: 0, byScope: { system: 0, org: 0, user: 0 } };
+    entry.calls += row.calls;
+    const scope = SKILL_SCOPES.find((s) => s === row.scope);
+    if (scope) entry.byScope[scope] += row.calls;
+    out.set(row.name, entry);
+  }
+  return out;
 }

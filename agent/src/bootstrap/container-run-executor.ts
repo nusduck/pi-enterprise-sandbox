@@ -111,7 +111,10 @@ export interface DshRunExecutorFactoryOptions {
    * 每个 Run 的 skill 根目录。返回 `string[]`——写 `unknown` 会让
    * DshRunExecutor 的依赖声明对不上（它要的就是路径数组）。
    */
-  readonly skillRootsForRun?: (identity: object) => unknown[] | Promise<unknown[]>;
+  readonly skillRootsForRun?: (
+    identity: object,
+    skillPolicy?: unknown,
+  ) => unknown[] | Promise<unknown[]>;
 }
 
 export async function buildDshRunExecutorFactory(
@@ -236,14 +239,26 @@ export async function buildDshRunExecutorFactory(
             apiKey: String(container.env.LLMIO_API_KEY).trim(),
           })
         : undefined),
-    // Per-Run skills: system tier + this caller's ledger-verified published
-    // versions (design §3.3 S1). The user tier is never discovered by scanning.
+    // Per-Run skills: system tier filtered by the bound `skillPolicy`, the
+    // pinned org versions, and this caller's ledger-verified published versions
+    // (ADR 0015 D1 / design §3.3 S1). Never discovered by scanning.
     skillRootsForRun:
       opts.skillRootsForRun ??
-      ((identity) =>
+      ((identity, skillPolicy) =>
         resolveRunSkillPaths(container.env, identity, {
           listEnabled: (owner) =>
             container.createRepositories(container.knex).skillEnablements.listForOwner(owner),
+          // org 层账本：Run 解析必须能回答「这个 (name, digest) 存在吗、什么状态」。
+          // **没有它，`skillPolicy.org` 的每个条目都会被判成 missing 并静默排除**——
+          // 配置说「带这个共享技能」而实际一个都不带，且症状只是一条诊断。
+          // 所以这条依赖是 org 绑定能否生效的关键，不是可选优化。
+          readOrgVersion: (input) =>
+            container.createRepositories(container.knex).orgSkills.getVersion({
+              orgId: input.orgId,
+              name: input.name,
+              contentDigest: input.contentDigest,
+            }).then((row) => (row ? { status: row.status } : undefined)),
+          skillPolicy: skillPolicy as never,
         })),
     generateId: container.generateId,
     now: container.now,

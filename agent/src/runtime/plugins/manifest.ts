@@ -217,6 +217,20 @@ const DISABLED: readonly PatchEntry[] = [
   disable('session-checkpoint-policy'),
   disable('session-query-sqlite'),
 
+  // Skill 发现面只留「按 Run 清单」的 provider（ADR 0015 D4 / design §6.5）。
+  //
+  // 出厂 skill-filesystem 注册在**全局层**，默认根是 project 的 `.dsh/skills`、
+  // `.agents/skills`，用户的 `~/.dsh/skills`、`~/.agents/skills`，以及
+  // `DSH_BUNDLED_SKILL_DIR`。SkillRegistry.collectFresh 是「全局层 → 该 agent 的
+  // scope 链」按名字合并，**后者覆盖前者**——所以全局层扫到的包不会被 agent scope
+  // 里注册的 run-filesystem（系统层名单过滤）、run-published / run-org-published
+  // 盖掉：只要默认根里有 SKILL.md，模型就能看见并加载，绕过 AgentVersion 的
+  // skillPolicy，正是「发现与挂载不同构」。
+  //
+  // 每个 Run 的系统层已经由 runtime-factory 在 agent scope 注册 run-filesystem
+  // （includeDefaultRoots:false + 本 Run 名单）承担，全局层在这里没有职责。
+  disable('skill-filesystem', '全局层 skill provider 绕过 AgentVersion 的 skillPolicy：默认根\n（project/user 的 .dsh、.agents、DSH_BUNDLED_SKILL_DIR）不经过任何绑定过滤，\n而 collectFresh 的「全局层 → agent scope 链」合并不会让后者盖掉它。\n每个 Run 的系统层由 runtime-factory 在 agent scope 注册的 run-filesystem 承担。'),
+
   // ——— 以下八组是 2026-08-31 起栈实测（scripts/dump-tool-registry.ts）才发现的：
   // 它们在 dsh-base 里就是激活的，模型能看见，而 ADR 0009 完全没提。风险表与分类器
   // 是 fail-closed 的，所以它们的现状是「模型看得见、一调必被拒」。

@@ -34,6 +34,16 @@ export const AGENT_SKILL_PATH = '/home/sandbox/skill';
 /** 已启用 skill 包的逻辑前缀——只读，逐包映射到 owner 的发布副本。 */
 export const AGENT_USER_SKILL_PATH = '/home/sandbox/skill-user';
 
+/**
+ * org 层 skill 的逻辑前缀（ADR 0015 D5）。
+ *
+ * 与 `skill-user` 分开：两者字节来源不同（本 org 管理员背书 vs 本人启用），
+ * 一个 Run 里同时出现时，日志、脱敏与审计都要能分辨来源。**必须**与
+ * `isolation/profile.ts` 的 `AGENT_ORG_SKILL_PATH` 一致——一个是围栏认的逻辑前缀，
+ * 一个是 bwrap 的挂载目标，对不上就是「挂载对了但读不到」。
+ */
+export const AGENT_ORG_SKILL_PATH = '/home/sandbox/skill-org';
+
 /** 一条逻辑路径落在哪个物理根里。 */
 /**
  * 逻辑路径的归属根。
@@ -42,7 +52,13 @@ export const AGENT_USER_SKILL_PATH = '/home/sandbox/skill-user';
  * 但不进模型上下文。可写与可见被这些根彻底分开——「模型能自由造包」与
  * 「闸门只剩人按的那一下」能同时成立。
  */
-export type SandboxPathScope = 'workspace' | 'temp' | 'skill-draft' | 'skill' | 'skill-user';
+export type SandboxPathScope =
+  | 'workspace'
+  | 'temp'
+  | 'skill-draft'
+  | 'skill'
+  | 'skill-user'
+  | 'skill-org';
 
 /** 解析后的逻辑路径：作用域 + 根内相对路径（POSIX 分隔符，`.` 代表根自身）。 */
 export interface ParsedSandboxPath {
@@ -130,7 +146,16 @@ export function parseSandboxPath(userPath: string, cwd?: ParsedSandboxPath): Par
     rejectTraversal(segments, raw);
     return { scope: 'skill-draft', relative: segments.length ? segments.join('/') : '.' };
   }
-  // skill-user 必须在 skill 之前：`/home/sandbox/skill-user` 以 skill 前缀开头。
+  // 三个 skill 前缀都必须在 `/home/sandbox/skill` 之前判：它们都以那个前缀开头。
+  // 先判更具体的 `skill-user` / `skill-org`，再判 `skill`。
+  if (raw === AGENT_ORG_SKILL_PATH) {
+    return { scope: 'skill-org', relative: '.' };
+  }
+  if (raw.startsWith(`${AGENT_ORG_SKILL_PATH}/`)) {
+    const segments = splitSegments(raw.slice(AGENT_ORG_SKILL_PATH.length + 1));
+    rejectTraversal(segments, raw);
+    return { scope: 'skill-org', relative: segments.length ? segments.join('/') : '.' };
+  }
   if (raw === AGENT_USER_SKILL_PATH) {
     return { scope: 'skill-user', relative: '.' };
   }
@@ -181,6 +206,11 @@ export function toDisplayPath(parsed: ParsedSandboxPath): string {
     return parsed.relative === '.'
       ? AGENT_USER_SKILL_PATH
       : `${AGENT_USER_SKILL_PATH}/${parsed.relative}`;
+  }
+  if (parsed.scope === 'skill-org') {
+    return parsed.relative === '.'
+      ? AGENT_ORG_SKILL_PATH
+      : `${AGENT_ORG_SKILL_PATH}/${parsed.relative}`;
   }
   return parsed.relative;
 }

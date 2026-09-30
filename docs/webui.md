@@ -101,11 +101,11 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 **`/admin/agents`（仅 admin）** — `pages/settings/AgentsPage.tsx`，管理控制台的「智能体」。
 左侧是 org 内的智能体列表（有未保存草稿的显示黄点）与「新建智能体」，右侧是一个编辑器：
 顶部固定栏显示「编辑基于 vN」、未保存标记、校验状态和「放弃修改 / 仅保存为新版本 / 保存并启用」，
-下方按「基本信息 / 模型 / 工具权限 / MCP / 协作 / 数据源 / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
+下方按「基本信息 / 模型 / 工具权限 / MCP / 协作 / 数据源 / 技能 / 版本历史 / JSON」分页（`AgentConfigEditor` 的 `section`
 参数一次只渲染一类，样式在 `agents.module.css`）。工具权限按类别分组（`groupToolsForPermissions`），
 每个工具是「继承 / 允许 / 审批 / 禁止」四段选择，可只看已覆盖项；新建智能体复用同一个编辑器。
 顶栏显示「N 处未保存修改」（`configDiff`：草稿与启用版本逐字段比较，键顺序不算修改，空对象不算叶子），
-保存按钮写出目标版本号（「仅保存为 v4 / 保存并启用 v4」）；「工具权限」「MCP」「协作」tab 上显示覆盖工具数、所选服务数与委派对象数；
+保存按钮写出目标版本号（「仅保存为 v4 / 保存并启用 v4」）；「工具权限」「MCP」「协作」「数据源」「技能」tab 上显示覆盖工具数、所选服务数、委派对象数、数据源数与技能绑定数（`mode: all` 时系统层个数由服务端展开，标签只计名单里点到的，不拿目录总数冒充）；
 版本历史顶部列出「vN → 草稿」的逐字段差异（− 旧值 / + 新值）。版本行显示创建时间；创建者接口未返回，暂不显示。
 
 - 页面反复说明的一件事是**保存 = 建新版本**：`agent_versions` 不可变，编辑配置
@@ -150,6 +150,15 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   草稿里有而目录里没有的 id 显示为「已保留」行，只能移除，`dataSources[i]` 的错误挂在该行；结构不合法时暂停该分类。
   目录由运维在 `SANDBOX_DATA_SOURCES_JSON` 登记，页面不提供登记入口。设计见
   [design/sandbox-data-sources.md](design/sandbox-data-sources.md)。
+- 「技能」分类（`SkillPolicyFields.tsx`、`skillPolicyHelpers.ts`）编辑 `skillPolicy`（ADR 0015，设计见
+  [design/skill-catalog-and-agent-binding.md](design/skill-catalog-and-agent-binding.md)）：三层分开呈现——
+  系统层选「全部 / 只选这些 / 不带」（选「只选这些」时从 config-options 的
+  `platformConstraints.skills.system` 勾名字）、组织共享层从 `platformConstraints.skills.org` 勾名字并**钉住一个版本**
+  （不跟随最新：同一个 AgentVersion 在不同时间必须行为一致）、用户层是一个「带上调用者自己启用的技能」开关。
+  字段错误按路径挂到对应控件（`skillPolicy.system.names[i]`、`skillPolicy.org[i].contentDigest`）。
+  三个刻意的行为：**没设过这个键时页面照实说「未设置」**，不冒充默认值；保存结果与「省略」等价时**删掉整个键**
+  （写回一个等价对象会改变既有版本的 `config_hash`）；`allowlist` 之外**不写 `names`**（服务端对「非 allowlist 带 names」
+  报错，不许静默忽略）。名单里已不在当前 release 的名字标为「不在当前平台」而不是静默丢掉。结构不合法时暂停该分类。
 - Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
   是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为「不支持」，
   要求改掉后才能发布，不静默降级到别的档位。
@@ -211,6 +220,12 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   （紧凑 / 展开：已完成轮次的工具组是否默认展开）、运行中按 Enter（排队追问 / 立即改向）。偏好存在本机
   浏览器（`shared/ui/preferences.ts`，`usePreference` 跨组件实时同步，读不到时用默认值）。我的 Skills：
   上传草稿（.zip / .skill，50 MB）、启用、停用，分层规则复用 `skillHelpers.splitSkillTiers`。
+  每个**已启用**的 Skill 上还有一个「申请共享」（ADR 0015 §7.2/§7.3）：点了就对该版本发起申请并钉住摘要，
+  等本 org 管理员处理；同名已有一条 `pending` 时按钮变成「申请中」并禁用——再点一次会把旧申请置为
+  `superseded`，那会让「我上次写了什么说明」无声消失。下方「我的共享申请」列出自己的申请与状态，
+  `pending` 的可撤回。可操作的拒绝原因就地显示（`SKILL_NAME_RESERVED_BY_ORG` → 说明这个名字已被组织共享层
+  占用；`SKILL_NOT_ENABLED` → 只有已启用的版本才能申请），不是一句「操作失败」。申请列表接口不可用时
+  显示「申请列表现不可用」，而不是「还没有提交过共享申请」——后者会让人以为申请丢了。
 
 ### 路由
 
@@ -219,7 +234,7 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 | `/`、`/c/:conversationId` | 会话工作台；`/c/<id>` 可直接打开某个会话，新会话发出首条消息后地址自动变为 `/c/<id>` |
 | `/schedules` | 定时任务 |
 | `/artifacts` | 产物库 |
-| `/admin/runs`、`/admin/approvals`、`/admin/agents`、`/admin/capabilities`、`/admin/a2a` | 管理控制台（admin） |
+| `/admin/runs`、`/admin/approvals`、`/admin/agents`、`/admin/capabilities`、`/admin/skills`、`/admin/a2a` | 管理控制台（admin） |
 | `/settings/*`、`/runs`、`/approvals` | 旧地址，重定向到对应的 `/admin/*` |
 
 地址与当前会话双向同步（`pages/workbench/WorkbenchPage.tsx`）：地址变化时选中对应会话，建会话、删除
@@ -227,12 +242,30 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 避免与恢复逻辑竞争。
 
 **能力页**（`/admin/capabilities`）：Skills / MCP 服务 / 工具 / 模型 四个 tab，均为可搜索的只读表格；
-Skills 可按系统 / 用户筛选，有「所有者」列（接口只返回调用者自己的用户 Skill，所以用户 Skill 的所有者就是当前用户），管理员另有「近 7 天调用」列（`/api/admin/skill-usage`，只统计 `skill` 工具调用；接口不可用时不显示该列），MCP 状态以服务端的 `status` 为准（`capabilityFormat.ts`），模型标注目录默认模型
-与看图 / 思考 / 工具调用能力。Extension 诊断已移除；个人 Skill 的上传与启用在设置弹窗里。
+Skills 按**三层**筛选（系统 / 组织 / 用户）并显示来源与「所有者」列：组织共享层列出本 org 已发布的
+`active` 版本（`org-skill-root`，所有者显示「本组织」），用户层只返回调用者自己的 Skill，所以所有者
+就是当前用户，草稿单独标注「草稿 / 已发布」；管理员另有「近 7 天调用」列（`/api/admin/skill-usage`，
+只统计 `skill` 工具调用，接口不可用或字段不合法时不显示该列），悬停显示按层拆分的明细，
+MCP 状态以服务端的 `status` 为准（`capabilityFormat.ts`），模型标注目录默认模型
+与看图 / 思考 / 工具调用能力。Extension 诊断已移除；个人 Skill 的上传、启用与共享申请在设置弹窗里。
+
+**Skill 共享**（`/admin/skills`）— `pages/settings/SkillAdminPage.tsx`，两个 tab（ADR 0015 §7.1/§7.2）：
+
+- **共享申请**：本 org 的申请队列（默认只看「待处理」，可按状态筛），每张卡是一个被申请的版本——
+  用户、名字、摘要、申请说明与时间；「查看清单」展开该版本的文件清单与截断的 `SKILL.md`
+  （这是管理员批准前唯一能看到的东西，不看作者的其他 Skill）。批准可同时把该版本设为
+  「当前推荐版本」；驳回必须填写原因（没有原因的驳回在审计里等于没解释），输入为空时按钮禁用。
+  **批准失败时申请保持「待处理」且这一行不消失**：失败原因（摘要不一致、源缺失、名字被别的作者占用）
+  就地报出来，管理员可以再点一次。读取队列失败**不显示成空队列**——那看起来像「没人申请」。
+- **组织共享层**：本 org 每个共享名字的版本表（摘要前缀、状态、发布时间、当前指针），
+  可「设为当前」（不影响任何已钉住的 AgentVersion）、「弃用」（只挡新绑定）、
+  「吊销」（安全动作，立即影响新 Run 的解析；按设计要求先填原因）；「清单」展开某个版本的
+  文件清单与 `SKILL.md`。顶部可直传 `.zip` / `.skill`（≤50MB）发布新版本，可选同时设为当前推荐版本。
+  发布后页面明确提示要去「智能体」的版本配置里引用具体版本，否则没有 Agent 会带上它。
 
 **管理控制台**（`app/layout/AdminShell.tsx`）是独立的全屏布局：左侧「返回对话」与分组导航（运维：运行、
-审批；配置：智能体、能力、A2A 接入），不显示会话侧栏。非管理员访问时只显示「需要管理员权限」；服务端对
-管理接口有同样的角色校验。
+审批；配置：智能体、能力、Skill 共享、A2A 接入），不显示会话侧栏。非管理员访问时只显示「需要管理员权限」；
+服务端对管理接口有同样的角色校验——页面隐藏只是不让人撞上死路，不是权限边界。
 
 **运行**（`/admin/runs`）：全组织的运行，数据来自 `/api/admin/runs*`（见 [API 文档](api.md#管理端运行查询)）。
 统计条（今日运行与较昨日、今日失败与失败率、等待审批 / 回答的数量与最久等待、耗时中位数与 P95、近 7 天运行量；

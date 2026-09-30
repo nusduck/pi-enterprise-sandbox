@@ -62,6 +62,7 @@ test('cordis.patch.yml：凭据只读 env，网关走 LLMIO_BASE_URL，本机执
     'tool-goal',
     'plan-mode',
     'tool-str-replace-editor',
+    'skill-filesystem',
   ]) {
     const block = yaml.split(`- id: ${id}\n`)[1]?.slice(0, 80) ?? '';
     assert.match(block, /disabled:\s*true/, `expected ${id} disabled`);
@@ -100,6 +101,7 @@ test('createRemoteProviders 装配 RPC 代理且不碰本机路径', () => {
     userId: 'u',
     workspaceId: 'w',
     fenceToken: 0,
+    systemSkills: [],
     physicalRoots: ['/var/sandbox/workspaces/secret'],
     fetchImpl: (async () => new Response(JSON.stringify({ ok: true, data: {} }))) as typeof fetch,
   });
@@ -249,6 +251,7 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
     spawnProvider: { inheritsParentContext: boolean; capabilities: unknown } | null;
     toolNames: string[] | null;
     badSchemas: string[];
+    globalSkillProviders: string[];
     seams: {
       approval: boolean;
       permissionPresets: boolean;
@@ -339,5 +342,20 @@ test('boot 之后实际挂载的是自建实现，不是出厂实现', () => {
     mounted.seams.subprocess,
     false,
     '本机 subprocess 不得为了 tool-fs-search 恢复（ADR 0009 D8 的「拒绝」条）',
+  );
+
+  // ── Skill 发现面（ADR 0015 D4 / design §6.5）──────────────────────────────
+  //
+  // 断言的是**组合结果**：boot 之后全局层不得剩下任何 skill provider。
+  //
+  // 为什么断言「注册表里的 provider 集合」而不是「list() 里有没有 skill」：
+  // 文件系统发现面在 boot 树里走 `ctx.fs`（RemoteFileSystem，沙箱内），测试进程
+  // 外面造的夹具根根本读不到，用 list() 做探针只会得到假绿——probe 里已经改成
+  // 直接读 SkillRegistry 的全局层，拿不到私有字段时**抛错**而不是静默通过。
+  assert.deepEqual(
+    mounted.globalSkillProviders,
+    [],
+    '全局层不得有 skill provider：默认根不经过 AgentVersion 的 skillPolicy，' +
+      '且 collectFresh 的「全局层 → agent scope 链」合并不会让后者盖掉它',
   );
 });

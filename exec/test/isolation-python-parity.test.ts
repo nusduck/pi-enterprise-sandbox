@@ -53,7 +53,7 @@ function pairs(argv: readonly string[], flag: string): [string, string][] {
 }
 
 test('[py: test_bwrap_maps_workspace_temp_and_readonly_skills] workspace/temp bound, system skill read-only, no outer /proc bind, unshare flags present, env override passes through', async () => {
-  const ws = await makeTestWorkspace();
+  const ws = await makeTestWorkspace({ systemSkillNames: ['pdf'] });
   try {
     const profile = buildIsolationProfile({
       context: ws.context,
@@ -65,8 +65,13 @@ test('[py: test_bwrap_maps_workspace_temp_and_readonly_skills] workspace/temp bo
 
     assert.ok(pairs(argv, '--bind').some(([s, d]) => s === ws.context.workspaceRoot && d === '/home/sandbox/workspace'));
     assert.ok(pairs(argv, '--bind').some(([s, d]) => s === ws.context.tempRoot && d === '/tmp'));
-    const roReadonlySkill = pairs(argv, '--ro-bind').filter(([, d]) => d === '/home/sandbox/skill');
-    assert.deepEqual(roReadonlySkill, [[ws.context.systemSkillRoot, '/home/sandbox/skill']]);
+    // 系统层**逐包**只读绑定（ADR 0015 D4）：系统根本身不再进 argv，否则名单外的
+    // 包依然能被 `ls`/`read` 到。
+    assert.deepEqual(
+      pairs(argv, '--ro-bind').filter(([, d]) => d.startsWith('/home/sandbox/skill')),
+      [[`${ws.context.systemSkillRoot}/pdf`, '/home/sandbox/skill/pdf']],
+    );
+    assert.ok(!pairs(argv, '--ro-bind').some(([, d]) => d === '/home/sandbox/skill'));
     assert.ok(!pairs(argv, '--bind').some(([, d]) => d === '/home/sandbox/skill'));
 
     for (const flag of [
@@ -201,6 +206,7 @@ test('[py: test_bwrap_preflight_exercises_launch_namespace_policy] preflight ren
     assert.equal(argv[argv.indexOf('--uid') + 1], '12345');
     assert.equal(argv[argv.indexOf('--gid') + 1], '12346');
     assert.equal(argv[argv.indexOf('--cap-drop') + 1], 'ALL');
+    // 探针不带系统名单：系统根整树只读绑定（design §6.4 / §8），与 Python 版一致。
     assert.ok(
       pairs(argv, '--ro-bind').some(
         ([s, d]) => s === ws.context.systemSkillRoot && d === '/home/sandbox/skill',
@@ -271,8 +277,8 @@ test('[py: test_bwrap_binds_only_the_callers_own_user_skill_dir] (reframed for D
   }
 });
 
-test('[py: test_bwrap_omits_user_skill_tier_without_identity] (reframed for D4) no enabled packages means no skill-user mounts, system tier untouched', async () => {
-  const ws = await makeTestWorkspace();
+test('[py: test_bwrap_omits_user_skill_tier_without_identity] (reframed for D4) no enabled packages means no skill-user mounts; the named system package is still bound', async () => {
+  const ws = await makeTestWorkspace({ systemSkillNames: ['pdf'] });
   try {
     const profile = buildIsolationProfile({
       context: ws.context,
@@ -282,7 +288,7 @@ test('[py: test_bwrap_omits_user_skill_tier_without_identity] (reframed for D4) 
     const argv = render(profile);
     assert.ok(
       pairs(argv, '--ro-bind').some(
-        ([s, d]) => s === ws.context.systemSkillRoot && d === '/home/sandbox/skill',
+        ([s, d]) => s === `${ws.context.systemSkillRoot}/pdf` && d === '/home/sandbox/skill/pdf',
       ),
     );
     assert.ok(!argv.join(' ').includes('/home/sandbox/skill-user'));
@@ -291,7 +297,7 @@ test('[py: test_bwrap_omits_user_skill_tier_without_identity] (reframed for D4) 
   }
 });
 
-test('[py: test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch] (relocated to the runner layer) missing system skill root fails before bwrap runs, naming the path and the mount', async () => {
+test('[py: test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch] (relocated to the runner layer) a missing system package fails before bwrap runs, naming the path and the mount', async () => {
   const missingRoot = neverExists('skills-that-were-never-mounted');
   const profile = buildIsolationProfile({
     context: {
@@ -302,6 +308,9 @@ test('[py: test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch]
       tempRoot: '/does-not-matter-for-this-test',
       systemSkillRoot: missingRoot,
       enabledSkillPackages: [],
+      // 点了一个名字出来、源却不存在：系统层是硬绑定（design §6.4），
+      // 这是部署故障，必须在 spawn 之前说清楚，而不是让模型拿到残缺能力集。
+      systemSkillPackages: [{ name: 'pdf', sourcePath: `${missingRoot}/pdf`, kind: 'system' }],
     },
     mode: 'read-only', // 避免真的去挂 workspace/temp 根，这条用例只关心 skill 根
     command: ['bash', '-c', 'pwd'],
@@ -311,7 +320,7 @@ test('[py: test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch]
     (err: unknown) => {
       assert.ok(err instanceof IsolationUnavailable);
       assert.match(err.message, /missing or inaccessible/);
-      assert.ok(err.message.includes(missingRoot));
+      assert.ok(err.message.includes(`${missingRoot}/pdf`));
       return true;
     },
   );
@@ -340,7 +349,7 @@ test('[py: test_bwrap_degrades_to_system_tier_when_user_skill_root_is_unreadable
     t.skip('running as root: chmod-based EACCES cannot be exercised');
     return;
   }
-  const ws = await makeTestWorkspace();
+  const ws = await makeTestWorkspace({ systemSkillNames: ['pdf'] });
   const orgDir = join(ws.root, 'user-skills-broken');
   const pkgDir = join(orgDir, 'pkg-broken');
   await mkdir(pkgDir, { recursive: true });
@@ -358,8 +367,8 @@ test('[py: test_bwrap_degrades_to_system_tier_when_user_skill_root_is_unreadable
     assert.equal(degradedCount, 1);
     assert.ok(!args.join(' ').includes('pkg-broken'));
     assert.ok(
-      args.some((tok, i) => tok === '--ro-bind' && args[i + 2] === '/home/sandbox/skill'),
-      'system tier must still be bound',
+      args.some((tok, i) => tok === '--ro-bind' && args[i + 2] === '/home/sandbox/skill/pdf'),
+      'the bound system package must still be mounted',
     );
     assert.deepEqual(args.slice(args.indexOf('--') + 1), ['bash', '-c', 'pwd']);
   } finally {

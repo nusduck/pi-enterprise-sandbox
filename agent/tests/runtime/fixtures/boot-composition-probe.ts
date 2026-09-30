@@ -48,6 +48,33 @@ const badSchemas =
         })
         .map((t) => t.name);
 
+// Skill 发现面（ADR 0015 D4 / design §6.5）。
+//
+// 出厂的 `skill-filesystem` 注册在**全局层**，默认根不经过任何 AgentVersion 绑定
+// 过滤。`SkillRegistry.collectFresh` 是「全局层 → 该 agent 的 scope 链」按名字合并，
+// 后者覆盖前者——所以全局层扫到的包**不会**被 agent scope 里的 run-filesystem 盖掉。
+//
+// 这里断言的是**注册表本身**，不是「默认根恰好没有 SKILL.md」：
+//   - 文件系统发现面在 boot 树里走 `ctx.fs`（RemoteFileSystem，沙箱内），
+//     测试进程外面造的夹具根根本读不到，用它做探针只会得到假绿；
+//   - 而「全局层还剩哪些 provider」才是真正的安全边界事实。
+// `layers` 是 SkillRegistry 的私有字段。拿不到就抛——让它红，不要静默通过：
+// 一个永远为空的探针比没有探针更糟（2026-08 credentials 事故的形状）。
+const skills = get('skills') as unknown as {
+  layers?: { global?: { providers?: Map<string, { provider?: { name?: string } }> } };
+} | undefined;
+const globalLayers = skills?.layers?.global;
+if (globalLayers?.providers === undefined) {
+  throw new Error(
+    'boot-composition-probe: ctx.skills.layers.global.providers is unavailable; ' +
+      'the global-skill-surface assertion below can no longer see what it checks. ' +
+      'Re-derive it against the current @deepseek-ai/dsh-skill SkillRegistry shape.',
+  );
+}
+const globalSkillProviders = [...globalLayers.providers.values()].map(
+  (entry) => entry.provider?.name ?? '(unnamed)',
+);
+
 process.stdout.write(
   `${JSON.stringify({
     credentials: get('credentials')?.constructor?.name ?? null,
@@ -60,6 +87,7 @@ process.stdout.write(
         : { inheritsParentContext: spawn.inheritsParentContext, capabilities: spawn.capabilities },
     toolNames,
     badSchemas,
+    globalSkillProviders,
     // seam 在不在：D5 要 approval 开、permission 关；subprocess 必须缺席（D8/D11）。
     seams: {
       approval: get('approval') !== undefined,

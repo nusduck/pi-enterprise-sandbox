@@ -7,7 +7,229 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **ADR 0015 复审修复（2026-09-30，均在运行栈或单测上先复现）**：
+  - **只绑定部分系统 Skill 的 Agent 仍能用 `read` / `glob` / `grep` 读到全部系统包**。
+    bwrap 已逐包挂载，但文件工具走 exec 的 fs RPC，`skill` 作用域仍按整个系统根放行。
+    现在带系统名单时 fs 围栏与可读根也逐包，系统根本身不可寻址。
+  - **`skillPolicy` 形状非法时绑定回落到默认策略（全部系统 + 用户 Skill）**。例如更新的写入方
+    在 `skillPolicy.system` 里多写一个键，配置写的是「只带 xlsx」，沙箱里却挂了全部系统包。
+    现在 Worker 绑定时 `DSH_CONFIG_UNSUPPORTED` 拒绝，与顶层未知键同一条护栏。
+  - **滚动升级恢复兼容期**：exec 缺 `systemSkills` 不再 `ENVELOPE_INVALID`，按旧行为整树挂载并按分钟
+    汇总告警；否则 exec 先升级时旧 Worker 的每个 Run 都会失败。收紧留待告警归零后单独发布。
+    公共面、MCP 窄桥与隔离探针恢复整树只读（此前改成了「一个包都不挂」，MCP 外部客户端因此
+    看不到任何系统 Skill，探针也不再覆盖系统根）。
+  - **org 层回收会删掉仍可被绑定的 `active` 版本的字节**，账本仍显示 active：配置面照样列出、
+    保存成功，之后每个 Run 都静默排除它。现在 `active` 版本不回收。
+  - **批准与撤回的竞态**：旧顺序「先字节后状态」下，发布过程中作者撤回会成功，而他的 Skill 已进
+    org 层。现在先迁状态、字节失败再退回 `pending`。
+
+- **org 层账本写错了 org 身份，真实链路直接插入失败**（2026-09-30 容器栈验收抓到）。
+  两张新账本（`tbl_agsvc_org_skills` / `tbl_agsvc_org_skill_versions` / `tbl_agsvc_skill_share_requests`）
+  的 `org_id` 都是 `CHAR(26)` 且带 `→ tbl_agsvc_organizations.org_id` 外键，存的是**内部 ULID**；
+  Run 期读 org 版本的 `readOrgVersion` 也按内部 ULID 查。而管理员上传/申请流程把 BFF 投过来的
+  **外部主体**（开发栈里是 `org_bootstrap`）直接写进账本：写会被外键拒绝（`SKILL_ORG_OPERATION_FAILED`），
+  而**读**会静默命中零行——症状是「发布看起来成功了，Run 里一个共享包都没有」。
+  现在两个服务都要求注入 `resolveOwner`（外部主体 → 内部 ULID，与 `AdminRunQueryService`
+  同一条 `ExternalIdentityResolver` 路径），**先鉴权、再解析**（不认得的身份不该知道 org 是否存在），
+  并加了三条回归用例钉住这个边界。
+
+- **exec 没给 org 包标 `kind`，共享 Skill 挂到了用户层的路径上**（同上，真实链路抓到）。
+  `enabledSkillPackagesFromManifest()` 只算 `sourcePath`，org 条目回来时 `kind === undefined`，
+  于是 `internal-shell.ts` 的 `published.filter((pkg) => pkg.kind === 'org')` 永远是空的——
+  org 包以用户身份混进 `enabledSkillPackages`，被挂到 `/home/sandbox/skill-user/<name>` 而不是
+  `/home/sandbox/skill-org/<name>`。字节挂上了、路径错一层，而且**不报错**：Agent 侧发现
+  （provider 报的逻辑根是 `/home/sandbox/skill-org/<name>`）与沙箱里能 `read` 的位置不一致，
+  正是 ADR 0015 要消掉的「发现与挂载不同构」。现在按 `ref.scope` 显式给 `kind: 'org'`，
+  exec 的 fs 围栏、可读根与挂载目标随之对到同一个逻辑根。
+
+### Added
+
+- **浏览器侧的 Skill 共享入口与管理员页**（P2/P3，ADR 0015 §7.2）：BFF 新增
+  `/api/capabilities/skills/share-requests*`（本人申请 / 撤回）与 `/api/admin/skills/*`
+  （申请队列、审阅清单、批准、驳回、org 层列表、直传发布、改当前版本、弃用、吊销）。
+  BFF 只转发与投影身份：角色来自**服务端写入**的 `X-Acting-Role`，浏览器的同名头进不来；
+  admin 队列的 `scope=org` 由 BFF **写死**——浏览器说 `scope=user` 不能把队列换成别人的
+  名单，而权限判定仍在 Agent（`scope=org` 照旧要过 admin 检查）。管理控制台新增
+  `/admin/skills`（共享申请 / 组织共享层两个 tab），个人设置弹窗的每个**已启用** Skill 上
+  新增「申请共享」与「我的共享申请」列表（含撤回）；同名的 `pending` 申请还在时按钮禁用，
+  因为再点一次会把旧申请置为 `superseded`、让上次写的说明无声消失。批准失败时申请保持
+  `pending` 且**那一行不从队列里消失**；队列读取失败不显示成空队列。
+
+- **Skill 近 7 天调用按层拆分**（P4，ADR 0015 §7.4）：`GET /api/admin/skill-usage` 的
+  `usage[]` 增加 `scope`（`system` / `org` / `user`），由**那次 Run 的 AgentVersion 引用账本**
+  反推——`skillPolicy` 只钉 system/org 两层，用户层随调用者启用集变化、不进账本，所以
+  「不在账本里」就是 `user`。同一个名字在不同 AgentVersion 下属于不同层时**各出一行**：
+  合成一个数字就答不出「这个系统 Skill 到底有没有人用」。能力页的调用列悬停显示分层明细。
+
+- **能力页展示组织共享层**（P4，design §7.2）：`GET /api/capabilities/skills` 新增
+  `source: 'org-skill-root'` 项，列的是**本 org 已发布的 `active` 版本**，与任何 AgentVersion
+  的绑定无关——用绑定清单会让刚发布、还没被绑定的共享 Skill 从页面上消失。`current_digest`
+  只是「推荐版本」指针，不是可用性判据：指针指着的版本被吊销时回退到 newest active。
+  页面的来源筛选与来源标签按三层（系统 / 组织 / 用户）分开，分层规则只在 `skillHelpers.ts`
+  一处，页面不再各判一次。
+
+- **共享申请与审批流程**（P3，ADR 0015 D6 / design §7.1–§7.3）：
+  用户对自己**已启用**的版本发起申请（钉住该摘要；未启用 → 409 `SKILL_NOT_ENABLED`）、
+  看自己的申请、撤回自己的 `pending`；管理员审阅、批准、驳回。状态机
+  `pending → approved | rejected | withdrawn | superseded`，**只有 `pending` 能迁出**——
+  允许回退会让「这条申请被拒过」这个事实消失。同名再次申请在**同一个事务内**把旧
+  `pending` 置为 `superseded`（两条 pending 会让「该批哪一条」没有答案）。
+  批准先在行锁里迁到 `approved`（与作者撤回互斥），再发字节；字节失败（摘要不一致、
+  源缺失）时申请**退回 `pending`**，作者可以重新发布再申请——「被拒绝」是管理员的判断，
+  不该由一次竞态代劳，也不会留下「已批准但 org 层没有这个版本」。
+  跨 org 一律 404，非 admin 403，每次状态转换记审计。
+- **共享申请与审批的 HTTP 面**（`/internal/skills/share-requests*`，ADR 0015 §7.2）：
+  用户侧发起 / 列表 / 撤回；管理员侧队列 / 审阅清单 / 批准 / 驳回。用户侧与管理员共用
+  `GET ...?scope=org`，但**权限判定不靠这个参数**——`scope=org` 仍要过 admin 检查；
+  角色来自服务端写入的 `X-Acting-Role`。驳回必须带原因（没有原因的驳回在审计里等于
+  没解释）。跨 org 与跨用户一律 404。浏览器侧的 BFF 路由与申请/审阅 UI 见本文件
+  顶部「浏览器侧的 Skill 共享入口与管理员页」。
+
+- **用户启用的名字保留**（ADR 0015 D7 / design §7.3）：与本 org 任一**非 revoked**
+  org 名冲突的包不能启用（`SKILL_NAME_RESERVED_BY_ORG`）。**原作者豁免**：被提升过的
+  Skill 的原作者仍可启用自己的新版本，否则他没法迭代草稿；别人仍被挡住。
+  `deprecated` 仍然占名（只挡新绑定，不释放名字），全部 `revoked` 之后才释放。
+
+- **org 层版本回收**（`skills/org-gc.ts`，ADR 0015 D8 / design §5.4）：四条同时满足才删——
+  **不被任何 AgentVersion 引用**、**不是 `current_digest`**、**账本状态不是 `active`**、
+  **超过宽限期**（沿用用户层的 `SKILL_VERSION_GC_GRACE_MS`，同一个解析器）。`active` 版本
+  随时可被新绑定，字节必须在盘上；要回收旧版本先弃用它。`revoked` 的**字节不立刻删**：
+  吊销是加载许可的撤销、不是「字节不存在了」，保留到满足这些条件才回收，便于事后审计。
+  逐名复用用户层的 `collectStaleSkillVersions`——两层字节布局相同，回收规则也该相同。
+  触发点在管理员发布 / 改指针 / 弃用 / 吊销之后（design §5.3 明说不加后台定时器）。
+  **删除后复验**：「先算保留集合、再删盘」两步之间没有锁，期间可能有管理员把 `current`
+  指到候选版本上，而那种删除不可逆（字节没了、账本还指着它）——复验发现即告警。
+
+- **AgentVersion → Skill 引用账本**（`tbl_agsvc_agent_version_skill_refs`，迁移
+  `20260930000002_agent_version_skill_refs.js`，ADR 0015 D5）：AgentVersion 创建时在
+  **同一个事务里**登记它引用的 system / org 层 Skill，供两个安全相关的判定使用——
+  吊销的影响面（哪些 Agent 的下一个 Run 会因此丢挂载）与 GC 判定（被任何 AgentVersion
+  引用的 org 版本**不回收**）。`system.mode: all` 会展开成当前 release 的全部名字写进账本：
+  账本记的是「这个版本实际点名了哪些包」，只有这样 release 删包时才能回答谁受影响。
+  **用户层不进这张表**——它随调用者变化，不随 AgentVersion 固定。只增不改：AgentVersion
+  不可变，引用集合在创建那一刻冻结。吊销响应的 `affectedAgentVersionIds` 由此从「恒为空」
+  变成真实数据。
+
+- **`skillPolicy.org` 开始真正生效**（P2）：Run 解析（`readOrgVersion`）与配置面校验
+  都接到 `OrgSkillRepository`。保存时钉住的 org 版本必须是本 org 已发布的 `active` 版本：
+  不存在或已 `revoked` → `SKILL_ORG_VERSION_UNKNOWN`，`deprecated` → `SKILL_ORG_VERSION_DEPRECATED`
+  （弃用只挡**新绑定**，已钉住的版本照常运行）。`revoked` 在配置面等于不存在——必须在
+  保存时就被判出来，而不是等 Run 期静默排除。
+
+- **修复：`AgentConfigValidator` 把 org 层存成实例字段会导致跨租户泄漏。**
+  这个校验器由 `createHttpServices()` 在启动时建一次并复用，而 org 技能列表是**每 org
+  不同**的。第一版把它存进实例，两个 org 的并发请求会在 `await` 之间互相覆盖——A 的
+  `GET /api/agents/config/options` 可能读到 B 的 org 技能列表与版本摘要。现在 org 层
+  作为**每次调用的参数**传入（`options(orgSkills)` / `validate(config, orgSkills)`），
+  `capabilityRevision` 也按本次的 org 层现算。有回归测试用同一个实例连续按两个 org
+  投影，第二次必须只看到自己的。
+
+- **org 层共享 Skill 的管理员操作面**（`OrgSkillAdminService` + `/internal/skills/org*`，ADR 0015 §7.2）：
+  管理员直传归档、列表、看某个版本的文件清单与截断 `SKILL.md`、改「当前推荐版本」、
+  弃用、吊销。鉴权沿用既有机制——角色来自**服务端写入**的 `X-Acting-Role`，不是浏览器
+  能自己声明的；非 admin 403。作用域是调用者当前 org，**跨 org 一律 404 而不是 403**
+  （存在性本身不能泄漏）。吊销响应带受影响的 AgentVersion 列表（当前恒为空——`refs`
+  表还没建，宁可返回空也不编一个数字）。账本说版本存在而盘上没有字节时报
+  `SKILL_ORG_BYTES_MISSING`：那是**存储损坏**，报成「没找到」会让人以为版本不存在从而
+  重新发布同一摘要。浏览器侧的 `/api/admin/skills/*` 路由与管理员 UI 见本文件顶部
+  「浏览器侧的 Skill 共享入口与管理员页」。
+
+- **org 层共享 Skill 的发布路径**（`skills/org-publish.ts`，ADR 0015 D5/D6）：
+  管理员上传的归档走**与用户层同一套**解包与校验（大小、条目数、路径穿越、符号链接、
+  frontmatter、系统同名遮蔽），落字节到 `<base>/<orgId>/_org/<name>/.v/<digest>/`，
+  最后写账本。顺序是**先字节、后账本**：任何一步失败账本里都不会出现这个版本，只留下
+  一个没人引用的目录由 GC 回收——反过来会留下「账本指向不存在字节」的损坏，而那种损坏
+  要到 Run 期才发现。摘要按**复制后的暂存字节**算，不是上传的 zip。
+  批准路径（`publishOrgSkillFromPublishedVersion`）复制作者的**已发布**版本而不是草稿
+  （草稿模型可写，批准一个会变的目录等于批准移动目标），复制后重算摘要，与申请时钉住的
+  不一致就拒绝并把两个摘要都带回去。解包临时区放在系统临时目录而不是发布存储里——
+  否则半成品会被列表接口与 GC 当成「这个 org 有一个叫这个名字的包」。
+  HTTP 面（`/api/admin/skills/org` 与 `/internal/skills/org`）与管理员 UI 见本文件顶部。
+
+- **org 层共享 Skill 的账本读写**（`OrgSkillRepository`，ADR 0015 D5/D8）：
+  发布版本（事务内先占位再锁 `(org, name)`，同 org 同名串行、不同名不互锁）、改「当前推荐版本」
+  指针、弃用/吊销（带留痕）。三条刻意的纪律：**首次发布才默认把指针指到新版**，之后升级必须是
+  显式动作（否则同一个 AgentVersion 在不同时间行为不同，审计回答不了「那次 Run 用了哪版」）；
+  `revoked` 是**终态**——既不能改回 active，同一摘要也不允许重新发布（否则吊销成了可逆的展示开关）；
+  空 `orgId` 一律拒绝，不能靠 `where org_id = ''` 静默命中零行并被当成「这个 org 没有 org 层」。
+  **还没有 API 与 UI 入口**——发布/审批的 HTTP 面与 `skillPolicy.org` 的消费在后续阶段接上。
+
+- **Agent 配置页新增「技能」分类**（ADR 0015 D2，[设计稿](design/skill-catalog-and-agent-binding.md)）：
+  三层分开编辑——系统层「全部 / 只选这些 / 不带」、组织共享层勾选并**钉住一个版本**、用户层一个开关。
+  没设过该键时页面照实说「未设置」而不冒充默认值；保存结果与「省略」等价时删掉整个键（写回等价对象会改变
+  既有版本的 `config_hash`）；`allowlist` 之外不写 `names`（服务端对「非 allowlist 带 names」报错）。
+  名单里已不在当前 release 的名字标出来而不是静默丢掉；结构不合法时暂停该分类，让用户去 JSON 修。
+
+- **org 层共享 Skill 的三张账本表**（ADR 0015 D5/D6/D8，迁移 `20260930000001_org_skills.js`，
+  进 DBA 发布包并同步 `contract/schema/schema-manifest.json`）：
+  `tbl_agsvc_org_skill_versions`（每个已发布摘要一行，不可变：来源、发布人、`active` /
+  `deprecated` / `revoked` 状态与吊销留痕）、`tbl_agsvc_org_skills`（每名一行的「当前推荐
+  版本」指针，也是发布/弃用的行锁对象）、`tbl_agsvc_skill_share_requests`（用户申请 →
+  管理员决定的流程账）。**本迁移只建表，还没有读写方**——发布/审批 API 与 `skillPolicy.org`
+  的消费在后续阶段接上。表/索引按 UPspec 命名（新增缩写 `osv` / `osk` / `osr`）。
+
+- **AgentVersion 新增 `skillPolicy`：按 Agent 选择 Skill**（ADR 0015 D2，[设计稿](design/skill-catalog-and-agent-binding.md)）。
+  `system`（`all` / `allowlist` / `none`）决定这个 Agent 带哪些系统 Skill，`user`
+  （`allow` / `deny`）决定是否带上调用者自己启用的 Skill；`org[]` 为 P2 的组织共享层预留
+  （当前没有 org 层可绑，条目一律报 `SKILL_ORG_VERSION_UNKNOWN`）。**省略 `skillPolicy`
+  等于当前行为**（全部系统 + 用户启用），既有 AgentVersion 不迁移、`config_hash` 不变。
+  配置面：`GET /api/agents/config/options` 的 `platformConstraints.skills` 返回系统层与
+  本 org 的 org 层（不含任何用户的个人 Skill 与物理路径），`capabilityRevision` 随之变化；
+  `POST /api/agents/config/validate` 的 `effectiveSummary.skills` 返回展开后的有效清单。
+  错误码：`SKILL_SYSTEM_UNKNOWN`（名字不在当前 release）、`SKILL_POLICY_TOO_LARGE`
+  （展开后超过 `ENABLED_SKILLS_MAX`）；形状错误按字段路径返回 `CONFIG_TYPE` /
+  `CONFIG_UNKNOWN_FIELD` / `CONFIG_LIMIT`。保存与校验**共用同一套语义判定**，不会出现
+  「保存成功但起 Run 必失败」。
+- **有效 Skill 清单解析**（`agent/src/skills/run-skills.ts`，ADR 0015 D1/D7/D8）：每个 Run
+  只算一次清单，系统层与 release 求交（release 里已消失的名字排除并写诊断 `not_in_release`），
+  用户层按 `user` 开关决定是否读账本，三层按 **system > org > user** 去重，落败项写
+  `name_conflict`，被吊销的 org 版本写 `revoked`，坏包写 `user_version_unusable`。
+  **账本读失败一律让 Run 失败**（fail-closed），不降级成「这个用户没有 Skill」。
+- **系统层 Skill 目录**（`agent/src/skills/system-catalog.ts`）：扫 `SKILLS_ROOT`
+  得到当前 release 的包名与描述，5 秒 TTL 缓存。目录不存在（开发机没挂载）是空集，
+  其余 I/O 错误上抛——**读失败 ≠ 空能力集**。进程内只有一份（配置面与 Run 解析共用），
+  否则两份 TTL 缓存会出现「保存时认得、起 Run 时不认得」的窗口。
+- **Run 实际按绑定发现 Skill**（Agent 侧）：`dsh-run-executor` 把绑定的 `skillPolicy`
+  交给每 Run 的解析，runtime-factory 在 agent scope 只注册**名单内**的系统 provider
+  （`list` 与 `get` 都过滤，绕不过去），org / user 层各自用对的逻辑根
+  （`/home/sandbox/skill-org` 与 `/home/sandbox/skill-user`）。省略 `skillPolicy`
+  时系统层仍按旧形状注册（整棵树），行为与升级前一致。诊断同时写日志与清单。
+- **exec 逐包挂载系统层与 org 层**（ADR 0015 D4/D5）：请求带 `systemSkills` 时，系统根
+  **不再整树 `ro_bind`**，改为按名单逐包挂到 `/home/sandbox/skill/<name>`——没进名单的包
+  在沙箱里根本不存在，模型 `ls`/`read` 不到，发现与挂载因此同构。org 层逐包挂到
+  `/home/sandbox/skill-org/<name>`，与用户层分开（审计与脱敏要能分辨来源）。围栏（fs
+  只读根、可读根清单、错误脱敏根）三层都登记；未绑定的包一律 `FS_SANDBOX_DENIED`，
+  层与层之间不互相兜底。`systemSkills` 缺省仍是旧 Agent 的整树挂载（滚动升级兼容）。
+- **Agent Card 按有效绑定出卡**（ADR 0015 §4.3）：有 `skillPolicy` 的版本，卡的 Skill
+  列表来自 `system` 展开名单 + `org` 钉住的条目（带摘要前缀），**不再回落到 release
+  目录扫描**（那样会播报未绑定的系统包）。`user` 层不进卡——它随调用者变化，不是
+  Agent 的对外能力。没有 `skillPolicy` 的 legacy 版本维持旧行为。
+
 ### Changed
+
+- **清单契约扩展**（`contract/src/skill-manifest.ts`，ADR 0015 D4/D5）：`enabledSkills[]`
+  新增可选 `scope: 'user' | 'org'`（缺省 `user`，旧 Agent 语义不变），exec 按它选 owner 根
+  （`<orgId>/<userId>` 或 `<orgId>/_org`）；新增可选顶层 `systemSkills: string[]`，
+  **缺省与空数组语义不同**——缺省是旧 Agent（exec 维持系统根整树挂载），空数组是
+  「一个系统包都不挂」。同一名字同时出现在两层 → `ENVELOPE_INVALID`（Agent 侧已去重，
+  出现即是拼错请求）。两者都在 HMAC 覆盖范围内。
+- **滚动升级护栏：`schemaVersion: 1` 的 AgentVersion 出现运行时未知的顶层键即拒绝绑定**。
+  Worker 起 Run 时若发现这类记录，直接以 `DSH_CONFIG_UNSUPPORTED` 失败，不再把不认识的字段
+  当作「省略」继续跑。这是 ADR 0015 的前置改动：新字段（如 `skillPolicy`）由更新的写入方落库，
+  旧 Worker 忽略它会让**绑定静默失效**——配置说「这个 Agent 只带 pdf」，实际跑的是全部系统 Skill。
+  没有 `schemaVersion` 的 legacy 记录不受影响（它们本来就带 `skills` / `extensions` /
+  `sandboxPolicy` 等 v1 已删除的键，未知键维持既有忽略行为）。部署顺序因此是
+  **exec / Worker 先于允许写入新字段的 API**。
+
+- **关掉出厂的全局 `skill-filesystem` skill provider**。它注册在 SkillRegistry 的全局层，
+  默认根（project 的 `.dsh/skills`、`.agents/skills`，用户的 `~/.dsh/skills`、`~/.agents/skills`，
+  以及 `DSH_BUNDLED_SKILL_DIR`）不经过任何 AgentVersion 绑定过滤；而注册表的读取是
+  「全局层 → agent scope 链」按名字合并，agent scope 里按 Run 清单注册的 `run-filesystem`
+  **盖不住**它。留在组合里就有一条绕过绑定的发现面（模型能看见并加载清单之外的 Skill）。
+  `boot.test.ts` 现在断言 boot 之后全局层没有任何 skill provider，且探针在读不到注册表内部
+  结构时**抛错而不是静默通过**。
 
 - **Agent 提示词补齐任务与交付约定**：平台新增独立 `Doing work` section，覆盖范围、关键澄清、事实与推断、
   操作结果确认、适度验证与完成报告；空人格的通用智能体也会获得这些约定。工具指导按每个模型步骤的最终

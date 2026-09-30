@@ -69,6 +69,9 @@ export async function requireOwnedSession(
       tempRoot,
       systemSkillRoot: deps.systemSkillRoot,
       enabledSkillPackages: [...deps.enabledSkillPackagesFor(acting.orgId, acting.userId)],
+      // 公共面**不带系统名单**（`systemSkillPackages` 省略）：浏览器侧没有
+      // AgentVersion 绑定。公共面的文件路由只服务 `workspaceRoot` 之下的路径（见
+      // `public/files.ts`），也从不构造隔离 profile，所以这里维持 ADR 0015 之前的形状。
     };
     return { workspace: ctx, physicalRoots: physicalRootsOf(ctx) };
   } catch (err) {

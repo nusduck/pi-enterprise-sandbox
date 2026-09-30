@@ -16,6 +16,7 @@ import type { DataSourceMount, EnabledSkillPackage, SandboxMode, WorkspaceContex
 import { DATA_SOURCE_ENV_PREFIX, DATA_SOURCE_MOUNT_ROOT } from '@dsh/contract/data-sources.js';
 import { writableRoots } from '../fs/writable-roots.js';
 import {
+  AGENT_ORG_SKILL_PATH,
   AGENT_PYTHON_VENV,
   AGENT_SKILL_PATH,
   AGENT_TEMP_PATH,
@@ -140,7 +141,9 @@ function logicalCwd(relative: string, scope: 'workspace' | 'temp' | 'skill-draft
   return relative === '' || relative === '.' ? root : `${root}/${relative}`;
 }
 
-function buildStaticMounts(ctx: Pick<WorkspaceContext, 'systemSkillRoot'>): Mount[] {
+function buildStaticMounts(
+  ctx: Pick<WorkspaceContext, 'systemSkillRoot' | 'systemSkillPackages'>,
+): Mount[] {
   const mounts: Mount[] = [];
   mounts.push({ kind: 'proc', target: '/proc', sessionSpecific: false });
   mounts.push({ kind: 'dev', target: '/dev', sessionSpecific: false });
@@ -173,28 +176,46 @@ function buildStaticMounts(ctx: Pick<WorkspaceContext, 'systemSkillRoot'>): Moun
       sessionSpecific: false,
     });
   }
-  // 系统 skill 树是硬绑定：缺失是部署故障，要在启动前就说清楚（见
-  // `bubblewrap.ts` 的 `resolveEffectiveMounts()`），而不是让 bwrap 用一句
-  // "can't find source path" 带走 bash/python/pwd。
-  mounts.push({
-    kind: 'ro_bind',
-    source: ctx.systemSkillRoot,
-    target: AGENT_SKILL_PATH,
-    required: true,
-    sessionSpecific: false,
-  });
+  // 系统层（ADR 0015 D4）。两种形状，都是**硬绑定**（`required: true`）：字节随
+  // release 交付、运行期不可变，缺失是部署故障，要在启动前说清楚（见 `bubblewrap.ts`
+  // 的 `resolveEffectiveMounts()`），而不是让 bwrap 用一句 "can't find source path"
+  // 带走 bash/python/pwd。
+  //
+  // - 带名单：逐包挂，`mounts` 里没有的包在沙箱里**根本不存在**——配置说「只带 pdf」
+  //   时模型 `ls`/`read` 不到别的系统包，发现与挂载同构。
+  // - 省略名单：滚动升级兼容期的旧 Agent、MCP 窄桥与启动探针（design §8），维持整树挂载。
+  if (ctx.systemSkillPackages === undefined) {
+    mounts.push({
+      kind: 'ro_bind',
+      source: ctx.systemSkillRoot,
+      target: AGENT_SKILL_PATH,
+      required: true,
+      sessionSpecific: false,
+    });
+  } else {
+    mounts.push(...buildSkillPackageMounts(ctx.systemSkillPackages, AGENT_SKILL_PATH, true));
+  }
   return mounts;
 }
 
-/** 逐包 `ro_bind`（ADR 0008 D4）：未启用的包根本不在 `mounts` 里，
- * 而不是"整个目录挂进去、靠 prompt 列表不提它"。`required: false` 保留今天
- * 那条来之不易的健壮性——一个包的挂载失败，不能让这个用户连 `pwd` 都用不了。 */
-function buildSkillPackageMounts(packages: readonly EnabledSkillPackage[]): Mount[] {
+/** 逐包 `ro_bind`（ADR 0008 D4 / ADR 0015 D4/D5）：未绑定的包根本不在 `mounts` 里，
+ * 而不是"整个目录挂进去、靠 prompt 列表不提它"。
+ *
+ * 目标根由调用方给：系统层 `/home/sandbox/skill`、org 层 `skill-org`、
+ * 用户层 `skill-user`。三者的差别在目标前缀与 `required`：
+ * - 用户 / org 层 `required: false`——一个包挂不上不能让这个用户连 `pwd` 都用不了；
+ * - 系统层 `required: true`——字节随 release 交付且运行期不可变（design §6.4），
+ *   缺包是部署故障，要炸在启动前而不是让模型拿着残缺能力集跑。 */
+function buildSkillPackageMounts(
+  packages: readonly EnabledSkillPackage[],
+  targetRoot: string,
+  required: boolean,
+): Mount[] {
   return packages.map((pkg) => ({
     kind: 'ro_bind',
     source: pkg.sourcePath,
-    target: `${AGENT_USER_SKILL_PATH}/${pkg.name}`,
-    required: false,
+    target: `${targetRoot}/${pkg.name}`,
+    required,
     sessionSpecific: true,
   }));
 }
@@ -302,7 +323,8 @@ export function buildIsolationProfile(input: BuildProfileInput): IsolationProfil
 
   const mounts: Mount[] = [
     ...buildStaticMounts(ctx),
-    ...buildSkillPackageMounts(ctx.enabledSkillPackages),
+    ...buildSkillPackageMounts(ctx.enabledSkillPackages, AGENT_USER_SKILL_PATH, false),
+    ...buildSkillPackageMounts(ctx.orgSkillPackages ?? [], AGENT_ORG_SKILL_PATH, false),
     ...rootMounts,
     ...buildHomeMounts(ctx, tempWritable),
     ...buildDataSourceMounts(ctx.dataSources ?? []),

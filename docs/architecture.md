@@ -140,6 +140,7 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 - `$HOME` 是 Bubblewrap 每次执行新建的 tmpfs，因此 `~/.config`、`~/.cache`、`~/.local/share` 显式绑定到 `<session tmp>/.home/` 下的对应目录（`XDG_*_HOME` 同步设置）。依赖用户配置目录的应用（LibreOffice 宏、插件、缓存）因此能在同一 Session 内复用配置；这些目录随 Session 私有 `/tmp` 一同计入配额并一同清理，不构成第四个存储根，也不跨租户共享
 - 内部物理根仅存于 service/repository，不进入 API、SSE、模型上下文或活跃文档示例
 - Skills：共享系统根在 workspace 外并始终只读；用户根按 org/user 隔离。新建只允许当前回合 ZIP attachment 或 Agent 结构化生成，所有变更走审批并由 Agent 原子落盘，Sandbox 执行侧始终只读
+- Skill 分**目录**与**绑定**两个维度（ADR 0015）：目录三层——`system`（平台 release，`/home/sandbox/skill/<name>`，只读，按名选择不钉摘要）、`org`（本 org 管理员背书，`/home/sandbox/skill-org/<name>`，按摘要分版本，复用 `published/` 存储的 `<orgId>/_org` owner 根）、`user`（本人启用，`/home/sandbox/skill-user/<name>`）；绑定由 AgentVersion 的 `skillPolicy` 表达。每个 Run 由绑定 + 调用者身份算出**一份有效清单**（按名去重，优先级 system > org > user，落败项写诊断），Agent 侧的 prompt 目录与 exec 的只读挂载**都只认这份清单**——发现与挂载同构，模型 `ls` 到的就是配置选中的。省略 `skillPolicy` 等于既有行为（全部系统 + 用户启用）。两侧都已落地：Agent 侧的系统 provider 在 `list`/`get` 都按名单过滤，且**总是**向 exec 下发 `systemSkills`（含空数组）；exec 侧带名单时逐包 `ro_bind`，fs 围栏（`read` / `glob` / `grep`）同样只放行名单里的包、系统根本身不可寻址（没进名单的包在沙箱里不存在），系统包是硬绑定：缺包是部署故障，要在 spawn 前带路径说清楚。请求没带名单（滚动升级兼容期的旧 Agent，design §8）时维持整树只读挂载并记告警，收紧待告警归零后单独做。org 层走独立的 `skill-org` 逻辑根，fs 围栏与可读根三层都登记，未绑定的包一律 `FS_SANDBOX_DENIED`。公共面、隔离探针与 MCP 窄桥不带名单，维持整树只读（与 ADR 0015 之前相同）
 - 副作用执行按 `workspace_id` 串行，避免同一 Session 的并发写竞态
 - Conversation 不拥有或派生 Workspace；Workspace 的保留与清理由 Agent Session 生命周期决定
 

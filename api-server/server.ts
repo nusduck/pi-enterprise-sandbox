@@ -60,6 +60,7 @@ import {
   handleExtensionDiagnostics,
   handleSkillDraftUpload,
   handleSkillMutation,
+  handleSkillShareRequests,
 } from './src/routes/capabilities.js';
 import {
   handleGetA2aConfig,
@@ -87,6 +88,7 @@ import {
   handleSetAgentActiveVersion,
 } from './src/routes/agents.js';
 import { handleAdminRunsRoute } from './src/routes/admin-runs.js';
+import { handleAdminSkillsRoute } from './src/routes/admin-skills.js';
 import { authFromRequest, checkSandboxReady } from './src/services/sandbox-client.js';
 import { checkAgentReady } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
@@ -297,6 +299,17 @@ const server = http.createServer(async (rawReq, res) => {
       await handleSkillDraftUpload(parsedUrl, res, req);
       return;
     }
+    // 共享申请（ADR 0015 §7.2 用户侧）：`share-requests` 是保留段，必须在
+    // `/:name/(enable|disable)` 之前判——否则 `share-requests` 会被当成 Skill 名。
+    if (
+      (req.method === 'GET' || req.method === 'POST')
+      && (path === '/api/capabilities/skills/share-requests'
+        || path.startsWith('/api/capabilities/skills/share-requests/')
+        || /^\/api\/capabilities\/skills\/[^/]+\/share-requests$/.test(path))
+    ) {
+      await handleSkillShareRequests(req.method || 'GET', path, res, req);
+      return;
+    }
 
     if (req.method === 'GET' && path === '/api/a2a/config') {
       await handleGetA2aConfig(parsedUrl, res, req);
@@ -376,6 +389,9 @@ const server = http.createServer(async (rawReq, res) => {
 
     // ── 管理端 Run 查询（只读；角色与 org 作用域由 agent/ 判定） ──
     if (await handleAdminRunsRoute(req.method || 'GET', path, parsedUrl, res, req)) return;
+
+    // ── 管理端 Skill（org 层与共享申请；角色与 org 作用域同样由 agent/ 判定） ──
+    if (await handleAdminSkillsRoute(req.method || 'GET', path, parsedUrl, res, req)) return;
 
     // ── Agent catalog（目录事实归 agent/，这里只转发 + 身份投影） ──
     if (req.method === 'GET' && path === '/api/agents') {

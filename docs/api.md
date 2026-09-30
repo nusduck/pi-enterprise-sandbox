@@ -120,7 +120,7 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 
 `GET /api/capabilities/{skills,mcp,tools,models}` 仍从 diagnostics 投影列表；字段可附加 `status` / `dynamic`。
 
-`skills` 是**按调用者投影**的：Agent 用服务端写入的 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析内部 owner，列出系统层、该 owner 的已发布层和草稿层。`source` 分别为 `shared-skill-root`、`user-skill-root`、`draft-skill-root`；浏览器传入的同名 header 不会被透传。
+`skills` 是**按调用者投影**的：Agent 用服务端写入的 `X-Acting-User-Id` / `X-Acting-Organization-Id` 解析内部 owner，列出系统层、**本 org 的 org 共享层**、该 owner 的已发布层和草稿层。`source` 分别为 `shared-skill-root`、`org-skill-root`、`user-skill-root`、`draft-skill-root`；浏览器传入的同名 header 不会被透传。
 
 **2026-08-31（ADR 0009 D7）起，用户侧 Skill 有三个根**：系统根（只读，永远进 prompt）、已启用根（逐包只读，进 prompt）、**草稿根 `/home/sandbox/skill-draft`**（每用户一个，模型可写，**不进发现也不进 prompt**）。模型用 `write` / `bash` 在草稿根里造包——`skill_install` / `skill_create` / `skill_edit` / `skill_uninstall` 这四个工具**已整体取消**。闸门只剩一处：人在 UI 上按「启用」，那一刻平台校验结构、**把字节复制成一份只读的已发布版本**、记内容摘要与启用态（`user_skill_enablements`，owner-scoped）。因为是两份字节，模型之后改草稿动不了已启用的包，所以不需要每 Run 重算摘要。请求不带身份时只投影系统层；用户层基目录**永远不整根扫描**，否则会跨租户列出他人已安装的 Skill。
 
@@ -131,6 +131,98 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 草稿在**启用之后不会消失**——启用是复制字节，草稿留在原地当可编辑的源，停用只撤销启用。所以 `skill_drafts` 里会一直有它；这类条目带 `published: true` 与 `status: 'published'`，与还等着人按「Enable」的 `published: false` / `status: 'draft'` 区分。UI 的 Drafts 区只列后者，否则同一个名字会在页面上出现两次。要重新发布一份改过的草稿，先在 My Skills 里 Disable，草稿会回到 Drafts。
 
 草稿包上传入口是 `POST /api/capabilities/skills/drafts`。支持通过 UI 或客户端直传 `.zip` 与 `.skill` 归档包（请求头带 `X-Filename`，流式二进制 body，单包上限 50MB）。BFF 受信鉴权后透传 Agent；Agent 校验包结构与 `SKILL.md`，解压落入当前用户的草稿根目录 `/home/sandbox/skill-draft/<org>/<user>/<skill-name>/`，状态保持为未启用（`enabled: false, status: 'draft'`）。草稿不进模型发现、不进 prompt，等待用户在 UI 上点击「Enable」正式启用。
+
+### 清单契约：`systemSkills` 与 `enabledSkills[].scope`（ADR 0015 D4/D5，design §6.3、§8）
+
+内部面（`/internal/v1/*`）的请求体顶层两个字段都在 HMAC 覆盖范围内（POST 进 `body_sha256`，
+`fs/stream-text` 的 GET 进规范化 query）：
+
+| 字段 | 说明 |
+|---|---|
+| `systemSkills: string[]` | 本 Run 选中的**系统层**包名（≤256，`SKILL_NAME_PATTERN`，不重复）。**空数组是合法值**，表示一个系统包都不带。缺省见下文（滚动升级兼容期） |
+| `enabledSkills[].scope` | `user`（缺省）\| `org`。exec 按它选 owner 根：`<orgId>/<userId>` 或 `<orgId>/_org` |
+
+带了 `systemSkills` 时系统层**逐包** `ro_bind` 到 `/home/sandbox/skill/<name>`，fs 面
+（`read` / `glob` / `grep`）同样只放行名单里的包，系统根本身不可寻址——没进名单的包无论经
+bash 还是经文件工具都不存在。系统包是**硬绑定**（`required: true`）：字节随 release 交付、
+运行期不可变，缺包是部署故障，要在 spawn 之前带路径说清楚；用户 / org 包仍是
+`required: false`——一个包挂不上不该让这个用户连 `pwd` 都用不了。
+
+**滚动升级兼容期（design §8）**：请求没带 `systemSkills` 视为旧 Agent，exec 维持整树只读
+挂载，并按分钟汇总一条 `[skills] … internal request(s) without systemSkills` 告警。全部 Worker
+升级、这条告警在所有 exec 上归零后，才把缺省改成 `ENVELOPE_INVALID`（尚未收紧）。
+公共面、MCP 窄桥与 `isolation/preflight.ts` 的探针不带名单，维持整树只读（与 ADR 0015 之前相同）。
+
+同一名字同时出现在 `systemSkills` 与 `enabledSkills` 里 → `ENVELOPE_INVALID`（Agent 侧已按
+system > org > user 去重，出现即是调用方拼错）。
+
+### 共享申请与审批（ADR 0015 D6，design §7.1–§7.3）
+
+**浏览器面（BFF）**：`/api/capabilities/skills/share-requests*`（用户侧）与
+`/api/admin/skills/share-requests*`（管理员侧）。BFF 只转发与投影身份——角色判定、
+org 作用域、状态机合法性都在 Agent；浏览器的同名 `X-Acting-Role` 头不会被透传。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/capabilities/skills/{name}/share-requests` | body `{ note? }`。对当前用户**已启用**的版本发起申请，钉住该摘要。未启用 → 409 `SKILL_NOT_ENABLED` |
+| `GET` | `/api/capabilities/skills/share-requests` | 本人的申请列表 |
+| `POST` | `/api/capabilities/skills/share-requests/{id}/withdraw` | 撤回本人的 `pending` |
+| `GET` | `/api/admin/skills/share-requests?status=` | **admin**：本 org 的申请队列 |
+| `GET` | `/api/admin/skills/share-requests/{id}/manifest` | **admin**：被申请版本的文件清单与截断 `SKILL.md`（只看这一个版本，不开放浏览作者的其他 Skill） |
+| `POST` | `/api/admin/skills/share-requests/{id}/approve` | **admin**：body `{ setCurrent?, note? }`。复制作者**已发布**版本到 org 层并重算摘要，不一致即拒绝 |
+| `POST` | `/api/admin/skills/share-requests/{id}/reject` | **admin**：body `{ note }`，**必填**（没有原因的驳回在审计里等于没解释） |
+
+**Agent 内部面**是同一组操作，路径为 `/internal/skills/share-requests*`。用户侧与管理员
+共用这一条路径，靠 `scope=org` 区分列表口径——**权限判定不靠这个参数**：`scope=org` 仍要过
+admin 检查，而且这个参数由 BFF 写死（浏览器不能拿它换到别人的名单）。
+
+错误码：`ADMIN_REQUIRED`(403)、`SKILL_SHARE_REQUEST_UNKNOWN`(404，含跨 org 与跨用户——不泄漏存在性)、
+`SKILL_NOT_ENABLED`(409)、`SKILL_ORG_NAME_TAKEN`(409，名字已被别的作者占用)、
+`SKILL_SHARE_REQUEST_DECIDED`(409，终态不能二次决定)、
+`SKILL_SHARE_DIGEST_MISMATCH`(400，作者在申请后改过——申请**保持 pending**)、
+`SKILL_SHARE_NOTE_REQUIRED`(400)。
+
+**批准是「先字节后状态」**：字节那一步失败时申请保持 `pending`，作者可以重新发布再申请。
+反过来会留下「已批准但 org 层没有这个版本」的不可恢复状态。UI 侧批准失败时**不把行从队列
+里拿掉**——拿掉会让人以为已经处理完了。
+
+**名字保留**（§7.3）：与本 org 任一非 `revoked` org 名冲突的包不能启用
+（`SKILL_NAME_RESERVED_BY_ORG`），但**原作者豁免**——被提升过的 Skill 的原作者要能继续
+启用自己新版本，否则没法迭代草稿。
+
+### org 层共享 Skill 的管理员操作面（ADR 0015 §7.2）
+
+判定沿用既有机制：`AuthSubjects.role` 来自**服务端写入**的 `X-Acting-Role`，不是浏览器能
+自己声明的。非 admin → 403（`ADMIN_REQUIRED`）；所有操作的作用域是调用者的**当前 org**，
+跨 org 的资源一律 404（不是 403——存在性本身不能泄漏）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/admin/skills/org?filename=<name>.zip&set_current=true` | 管理员直传 `.zip` / `.skill`（流式二进制 body，上限 50MB）。解包与校验复用用户层同一套；落字节到 `<base>/<orgId>/_org/<name>/.v/<digest>/`，**先字节后账本**。名字与系统包冲突 → 400 |
+| `GET` | `/api/admin/skills/org` | 本 org 的 org 层列表：每名的版本、状态与 `currentDigest` |
+| `GET` | `/api/admin/skills/org/{name}/versions/{digest}/manifest` | 文件清单（相对路径 + 字节数）、截断的 `SKILL.md`、`truncated`。**不返回其它文件的内容** |
+| `POST` | `/api/admin/skills/org/{name}/current` | body `{ contentDigest }`；改「当前推荐版本」。**不影响任何已钉住的 AgentVersion** |
+| `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate` | body `{ reason }`；只挡**新绑定**，已钉住的版本照常运行 |
+| `POST` | `/api/admin/skills/org/{name}/versions/{digest}/revoke` | body `{ reason }`；安全动作，**立刻**影响新 Run 的解析。响应带 `affectedAgentVersionIds` |
+
+内部面对应 `/internal/skills/org*`，形状与上表逐条相同。
+
+错误码：`ADMIN_REQUIRED`(403)、`SKILL_ORG_VERSION_UNKNOWN`(404)、
+`SKILL_ORG_VERSION_REVOKED`(400，撤销过的摘要不允许再次发布)、
+`SKILL_ORG_BYTES_MISSING`(400，账本说存在而盘上没有——**存储损坏，不是「没找到」**)。
+归档后缀不是 `.zip` / `.skill` → `SKILL_ARCHIVE_INVALID_EXTENSION`(400)；
+超过 50MB → `SKILL_ARCHIVE_TOO_LARGE`(413)。
+
+**状态机**：`active → deprecated → revoked`；`deprecated` 可以改回 `active`，`revoked`
+是**终态**（不能改回来，也不能用同一摘要重新发布）。已钉住的 AgentVersion 在吊销后
+**不被中途撤掉挂载**，但它的**下一个 Run** 会排除该版本并写诊断。
+
+### 能力页里的 org 层
+
+`GET /api/capabilities/skills` 按层投影，本 org 的 org 层项 `source` 为 `org-skill-root`
+（系统层 `shared-skill-root`、用户层 `user-skill-root`、草稿 `draft-skill-root`）。
+org 层列的是**本 org 已发布的 `active` 版本**，与任何 AgentVersion 的绑定无关——
+用绑定清单会让刚发布、还没被绑定的共享 Skill 从页面上消失。
 
 `GET /api/runs/{run_id}/trace` 返回 owner-scoped durable span 树：
 
@@ -205,7 +297,14 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/admin/runs` | 全组织运行列表（**admin**）；见下文「管理端运行查询」 |
 | `GET` | `/api/admin/runs/stats` | 运行统计条（**admin**） |
 | `GET` | `/api/admin/runs/{id}` `/events` `/tools` | 单次运行详情 / 全部持久事件 / 工具台账（**admin**） |
-| `GET` | `/api/admin/skill-usage` | 近 N 天（`days` 1–90，默认 7）全组织各 Skill 的 `skill` 工具调用次数（**admin**） |
+| `GET` | `/api/admin/skill-usage` | 近 N 天（`days` 1–90，默认 7）全组织各 Skill 的 `skill` 工具调用次数，按 `(name, scope)` 分层（**admin**） |
+| `GET` | `/api/admin/skills/org` | 本 org 的 org 共享层列表（**admin**） |
+| `POST` | `/api/admin/skills/org` | 管理员直传 `.zip` / `.skill` 发布到 org 共享层（**admin**，流式，≤50MB） |
+| `GET` | `/api/admin/skills/org/{name}/versions/{digest}/manifest` | 该版本的文件清单与截断 `SKILL.md`（**admin**） |
+| `POST` | `/api/admin/skills/org/{name}/current` | 改「当前推荐版本」（**admin**） |
+| `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate\|revoke` | 弃用 / 吊销某版本（**admin**） |
+| `GET` | `/api/admin/skills/share-requests` | 本 org 的共享申请队列（**admin**） |
+| `GET` `POST` | `/api/admin/skills/share-requests/{id}/manifest\|approve\|reject` | 审阅清单 / 批准 / 驳回（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/runs` | 本人所有未删除任务的执行记录（`since` ISO，`limit` 1–1000，默认 500），每条带 `job_name` / `job_timezone` |
@@ -213,7 +312,10 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/cron-jobs/{id}/run` | 立即触发一次 |
 | `GET` | `/api/capabilities/{skills,mcp,tools,models}` | 从 diagnostics 投影的能力清单 |
 | `POST` | `/api/capabilities/skills/drafts` | 上传 Skill 草稿包（.zip / .skill）；解压至用户草稿根，保持未启用 |
-| `POST` | `/api/capabilities/skills/{name}/enable\|disable` | 启用草稿 / 停用用户 Skill；owner-scoped |
+| `POST` | `/api/capabilities/skills/{name}/enable\|disable` | 启用草稿 / 停用用户 Skill；owner-scoped。名字与本 org 的 org 层冲突 → 409 `SKILL_NAME_RESERVED_BY_ORG`（原作者豁免） |
+| `GET` | `/api/capabilities/skills/share-requests` | 本人的共享申请列表 |
+| `POST` | `/api/capabilities/skills/{name}/share-requests` | 对本人**已启用**版本发起共享申请（body `{ note? }`） |
+| `POST` | `/api/capabilities/skills/share-requests/{id}/withdraw` | 撤回本人 `pending` 的申请 |
 | `GET` | `/api/extensions/diagnostics` | Extension / Profile / allowlist 状态 |
 | `GET` | `/api/a2a/config` | A2A 配置（**admin**） |
 | `POST` | `/api/a2a/credentials` | 签发 A2A 凭据（**admin**） |
@@ -262,8 +364,9 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `delegation.remoteAgents` | ✅ | `delegate_to_remote_agent` 的白名单：`A2A_REMOTE_AGENTS_JSON` 里的远端 `id` 数组（≤20，去重）。保存时要求已登记（否则 `DELEGATION_REMOTE_AGENT_UNKNOWN`）；**不接收**地址、凭据、超时。`platformConstraints.remoteAgents` 只返回 `id`/`name`/`description`。见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md) |
 | `delegation.agents` | ✅ | `delegate_to_agent` 的白名单：同 org 的 Agent `name` 数组（≤20，去重）。保存时要求每个名字在本 org 存在（否则 `DELEGATION_AGENT_UNKNOWN`，别的 org 的同名 Agent 视为不存在）；运行时再判目标是否 active。省略或 `[]` = 不可委派。见 [design/agent-delegation.md](design/agent-delegation.md) |
 | `dataSources` | ✅ | 本 Agent 的 Run 可在沙箱里连接的业务库：`[{ "id": "<数据源 id>" }]`（≤16，不允许重复）。条目只接收 `id`，地址、账号、口令属于 `SANDBOX_DATA_SOURCES_JSON` 目录，写进来即 `CONFIG_UNKNOWN_FIELD`；保存时要求 id 在目录里（否则 `DATA_SOURCE_UNKNOWN`）。`platformConstraints.dataSources` 只返回 `id`/`label`/`description`/`engine`。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md) |
+| `skillPolicy` | ✅ | 这个 Agent 的 Run 带哪些 Skill（ADR 0015 D2，[design/skill-catalog-and-agent-binding.md](design/skill-catalog-and-agent-binding.md)）。`system`（`all`\|`allowlist`\|`none`，`names` 仅 `allowlist` 时允许且必填）、`org[]`（`{ name, contentDigest }`，钉摘要不跟随最新）、`user`（`allow`\|`deny`）。**省略 = 当前行为**（全部系统 + 用户启用），既有版本不迁移、`config_hash` 不变。保存时校验名字在当前 release（`SKILL_SYSTEM_UNKNOWN`）与 org 账本（`SKILL_ORG_VERSION_UNKNOWN` / `SKILL_ORG_VERSION_DEPRECATED`）；有效清单总量超 `ENABLED_SKILLS_MAX` → `SKILL_POLICY_TOO_LARGE` |
 | `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
-| `skills` | ❌ | 已移除，写入即 `CONFIG_UNKNOWN_FIELD`。运行时的 skill 只来自**调用者自己的 skill 目录** |
+| `skills` | ❌ | 已移除，写入即 `CONFIG_UNKNOWN_FIELD`。运行时的 skill 绑定改用 `skillPolicy`（旧 `skills` 是展示用的描述，不能推断绑定意图，故不复用同名键） |
 | `extensions` | ❌ | 已移除（同上）。旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
 | `sandboxPolicy` | ❌ | 已移除（同上），没有执行路径。沙箱模式、网络模式、可写根都由 exec 的部署级配置决定，不按 Agent 分（ADR 0002 起就是如此） |
 | `a2a` / `contextPolicy` | ❌ | 已移除（同上），无读取方 |
@@ -275,11 +378,17 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 - `GET /api/agents/config/options` 返回 `{ schemaVersion, fieldSupport, platformConstraints,
   capabilityRevision }`。`platformConstraints` 只描述能力：模型目录及其可选 effort、工具名、
-  MCP server/工具清单与 `mcpReadiness`、远端 Agent 与数据源目录的展示字段，以及大小上限。**不返回**连接地址、密钥引用、
-  宿主物理路径或别的用户的技能。
+  MCP server/工具清单与 `mcpReadiness`、远端 Agent 与数据源目录的展示字段、Skill 目录
+  （`skills.system` = 系统层名字与描述，`skills.org` = **本 org** 的 org 层版本与状态），
+  以及大小上限。**不返回**连接地址、密钥引用、宿主物理路径或别的用户的技能。
+  `capabilityRevision` 的输入包含 Skill 目录，因此系统包名集合或 org 层
+  `(name, digest, status)` 集合变化会改变它。
 - `POST /api/agents/config/validate` 接收 `{ config, agent_id? }`，返回
   `{ valid, errors, warnings, normalizedConfig?, effectiveSummary, capabilityRevision }`。
   它只解析：不跑工具、不调模型、不建会话、不装 MCP。`agent_id` 按同一条跨租户 404 规则校验。
+  `effectiveSummary.skills` 给出**展开后**的有效清单：`system` 是展开后的名单
+  （`all` 展开成当前 release 的全部名字）、`org` 是钉住的 `(name, contentDigest)`、
+  `user` 是开关本身（**不含**具体用户包名——它随调用者变化）。
 - **状态码语义**：body 结构错误（不是对象、`config` 缺失）是 400；**字段级校验结果是
   合法请求的正常结果，返回 200 + `valid:false`**，`errors` 每条形如
   `{ path, code, message }`，`path` 精确到 `modelPolicy.thinkingLevel`、
@@ -293,6 +402,13 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
   否则 `LEGACY_MODEL_UNMAPPABLE` 阻止升级；`skills` / `extensions` / `sandboxPolicy`
   / `a2a` 与其他未识别键在 legacy 记录里返回 `LEGACY_FIELD_REQUIRES_MIGRATION`，要求管理员显式处理，
   **不会在表单/JSON 往返中被静默丢掉**。`effectiveSummary.migration.blockedPaths` 列出待处理项。
+- **绑定期 fail-closed（滚动升级护栏）**：带 `schemaVersion: 1` 的记录在运行进程
+  （Agent / agent-worker）绑定时出现该进程不认识的**顶层键**，起 Run 直接失败
+  （`DSH_CONFIG_UNSUPPORTED`），不按「字段省略」继续跑。原因：新字段由更新的写入方落库，
+  旧 Worker 不认识它，若忽略就会**静默失效**——配置说「只带 pdf」，实际跑的是全部。
+  没有 `schemaVersion` 的 legacy 记录不受此约束（它们本来就带 `skills` / `extensions` /
+  `sandboxPolicy` 等 v1 已删除的键，且不可变、不迁移），未知键维持既有忽略行为。
+  因此部署顺序是 **exec / Worker 先于允许写入新字段的 API**。
 
 ##### 激活的乐观并发
 
@@ -390,9 +506,14 @@ Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不
 `payload`、`created_at`），BFF 分页拉齐（上限 2 万条）；`/tools` 形状同 `/api/runs/{id}/tools`。
 沙箱进程与日志仍按所有者隔离，管理端不提供跨用户的进程读取。
 
-`GET /api/admin/skill-usage?days=7` 返回 `{ days, since, usage: [{ name, calls }] }`，按调用次数倒序。
+`GET /api/admin/skill-usage?days=7` 返回 `{ days, since, usage: [{ name, scope, calls }] }`，按调用次数倒序。
 只统计名为 `skill` 的工具调用（名字取自参数信封 `$payload.name`，兼容旧的扁平参数）；模型直接读取 Skill 文件
 （例如 `read` 某个 `SKILL.md`）不计入。权限规则同上：非 admin 403，参数非法 400。
+
+`scope`（ADR 0015 D1/D7 / design §7.4）取 `system` | `org` | `user`，由**那次 Run 的
+AgentVersion 引用账本**决定：被该版本钉在系统层的名字记 `system`，钉在 org 层的记 `org`，
+不在账本里的记 `user`（用户层随调用者启用集变化，不进账本）。同一个名字在不同 AgentVersion
+下属于不同层时会**各出一行**——把两层合成一个数字，就答不出「这个系统 Skill 到底有没有人用」。
 
 ### BFF 健康检查
 

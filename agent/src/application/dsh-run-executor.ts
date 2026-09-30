@@ -130,7 +130,10 @@ export class DshRunExecutor {
   projector: Loose;
   recoveryService: Loose;
   sessionLockRenewIntervalMs: Loose;
-  skillRootsForRun: Loose;
+  skillRootsForRun: (
+    identity: Record<string, unknown>,
+    skillPolicy?: unknown,
+  ) => unknown[] | Promise<unknown[]>;
   /** 运维层风险表（`config/agent/tool-risk.json` / `TOOL_RISK_POLICY_*`）。 */
   riskOverrides: Loose;
   /** 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。 */
@@ -177,7 +180,7 @@ export class DshRunExecutor {
    *   projector?: PlatformEventProjector,
    *   recoveryService?: SessionRecoveryService,
    *   sessionLockRenewIntervalMs?: number,
-   *   skillRootsForRun?: (identity: object) => string[],
+   *   skillRootsForRun?: (identity: object, skillPolicy?: SkillPolicy | null) => RunSkillPathEntry[],
    *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
    *   steerPollIntervalMs?: number,
    *   toolBudget?: { maxToolCalls?: number, maxIdenticalToolCalls?: number, maxModelTurns?: number, runDeadlineMs?: number },
@@ -671,16 +674,16 @@ export class DshRunExecutor {
             }
           : null;
 
-      // Skill discovery is per-caller: the system tier plus this user's own
-      // directory. Resolved here (not at factory construction) so one Run's
-      // prompt can never list another tenant's installed skills.
+      // Skill discovery is per-caller **and per-binding** (ADR 0015 D1): system
+      // tier filtered by `skillPolicy.system`, pinned org versions, plus this
+      // caller's own enabled skills when allowed. Per Run so one prompt can
+      // never list another tenant's or an unbound package.
       const runSkillPaths = this.skillRootsForRun
-        ? await this.skillRootsForRun({
-            orgId: eventContext.orgId,
-            userId: eventContext.userId,
-          })
+        ? await this.skillRootsForRun(
+          { orgId: eventContext.orgId, userId: eventContext.userId },
+          boundVersion.skillPolicy ?? null,
+        )
         : null;
-
       this._runtime = await this.dshRuntimeFactory.create({
         agentVersion,
         // 此处只传 persona + Delegation；平台路径/任务约定由 scoped sections 注入。

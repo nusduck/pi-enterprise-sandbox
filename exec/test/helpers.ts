@@ -27,6 +27,16 @@ export interface MakeTestWorkspaceOptions {
   /** 只在磁盘上创建目录、但**不**加入 `enabledSkillPackages`——用来模拟
    * "已安装但未启用"的包，验证它不会被挂载。 */
   readonly installedButNotEnabledPackages?: readonly string[];
+  /**
+   * 系统层**名单**（ADR 0015 D4）。包建在 `<base>/skills/<name>`，与
+   * `systemSkillRoot` 一致。**缺省就是空数组**（一个系统包都不挂），与新 Agent
+   * 下发的形状一致；整树挂载（省略 `systemSkillPackages`）只是兼容期旧 Agent 的形状。
+   */
+  readonly systemSkillNames?: readonly string[];
+  /** 系统根里存在、但**不在**名单里的包名——验证它不会被挂载。 */
+  readonly systemPackagesNotSelected?: readonly string[];
+  /** org 层包名，逐包挂到 `skill-org`。 */
+  readonly orgSkillPackages?: readonly string[];
 }
 
 /** 创建一整套真实存在于磁盘上的 workspace/temp/skill 目录，返回对应的
@@ -57,6 +67,23 @@ export async function makeTestWorkspace(
     // 故意不 push 进 enabledSkillPackages。
   }
 
+  // 系统层：名单里与名单外的包都真在磁盘上，差别只在 context。
+  const systemSkillPackages: EnabledSkillPackage[] = [];
+  for (const name of options.systemSkillNames ?? []) {
+    const pkgRoot = join(systemSkillRoot, name);
+    await mkdir(pkgRoot, { recursive: true });
+    systemSkillPackages.push({ name, sourcePath: pkgRoot, kind: 'system' });
+  }
+  for (const name of options.systemPackagesNotSelected ?? []) {
+    await mkdir(join(systemSkillRoot, name), { recursive: true });
+  }
+  const orgSkillPackages: EnabledSkillPackage[] = [];
+  for (const name of options.orgSkillPackages ?? []) {
+    const pkgRoot = join(base, 'org-skills', name);
+    await mkdir(pkgRoot, { recursive: true });
+    orgSkillPackages.push({ name, sourcePath: pkgRoot, kind: 'org' });
+  }
+
   const context: WorkspaceContext = {
     orgId: 'org_test',
     userId: 'user_test',
@@ -65,6 +92,9 @@ export async function makeTestWorkspace(
     tempRoot,
     systemSkillRoot,
     enabledSkillPackages,
+    orgSkillPackages,
+    // 没给名单就是空数组（一个系统包都不挂），与新 Agent 同形状。
+    systemSkillPackages,
   };
 
   return {

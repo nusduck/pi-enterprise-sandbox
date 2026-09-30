@@ -224,6 +224,9 @@ describe('createExecApp mounts health + internal + public routers', () => {
           fenceToken: 1,
         },
         payload: { path: '/home/sandbox/workspace' },
+        // 与新 Agent 同形状：带系统名单（空 = 一个都不挂）。这条用例只关心
+        // 「每次请求一份新 Cordis ctx」。
+        systemSkills: [],
       });
       const token = issueInternalToken({
         keyring: { [TEST_KID]: TEST_KEY_B64URL },
@@ -273,6 +276,7 @@ describe('createExecApp mounts health + internal + public routers', () => {
         fenceToken: 1,
       },
       payload: { target: json.data },
+      systemSkills: [],
     });
     const listToken = issueInternalToken({
       keyring: { [TEST_KID]: TEST_KEY_B64URL },

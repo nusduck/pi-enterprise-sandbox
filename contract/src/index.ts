@@ -139,16 +139,45 @@ export {
 export type { SchemaDrift, SchemaDriftKind, SchemaManifest } from './schema-manifest.js';
 
 export {
+  assertNoDuplicateSkillScopes,
   canonicalQueryBytes,
   ENABLED_SKILLS_MAX,
   parseEnabledSkills,
   parseSkillVersionSidecar,
+  parseSystemSkills,
   SKILL_DIGEST_PATTERN,
   SKILL_NAME_PATTERN,
   SKILL_VERSIONS_DIRNAME,
   skillVersionPaths,
+  SYSTEM_SKILLS_MAX,
 } from './skill-manifest.js';
-export type { EnabledSkillRef, SkillVersionPaths, SkillVersionSidecar } from './skill-manifest.js';
+export type {
+  EnabledSkillRef,
+  EnabledSkillScope,
+  SkillVersionPaths,
+  SkillVersionSidecar,
+} from './skill-manifest.js';
+
+export {
+  defaultSkillPolicy,
+  parseSkillPolicy,
+  SKILL_POLICY_LAYER_MAX,
+  SKILL_POLICY_TOTAL_MAX,
+  SKILL_SYSTEM_MODES,
+  SKILL_USER_MODES,
+  skillPolicyError,
+  skillPolicyTooLarge,
+} from './skill-policy.js';
+export type {
+  SkillOrgBinding,
+  SkillPolicy,
+  SkillPolicyDiagnostic,
+  SkillPolicyDiagnosticCode,
+  SkillPolicyParseResult,
+  SkillSystemMode,
+  SkillSystemPolicy,
+  SkillUserMode,
+} from './skill-policy.js';
 export {
   DEFAULT_SHELL_PAYLOAD_LIMITS,
   parseShellRunPayload,
