@@ -81,7 +81,13 @@ describe('BrowserAuthService', () => {
     assert.equal(registered.user.organization_id, 'org_bootstrap');
     assert.equal(registered.user.role, 'admin');
     assert.equal((await service.me(`Bearer ${registered.token}`) as any).username, 'alice');
-    const alteredToken = `${registered.token.slice(0, -1)}${registered.token.endsWith('a') ? 'b' : 'a'}`;
+    // 改**签名段的首字符**，不改最后一个：JWT 签名是 base64url 编码的 HMAC（43 字符
+    // 承载 32 字节），最后一位只带 4 个有效位——翻它有时解出**同一串字节**，签名照样通过，
+    // 于是这条用例会随机变红（用户 id 是随机 ULID，token 每次都不同）。这是 base64url 的
+    // 非规范编码，不是安全问题：伪造签名仍然要密钥。
+    const [header, payload, signature] = registered.token.split('.');
+    const alteredToken = `${header}.${payload}.${signature![0] === 'A' ? 'B' : 'A'}${signature!.slice(1)}`;
+    assert.notEqual(alteredToken, registered.token);
     await assert.rejects(
       service.me(`Bearer ${alteredToken}`),
       (error: any) => error instanceof BrowserAuthError && error.status === 401,
