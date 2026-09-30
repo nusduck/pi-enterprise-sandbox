@@ -7,6 +7,7 @@ import {
 import { promisify } from 'node:util';
 import { formatUserExternalSubject } from '../infrastructure/mysql/repositories/organization-repository.js';
 import { ulid } from '../domain/shared/ulid.js';
+import { parseRoleSet, primaryRole, type KnownRole } from '../domain/identity/roles.js';
 
 const pbkdf2 = promisify(pbkdf2Callback);
 /** Pragmatic shape check; deliverability is the mail gateway's business. */
@@ -85,6 +86,25 @@ type CredentialStore = {
   touchLogin(id: string): Promise<void>;
 };
 
+/**
+ * 角色账本的**最小端口**（`MemberRoleService` 满足它）。
+ *
+ * 只要求两件事：读这个人的角色集合、按环境变量名单做一次引导。写成显式端口而不是
+ * 直接依赖服务类：这一跳是「浏览器身份 → 平台角色」的权威，签名写错在 `any` 下不会
+ * 有任何提示（与上面的 `OrganizationStore` 同一理由）。
+ *
+ * 可选是刻意的：**没有注入账本时角色集合为空**——fail-closed，缺配置只会少权限，
+ * 不会把管理面开出去。
+ */
+type MemberRolePort = {
+  listRolesForMember(orgId: string, userId: string): Promise<readonly KnownRole[]>;
+  ensureDeploymentGrant(input: {
+    orgId: string;
+    userId: string;
+    username: string | null | undefined;
+  }): Promise<void>;
+};
+
 type ProfilePatch = { displayName?: string; email?: string | null; notifyRunComplete?: boolean };
 
 /** 服务端算出的邮件通知能力；前端据此禁用开关，不自行猜测。 */
@@ -142,21 +162,24 @@ export class BrowserAuthService {
   credentials: CredentialStore;
   organizations?: OrganizationStore | undefined;
   externalRefs?: ExternalRefStore | undefined;
+  memberRoles?: MemberRolePort | undefined;
   generateId?: (() => string) | undefined;
   /**
-   * 本进程内已经确认 provisioned 的 credential id。
+   * 本进程内已经确认 provisioned 的 credential id → 内部身份 ULID。
    *
    * `me()` 挂在 BFF 的 `resolveTrustedAuth()` 上，**每一个**已认证请求都会走一次；
    * 不记住就是每请求 3~4 次 MySQL 往返。补建本身是幂等的一次性修复
    * （register/login 之后正常不会缺），所以每进程每用户做一次就够。
+   *
+   * 注意：**角色本身不进这个缓存**——授予与撤销必须在下一个请求就生效
+   * （design §4.4），每次都要读账本。缓存的是映射，不是授权。
    */
-  private readonly provisioned = new Set<string>();
+  private readonly identities = new Map<string, { orgId: string; userId: string }>();
   secret: string;
   issuer: string;
   audience: string;
   ttlSeconds: number;
   allowPublicRegister: boolean;
-  adminUsernames: Set<string>;
   notificationCapability: NotificationCapability;
   now: () => Date;
 
@@ -164,28 +187,26 @@ export class BrowserAuthService {
     credentials: CredentialStore;
     organizations?: OrganizationStore;
     externalRefs?: ExternalRefStore;
+    memberRoles?: MemberRolePort;
     generateId?: () => string;
     secret?: string;
     issuer?: string;
     audience?: string;
     ttlSeconds?: number;
     allowPublicRegister?: boolean;
-    adminUsernames?: string[];
     notificationCapability?: NotificationCapability;
     now?: () => Date;
   }) {
     this.credentials = input.credentials;
     this.organizations = input.organizations;
     this.externalRefs = input.externalRefs;
+    this.memberRoles = input.memberRoles;
     this.generateId = input.generateId;
     this.secret = String(input.secret || '').trim();
     this.issuer = String(input.issuer || 'dsh-enterprise-sandbox');
     this.audience = String(input.audience || 'dsh-enterprise-sandbox');
     this.ttlSeconds = Math.min(604_800, Math.max(60, Number(input.ttlSeconds) || 86_400));
     this.allowPublicRegister = input.allowPublicRegister !== false;
-    this.adminUsernames = new Set(
-      (input.adminUsernames || []).map((name) => name.trim().toLowerCase()).filter(Boolean),
-    );
     this.notificationCapability = input.notificationCapability ?? {
       available: false,
       min_run_duration_ms: null,
@@ -194,16 +215,26 @@ export class BrowserAuthService {
   }
 
   /**
-   * 把一个浏览器凭据补成正式的 org / user / membership。
+   * 把一个浏览器凭据补成正式的 org / user / membership，并返回**内部身份 ULID**。
+   *
+   * 角色账本挂在 `(org_id, user_id)` 上，而这里正是把外部凭据翻译成那两个 ULID 的
+   * 唯一一跳，所以它必须把结果交出来（改造前它是 void）。
    *
    * 失败只记日志不抛：这一步是**补建**，它缺席的后果是下游 400，而不是让
-   * 登录本身失败——把它变成硬失败会让一次 MySQL 抖动直接锁死所有人登录。
+   * 登录本身失败——把它变成硬失败会让一次 MySQL 抖动直接锁死所有人登录。代价是
+   * 返回 null 时调用方拿不到角色（fail-closed：少权限，不是多权限）。
    *
    * @param force register/login 走 true：那两条路上凭据刚变过，必须重新对账。
    */
-  private async ensureUserProvisioned(entry: Credential, force = false): Promise<void> {
-    if (!this.organizations || !this.externalRefs) return;
-    if (!force && this.provisioned.has(entry.id)) return;
+  private async ensureUserProvisioned(
+    entry: Credential,
+    force = false,
+  ): Promise<{ orgId: string; userId: string } | null> {
+    if (!this.organizations || !this.externalRefs) return null;
+    if (!force) {
+      const cached = this.identities.get(entry.id);
+      if (cached) return cached;
+    }
     try {
       const provider = 'bff';
       const externalOrgId = entry.organizationId || BOOTSTRAP_ORG_ID;
@@ -246,13 +277,41 @@ export class BrowserAuthService {
       await this.organizations.addMembershipIfAbsent({
         orgId,
         userId: user.userId,
-        role: entry.role || 'user',
+        // 成员关系的 role 已收窄为「成员类型」，不参与授权（design §2.3）：
+        // 角色权威是 member_roles。写当时的 credential 角色只会再制造一份陈旧快照。
+        role: 'member',
         status: 'active',
       });
-      this.provisioned.add(entry.id);
+      const identity = { orgId, userId: user.userId };
+      this.identities.set(entry.id, identity);
+      return identity;
     } catch (err) {
       console.error('[browser-auth] Failed to provision user in organizations:', err);
+      return null;
     }
+  }
+
+  /**
+   * 这个凭据当前的平台角色集合：环境变量引导 + 账本读取。
+   *
+   * 顺序不能反：先引导再读，名单内账号的**首个** `me` 才能立刻看到 admin。
+   * 账本没注入、或身份补建失败时返回空集合（fail-closed）。
+   *
+   * @param force register/login 走 true：那两条路上凭据刚变过，必须重新对账
+   *   （`me` 走缓存，否则每请求 3~4 次 MySQL 往返）。
+   */
+  private async rolesFor(entry: Credential, force = false): Promise<KnownRole[]> {
+    const identity = await this.ensureUserProvisioned(entry, force);
+    if (!identity) return [];
+    if (!this.memberRoles) return [];
+    await this.memberRoles.ensureDeploymentGrant({
+      orgId: identity.orgId,
+      userId: identity.userId,
+      username: entry.username,
+    });
+    return parseRoleSet(
+      await this.memberRoles.listRolesForMember(identity.orgId, identity.userId),
+    );
   }
 
   private requireSecret() {
@@ -261,29 +320,30 @@ export class BrowserAuthService {
     }
   }
 
-  private roleFor(username: string) {
-    return this.adminUsernames.has(username.toLowerCase()) ? 'admin' : 'user';
-  }
-
-  private publicUser(entry: Credential) {
+  private publicUser(entry: Credential, roles: readonly string[]) {
+    const granted = parseRoleSet(roles);
     return {
       id: entry.id,
       username: entry.username,
       email: entry.email,
       display_name: entry.displayName,
-      role: entry.role || 'user',
+      // 兼容主角色（含 admin 即 admin）；**权威是 roles**，前端改读它。
+      role: primaryRole(granted),
+      roles: granted,
       organization_id: entry.organizationId || BOOTSTRAP_ORG_ID,
     };
   }
 
-  private createToken(entry: Credential) {
+  private createToken(entry: Credential, roles: readonly string[]) {
     this.requireSecret();
     const now = Math.floor(this.now().getTime() / 1000);
     const header = base64urlJson({ alg: 'HS256', typ: 'JWT' });
     const payload = base64urlJson({
       sub: entry.id,
       username: entry.username,
-      role: entry.role || 'user',
+      // JWT 里的 role 只作展示，不作权威：撤销要能在下一个请求生效，
+      // 而 token 会一直活到过期（design §4.4）。
+      role: primaryRole(roles),
       organization_id: entry.organizationId || BOOTSTRAP_ORG_ID,
       iat: now,
       exp: now + this.ttlSeconds,
@@ -330,11 +390,22 @@ export class BrowserAuthService {
     }
   }
 
-  private async reconcileRole(entry: Credential) {
-    const desired = this.roleFor(entry.username);
-    if (entry.role === desired) return entry;
-    await this.credentials.setRole(entry.id, desired);
-    return { ...entry, role: desired };
+  /**
+   * 兼容列的写回：`auth_credentials.role` 不再是权威，只投影 `me` 算出的主角色
+   * （design §2.3，删列留给后续清理 PR）。
+   *
+   * 写失败不抛：角色已经读到并会随响应返回，而这一列没有任何判定在读它；
+   * 为一次兼容列的写失败把登录打成 503 是纯粹的倒退。
+   */
+  private async syncCompatRole(entry: Credential, roles: readonly string[]): Promise<Credential> {
+    const compat = primaryRole(roles);
+    if (entry.role === compat) return entry;
+    try {
+      await this.credentials.setRole(entry.id, compat);
+    } catch (err) {
+      console.error('[browser-auth] Failed to sync the deprecated role column:', err);
+    }
+    return { ...entry, role: compat };
   }
 
   async register(body: Record<string, unknown>) {
@@ -361,11 +432,14 @@ export class BrowserAuthService {
         externalOrgId: BOOTSTRAP_ORG_ID,
         email: safeText(body.email, 'email', 320),
         displayName: safeText(body.display_name, 'display_name', 255),
-        role: this.roleFor(username),
+        // 凭据创建时还不知道角色：权威账本随后由 rolesFor() 决定（名单内账号
+        // 会在这里被引导成 admin）。先写默认身份，绝不在创建时按用户名猜角色。
+        role: 'user',
       });
       if (!entry) throw new Error('credential insert did not persist');
-      await this.ensureUserProvisioned(entry, true);
-      return { token: this.createToken(entry), user: this.publicUser(entry) };
+      const roles = await this.rolesFor(entry, true);
+      const synced = await this.syncCompatRole(entry, roles);
+      return { token: this.createToken(synced, roles), user: this.publicUser(synced, roles) };
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
       if (/duplicate|unique/i.test(String((error as Error)?.message || ''))) {
@@ -391,40 +465,51 @@ export class BrowserAuthService {
     if (!entry?.isActive || !(await verifyPassword(password, entry.passwordHash))) {
       throw new BrowserAuthError(401, 'INVALID_CREDENTIALS', 'Invalid credentials');
     }
+    let roles: KnownRole[];
     try {
-      entry = await this.reconcileRole(entry);
+      roles = await this.rolesFor(entry, true);
+      entry = await this.syncCompatRole(entry, roles);
       await this.credentials.touchLogin(entry.id);
-      await this.ensureUserProvisioned(entry, true);
     } catch {
       throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
     }
-    return { token: this.createToken(entry), user: this.publicUser(entry) };
+    return { token: this.createToken(entry, roles), user: this.publicUser(entry, roles) };
   }
 
-  /** Verified, active credential behind a bearer token, or 401. */
-  private async authenticated(authorization: string | undefined): Promise<Credential> {
+  /**
+   * Verified, active credential behind a bearer token, or 401.
+   *
+   * 角色**每次请求**都从账本重读（design §4.4）：JWT 里的 role 只作展示，
+   * 撤销 admin 必须在同一个会话的下一个请求就生效，不必等 token 过期。
+   */
+  private async authenticated(
+    authorization: string | undefined,
+  ): Promise<{ entry: Credential; roles: KnownRole[] }> {
     const match = /^Bearer\s+(.+)$/i.exec(String(authorization || ''));
     const payload = match ? this.verifyToken(match[1] as string) : null;
     if (!payload) {
       throw new BrowserAuthError(401, 'INVALID_TOKEN', 'Invalid or expired token');
     }
     let entry: Credential | null;
+    let roles: KnownRole[] = [];
     try {
       entry = await this.credentials.getByExternalUserId(String(payload.sub));
-      if (entry?.isActive) entry = await this.reconcileRole(entry);
+      if (entry?.isActive) {
+        roles = await this.rolesFor(entry);
+        entry = await this.syncCompatRole(entry, roles);
+      }
     } catch {
       throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
     }
     if (!entry?.isActive) {
       throw new BrowserAuthError(401, 'INVALID_TOKEN', 'Invalid or expired token');
     }
-    return entry;
+    return { entry, roles };
   }
 
   async me(authorization: string | undefined) {
-    const entry = await this.authenticated(authorization);
-    await this.ensureUserProvisioned(entry);
-    return this.publicUser(entry);
+    const { entry, roles } = await this.authenticated(authorization);
+    return this.publicUser(entry, roles);
   }
 
   /**
@@ -432,11 +517,11 @@ export class BrowserAuthService {
    * Kept off `me()`, which runs on every BFF request and must stay cheap.
    */
   async profile(authorization: string | undefined) {
-    const entry = await this.authenticated(authorization);
-    return this.presentProfile(entry);
+    const { entry, roles } = await this.authenticated(authorization);
+    return this.presentProfile(entry, roles);
   }
 
-  private async presentProfile(entry: Credential) {
+  private async presentProfile(entry: Credential, roles: readonly string[]) {
     let organizationName: string | null = null;
     try {
       const ref = await this.externalRefs?.getOrganizationRef('bff', entry.organizationId || BOOTSTRAP_ORG_ID);
@@ -458,7 +543,7 @@ export class BrowserAuthService {
       }
     }
     return {
-      ...this.publicUser(entry),
+      ...this.publicUser(entry, roles),
       organization_name: organizationName,
       status: entry.isActive ? 'active' : 'disabled',
       created_at: entry.createdAt ?? null,
@@ -479,7 +564,7 @@ export class BrowserAuthService {
    * no mail would ever go out.
    */
   async updateProfile(authorization: string | undefined, body: Record<string, unknown>) {
-    const entry = await this.authenticated(authorization);
+    const { entry, roles } = await this.authenticated(authorization);
     const unknown = Object.keys(body || {}).filter((k) => !EDITABLE_PROFILE_FIELDS.includes(k));
     if (unknown.length) {
       throw new BrowserAuthError(422, 'PROFILE_FIELD_NOT_EDITABLE', `Not editable: ${unknown.join(', ')}`);
@@ -544,6 +629,6 @@ export class BrowserAuthService {
     } catch {
       throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
     }
-    return this.presentProfile(updated ?? entry);
+    return this.presentProfile(updated ?? entry, roles);
   }
 }

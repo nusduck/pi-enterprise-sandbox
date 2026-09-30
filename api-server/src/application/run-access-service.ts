@@ -2,6 +2,7 @@
 
 import type { IncomingMessage } from 'node:http';
 import { config } from '../config.js';
+import { formatActingRole } from '../domain/roles.js';
 import { HttpError } from '../http/errors.js';
 import { authFromRequest } from '../services/sandbox-client.js';
 import { authMe } from '../services/agent-auth-client.js';
@@ -103,7 +104,9 @@ export async function resolveTrustedAuth(req: ReqWithTrace | null | undefined): 
     ...forwarded,
     actingUserId: userId,
     actingOrganizationId: organizationId,
-    actingRole: String(user.role || 'user'),
+    // `X-Acting-Role` 是逗号分隔的角色集合（design §4.2）；权威是 `me` 的
+    // `roles`，缺失时退回兼容的 `role` 单值，再没有就是 `user` 哨兵。
+    actingRole: formatActingRole(user.roles ?? user.role ?? null),
     requestId: req?.requestId || null,
     callerType: 'web',
   }, req?.traceContext);

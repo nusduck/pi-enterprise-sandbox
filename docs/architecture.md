@@ -102,6 +102,7 @@ Browser → Frontend → BFF (Node:4000) → Agent (Node:4100) ──入队─�
 - **API Server → Agent**: 内部 Run API（`X-Internal-Token`），序列化 SSE 事件；Run/event 事实仅 Agent MySQL
 - **Agent → Sandbox**: HMAC-authenticated internal HTTP (`/internal/v1/*`) for execution, files, processes, datasets and artifact submit; **不** dual-write Run 状态
 - **BFF → Agent auth**: `/api/auth/*` 经 `AGENT_INTERNAL_TOKEN` 保护的 `/internal/auth/*` 读写 Agent MySQL `auth_credentials`；BFF 只持有 HttpOnly Cookie，exec 没有浏览器认证权威
+- **平台角色（RBAC 一期）**: 权威是 Agent MySQL 的 `tbl_agsvc_member_roles`（挂在 `(org_id, user_id)`，即组织成员关系上），由 admin 在管理控制台的「成员与角色」页授予/撤销，审计写在只追加的 `tbl_agsvc_member_role_events`。`auth_credentials.role` 退化为兼容展示列，`organization_memberships.role` 收窄为「成员类型」不参与授权，`SANDBOX_AUTH_ADMIN_USERNAMES` 降级为首个管理员的引导与锁定。BFF 每次请求经 `me` 重读账本，并把角色**集合**写进 `X-Acting-Role`（逗号分隔）；服务端各处用 `hasRole()` 判定，`admin,reviewer` 仍算 admin。见 [design/rbac-roles.md](design/rbac-roles.md)
 - **Browser/BFF → Sandbox**: 浏览器不直连 Sandbox。用户可见的文件、Dataset、Artifact、Process 操作只能经 BFF `/api/*`；Process 路由先由 Agent 授权 Session 并解析 Workspace，其余路由由 BFF/Agent 注入 owner context。exec `/sessions/*` adapters 只供 BFF 或受控测试调用，不是正式公共 API。
 - **Agent → MCP**: 直连外部 MCP（不经执行面）
 - **Sandbox 子进程 → 业务库（数据源）**: 子进程仍在 `--unshare-net` 下，只经 exec 为本次执行建的 unix socket（`/run/dsh-db/<id>/mysql.sock`）到达 `SANDBOX_DATA_SOURCES_JSON` 登记的地址；哪些库可用由 AgentVersion `dataSources` 决定并随 shell 请求下发，口令由 exec 启动时向 DBPM 取。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md)

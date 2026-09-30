@@ -9,6 +9,9 @@ export const AuthUserSchema = z
     id: z.union([z.string(), z.number()]).optional(),
     username: z.string(),
     display_name: z.string().optional().nullable(),
+    // 角色权威（design §4.1）：`me` / 登录响应里的 `roles`；`role` 只是兼容主角色。
+    // 缺省时保留 undefined，由 hasAdminRole 回退到 `role`，不在这里猜默认角色。
+    roles: z.array(z.string()).optional(),
   })
   .passthrough();
 

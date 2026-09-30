@@ -163,7 +163,7 @@ export async function handleSkillRoute(input: {
 
   // ── org 层管理员操作面（ADR 0015 §7.2）───────────────────────────────────
   //
-  // 鉴权（role === 'admin'）与 org 作用域都在 `orgSkillAdmin` 里判，这里只做
+  // 鉴权（`hasRole(actor, 'admin')`）与 org 作用域都在 `orgSkillAdmin` 里判，这里只做
   // HTTP 形状与错误映射。跨 org 的资源由服务返回「不存在」→ 404，不是 403。
   if (path.startsWith('/internal/skills/org')) {
     if (typeof input.orgSkillAdmin !== 'function') {

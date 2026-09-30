@@ -114,6 +114,17 @@ describe('SkillShareService 权限与作用域', () => {
     );
   });
 
+  it('X-Acting-Role 是集合：admin,reviewer 放行，纯 reviewer 拒绝（design §4.3）', async () => {
+    const { service } = makeService();
+    // 正向对照 + 拒绝对照成对出现，避免「全部拒绝」假通过。
+    const listed = await service.listForAdmin({ actor: { ...ADMIN_ACTOR, role: 'admin,reviewer' } });
+    assert.equal(Array.isArray(listed), true);
+    await assert.rejects(
+      () => service.listForAdmin({ actor: { ...ADMIN_ACTOR, role: 'reviewer' } }),
+      ShareAdminRequiredError,
+    );
+  });
+
   it('跨 org 的申请一律 404（不泄漏存在性），且申请不被改动', async () => {
     const { service } = makeService();
     const row = await pendingRequest(service);

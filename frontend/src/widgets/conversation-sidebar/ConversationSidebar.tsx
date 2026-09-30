@@ -24,6 +24,7 @@ import { SettingsDialog } from '../settings/SettingsDialog';
 import { CommandPalette, type PaletteAction } from '../command-palette/CommandPalette';
 import { listCronJobs } from '../../shared/api/cron-jobs';
 import { hasUnseenRuns, readSchedulesSeenAt } from '../../pages/schedules/scheduleModel';
+import { hasAdminRole } from '../../shared/security/roles';
 import s from './sidebar.module.css';
 
 /**
@@ -67,7 +68,7 @@ export function ConversationSidebar() {
   const isMobile =
     typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
   const signedIn = Boolean(state.authUser?.username);
-  const isAdmin = String(state.authUser?.role || '').toLowerCase() === 'admin';
+  const isAdmin = hasAdminRole(state.authUser);
 
   const markers = useMemo(() => conversationRunMarkers(entityStore), [entityStore]);
   const pendingApprovals = useMemo(() => listPendingApprovals(entityStore), [entityStore]);

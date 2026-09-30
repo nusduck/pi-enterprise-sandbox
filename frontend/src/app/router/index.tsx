@@ -10,6 +10,7 @@ import { CapabilitiesPage } from '../../pages/settings/CapabilitiesPage';
 import { A2aPage } from '../../pages/settings/A2aPage';
 import { AgentsPage } from '../../pages/settings/AgentsPage';
 import { SkillAdminPage } from '../../pages/settings/SkillAdminPage';
+import { MembersPage } from '../../pages/settings/MembersPage';
 import { SchedulesPage } from '../../pages/schedules/SchedulesPage';
 import { ArtifactsPage } from '../../pages/artifact-library/ArtifactsPage';
 
@@ -39,6 +40,7 @@ export function AppRouter() {
         <Route path="/admin/capabilities" element={admin(<CapabilitiesPage />)} />
         <Route path="/admin/skills" element={admin(<SkillAdminPage />)} />
         <Route path="/admin/a2a" element={admin(<A2aPage />)} />
+        <Route path="/admin/members" element={admin(<MembersPage />)} />
 
         {/* Backward-compatible redirects */}
         <Route path="/settings/:tab" element={<LegacySettingsRedirect />} />

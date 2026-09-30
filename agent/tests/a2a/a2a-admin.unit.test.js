@@ -118,6 +118,28 @@ function handlerFixture({
 }
 
 describe('A2A admin HTTP', () => {
+  it('X-Acting-Role 是集合：admin,reviewer 放行，纯 reviewer 拒绝（design §4.3）', async () => {
+    const both = handlerFixture({ role: 'admin,reviewer' });
+    const captured = responseCapture();
+    await both.handler.handle(
+      { method: 'GET', headers: {} },
+      captured.response,
+      new URL('http://agent/internal/a2a/config'),
+    );
+    // 正向：集合里的 admin 过了角色闸门（不是 403）。
+    assert.notEqual(captured.response.statusCode, 403);
+
+    const reviewerOnly = handlerFixture({ role: 'reviewer' });
+    const denied = responseCapture();
+    await reviewerOnly.handler.handle(
+      { method: 'GET', headers: {} },
+      denied.response,
+      new URL('http://agent/internal/a2a/config'),
+    );
+    assert.equal(denied.response.statusCode, 403);
+    assert.equal(denied.body().code, 'ADMIN_REQUIRED');
+  });
+
   it('rejects a non-admin before returning organization data', async () => {
     const { handler } = handlerFixture({ role: 'user' });
     const captured = responseCapture();

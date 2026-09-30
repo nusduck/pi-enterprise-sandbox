@@ -29,6 +29,7 @@ import type {
   SkillShareRequestRepository,
 } from '../infrastructure/mysql/repositories/skill-share-request-repository.js';
 import { ShareRequestError } from '../infrastructure/mysql/repositories/skill-share-request-repository.js';
+import { ROLE_ADMIN, hasRole } from '../domain/identity/roles.js';
 
 /** 发起申请的人。 */
 export interface RequesterActor {
@@ -137,7 +138,9 @@ export interface ShareFlowDeps {
 }
 
 function requireDecider(actor: DeciderActor | null | undefined): DeciderActor {
-  if (!actor || actor.role !== 'admin') throw new ShareAdminRequiredError();
+  // 角色是**集合**（一个人可以同时是 admin 与 reviewer），字面比较会误拒
+  // `admin,reviewer`，且缺失角色时行为必须一样是拒绝（fail-closed）。
+  if (!actor || !hasRole(actor, ROLE_ADMIN)) throw new ShareAdminRequiredError();
   if (!String(actor.externalOrgId ?? '').trim()) throw new ShareAdminRequiredError();
   return actor;
 }

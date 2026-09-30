@@ -2,7 +2,8 @@
  * 管理端的 Run 查询：全组织的运行列表、统计、详情、事件与工具台账。
  *
  * 三条约束（AGENTS.md §2）在这一层落实，而不是交给 handler 或 BFF：
- * - **fail-closed 的角色判定**：要求 `role === 'admin'`；BFF 没解析出角色（null）
+ * - **fail-closed 的角色判定**：要求 `hasRole(auth, 'admin')`——`X-Acting-Role` 是
+ *   逗号分隔的角色集合（`admin,reviewer` 也算 admin）；BFF 没解析出角色（null）
  *   时拒绝，不回退到「默认允许」。
  * - **只限本 org**：org 由调用者的外部身份解析出来，所有查询都带 `org_id`。
  * - **跨 org 一律 404**：别的 org 的 runId 与不存在的 runId 返回同一个错误。
@@ -20,6 +21,7 @@ import {
   type AdminRunRow,
   type AdminRunStatRow,
 } from '../infrastructure/mysql/repositories/admin-run-read-repository.js';
+import { ROLE_ADMIN, hasRole } from '../domain/identity/roles.js';
 
 type Loose = any;
 
@@ -235,7 +237,7 @@ export class AdminRunQueryService {
 
   /** 角色缺失即拒绝：null 说明 BFF 没解析出角色，放行等于把管理面开给所有人。 */
   async #adminOrg(auth: AdminAuth): Promise<string> {
-    if (String(auth?.role || '').toLowerCase() !== 'admin') throw new AdminRoleRequiredError();
+    if (!hasRole(auth, ROLE_ADMIN)) throw new AdminRoleRequiredError();
     return this.resolveOrgId(auth);
   }
 

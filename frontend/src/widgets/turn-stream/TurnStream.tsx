@@ -15,6 +15,7 @@ import { isTerminalRunStatus } from '../../entities';
 import { useChat } from '../../features/chat/ChatContext';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
 import { projectTurnItems, runHasTurnEntities, type TurnItem } from '../../features/chat/projections/turnItems';
+import { hasAdminRole } from '../../shared/security/roles';
 
 export { runHasTurnEntities };
 import { MarkdownBody } from '../markdown/Markdown';
@@ -64,7 +65,7 @@ export function TurnStream({ runId }: { runId: string }) {
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const closePreview = useCallback(() => setPreviewId(null), []);
-  const isAdmin = String(state.authUser?.role || '').toLowerCase() === 'admin';
+  const isAdmin = hasAdminRole(state.authUser);
 
   const run = entityStore.runsById[runId];
   const runActive = Boolean(run && !isTerminalRunStatus(String(run.status)));

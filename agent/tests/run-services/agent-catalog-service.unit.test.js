@@ -172,6 +172,23 @@ describe('AgentCatalogService — 一个 org 下并列多个智能体', () => {
     );
   });
 
+  it('X-Acting-Role 是集合：admin,reviewer 放行，纯 reviewer 拒绝（design §4.3）', async () => {
+    const world = createFakeRunWorld();
+    await provisionOwner(world);
+    const catalog = createCatalog(world);
+
+    // 正向对照：集合里的 admin 必须被认出来，否则 `admin,reviewer` 的用户打不开管理面。
+    const created = await catalog.createAgent(
+      { ...FIXED_AUTH, role: 'admin,reviewer' },
+      { name: '集合里的管理员' },
+    );
+    assert.equal(created.agent.name, '集合里的管理员');
+    await assert.rejects(
+      () => catalog.createAgent({ ...FIXED_AUTH, role: 'reviewer' }, { name: 'nope' }),
+      AdminRoleRequiredError,
+    );
+  });
+
   it('非 admin 不能写目录，但可以读', async () => {
     const world = createFakeRunWorld();
     await provisionOwner(world);

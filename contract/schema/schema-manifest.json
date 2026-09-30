@@ -32,7 +32,8 @@
     "20260923000002_dsh_naming.js",
     "20260928000001_run_completion_notifications.js",
     "20260930000001_org_skills.js",
-    "20260930000002_agent_version_skill_refs.js"
+    "20260930000002_agent_version_skill_refs.js",
+    "20261001000001_member_roles.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -3912,6 +3913,243 @@
         }
       },
       "foreignKeys": {}
+    },
+    "tbl_agsvc_member_role_events": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "action": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "actor_user_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "event_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "role": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "source": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "event_id"
+          ]
+        },
+        "ind_agsvc_mre_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_mre_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "tbl_agsvc_member_role_events_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "tbl_agsvc_member_role_events_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_member_roles": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "granted_by": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "role": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "source": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id",
+            "role"
+          ]
+        },
+        "ind_agsvc_mr_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "role"
+          ]
+        },
+        "ind_agsvc_mr_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "tbl_agsvc_member_roles_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "tbl_agsvc_member_roles_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
     },
     "tbl_agsvc_messages": {
       "engine": "InnoDB",

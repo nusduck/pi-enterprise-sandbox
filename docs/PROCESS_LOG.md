@@ -1225,3 +1225,23 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action：** 吊销请求处理中阻止原生 dialog 的 Esc cancel，空闲时仍允许关闭；移除完整引用集合的虚假截断标记，保留 SKILL.md 的真实截断提示。新增真实浏览器回归脚本，覆盖失败草稿保留、重试、焦点与 1001 条列表；同步 webui / development / CHANGELOG。
 - **STATUS IDs：** 无状态变化，本次不关闭 §32 条目。
 - **验证：** 浏览器回归修复前 1 pass / 2 fail，修复后与部署版各 3/3；六套测试最终通过（exec 459 pass / 3 skipped，BFF 首轮在 Node 22.19.0 有 2 cancelled，Node 22.23.2 全套 185/185），所有类型检查及前端 build 通过。全部镜像重建并更新实际 K8s / Compose 消费者；真实模型 Run、进程 logs / SIGTERM 与跨组织 6×404 通过。边界与初次失败见[证据](evidence/skill-admin-dialog-followup-2026-09-30.md)。
+
+## 2026-10-01 — 平台角色管理（RBAC 一期：admin / reviewer）
+
+- **Context：** 按 [design/rbac-roles.md](design/rbac-roles.md) 实施 P1–P5：把角色从「登录时按
+  `SANDBOX_AUTH_ADMIN_USERNAMES` 重算的单值 `auth_credentials.role`」改成挂在组织成员关系上的
+  角色集合（`tbl_agsvc_member_roles`），由 admin 在管理控制台配置；`reviewer` 本期只落账本与界面。
+- **Action：** 迁移 `20261001000001_member_roles.js`（两张表 + 历史 admin 回填）、`MemberRoleRepository`、
+  `MemberRoleService`（幂等授予/撤销、`SELECT … FOR UPDATE` 的最后 admin 锁、部署锁定、审计、引导）、
+  `me.roles` 与 `X-Acting-Role` 集合化、`hasRole()` 替换服务端 6 处字面判定（agent 与 BFF 各一份实现，
+  由同一份夹具锁定）、`/api/admin/users*` 四个接口与 `/admin/members` 页面。
+  文档同步：api / deployment（新增「升级到 RBAC 一期」）/ architecture / webui / CHANGELOG / .env.example / README。
+  实施中发现并修正两点偏差，已写回设计稿：数据迁移不写审计行（账本由同一迁移创建），
+  且回填必须是 `INSERT IGNORE … SELECT`——否则空影子库生成的发布包抓不到它，走发布包升级会静默跳过。
+- **STATUS IDs：** 无状态变化，本次不关闭 §32 条目（RBAC 不在冻结基线的验收范围内）。
+- **验证：** 六套测试（pytest 223、contract 151、exec 459/3 skipped、agent 1784/8 fail、BFF 231、
+  frontend 486）+ 全部类型检查 + 前端 build。agent 的 8 个失败在 `tests/runtime/*`，已在**干净工作树**上
+  复现同样的 `--expose-internals` 报错（宿主机 Node v26.5.0，仓库钉 22.x），与本变更无关。
+  真实 MySQL 集成用例 12/12（含并发互相撤销）；镜像重建后在开发 K8s 上跑完 §9 七条与 AGENTS §4 链路
+  （真实模型带工具 Run、进程 logs/SIGTERM、跨租户 404）。详见
+  [证据](evidence/2026-10-01-rbac-roles-live-chain.md)。

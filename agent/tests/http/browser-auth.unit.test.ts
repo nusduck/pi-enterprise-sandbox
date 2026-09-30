@@ -56,6 +56,60 @@ function memoryCredentials() {
   };
 }
 
+/**
+ * 角色账本的最小替身（`MemberRolePort`）。
+ *
+ * 角色权威在 `tbl_agsvc_member_roles`，不在 credential 上；这些用例只关心
+ * 「凭据 ↔ 内部身份 ↔ 角色集合」这条链的形状，所以账本用内存实现。
+ * `pinned` 模拟 `SANDBOX_AUTH_ADMIN_USERNAMES` 的引导（只授予、不降级）。
+ */
+function memoryMemberRoles(pinned: string[] = []) {
+  const pinSet = new Set(pinned.map((name) => name.trim().toLowerCase()));
+  const grants = new Map<string, Set<string>>();
+  const key = (orgId: string, userId: string) => `${orgId}/${userId}`;
+  return {
+    grants,
+    async listRolesForMember(orgId: string, userId: string) {
+      return [...(grants.get(key(orgId, userId)) ?? [])];
+    },
+    async ensureDeploymentGrant({ orgId, userId, username }: any) {
+      if (!pinSet.has(String(username || '').trim().toLowerCase())) return;
+      const set = grants.get(key(orgId, userId)) ?? new Set<string>();
+      set.add('admin');
+      grants.set(key(orgId, userId), set);
+    },
+  };
+}
+
+/** provisioning 需要的最小 org / user / membership 映射（角色不在这里）。 */
+function memoryIdentity(orgId = '01M1ORG0000000000000000000') {
+  return {
+    organizations: {
+      async createOrganization() {},
+      async getUserByExternalSubject() {
+        return { userId: '01M1USER000000000000000000' };
+      },
+      async createUserIfAbsent(u: any) {
+        return u;
+      },
+      async addMembershipIfAbsent(m: any) {
+        return m;
+      },
+      async getOrganization() {
+        return { name: '华东销售部' };
+      },
+    },
+    externalRefs: {
+      async getOrganizationRef() {
+        return { orgId };
+      },
+      async getOrCreateOrganizationRef(ref: any) {
+        return { orgId: ref.orgId };
+      },
+    },
+  };
+}
+
 describe('BrowserAuthService', () => {
   it('hashes passwords and rejects a wrong password', async () => {
     const stored = await hashPassword('correct horse');
@@ -64,13 +118,15 @@ describe('BrowserAuthService', () => {
     assert.equal(await verifyPassword('correct horse', 'broken'), false);
   });
 
-  it('registers, logs in, verifies tokens, and reconciles deployment roles', async () => {
+  it('registers, logs in, verifies tokens, and bootstraps deployment roles', async () => {
     const credentials = memoryCredentials();
     const now = new Date('2026-09-01T00:00:00Z');
     const service = new BrowserAuthService({
       credentials,
+      ...memoryIdentity(),
+      // 名单内的账号由账本引导成 admin；角色不再由用户名现算。
+      memberRoles: memoryMemberRoles(['alice']),
       secret: 'a'.repeat(32),
-      adminUsernames: ['alice'],
       now: () => now,
     });
     const registered: any = await service.register({
@@ -80,7 +136,9 @@ describe('BrowserAuthService', () => {
     });
     assert.equal(registered.user.organization_id, 'org_bootstrap');
     assert.equal(registered.user.role, 'admin');
+    assert.deepEqual(registered.user.roles, ['admin']);
     assert.equal((await service.me(`Bearer ${registered.token}`) as any).username, 'alice');
+    assert.deepEqual((await service.me(`Bearer ${registered.token}`) as any).roles, ['admin']);
     // 改**签名段的首字符**，不改最后一个：JWT 签名是 base64url 编码的 HMAC（43 字符
     // 承载 32 字节），最后一位只带 4 个有效位——翻它有时解出**同一串字节**，签名照样通过，
     // 于是这条用例会随机变红（用户 id 是随机 ULID，token 每次都不同）。这是 base64url 的
@@ -137,7 +195,8 @@ describe('BrowserAuthService', () => {
     assert.equal(createdUsers.length, 1);
     assert.equal(createdUsers[0].displayName, 'bob');
     assert.equal(createdMemberships.length, 1);
-    assert.equal(createdMemberships[0].role, 'user');
+    // 成员关系的 role 已收窄为「成员类型」，角色权威是 member_roles（design §2.3）。
+    assert.equal(createdMemberships[0].role, 'member');
 
     await service.login({ username: 'bob', password: 'password123' });
     assert.equal(createdMemberships.length, 2);

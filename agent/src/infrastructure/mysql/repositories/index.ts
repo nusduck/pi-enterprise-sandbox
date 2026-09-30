@@ -162,3 +162,12 @@ export {
   CRON_JOB_LIST_MAX_LIMIT,
 } from './cron-job-repository.js';
 export { SkillEnablementRepository } from './skill-enablement-repository.js';
+export {
+  MemberRoleRepository,
+  MEMBER_LIST_DEFAULT_LIMIT,
+  MEMBER_LIST_MAX_LIMIT,
+  ROLE_EVENT_DEFAULT_LIMIT,
+  ROLE_EVENT_MAX_LIMIT,
+  resolveMemberListLimit,
+  resolveRoleEventLimit,
+} from './member-role-repository.js';

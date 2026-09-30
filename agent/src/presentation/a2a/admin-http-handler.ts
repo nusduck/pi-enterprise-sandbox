@@ -9,6 +9,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ExternalIdentityResolver } from '../../application/parent/external-identity-resolver.js';
 import { publicCredentialView } from '../../application/a2a/credential-service.js';
 import { isUlid } from '../../domain/shared/ulid.js';
+import { ROLE_ADMIN, hasRole } from '../../domain/identity/roles.js';
 
 /**
  * 带 HTTP 状态的错误。
@@ -99,7 +100,7 @@ export function createA2aAdminHttpHandler(deps: AdminHandlerDeps) {
     if (!auth) {
       throw new HttpStatusError('Authenticated admin identity is required', 401);
     }
-    if (String(auth.role || '').toLowerCase() !== 'admin') {
+    if (!hasRole(auth, ROLE_ADMIN)) {
       throw new HttpStatusError('Administrator role is required', 403);
     }
     const repos = deps.createRepositories(deps.db);

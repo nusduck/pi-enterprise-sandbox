@@ -88,6 +88,16 @@ describe('AdminRunQueryService — access', () => {
     }
   });
 
+  it('X-Acting-Role 是集合：admin,reviewer 放行，纯 reviewer 拒绝（design §4.3）', async () => {
+    // 正向对照：`admin,reviewer` 里的人仍是 admin；旧的字面比较会把他误拒。
+    const listed = await service().list({ ...ADMIN, role: 'admin,reviewer' });
+    assert.deepEqual(listed.runs.map((r) => r.run_id), [RUN_A]);
+    await assert.rejects(
+      service().list({ ...ADMIN, role: 'reviewer' }),
+      AdminRoleRequiredError,
+    );
+  });
+
   it('lets an admin list and read runs of their own org', async () => {
     const read = fakeRead();
     const listed = await service(read).list(ADMIN);

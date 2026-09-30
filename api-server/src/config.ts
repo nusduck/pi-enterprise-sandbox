@@ -3,6 +3,8 @@
  * All environment variable reads are centralized here.
  */
 
+import { formatActingRole } from './domain/roles.js';
+
 const MIN_SECRET_LEN = 32;
 const DEFAULT_DATASET_UPLOAD_MAX_BYTES = 55 * 1024 * 1024;
 const WEAK_SECRET_MARKERS = [
@@ -20,7 +22,11 @@ const WEAK_SECRET_MARKERS = [
 export interface DevelopmentActingIdentity {
   actingUserId: string;
   actingOrganizationId: string;
-  actingRole: 'admin' | 'user';
+  /**
+   * `X-Acting-Role` 的线格式：逗号分隔的角色集合（`admin,reviewer`），没有角色时是
+   * `user`。与生产路径同格式，否则开发模式会走一条鉴权形状不同的分支。
+   */
+  actingRole: string;
 }
 
 /**
@@ -63,12 +69,11 @@ export function resolveDatasetUploadMaxBytes(
 export function resolveDevelopmentActingIdentity(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): Readonly<DevelopmentActingIdentity> {
-  const requestedRole = String(env.BFF_DEV_ACTING_ROLE || 'user')
-    .trim()
-    .toLowerCase();
   // Development-only convenience for exercising the A2A admin surface. The
-  // authenticated production path resolves role from Sandbox instead.
-  const actingRole: 'admin' | 'user' = requestedRole === 'admin' ? 'admin' : 'user';
+  // authenticated production path resolves role from Sandbox instead. Accepts
+  // the same comma-separated set as the wire format (`admin,reviewer`); unknown
+  // values are dropped rather than smuggled through (fail-closed).
+  const actingRole = formatActingRole(env.BFF_DEV_ACTING_ROLE || 'user');
   return Object.freeze({
     actingUserId:
       String(env.BFF_DEV_ACTING_USER_ID || '').trim() || 'local-development-user',

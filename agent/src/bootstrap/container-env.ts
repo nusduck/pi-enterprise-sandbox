@@ -35,6 +35,7 @@ import { OrgSkillRepository } from '../infrastructure/mysql/repositories/org-ski
 import { AgentVersionSkillRefRepository } from '../infrastructure/mysql/repositories/agent-version-skill-ref-repository.js';
 import { SkillShareRequestRepository } from '../infrastructure/mysql/repositories/skill-share-request-repository.js';
 import { AuthCredentialRepository } from '../infrastructure/mysql/repositories/auth-credential-repository.js';
+import { MemberRoleRepository } from '../infrastructure/mysql/repositories/member-role-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
 import * as skillPathsModule from '../skills/paths.js';
@@ -309,6 +310,8 @@ export function createRepositoryBundle(
       generateId: opts.generateId,
     }),
     authCredentials: new AuthCredentialRepository(db, { now }),
+    /** 平台角色账本（admin / reviewer）：授予、撤销与审计（design rbac-roles §2）。 */
+    memberRoles: new MemberRoleRepository(db, { now }),
   };
 }
 
