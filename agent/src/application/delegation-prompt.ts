@@ -2,8 +2,8 @@
  * 系统提示里的「Delegation」段（docs/design/agent-delegation.md D4）。
  *
  * 工具在 boot 时注册一次，描述不能按 Run 变；模型要知道「可以交给谁、各自擅长什么」，
- * 就在本 Run 的租户段（persona）后面追加这一段。企业条款仍由 `assembleSystemPrompt`
- * 追加在最后，不受影响。
+ * 就在本 Run 的租户段（persona）后面追加这一段。平台路径与任务约定由
+ * 独立 section 排在 persona 之前；真实授权仍由执行 guard 判定。
  *
  * 只列**当下** active 的目标：白名单里停用或删掉的 Agent 不进提示，免得模型去调一个
  * 注定被 spawn 拒绝的名字。

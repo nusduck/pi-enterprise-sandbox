@@ -48,12 +48,12 @@ export { runGuards } from './policy/guards.js';
 export { RunBudget, wrapExecute } from './policy/run-budget.js';
 export { recordLedger, redactPostExecute } from './policy/post-execute.js';
 export {
-  assembleSystemPrompt,
   buildPromptPlan,
   ENTERPRISE_CLAUSES,
   PERSONA_VARIABLE,
 } from './prompt/enterprise-clauses.js';
 export type { EnterpriseClauseRoots, PromptPlan } from './prompt/enterprise-clauses.js';
+export { installPromptContract } from './prompt/install.js';
 export { PLUGIN_MANIFEST, ownModulePaths } from './plugins/manifest.js';
 export type { PatchEntry } from './plugins/manifest.js';
 export { renderPatchYaml } from './plugins/render.js';

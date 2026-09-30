@@ -13,8 +13,8 @@ import {
   sharedEnterpriseRuntime,
   createRemoteProviders,
   mountSessionPersistence,
-  assembleSystemPrompt,
   buildPromptPlan,
+  installPromptContract,
   runWithExecRpc,
   runWithRunServices,
   installEnterprisePolicy,
@@ -259,7 +259,6 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
   const loadRuntime = opts.loadRuntime ?? (async () => ({
     createRemoteProviders,
     mountSessionPersistence,
-    assembleSystemPrompt,
     buildPromptPlan,
     bootEnterpriseRuntime,
     sharedEnterpriseRuntime,
@@ -402,12 +401,8 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
          * Wave 5 的 policy/ 全套有单测且全绿，因为那些测的是纯函数。
          */
         async setup(agentCtx) {
-          // 1) 企业系统提示词。order -50：在 harness 身份(-100)之后、
-          //    部署 persona(0) 之前——企业条款约束 persona，不该被它盖掉。
-          //
-          //    服务名是 `systemPrompt`（驼峰），且**必须经 inject 取**：
-          //    直接 `agentCtx.systemPrompt` 会抛 "cannot get property without
-          //    inject"。这两点都是实跑探针撞出来的，不是文档里写着的。
+          // 1) 平台路径/行为在 persona 前；工具指导随每一步实际 schema 过滤。
+          // 顺序不授予权限，执行授权仍由 enterprise-policy guard 保证。
           // reasoning effort 只能经 agent scope 的 ModelSelection 生效：
           // `AgentOptions` 上没有这个字段，装在根 ctx 上会串到别的 Run。
           if (versionEffort) {
@@ -416,21 +411,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
             );
           }
 
-          const systemPromptFiber = agentCtx.inject(['systemPrompt'], (scoped) => {
-            scoped.systemPrompt.section(promptPlan.enterprise);
-            if (promptPlan.persona) {
-              // persona 原文经**变量**注入。`renderPrompt` 对 `{{name}}` 是严格的
-              // （未知/格式错的引用直接抛），而替换进去的值不会被再次扫描——
-              // 这是 DSH 给的字面量安全路径。直接把 persona 放进 section 正文，
-              // 管理员写一句 `{{customer_name}}` 就会让整个 Run 起不来。
-              for (const [name, value] of Object.entries(promptPlan.variables)) {
-                scoped.systemPrompt.variable(name, () => value);
-              }
-              scoped.systemPrompt.section(promptPlan.persona);
-            }
-          });
-          disposers.push(systemPromptFiber);
-          await systemPromptFiber;
+          disposers.push(await installPromptContract(agentCtx, promptPlan));
 
           // DSH's default skill filesystem provider does not consume the
           // resourceLoaderOptions passed by this factory. Register this Run's

@@ -48,7 +48,6 @@ function factoryEmitting(events, { recovered } = {}) {
     loadRuntime: async () => ({
       createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
       mountSessionPersistence: () => freshPersistence(),
-      assembleSystemPrompt: () => 'p',
       runWithExecRpc(_cfg, fn) {
         return fn();
       },
@@ -175,9 +174,6 @@ describe('createDshRuntimeFactory.create', () => {
           return { fs: { kind: 'fs' }, shell: { kind: 'shell' }, jobs: { kind: 'jobs' } };
         },
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt(lead) {
-          return `assembled:${lead ?? ''}`;
-        },
         runWithExecRpc(cfg, fn) {
           rpcCalls.push({ bound: true, workspaceId: cfg.workspaceId });
           return fn();
@@ -269,7 +265,6 @@ describe('createDshRuntimeFactory.create', () => {
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt: () => 'p',
         runWithExecRpc(_cfg, fn) {
           return fn();
         },
@@ -321,7 +316,6 @@ describe('createDshRuntimeFactory.create', () => {
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt: () => 'p',
         runWithExecRpc(_cfg, fn) {
           return fn();
         },
@@ -385,7 +379,6 @@ describe('createDshRuntimeFactory.create', () => {
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt: () => 'p',
       }),
       async createAgent() {
         return {
@@ -481,7 +474,6 @@ describe('createDshRuntimeFactory.create', () => {
           calls.push({ kind: 'mount', ctx, options });
           return persistence;
         },
-        assembleSystemPrompt: () => 'p',
       }),
       async createAgent() {
         assert.fail('persisted session must use resume, not create');
@@ -533,7 +525,6 @@ describe('createDshRuntimeFactory.create', () => {
           return { fs: bind('fs'), shell: bind('shell'), jobs: bind('jobs') };
         },
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt: () => 'p',
         runWithExecRpc: (cfg, fn) => {
           alsScopes.push(cfg.workspaceId);
           return fn();
@@ -561,7 +552,6 @@ describe('createDshRuntimeFactory.create', () => {
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt: () => 'p',
       }),
       async createAgent(_ctx, options) {
         provider = options.agentOptions.provider;
@@ -593,6 +583,7 @@ describe('createDshRuntimeFactory.create', () => {
       let resolve;
       const ready = new Promise((r) => { resolve = r; });
       const fiber = () => undefined;
+      fiber.dispose = () => undefined;
       fiber.then = (onFulfilled, onRejected) => ready.then(onFulfilled, onRejected);
       setTimeout(() => {
         callback();
@@ -634,7 +625,6 @@ describe('createDshRuntimeFactory.create', () => {
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt: () => 'p',
         runWithExecRpc(_cfg, fn) {
           return fn();
         },
@@ -667,7 +657,6 @@ describe('createDshRuntimeFactory.create', () => {
       loadRuntime: async () => ({
         createRemoteProviders: () => ({ fs: {}, shell: {}, jobs: {} }),
         mountSessionPersistence: () => freshPersistence(),
-        assembleSystemPrompt: () => 'p',
       }),
       async createAgent() {
         return {

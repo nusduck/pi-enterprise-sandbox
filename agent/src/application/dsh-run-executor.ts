@@ -683,8 +683,8 @@ export class DshRunExecutor {
 
       this._runtime = await this.dshRuntimeFactory.create({
         agentVersion,
-        // 企业条款由 `assembleSystemPrompt` 追加在它之后且不可被覆盖，所以这里
-        // 传的是"租户自定义的那一段"，不是最终提示词。
+        // 此处只传 persona + Delegation；平台路径/任务约定由 scoped sections 注入。
+        // 专业人格不是最终系统提示词，权限以执行 guard 为准。
         systemPrompt: await withDelegationSection({ lead: boundVersion.systemPrompt, delegation: boundVersion.delegation, orgId: scope.orgId, transactionManager: this.tx, createRepositories: this.createRepositories }),
         agentSession: session,
         sessionSnapshot,

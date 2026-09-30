@@ -310,7 +310,7 @@ WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.ts`�
   **它自己的**版本决定，不继承父的；环由深度上限截断。
 - 幂等键是 DSH 的 tool `callId`，同一次调用重试领回已建的子 Run。
 - 名单中当下 active 的目标（名字 + `description`）以「Delegation」段追加在租户 persona
-  之后（`application/delegation-prompt.ts`），企业条款仍在最后。
+  之后（`application/delegation-prompt.ts`）；平台路径与任务约定作为独立 section 排在 persona 之前。
 - 父子工作区不共享；传文件走产物提交 + 跨会话导入。
 
 #### 远端 A2A 委派
@@ -469,16 +469,21 @@ Exec internal plane (TypeScript)
   `xlsx/scripts/office/pack.py`）；路径里含 `..` 一律拒绝。命令里不允许出现 shell 操作符或
   glob，因此 `cd … && …`、管道、重定向、`$(...)`、`python -m`、换用别的解释器、以及用 `cat`
   读 Skill 文件都会被拒——读文件用 `read` 工具，需要更复杂的命令先把脚本复制到 workspace。
-  这条规则同时写进 system prompt 的 Skills 段，模型不必靠撞墙去发现它。
+  执行授权以执行面 guard 为准；system prompt 的 Paths 段只声明 Skill 的逻辑根与只读/草稿边界。
 - **Enterprise system prompt** 由 `agent/src/runtime/prompt/enterprise-clauses.ts`
-  装配进 DSH：身份可被 AgentVersion / `AGENT_SYSTEM_PROMPT` lead 整段替换，路径 /
-  Skill 入口 / 工具契约 / `## Doing work` 不可被替换。`## Tools` 正文按本 run
-  绑定的工具现场拼接（各工具自己的 `promptSnippet` / `promptGuidelines`），基座
-  不写死工具清单。`## Doing work` 只写工具无关的工作纪律（本轮做完并验证、不擅自
-  改范围、进度写在用户可见回复、密钥不进回复、有交付工具就走交付工具）；todo /
-  memory / `ask_user` / 子代理 / artifact 的用法只出现在对应工具被绑定后的
-  guideline 里，避免没装该能力的 run 读到幽灵工具。`AGENT_SYSTEM_PROMPT` 只替换
-  身份 lead，不再另拼一层「平台安全」附录。
+  的 `buildPromptPlan` 与 `runtime/prompt/install.ts` 装配进每个 DSH Agent scope。
+  顺序为 harness 身份（-100）→ 平台路径/Policy（-50）→ `## Doing work`（-25）→
+  AgentVersion persona + Delegation（0）→ 工具指导（100 起）。顺序不授予权限，真实授权由 guard 保证。
+  persona 通过变量值按字面量注入，不再次展开其中的 `{{...}}`；非空 persona 不会删除平台 section。
+  `## Doing work` 由 `task-contract.ts` 定义，约定任务范围、关键澄清、事实与推断、结果验证、
+  不确定副作用、进度及最终交付，正文不点名工具。默认「通用智能体」的 persona 为空也获得这些约定。
+  每个模型步骤在 DSH `system-prompt/assemble` waterfall 后，按本次最终 `tools` schema 过滤
+  `tool:<name>` 指导段；jobs 段须同时有 job_output/job_kill，write 段须有 write/read/edit，
+  edit 段须有 edit/read（上游正文会引用这些工具）。缺依赖时整段省略，schema 与执行授权不变。
+  `## File delivery` 仅在 submit_artifact schema 存在时出现，要求生成、检查后提交，并以成功结果为交付依据。
+  工具参数/描述仍由 schema 提供；技能目录、按需全文、工作区指令和 runtime-context 通过会话消息进入上下文。
+  新运行时对已有会话的下一 Run 同样注册这些 section，不改写 AgentVersion JSON/hash、历史消息或 request header；
+  新步骤的 request header 由 DSH 正常记录。没有 `AGENT_SYSTEM_PROMPT` 环境变量覆盖入口，也没有第二套字符串拼装器。
 - 策略版本常量 `POLICY_VERSION`（当前 `2026-07-15.1`）写入审批响应与审计 meta，便于追溯。
 - `SANDBOX_POLICY_PROFILE=strict|balanced` 在 Agent 与 Sandbox 对称生效；`balanced` 仅在 required Bubblewrap 已通过配置校验时激活，并只放行常见包管理命令的审批前置门。执行子进程始终 `--unshare-net`，没有网络开关（`SANDBOX_NETWORK_MODE` 已删除）；生产 profile 固定 `strict`。
 - approval key 由 durable `run_id`、Sandbox session、工具名、稳定 SDK

@@ -161,6 +161,23 @@ SANDBOX_BASE_URL=http://localhost:8081 AGENT_BASE_URL=http://localhost:4100 \
 
 ## 开发流程
 
+### 系统提示词
+
+`agent/src/runtime/prompt/` 是平台提示词的实现入口：`enterprise-clauses.ts` 生成逻辑路径/Policy
+与字面量 persona 计划，`task-contract.ts` 定义工具无关的完成约定和产物交付指导，`install.ts`
+在生产工厂的 Agent scope 注册 section，并按每次 assembly 的最终 schema 过滤工具指导。
+不要维护另一份工具名清单或在 BFF/前端拼装平台 system prompt；工具描述/参数来自实际 schema。
+涉及多个工具的上游指导须在 `GROUPED_GUIDANCE` 声明全部依赖，避免只隐藏 schema 却保留调用建议。
+
+修改提示词后，运行 `agent/tests/runtime/prompt-assembly.test.ts` 与
+`agent-version-wire-request.test.ts`：它们起真实 DSH 插件树和生产工厂，在模型 transport 边界检查
+最终请求，覆盖权限拒绝与允许对照、scope 隔离、同会话收窄/恢复、零工具、空人格及字面量人格。
+模型响应与会话持久化是替身，不能用这些测试宣称真实模型行为、数据库事务或完整交付链已验收。
+仍需按 AGENTS.md 重建运行消费者并验证真实链路；提示词效果须另用真实任务观察。
+
+平台约定对已有会话的后续 Run 生效；不需要数据迁移或历史兼容分支。管理员的专业角色仍由
+绑定的 AgentVersion 提供，发布新角色时使用现有的建版本/激活流程。
+
 ### 新增 API 端点（执行面 exec）
 
 1. 在 `exec/src/http/` 建或改路由文件：

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Agent 提示词补齐任务与交付约定**：平台新增独立 `Doing work` section，覆盖范围、关键澄清、事实与推断、
+  操作结果确认、适度验证与完成报告；空人格的通用智能体也会获得这些约定。工具指导按每个模型步骤的最终
+  schema 过滤，避免权限隐藏工具后仍指导调用；涉及多个工具的段落须满足全部依赖。文件生成、检查与
+  `submit_artifact` 提交指导只在该工具可见时出现。移除无生产调用的旧字符串拼装器；已有会话的后续 Run
+  使用新平台 section，不改写历史配置、hash 或消息，权限仍由执行 guard 保证。
+
 - **前端再清两处死代码**：`AgentSession` 实体（`agentSessionsById`、`createAgentSession` / `upsertAgentSession`、
   run → session 的链接）——唯一写入方 `session.restored` 已在上一轮删除，此后只剩一个永远为空的映射；
   以及 `message.started`（别名自 `message.created`）事件分支——agent 不发这个事件，`message.delta` 自己会建消息。
