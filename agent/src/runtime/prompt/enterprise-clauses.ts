@@ -50,9 +50,9 @@ export function enterpriseClauses(roots: EnterpriseClauseRoots = {}): string {
   // 会让提示词同时出现两套根——模型照着写会扑空，而且那种不一致没人会报错。
   const draftSkillRoot = (roots.draftSkillRoot || '').trim() || `${skillRoot}-draft`;
   return `${PATHS_HEADING}
-- **User project / workspace**: \`${workspaceRoot}\` — read and write here. Relative paths resolve under this root.
+- **User project / workspace**: \`${workspaceRoot}\` — work here using only operations authorized for this Run. Relative paths resolve under this root.
 - **Skills (read-only)**: \`${skillRoot}\` and \`${skillRoot}-user\` — available skill packages. Never write here.
-- **Skill drafts (writable)**: \`${draftSkillRoot}\` — build new skill packages here with ordinary \`write\`/\`bash\`. A draft is not available to you until a human enables it; you cannot enable one yourself.
+- **Skill drafts (writable)**: \`${draftSkillRoot}\` — build new skill packages here using available, authorized tools. A draft is not available to you until a human enables it; you cannot enable one yourself.
 - Do **not** search or read host install trees such as \`/app\`, \`node_modules\`, or agent home.
 
 ## Policy
@@ -64,21 +64,6 @@ export function enterpriseClauses(roots: EnterpriseClauseRoots = {}): string {
 
 /** 默认根目录下的条款文本。保留具名导出，既有引用不必改。 */
 export const ENTERPRISE_CLAUSES = enterpriseClauses();
-
-/**
- * 企业条款始终追加在自定义 lead 之后，lead 不能覆盖或删除它们。
- *
- * **没有任何基于正文的幂等分支**：企业条款恰好出现一份，与 lead 里写了什么无关。
- */
-export function assembleSystemPrompt(
-  lead?: string,
-  roots: EnterpriseClauseRoots = {},
-): string {
-  const clauses = enterpriseClauses(roots);
-  const custom = (lead ?? '').trim();
-  if (!custom) return clauses;
-  return `${custom}\n\n${clauses}`;
-}
 
 /**
  * DSH 变量名：承载 persona 原文。命名必须匹配 `[a-z][a-z0-9_]*`。

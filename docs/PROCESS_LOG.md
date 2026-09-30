@@ -1203,3 +1203,18 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **STATUS IDs：** 无状态变化。
 - **验证：** 六套测试、类型检查、前端 build 全绿；开发库存量数据迁移后 105/105 会话可恢复；真实链路 17/17；
   浏览器实测。详见[证据](evidence/dsh-naming-and-cleanup-2026-09-23.md)。
+
+## 2026-09-30 — Prompt 拼装与任务完成约定
+
+- **Context：** 用户要求实施 prompt 优化，并明确开发阶段不做历史兼容；不符合当前契约的数据可定向清理。
+- **根因：** 原生工具 schema 被 per-Run 权限隐藏，但上游指导段无条件注册；通用智能体的空 persona
+  缺少平台任务完成约定，产物工具没有跨调用的生成/检查/提交指导。
+- **Action：** 独立平台 `Doing work` section；按每步最终 schema 过滤结构化工具指导，包含 jobs/write/edit
+  的正文依赖；仅 submit_artifact 可见时显示文件交付约定。移除无生产调用的旧字符串拼装器，保留字面量
+  persona 与执行 guard。architecture/api/development/CHANGELOG 同步。空 persona 仍有效，无需清理数据。
+- **STATUS IDs：** A5 关联，保持 partial，本次未关闭 §32 条目。
+- **验证：** 新回归修复前 0/3，修复后四条请求回归通过；相关组合与工厂用例 32/32；六套测试最终通过
+  （exec 443 pass / 3 skipped；BFF 首轮 2 cancelled，单独全套重跑 175/175）；类型检查与前端 build 通过。
+  全部后端镜像重建，实际 K8s/Compose 消费者更新；真实模型完成文件交付、失败读取、后台进程 logs/SIGTERM、
+  跨组织 6×404 与同会话续聊；两条持久 request header 包含新约定。详见
+  [证据](evidence/prompt-assembly-contract-2026-09-30.md)。

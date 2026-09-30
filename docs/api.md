@@ -250,7 +250,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 | 字段 | 生效？ | 落在哪 |
 |------|-------|--------|
-| `systemPrompt` | ✅ | 作为租户自定义段进入发给模型的 system prompt，排在 harness 身份之后、企业条款之前；企业条款始终追加在它后面且**不可被租户覆盖** |
+| `systemPrompt` | ✅ | 作为 persona 按字面量进入系统提示词，排在 harness 身份、平台路径/Policy 和 `Doing work` 之后、工具指导之前；内部的 `{{...}}` 不再次展开，不能删除平台 section。Delegation 如有则追加在 persona 内。空串省略 persona，仍保留平台约定；执行授权以 guard 为准 |
 | `modelPolicy`（含内嵌 `model`） | ✅ | `modelResolver` 解析出本次 Run 的具体模型；内嵌完整 model 时 `input.model` 不能改身份 |
 | `modelPolicy.maxOutputTokens` | ✅ | 作为 `AgentOptions.maxTokens` 出现在**主对话请求**上；标题/压缩等辅助请求不受影响 |
 | `modelPolicy.thinkingLevel` | ✅ | 作为 agent scope 的 `ModelSelection.reasoningEffort` 出现在主对话请求上。取值必须是当前适配器接受的 effort ID（`deepseek-official`：`off|low|high|max`），否则保存时 400、起 Run 时 fail-closed |
