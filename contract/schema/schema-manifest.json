@@ -35,7 +35,8 @@
     "20260930000002_agent_version_skill_refs.js",
     "20261001000001_member_roles.js",
     "20261001000002_exec_workspace_policies.js",
-    "20261001000003_exec_artifact_visibility.js"
+    "20261001000003_exec_artifact_visibility.js",
+    "20261001000004_review_ledger.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -5295,6 +5296,513 @@
           "referencedTable": "tbl_agsvc_users",
           "referencedColumns": [
             "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_review_events": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "actor_user_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "detail": {
+          "type": "text",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "event_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "event_type": {
+          "type": "char(32)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "from_artifact_id": {
+          "type": "varchar(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "item_no": {
+          "type": "int",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "review_task_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "to_artifact_id": {
+          "type": "varchar(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "event_id"
+          ]
+        },
+        "ind_agsvc_rv_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "review_task_id",
+            "created_at"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_review_items": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "current_artifact_id": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "item_no": {
+          "type": "int",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "mime_type": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "application/octet-stream",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "name": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "original_artifact_id": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "review_task_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "sha256": {
+          "type": "char(64)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "size_bytes": {
+          "type": "bigint unsigned",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "review_task_id",
+            "item_no"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_review_materials": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "attachment_id": {
+          "type": "varchar(64)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "filename": {
+          "type": "varchar(1024)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "material_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "mime_type": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "application/octet-stream",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "review_task_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "size_bytes": {
+          "type": "bigint unsigned",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "snapshot_artifact_id": {
+          "type": "varchar(64)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "snapshot_status": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "unavailable",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "review_task_id",
+            "material_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
+    },
+    "tbl_agsvc_review_tasks": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_session_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "agent_version_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "assignee_user_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "claimed_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "context_injected_run_id": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "decided_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "decided_by": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "feedback": {
+          "type": "text",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "requester_user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "review_task_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "revision": {
+          "type": "int",
+          "nullable": false,
+          "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "run_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "run_status": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "status": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "PENDING",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "review_task_id"
+          ]
+        },
+        "ind_agsvc_rt_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
+          ]
+        },
+        "ind_agsvc_rt_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "status",
+            "created_at"
+          ]
+        },
+        "ind_agsvc_rt_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "assignee_user_id",
+            "status"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "tbl_agsvc_review_tasks_run_id_foreign": {
+          "columns": [
+            "run_id"
+          ],
+          "referencedTable": "tbl_agsvc_runs",
+          "referencedColumns": [
+            "run_id"
           ],
           "onUpdate": "RESTRICT",
           "onDelete": "RESTRICT"
