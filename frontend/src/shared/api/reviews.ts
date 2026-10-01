@@ -27,6 +27,10 @@ export const ReviewTaskSchema = z
     requester: ReviewUserSchema.optional(),
     assignee: ReviewUserSchema.nullable().optional(),
     item_count: z.number().optional(),
+    /** 首件交付物名（§3.2.1）：列表要能区分同一发起人的十几行。 */
+    first_item_name: nullableString,
+    /** 智能体名（§3.2.1）；缺了显示「—」，不拿版本号冒充。 */
+    agent_name: nullableString,
     created_at: nullableString,
     claimed_at: nullableString,
     decided_at: nullableString,
@@ -55,6 +59,8 @@ const ReviewQuestionSchema = z
     sequence_no: z.number(),
     text: z.string().default(''),
     created_at: nullableString,
+    /** 是不是触发本次任务的那一条提问（§3.2.7）。 */
+    triggering: z.boolean().default(false),
     attachments: z.array(ReviewAttachmentSchema).default([]),
   })
   .passthrough();
@@ -73,7 +79,18 @@ const ReviewMaterialSchema = z
 export type ReviewMaterial = z.infer<typeof ReviewMaterialSchema>;
 
 const ReviewVersionSchema = z
-  .object({ artifact_id: z.string(), current: z.boolean(), revision: z.number() })
+  .object({
+    artifact_id: z.string(),
+    current: z.boolean(),
+    revision: z.number(),
+    /** `agent` | `reviewer`：版本表要显示上传者（§3.2.4）。 */
+    uploaded_by_kind: z.string().optional(),
+    uploaded_by_user_id: nullableString,
+    uploaded_by_display_name: nullableString,
+    created_at: nullableString,
+    /** 非当前版本的大小来自 exec 元数据；取不到就是 null（界面显示「—」）。 */
+    size: z.number().nullable().optional(),
+  })
   .passthrough();
 
 const ReviewItemSchema = z
@@ -115,7 +132,15 @@ export const ReviewDetailSchema = z
     conversation_id: z.string().optional(),
     requester: ReviewUserSchema.optional(),
     assignee: ReviewUserSchema.nullable().optional(),
-    agent: z.object({ agent_id: z.string().optional(), version_no: z.number().nullable().optional() }).passthrough().optional(),
+    agent: z
+      .object({
+        agent_id: z.string().optional(),
+        /** 智能体名称（§3.2.3）：元信息里显示它，不只是版本号。 */
+        name: nullableString,
+        version_no: z.number().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
     created_at: nullableString,
     claimed_at: nullableString,
     decided_at: nullableString,

@@ -4,6 +4,30 @@
 .roleCell { display: flex; align-items: center; gap: 8px; }
 .more { display: flex; justify-content: center; }
 
+/* 窄屏卡片式行（R4）：默认隐藏，≤900px 时替代表格。
+   表格在 ~490px 的可用宽度里放不下 5 列，会把「操作」挤出屏幕、按钮竖排撑高整行。 */
+.memberCards { display: none; list-style: none; margin: 0; padding: 0; }
+.memberCard {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.memberCardMeta { display: grid; gap: 8px; margin: 0; }
+.memberCardMeta > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.memberCardMeta dt { color: var(--color-text-muted); font-size: 12.5px; }
+.memberCardMeta dd { margin: 0; display: flex; align-items: center; gap: 8px; }
+.memberCardActions { display: flex; justify-content: flex-end; }
+.memberCardActions button { white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .tableOnly { display: none; }
+  .memberCards { display: grid; gap: 10px; }
+}
+
 .errorBox {
   border: 1px solid var(--color-danger-text);
   border-radius: 10px;
@@ -14,16 +38,19 @@
   gap: 8px;
 }
 
-/* 角色开关：原生 checkbox 当状态源（可聚焦、可读屏），视觉是滑块。 */
-.switch { position: relative; display: inline-block; width: 34px; height: 18px; flex: none; }
+/* 角色开关：原生 checkbox 当状态源（可聚焦、可读屏），视觉是滑块。
+   关闭态用 `--color-text-muted` 做边界、`--color-text-secondary` 做滑块：原来的
+   `--color-border`（浅色下 rgba(0,0,0,0.08)）+ 纯白滑块在白色卡片上几乎看不见
+   （返工单 R6，非文本对比度要 ≥3:1）。深色主题下这两个 token 同样清晰。 */
+.switch { position: relative; display: inline-block; width: 34px; height: 18px; flex: none; vertical-align: middle; }
 .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .switch input:disabled { cursor: not-allowed; }
 .slider {
   position: absolute;
   inset: 0;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-text-muted);
   border-radius: 999px;
-  background: var(--color-bg-hover);
+  background: var(--color-bg-active);
   transition: background 0.15s ease, border-color 0.15s ease;
   pointer-events: none;
 }
@@ -35,7 +62,7 @@
   left: 2px;
   top: 2px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--color-text-secondary);
   transition: transform 0.15s ease;
 }
 .switch input:checked + .slider { background: var(--color-primary); border-color: var(--color-primary); }

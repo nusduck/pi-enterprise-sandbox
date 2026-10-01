@@ -5,6 +5,8 @@ import {
   getRunToolExecutions,
   listDatasetsForConversation,
   listProcessesForSession,
+  processListStateFor,
+  processPanelState,
   type ArtifactEntity,
 } from '../../entities';
 import { fileTypeLabel } from '../../shared/state';
@@ -18,6 +20,7 @@ import { DatasetPanel } from '../dataset-panel/DatasetPanel';
 import { ProcessPanel } from '../process-panel/ProcessPanel';
 import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContext';
 import { IconClose, IconLayers } from '../../shared/ui/Icons';
+import { inspectorWorkspaceTabs } from './inspectorTabs';
 
 type TabDef = {
   id: InspectorTabId;
@@ -282,18 +285,25 @@ export function ContextInspector({
     [tools, artifacts, listedArtifacts],
   );
 
-  // review 会话里不显示工作区文件面板（design agent-output-review §8）：服务端本来
-  // 就会 404（E5），这里只是不引导用户去点。隐藏时给出原因，不是静默消失。
+  // review 会话里不显示工作区文件与进程面板（design agent-output-review §8 / E5 / E6）：
+  // 服务端这两个通道都会 404，这里只是不引导用户去点。隐藏时给出原因，不是静默消失。
   const conversation = (state.conversations || []).find((c) => c.id === state.conversationId);
   const reviewSession = conversation?.delivery_mode === 'review';
+  const workspaceTabs = inspectorWorkspaceTabs(reviewSession);
+  const processState = processPanelState({
+    state: processListStateFor(entityStore, activeSessionId),
+    count: processes.length,
+  });
 
   const tabs: TabDef[] = [
     { id: 'artifacts', label: '产物', count: importableArtifacts.length || undefined },
-    ...(reviewSession
-      ? []
-      : [{ id: 'files' as const, label: '文件', count: referencedFiles.length || undefined }]),
+    ...(workspaceTabs.files
+      ? [{ id: 'files' as const, label: '文件', count: referencedFiles.length || undefined }]
+      : []),
     { id: 'datasets', label: '数据集', count: datasets.length || undefined },
-    { id: 'processes', label: '进程', count: processes.length || undefined },
+    ...(workspaceTabs.processes
+      ? [{ id: 'processes' as const, label: '进程', count: processes.length || undefined }]
+      : []),
   ];
 
   const panelClass = [
@@ -372,13 +382,26 @@ export function ContextInspector({
             </p>
           ) : null}
 
-          {tab === 'processes' ? (
-            <ProcessPanel
-              processes={processes}
-              selectedId={selected?.kind === 'process' ? selected.id : null}
-              onOpenConsole={openProcessConsole}
-              emptyHint="这个会话还没有后台进程。"
-            />
+          {tab === 'processes' && workspaceTabs.processes ? (
+            processState === 'error' ? (
+              // 拉取失败不是空状态（AGENTS.md §3）：404/5xx 与服务端真的返回空列表
+              // 是两回事，渲染成「还没有后台进程」会让用户以为进程被清理了。
+              <div role="alert">
+                <EmptyState
+                  title="读取后台进程失败"
+                  body="服务端没有返回进程列表；这不代表「这个会话没有后台进程」。请稍后重试或刷新页面。"
+                />
+              </div>
+            ) : (
+              <ProcessPanel
+                processes={processes}
+                selectedId={selected?.kind === 'process' ? selected.id : null}
+                onOpenConsole={openProcessConsole}
+                emptyHint={
+                  processState === 'loading' ? '正在读取后台进程…' : '这个会话还没有后台进程。'
+                }
+              />
+            )
           ) : null}
 
           {tab === 'artifacts' ? (

@@ -57,6 +57,7 @@ import {
 } from '../../shared/api';
 import type { Agent, ModelItem } from '../../shared/api';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
+import { useReviewResultPolling } from './useReviewResultPolling';
 import type { EntityStore } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { projectConversationMessages } from './projections/conversationMessages';
@@ -1269,6 +1270,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       bridge.dispose();
     };
   }, [bridge]);
+
+  /**
+   * T1：发起人页面上还有待审交付物时定时重拉会话事件（审核结果是 Run 结束之后才
+   * 追加的，Run SSE 那时已经关了）。判定与计时器的细节在
+   * `useReviewResultPolling.ts`——那是行数棘轮之外的文件。
+   */
+  useReviewResultPolling(bridge, entityStore, state.conversationId);
 
   // Keyboard shortcuts
   useEffect(() => {

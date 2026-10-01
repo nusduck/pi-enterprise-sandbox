@@ -132,12 +132,15 @@ function applyReviewDecision(
       (artifactId ? next.artifactsById[artifactId] : undefined) ??
       (originalId ? next.artifactsById[originalId] : undefined);
     if (!existing) continue;
+    const size = Number(row.size ?? row.size_bytes);
     next = upsertArtifact(next, {
       ...existing,
       reviewStatus: state,
       reviewRevised: state === 'released' ? row.revised === true : false,
       reviewFeedback: feedback,
       reviewReleasedId: state === 'released' && artifactId ? artifactId : null,
+      // 卡片要显示**放行版本**的大小：有修订时那是修订版，不是原件（§3.3.1）。
+      ...(state === 'released' && Number.isFinite(size) && size >= 0 ? { size } : {}),
     });
   }
   return next;

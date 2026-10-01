@@ -28,10 +28,24 @@ export const DEFAULT_REVIEW_TIMEOUT_MS = 30_000;
 export const REVIEW_HTU = Object.freeze({
   snapshot: '/internal/v1/review/artifacts/snapshot',
   get: '/internal/v1/review/artifacts/get',
+  meta: '/internal/v1/review/artifacts/meta',
   revision: '/internal/v1/review/artifacts/revision',
   visibility: '/internal/v1/review/artifacts/visibility',
   import: '/internal/v1/review/artifacts/import',
 });
+
+/** 审核面板里一版产物的元数据（`meta` 端点的形状，不含字节）。 */
+export interface ReviewArtifactMeta {
+  readonly artifactId: string;
+  readonly name: string;
+  readonly mimeType: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly visibility: string;
+  readonly revisionOf: string | null;
+  readonly createdByKind: 'agent' | 'reviewer';
+  readonly createdAt: string | null;
+}
 
 export interface ReviewIdentity {
   readonly orgId: string;
@@ -227,6 +241,40 @@ export function createInternalReviewTransport(options: {
         revisionOf: data['revisionOf'] == null ? null : String(data['revisionOf']),
         bytes,
       };
+    },
+
+    /**
+     * 按 id 批量取元数据（名称/大小/上传者类型/时间），**不含字节**。
+     *
+     * 审核工作台的版本表要显示每一版的信息，而 agent 只保存当前版本的展示元数据；
+     * 逐版本走 `getArtifact` 会把整份字节拖进来，所以单独取一次元数据。返回值只包含
+     * exec 认得的 id（跨 org / 不存在会被跳过），调用方缺哪条就当它不可用。
+     */
+    async readArtifactMeta(
+      input: { artifactIds: readonly string[] },
+      identity: ReviewIdentity,
+    ): Promise<ReviewArtifactMeta[]> {
+      const ids = input.artifactIds.filter((id) => typeof id === 'string' && id.trim() !== '');
+      if (ids.length === 0) return [];
+      const data = await post<Record<string, unknown>>(REVIEW_HTU.meta, {
+        artifactIds: ids.map((id) => id.trim()),
+      }, identity);
+      const rows = Array.isArray(data['items']) ? data['items'] : [];
+      return rows.map((value: unknown): ReviewArtifactMeta => {
+        const row = (value ?? {}) as Record<string, unknown>;
+        const kind = row['createdByKind'] === 'reviewer' ? 'reviewer' : 'agent';
+        return {
+          artifactId: String(row['artifactId'] ?? ''),
+          name: String(row['name'] ?? ''),
+          mimeType: String(row['mimeType'] ?? 'application/octet-stream'),
+          size: Number(row['size'] ?? 0) || 0,
+          sha256: String(row['sha256'] ?? ''),
+          visibility: String(row['visibility'] ?? ''),
+          revisionOf: row['revisionOf'] == null ? null : String(row['revisionOf']),
+          createdByKind: kind,
+          createdAt: row['createdAt'] == null ? null : String(row['createdAt']),
+        };
+      }).filter((row) => row.artifactId !== '');
     },
 
     /** 审核员的修订上传：新产物 + `revision_of` 链，恒 `held`。 */

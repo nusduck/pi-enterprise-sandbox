@@ -200,8 +200,10 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   显示状态与耗时，中断时给「继续运行」；右侧「资料」按钮开关资料抽屉。
 - **资料抽屉**（`widgets/context-inspector/`）：右侧滑出，默认关闭，四个 tab：产物、文件、数据集、
   进程。会话内不再显示 Trace 与工具明细（工具已在对话流内联）。**审核会话（`delivery_mode: "review"`）
-  不显示「文件」页签**，并写明原因（工作区文件在审核通过前不对发起人开放，服务端本来也 404 E5）——
-  隐藏而不解释会让人以为文件丢了。
+  不显示「文件」与「进程」两个页签**，并写明原因（这两个通道在服务端都会 404——E5 工作区字节、E6 进程日志；
+  不关的话发起人能绕过审核读到源文件），隐藏而不解释会让人以为文件丢了。
+  其他会话里进程列表**拉取失败显示错误态**（404/5xx 与服务端真的返回空列表是两回事，
+  `processPanelState` 的四态判定在 `entities/store.ts`），不会渲染成「这个会话还没有后台进程」。
 - **输入框**（`widgets/composer/`）：见下文「键盘快捷键」；「＋」菜单可上传文件或图片，或引用其他
   会话的产物（对话框基于产物库：默认列出全部会话的产物并可按文件名搜索，左侧选会话只是缩小范围；
   `POST /api/conversations/{id}/artifact-imports`，会话开始后可用）；
@@ -303,15 +305,23 @@ reasoning 可能被截断）；tool-call 部件持久化后只剩 `type`，调�
 「取消运行」「打开会话」走所有者接口，只在自己的运行上出现。
 
 **成员与角色**（`/admin/members`）— `pages/settings/MembersPage.tsx`，管理控制台「配置」分组下：
-本 org 已 provisioning 成员（至少登录过一次）的表格——成员（显示名 + 用户名）、最近登录、`admin` / `reviewer`
-两个开关。工具栏支持按用户名/显示名搜索与按角色筛选，`next_cursor` 走「加载更多」。
+本 org **已开通**成员账号的表格——成员（显示名为主、用户名为辅）、最近登录、「管理员」/「审核员」
+两个开关（列头、筛选页签与变更记录都显示中文角色名，原始代码 `admin` / `reviewer` 放在悬停提示里）。
+名单来自成员关系（`memberships`），**不是**「登录过的人」：脚本或部署引导创建、还没走过平台登录的
+账号 `last_login_at` 是空，界面显示「—」并带 tooltip 说明，页面说明文字与这个口径一致。
+工具栏支持按用户名/显示名搜索与按角色筛选，`next_cursor` 走「加载更多」。
 开关**先乐观更新**，失败回滚并显示服务端原因的中文提示（`LAST_ADMIN` →「不能撤销本组织的最后一个管理员」；
 `ROLE_PINNED_BY_DEPLOYMENT` →「该管理员由部署锁定，不能撤销」）。`pinned_roles` 里的开关置灰，
 tooltip 说明是 `SANDBOX_AUTH_ADMIN_USERNAMES` 锁定。**列表加载失败显示错误态**（附重试），
 不会渲染成「无成员」；空态与错误态是两个分支（`pages/settings/memberRoles.ts` 的纯逻辑 + 单测）。
 撤销**自己**的 `admin` 要二次确认，成功后重读 `me`，AdminShell 的 `isAdmin` 闸门随即变 false，
 界面退出管理控制台。「变更记录」按钮拉 `/api/admin/users/{userId}/role-events` 并用右侧抽屉展示
-（授予/撤销、来源中文化、操作者显示名 → 用户名 →「系统」）。角色权威在服务端，页面只是投影。
+（按时间倒序；授予/撤销、来源中文化、操作者显示名 → 用户名 →「系统」）。角色权威在服务端，页面只是投影。
+**≤900px 换成卡片式行**（表格 `display: none`，不产生重复控件）：768px 下管理控制台侧栏仍占
+约 240px，内容区放不下 5 列，「操作」会被挤出屏幕、按钮竖排撑高整行。表格与卡片共用
+`MemberIdentity` / `MemberLastLogin` / `RoleCell`，不各写一份。关闭态开关用
+`--color-text-muted` 做边界、`--color-text-secondary` 做滑块（浅色下原来的 rgba(0,0,0,0.08) 边界
++ 纯白滑块几乎看不见，非文本对比度不足 3:1）。
 
 **审批**（`/admin/approvals`）：默认显示待审批；每条一张卡片（工具、风险、状态、原因、命令，可展开参数），
 待审批的卡片可直接批准 / 拒绝，效果与对话内审批卡相同。
@@ -404,23 +414,47 @@ AgentVersion 的 `deliveryPolicy.mode = "review"` 时，交付物先进入审核
 
 | `reviewStatus` | 卡片 | 有没有下载 URL |
 |---|---|---|
-| `pending` | 「已提交审核」 | **没有**——服务端本来 404（E2），留着按钮等于引导用户点一个必然失败的链接 |
+| `pending` | 「已提交审核」+ 一句「审核通过后可下载」 | **没有**——服务端本来 404（E2），留着按钮等于引导用户点一个必然失败的链接 |
 | `rejected` | 「未通过审核：<反馈>」 | **没有** |
 | `released` | 「已交付」/「已交付 · 经审核员修订」 | 有 |
 | `null`（direct 会话） | 不显示审核字样，与以前完全一致 | 有 |
+
+修订后放行时卡片显示**修订版**的大小与下载地址：`artifact.released` 负载里的 `size` 会写回实体，
+下载 id 用 `reviewReleasedId`（原件已 `withdrawn`，拿原件 id 拼链接必然 404）。
 
 **三个渲染点都要按状态挡下载**（漏一个就会出现「卡片说待审、chip 却能下载」）：
 对话流卡片（`TurnCards`）、产物抽屉的 chip（`DeliverablesPanel`，待审/驳回渲染成状态 chip 而不是链接）、
 产物面板（`ArtifactPanel` 沿用既有的「暂不可下载」分支）。
 
 事件侧：`artifact.created` 读 `artifact.ready` 负载里的 `review_status`；放行与驳回分别由
-`artifact.released` / `review.rejected` 归约（事件挂在**原 Run** 上，刷新后靠会话事件重放拿到，
-所以刷新前后状态一致）。
+`artifact.released` / `review.rejected` 归约（事件挂在**原 Run** 上）。
 
-**审核工作台**（`/reviews`，`pages/reviews/`）：列表分待领取 / 我领取的 / 历史（游标分页），
-三态**错误优先**——加载失败显示错误与重试，绝不渲染成「没有待审任务」；详情给出提问与附件清单、
-材料快照（`snapshot_status = unavailable` 时明确提示）、交付物版本链（任一版本可下载）与审计时间线；
+**Run 终态后审核结果怎么到达**（T1）：Run 一到终态，Run SSE 就关了，而放行/驳回事件是审核员
+之后才追加到这个已结束 Run 上的。所以只要当前会话里还有 `reviewStatus === 'pending'` 的交付物，
+前端每 20 秒调一次 `entityBridge.pollReviewDecisions(conversationId)`——**只拉一次会话事件、
+只归约 `artifact.released` / `review.rejected`**（不碰 `rehydrateRun` / `listRunTools` /
+`loadDurableTrace` / `connect`，20 个 Run 的会话不会每轮发 40 多个请求，也不会重放正在流式的 Run）。
+可见性迁移在 `features/chat/reviewResultPolling.ts` 的 `createReviewResultPoller`：**只要还有待审
+交付物就装 `visibilitychange` 监听**（不能因为此刻不可见就整体不注册，否则「发起任务 → 切走 →
+后台结束 → 切回来」永远不会开始轮询），切回前台立即拉一次，没有待审交付物或组件卸载时停表。
+
+**审核工作台**（`/reviews`，`pages/reviews/`）：列表分待领取 / 我领取的 / 历史（游标分页；
+历史传 `status=APPROVED,REJECTED` 多值，不再列出待领取与审核中的任务）。
+列表行以**交付物名**（多件时「首件名 等 N 件」）与**智能体名**区分任务，列头是
+「交付物 / 智能体 / 发起人 / 状态 / 运行结果 / 提交时间」。
+三态**错误优先**——加载失败显示错误与重试，绝不渲染成「没有待审任务」（与 `RunsPage` 同一套
+空态/错误态样式）；详情标题用交付物名或「智能体名 · 发起人」，任务 ID 降级为可复制的小字；
+详情给出提问（触发本次的那条标「本次」，更早的收进可折叠的「上文」）与附件清单、
+材料快照（`snapshot_status = unavailable` 时明确提示）、交付物版本链（「版本 / 上传者 / 时间 / 大小 / 下载」，
+artifact ID 收进悬停提示；非当前版本的大小来自 exec 的元数据端点，取不到显示「—」）与审计时间线
+（事件详情按类型格式化，未知结构不显示 JSON）。
 动作是领取 / 释放 / 上传修订（原始字节 body）/ 通过 / 驳回（反馈必填，与 422 `REVIEW_FEEDBACK_REQUIRED` 对齐）。
+任务状态与交付物状态共用同一套颜色语义（`reviewStatusTone` / `deliveryTone`：通过/已交付同色，
+驳回/未通过同色）；详情面板吸顶并可独立滚动，长列表里点下面的行不必滚回顶部。
+两栏布局是 `minmax(0, 1fr) minmax(420px, 0.95fr)`，**≤1200px 单栏**：详情要放得下版本表的 5 列，
+窄屏下两个 `minmax` 的下限会把面板顶出视口。详情里的表格单元格一律 `white-space: nowrap`
+（否则「下载」会竖排成「下 / 载」）。**审核面的时间一律是带 `Z` 的 ISO**（`formatDateTime`），
+列表/详情/审计时间线与版本表显示同一种本地时间。
 **409 版本冲突刷新任务但保留已选择的待上传文件**；错误码到中文的映射在 `pages/reviews/reviewErrors.ts`。
 
 ### 文件下载（P7 产物唯一交付）

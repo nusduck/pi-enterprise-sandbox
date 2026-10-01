@@ -371,6 +371,20 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
       'Function-local attachment_id -> source path index while snapshotting one task\'s materials; the messages table stays authoritative and the map is discarded with the tick',
     scope: 'local',
   },
+  {
+    rel: 'application/review-version-chain.ts',
+    match: /const\s+chains\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local item_no -> version chain result for one review detail projection; returned to the caller and never retained',
+    scope: 'local',
+  },
+  {
+    rel: 'application/review-version-chain.ts',
+    match: /const\s+byId\s*=\s*new\s+Map\s*\(/,
+    purpose:
+      'Function-local artifact_id -> exec metadata index while enriching one detail response; exec stays authoritative for size/time and the map is discarded with the call',
+    scope: 'local',
+  },
 ]);
 
 function walkSource(dir, acc = []) {
@@ -597,9 +611,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 2026-10-01: 47 → 49（交付物审核：`review-service.ts` 出列表的显示名缓存、
     // `review-publisher.ts` 一次 tick 内 attachment_id → 源路径索引）。两者都是
     // 函数局部、返回即丢；权威是 `users` 与 `messages` 两张表。
+    // 2026-10-01: 49 → 51（审核工作台的版本表拆出 `review-version-chain.ts`）：
+    // 一次投影里的版本链结果与 exec 元数据索引，函数局部、返回即丢；
+    // 权威是 `review_events` 与 exec 的产物记录。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      49,
+      51,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

@@ -5,6 +5,7 @@
  * |---|---|
  * | `POST /internal/v1/review/artifacts/snapshot`  | 附件快照：复制成不可变产物，`withdrawn` |
  * | `POST /internal/v1/review/artifacts/get`        | 按 id 读取（含字节），供审核员下载任一版本 |
+ * | `POST /internal/v1/review/artifacts/meta`       | 按 id 批量取元数据（名称/大小/版本链/时间），不含字节 |
  * | `POST /internal/v1/review/artifacts/revision`   | 审核员的修订上传：新产物 + `revision_of` 链 |
  * | `POST /internal/v1/review/artifacts/visibility` | 状态变更：`held` → `released` / `withdrawn` |
  * | `POST /internal/v1/review/artifacts/import`     | 修订版导入发起人工作区的 `审核版/`（§5.3 第 3 步） |
@@ -50,6 +51,9 @@ export interface InternalReviewDeps {
   /** 单件传输上限；省略取 `REVIEW_TRANSFER_MAX_BYTES`（100 MiB）。测试注入小值。 */
   readonly transferMaxBytes?: number;
 }
+
+/** 一次元数据查询最多几件产物；一条版本链通常只有几行，这是防滥用的上限。 */
+const MAX_META_IDS = 200;
 
 /** 超过审核传输上限：在读全文件或解码 base64 之前就拒绝（见 `REVIEW_TRANSFER_MAX_BYTES`）。 */
 function transferTooLarge(): ArtifactError {
@@ -249,6 +253,52 @@ export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps
           bytes: Buffer.concat(chunks).toString('base64'),
         },
       });
+    } catch (err) {
+      const wire = wireFor(err);
+      return c.json({ ok: false, error: wire }, statusFor(err) as never);
+    }
+  });
+
+  /**
+   * 按 id **批量**取元数据（不含字节）。
+   *
+   * 审核工作台的版本表要显示每一版的上传者、时间与大小，而 agent 的审核账本只保存
+   * **当前版本**的展示元数据（`tbl_agsvc_review_items` 的注释写了这个取舍）。逐版本
+   * 走 `artifacts/get` 会把整份字节拉进内存，所以这里单独给一条只读元数据的路。
+   *
+   * 作用域仍是 **org**：跨 org 与不存在的 id 一律**跳过**（不是 404）——调用方拿到的
+   * 列表里没有它，就是「不可用」，这不会泄漏「这个 id 在别处存在」。
+   */
+  app.post('/internal/v1/review/artifacts/meta', async (c) => {
+    try {
+      const { envelope: rawEnv, payload } = await parseBody(c);
+      parseEnvelope(rawEnv);
+      const env = rawEnv as Envelope;
+      const raw = Array.isArray(payload['artifactIds']) ? payload['artifactIds'] : [];
+      if (raw.length > MAX_META_IDS) {
+        throw new ArtifactError('review_input_invalid', `artifactIds must be at most ${MAX_META_IDS}`, 422);
+      }
+      const items: Record<string, unknown>[] = [];
+      for (const value of raw) {
+        const artifactId = typeof value === 'string' ? value.trim() : '';
+        if (!artifactId) continue;
+        const record = await deps.artifactService.getInOrg(artifactId, env.orgId);
+        if (record === null) continue;
+        items.push({
+          artifactId: record.artifactId,
+          name: record.name,
+          mimeType: record.mimeType,
+          size: record.sizeBytes,
+          sha256: record.sha256,
+          visibility: record.visibility,
+          revisionOf: record.revisionOf,
+          createdByKind: record.createdByKind,
+          createdAt: record.createdAt instanceof Date
+            ? record.createdAt.toISOString()
+            : String(record.createdAt),
+        });
+      }
+      return c.json({ ok: true, data: { items } });
     } catch (err) {
       const wire = wireFor(err);
       return c.json({ ok: false, error: wire }, statusFor(err) as never);

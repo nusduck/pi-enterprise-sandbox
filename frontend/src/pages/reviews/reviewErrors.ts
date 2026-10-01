@@ -46,6 +46,19 @@ export const RUN_STATUS_ZH: Record<string, string> = {
   CANCELLED: '已取消',
 };
 
+/**
+ * 列表页签（T5）。`status` 是服务端接受的**逗号分隔多值**筛选；`null`/空 = 不筛选。
+ *
+ * 「历史」必须写成 `APPROVED,REJECTED`：以前是 `null`，等于不筛选，于是待领取和
+ * 审核中的任务也出现在历史里（2026-10-01 浏览器实测发现）。单值页签行为不变。
+ */
+export const REVIEW_LIST_FILTERS = [
+  { id: 'pending', label: '待领取', status: 'PENDING', mine: false },
+  { id: 'mine', label: '我领取的', status: 'IN_REVIEW', mine: true },
+  { id: 'history', label: '历史', status: 'APPROVED,REJECTED', mine: false },
+] as const;
+export type ReviewFilterId = (typeof REVIEW_LIST_FILTERS)[number]['id'];
+
 /** 服务端错误码 → 中文。先认 `code`，再用 `error`，最后兜底。 */
 export function reviewErrorMessage(error: unknown): string {
   const candidate = error as { code?: unknown; message?: unknown } | null | undefined;
@@ -105,6 +118,58 @@ export function reviewEventLabel(eventType: unknown): string {
   return REVIEW_EVENT_ZH[key] || key || '—';
 }
 
+/** 详情是不是 JSON 结构（对象/数组）。宁可少显示，也不把 JSON 丢给用户。 */
+function looksLikeJson(text: string): boolean {
+  return text.startsWith('{') || text.startsWith('[');
+}
+
+function formatCreatedDetail(detail: string): string | null {
+  if (!looksLikeJson(detail)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const items = (parsed as Record<string, unknown>).items;
+  const materials = (parsed as Record<string, unknown>).materials;
+  if (typeof items !== 'number' || !Number.isFinite(items)) return null;
+  const parts = [`${items} 件交付物`];
+  if (typeof materials === 'number' && Number.isFinite(materials)) parts.push(`${materials} 个附件`);
+  return parts.join('，');
+}
+
+/**
+ * 审计事件的**详情**文案（T4）。
+ *
+ * `detail` 是服务端按事件类型写的自由文本：`created` 是 `{"items":N,"materials":M}`
+ * 这种 JSON、`released_claim` 可能是英文的 `admin released the claim`、`approved` 是
+ * 通过备注、`rejected` 是驳回反馈。把 `detail` 原样拼进时间线会在界面上显示一串 JSON
+ * （2026-10-01 浏览器实测发现）。
+ *
+ * 规则：认识的形状翻成一句中文；`revised` 的件数已经由「第 N 件」渲染，这里返回
+ * `null` 不重复；**未知结构一律返回 `null`**——宁可不显示详情，也不能把 JSON 或看不懂
+ * 的字符串丢给用户。
+ */
+export function reviewEventDetail(
+  event: { event_type?: unknown; detail?: unknown; item_no?: unknown } | null | undefined,
+): string | null {
+  if (!event || typeof event !== 'object') return null;
+  const type = typeof event.event_type === 'string' ? event.event_type : '';
+  const detail = typeof event.detail === 'string' ? event.detail.trim() : '';
+  if (type === 'revised') return null;
+  if (type === 'created') return formatCreatedDetail(detail);
+  if (!detail) return null;
+  if (type === 'released_claim') {
+    return detail === 'admin released the claim' ? '管理员释放了领取' : null;
+  }
+  if (type === 'approved') return looksLikeJson(detail) ? null : `备注：${detail}`;
+  if (type === 'rejected') return looksLikeJson(detail) ? null : `反馈：${detail}`;
+  // 未知事件类型：只有确认不是 JSON 结构时才原样显示这段纯文本。
+  return looksLikeJson(detail) ? null : detail;
+}
+
 export function runStatusLabel(status: unknown): string {
   const key = typeof status === 'string' ? status : '';
   return RUN_STATUS_ZH[key] || key || '—';
@@ -154,6 +219,103 @@ export function itemRevised(item: ReviewItem): boolean {
 export function reviewRequesterLabel(task: ReviewTask | ReviewDetail): string {
   const name = task.requester?.display_name;
   return typeof name === 'string' && name.trim() ? name.trim() : '—';
+}
+
+/**
+ * 列表行的交付物标签（§3.2.1）。
+ *
+ * 同一发起人的十几行原来只有「N 件」，看不出是哪个任务。现在给首件名，多件时
+ * 「首件名 等 N 件」；一件名字都没有时退回「N 件」，没有件数才是「—」。
+ */
+export function reviewTaskItemLabel(
+  task: { first_item_name?: unknown; item_count?: unknown } | null | undefined,
+): string {
+  const count = Number(task?.item_count);
+  const total = Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+  const name =
+    typeof task?.first_item_name === 'string' && task.first_item_name.trim()
+      ? task.first_item_name.trim()
+      : '';
+  if (total === 0) return name || '—';
+  if (!name) return `${total} 件`;
+  return total > 1 ? `${name} 等 ${total} 件` : name;
+}
+
+/** 列表行的智能体名；缺了显示「—」，不拿版本号冒充。 */
+export function reviewTaskAgentLabel(
+  task: { agent_name?: unknown } | null | undefined,
+): string {
+  const name = task?.agent_name;
+  return typeof name === 'string' && name.trim() ? name.trim() : '—';
+}
+
+/**
+ * 详情标题（§3.2.3）：**绝不拿 ULID 当标题**。
+ *
+ * 交付物名优先（多件时「首件名 等 N 件」），否则退到「智能体名 · 发起人」。任务 ID
+ * 降级为次要信息里可复制的小字。
+ */
+export function reviewDetailTitle(
+  detail: {
+    items?: ReadonlyArray<{ name?: unknown }>;
+    agent?: { name?: unknown } | null;
+    requester?: { display_name?: unknown } | null;
+  } | null | undefined,
+): string {
+  if (!detail) return '审核任务';
+  const names = (detail.items ?? [])
+    .map((item) => (typeof item?.name === 'string' ? item.name.trim() : ''))
+    .filter(Boolean);
+  if (names.length === 1) return names[0];
+  if (names.length > 1) return `${names[0]} 等 ${names.length} 件`;
+  const agentName =
+    typeof detail.agent?.name === 'string' && detail.agent.name.trim()
+      ? detail.agent.name.trim()
+      : '智能体';
+  const requester =
+    typeof detail.requester?.display_name === 'string' ? detail.requester.display_name.trim() : '';
+  return requester ? `${agentName} · ${requester}` : agentName;
+}
+
+/** 版本表的上传者（§3.2.4）：修订显示审核员显示名，原件是智能体。 */
+export function reviewVersionUploader(
+  version: { uploaded_by_kind?: unknown; uploaded_by_display_name?: unknown } | null | undefined,
+): string {
+  const kind = typeof version?.uploaded_by_kind === 'string' ? version.uploaded_by_kind : 'agent';
+  if (kind !== 'reviewer') return '智能体';
+  const name =
+    typeof version?.uploaded_by_display_name === 'string'
+      ? version.uploaded_by_display_name.trim()
+      : '';
+  return name || '审核员';
+}
+
+/** artifact id 的短展示（§3.2.4）：完整 id 收进悬停提示，主列只留版本号。 */
+export function shortArtifactId(artifactId: unknown): string {
+  const id = typeof artifactId === 'string' ? artifactId.trim() : '';
+  if (!id) return '—';
+  return id.length <= 16 ? id : `${id.slice(0, 10)}…${id.slice(-4)}`;
+}
+
+/**
+ * 状态颜色语义（§3.2.5）。
+ *
+ * 任务状态与交付物状态**共用这一套 tone**：驳回 / 未通过都是警示色，通过 / 已交付
+ * 都是成功色。以前交付物标签固定用蓝色，和任务的红色「已驳回」对不上。
+ */
+export type StatusTone = 'ok' | 'err' | 'warn' | 'mute';
+
+export function reviewStatusTone(status: unknown): StatusTone {
+  if (status === 'APPROVED') return 'ok';
+  if (status === 'REJECTED') return 'err';
+  if (status === 'IN_REVIEW') return 'warn';
+  return 'mute';
+}
+
+export function deliveryTone(state: DeliveryState): StatusTone {
+  if (state === 'released') return 'ok';
+  if (state === 'rejected') return 'err';
+  return 'warn';
 }
 
 /** 时间戳展示；空值是 em dash，解析不了就原样显示。 */

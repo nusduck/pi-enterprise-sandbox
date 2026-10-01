@@ -9,6 +9,10 @@
 .mono { font-family: var(--font-mono); font-size: 12.5px; }
 .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .right { text-align: right; }
+/* `.table th { text-align: left }` 的特异性高于单独的 `.right`，会把「操作」列头拉回
+   左对齐，而按钮所在的 `td` 仍是右对齐——列头与按钮看起来不一致。用两类的选择器
+   把右对齐钉在表格里。 */
+.table .right { text-align: right; }
 
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
 .tabs button {

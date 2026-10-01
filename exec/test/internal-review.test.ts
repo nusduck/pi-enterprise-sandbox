@@ -213,6 +213,45 @@ test('review: 快照恒 withdrawn，且跨 org 读取同一个 404', async () =>
   }
 });
 
+test('review: 元数据端点批量返回、按 org 作用域跳过别人的 id，且不带字节', async () => {
+  const { app, workspaceId, cleanup } = await makeApp();
+  try {
+    const snap = await post(app, '/internal/v1/review/artifacts/snapshot', {
+      envelope: envelope(workspaceId),
+      payload: { sourcePath: 'uploads/材料.txt', name: '材料快照.txt' },
+    });
+    const artifactId = ((await snap.json()) as any).data.artifactId as string;
+
+    const meta = await post(app, '/internal/v1/review/artifacts/meta', {
+      envelope: envelope(workspaceId),
+      payload: { artifactIds: [artifactId, 'art_missing'] },
+    });
+    assert.equal(meta.status, 200);
+    const body = (await meta.json()) as any;
+    // 不存在的 id 被**跳过**而不是 404：调用方只知道"这条元数据不可用"。
+    assert.equal(body.data.items.length, 1);
+    assert.equal(body.data.items[0].artifactId, artifactId);
+    assert.equal(body.data.items[0].size, Buffer.byteLength('材料内容', 'utf8'));
+    assert.equal(body.data.items[0].createdByKind, 'agent');
+    // 快照恒 withdrawn（只供审核员读取）。
+    assert.equal(body.data.items[0].visibility, 'withdrawn');
+    assert.equal('bytes' in body.data.items[0], false, '元数据端点不返回字节');
+    assert.ok(typeof body.data.items[0].createdAt === 'string' && body.data.items[0].createdAt.length > 0);
+
+    // 另一个 org 的令牌看不到这件产物——跨 org 与不存在同一处理（这里都是跳过）。
+    const otherOrg = await post(
+      app,
+      '/internal/v1/review/artifacts/meta',
+      { envelope: envelope(workspaceId, 'org_other'), payload: { artifactIds: [artifactId] } },
+      { orgId: 'org_other' },
+    );
+    assert.equal(otherOrg.status, 200);
+    assert.equal(((await otherOrg.json()) as any).data.items.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
 test('review: 修订上传新建一版 held 产物，revision_of 指向原件；状态变更幂等', async () => {
   const { app, workspaceId, cleanup } = await makeApp();
   try {

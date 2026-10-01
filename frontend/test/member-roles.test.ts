@@ -17,6 +17,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import { hasAdminRole, hasRole, rolesOf } from '../src/shared/security/roles.ts';
 import {
   MEMBER_ROLE_ERROR_ZH,
+  NO_LOGIN_RECORD_TOOLTIP,
+  ROLE_LABEL_ZH,
   ROLE_PINNED_TOOLTIP,
   formatMemberTimestamp,
   isRolePinned,
@@ -28,6 +30,8 @@ import {
   roleEventActionLabel,
   roleEventActorLabel,
   roleEventSourceLabel,
+  roleLabel,
+  sortRoleEventsDesc,
   withRole,
 } from '../src/pages/settings/memberRoles.ts';
 import {
@@ -176,6 +180,97 @@ describe('成员与角色页的错误提示映射', () => {
     assert.equal(isSelfMember({ username: 'alice' }, { username: 'alice' }), true);
     assert.equal(isSelfMember({ username: 'bob' }, { username: 'alice' }), false);
     assert.equal(isSelfMember({ user_id: 'u1' }, null), false);
+  });
+});
+
+describe('成员与角色的界面信息设计（§3.1）', () => {
+  it('角色代码在界面上显示成中文，代码只留在悬停提示里', () => {
+    assert.equal(roleLabel('admin'), '管理员');
+    assert.equal(roleLabel('reviewer'), '审核员');
+    assert.equal(roleLabel('ADMIN'), '管理员');
+    assert.equal(roleLabel('unknown_role'), 'unknown_role', '未知角色原样显示，不猜');
+    assert.equal(ROLE_LABEL_ZH.admin, '管理员');
+    assert.equal(ROLE_LABEL_ZH.reviewer, '审核员');
+  });
+
+  it('列头、筛选、变更记录都不直接显示 admin / reviewer 代码', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.doesNotMatch(page, /<th>admin<\/th>/);
+    assert.doesNotMatch(page, /<th>reviewer<\/th>/);
+    assert.doesNotMatch(page, /label: 'admin'/);
+    assert.doesNotMatch(page, /label: 'reviewer'/);
+    assert.match(page, /roleLabel\('admin'\)/);
+    assert.match(page, /roleLabel\('reviewer'\)/);
+    // 需要时在悬停提示里给出代码。
+    assert.match(page, /角色代码：admin/);
+    assert.match(page, /角色代码：reviewer/);
+  });
+
+  it('开关与同一行的文字垂直居中：表格与卡片共用同一个行容器', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.match(page, /className=\{s\.roleCell\}/);
+    // 两个角色 × 两种布局（表格 / 窄屏卡片）都走同一个 RoleCell，不会各写一份对齐样式。
+    assert.equal((page.match(/<RoleCell/g) || []).length, 4, '表格 + 卡片各两处');
+    const css = src('src/pages/settings/membersAdmin.module.css');
+    assert.match(css, /\.roleCell\s*\{[^}]*align-items:\s*center/);
+  });
+
+  it('表格的右对齐在「操作」列头与按钮上一致（.table th 的 text-align 不能盖住它）', () => {
+    const css = src('src/pages/settings/adminPage.module.css');
+    assert.match(css, /\.table\s+\.right\s*\{[^}]*text-align:\s*right/);
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.match(page, /<th className=\{a\.right\}>操作<\/th>/);
+  });
+
+  it('页面说明与「最近登录」的空值口径一致', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.doesNotMatch(page, /只包含至少登录过一次的成员/);
+    assert.match(page, /还没有平台登录记录/);
+    assert.match(page, /NO_LOGIN_RECORD_TOOLTIP/);
+  });
+
+  it('变更记录按时间倒序（服务端顺序之外界面再兜一次）', () => {
+    const rows = [
+      { event_id: 'a', created_at: '2026-09-30T10:00:00.000Z' },
+      { event_id: 'b', created_at: '2026-10-01T10:00:00.000Z' },
+      { event_id: 'c', created_at: '2026-09-30T10:00:00.000Z' },
+    ];
+    assert.deepEqual(sortRoleEventsDesc(rows).map((r) => r.event_id), ['b', 'c', 'a']);
+    assert.deepEqual(sortRoleEventsDesc([]), []);
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.match(page, /sortRoleEventsDesc\(/);
+  });
+
+  it('「最近登录」为空时的提示文案说明了数据来源', () => {
+    assert.match(NO_LOGIN_RECORD_TOOLTIP, /登录记录/);
+  });
+
+  it('浅色主题下关闭态的开关清晰可辨（R6）', () => {
+    const css = src('src/pages/settings/membersAdmin.module.css');
+    // 关闭态：边界用次要文字色（浅色 #85857d vs 白卡片 ≈3.7:1，深色 ≈4.5:1），
+    // 滑块用 secondary；原来的 rgba(0,0,0,0.08) 边界 + 纯白滑块在浅色下看不见。
+    assert.match(css, /\.slider\s*\{[^}]*border:\s*1px solid var\(--color-text-muted\)/);
+    assert.match(css, /\.slider::before\s*\{[^}]*background:\s*var\(--color-text-secondary\)/);
+    assert.doesNotMatch(css, /\.slider::before\s*\{[^}]*background:\s*#fff/);
+    assert.doesNotMatch(css, /\.slider\s*\{[^}]*border:\s*1px solid var\(--color-border\)/);
+  });
+
+  it('窄屏（≤900px）改用卡片式行：表格隐藏、操作入口不消失（R4）', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.match(page, /s\.memberCards/, '要有卡片式行');
+    assert.match(page, /s\.tableOnly/, '表格要能被窄屏隐藏');
+    const cards = page.slice(page.indexOf('s.memberCards'));
+    assert.match(cards, /变更记录/, '卡片里也要有变更记录入口');
+    assert.match(cards, /role="admin"/);
+    assert.match(cards, /role="reviewer"/);
+    // 两个角色开关与操作入口在表格与卡片里共用同一批子组件，不各写一份。
+    assert.match(page, /function RoleCell\(/);
+    assert.match(page, /function MemberIdentity\(/);
+    const css = src('src/pages/settings/membersAdmin.module.css');
+    assert.match(css, /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?\.tableOnly\s*\{[^}]*display:\s*none/);
+    assert.match(css, /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?\.memberCards\s*\{[^}]*display:\s*grid/);
+    // 操作按钮不能被挤成竖排（那会把整行撑高）。
+    assert.match(css, /\.memberCardActions\s+button|\.btn\b/);
   });
 });
 

@@ -226,6 +226,14 @@
 .delegRow code { font-size: 12px; color: var(--color-text-muted); }
 .delegDesc { flex: 1 1 200px; min-width: 0; color: var(--color-text-muted); font-size: 12.5px; }
 .delegError { flex-basis: 100%; padding-left: 24px; }
+/* 交付策略单选（T2）：两个选项共用这一套行样式。
+   align-items:flex-start + 文本列 min-width:0，保证长说明换行时圆圈仍与标题同一行，
+   不会被挤到单独一行（2026-10-01 浏览器实测的错位）。 */
+.deliveryOption { display: flex; align-items: flex-start; gap: 8px; padding: 6px 4px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.deliveryOption:hover { background: var(--color-bg-hover); }
+.deliveryOption input { flex: none; margin: 2px 0 0; }
+.deliveryOptionText { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.deliveryOptionText b { font-weight: 600; }
 /* MCP 平台参数 (host arguments) */
 .hostArgs { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 2px 24px; padding-top: 8px; border-top: 1px dashed var(--color-border); font-size: 13px; }
 .hostArgRow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }

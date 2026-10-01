@@ -2,12 +2,16 @@
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.2fr);
+  /* 详情面板需要放得下版本表的 5 列（版本/上传者/时间/大小/下载），所以给它一个
+     最小宽度；列表用固定列宽 + 省略号，缩得起（§3.2.1 / 返工单 R5）。 */
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.95fr);
   gap: 16px;
   align-items: start;
 }
 
-@media (max-width: 900px) {
+/* 窄屏单栏：两个 minmax 的下限（列表 460 / 详情 420）加起来放不进 1100px 的可用宽度，
+   会直接把详情面板顶出视口（返工单 R5）。 */
+@media (max-width: 1200px) {
   .layout {
     grid-template-columns: 1fr;
   }
@@ -18,8 +22,87 @@
   min-width: 0;
 }
 
+/* 详情面板吸顶并可独立滚动（§3.2.6）：列表很长时点下面的行，详情仍在视口内，
+   不需要先滚回页面顶部。窄屏（单列）下取消吸顶，避免面板被压在视口外。 */
+.detailPane {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 1200px) {
+  .detailPane {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+/* 详情里的表格短字段不换行（返工单 R5）：不加这条，「下载」会竖排成「下 / 载」、
+   「13 B」也会断行。长 artifact id 交给 `.cellEllipsis` 省略。 */
+.detailPane th,
+.detailPane td {
+  white-space: nowrap;
+}
+
 .rowActive {
   background: rgba(64, 128, 255, 0.08);
+}
+
+/* 列表主格：交付物名是这一行的主信息（§3.2.1），时间作为次要信息跟在下面。 */
+.cellTitle {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* 列表用固定列宽 + 省略号：不这样，长智能体名会把「状态/运行结果」挤出列表宽度，
+   审阅者要横向滚动才能看到关键列。 */
+.listTable {
+  table-layout: fixed;
+}
+
+.colItem { width: 34%; }
+.colAgent { width: 22%; }
+.colRequester { width: 20%; }
+.colStatus { width: 12%; }
+.colRun { width: 12%; }
+
+.cellEllipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listPane th,
+.listPane td {
+  white-space: nowrap;
+}
+
+.listPane td .cellTitle,
+.listPane td small {
+  white-space: normal;
+}
+
+/* 「本次」标签：标出触发本任务的那条提问（§3.2.7）。 */
+.triggerPill {
+  margin-left: 8px;
+}
+
+.questionHistory {
+  color: var(--color-text-secondary);
+}
+
+.questionHistory > summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+}
+
+.questionHistory[open] > summary {
+  margin-bottom: 4px;
 }
 
 .questions {

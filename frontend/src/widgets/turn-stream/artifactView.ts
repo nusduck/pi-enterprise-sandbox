@@ -42,6 +42,17 @@ export function artifactDownloadId(artifact: ArtifactEntity): string {
 }
 
 /**
+ * 「已提交审核」时卡片上的一句话说明（§3.3.2）。
+ *
+ * 待审卡片故意没有下载按钮（点了也会 404）。只说「已提交审核」用户不知道接下来会
+ * 发生什么、也不知道该等谁，所以补一句「审核通过后可下载」。其余状态各有明确文案，
+ * 不需要这句。
+ */
+export function deliveryHint(artifact: ArtifactEntity): string | null {
+  return artifact.reviewStatus === 'pending' ? '审核通过后可下载' : null;
+}
+
+/**
  * 会话产物列表里**还没有被卡片代表**的行。卡片按原件 id 建，修订放行后指向修订版，
  * 列表里的修订版就是同一件交付物，不能再补一条。
  */
@@ -75,6 +86,7 @@ export function artifactView(artifact: ArtifactEntity, sessionId: string | null)
     label: extLabel(name, artifact.mimeType),
     downloadName: downloadAttrName(artifact.name, artifact.path),
     badge: deliveryBadge(artifact),
+    hint: deliveryHint(artifact),
     isImage: Boolean(url && artifact.mimeType?.startsWith('image/') && artifact.mimeType !== 'image/svg+xml'),
   };
 }
