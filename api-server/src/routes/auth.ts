@@ -11,6 +11,7 @@ import {
   authProfile,
   authRegister,
 } from '../services/agent-auth-client.js';
+import { config } from '../config.js';
 import { expiredSessionCookie, sessionCookie } from '../http/cookies.js';
 import { sendError, sendJson as json } from '../http/response.js';
 import {
@@ -46,6 +47,17 @@ function isAuthConfigDto(value: unknown): boolean {
     const entry = entries[name];
     return Boolean(entry && typeof entry === 'object' && !Array.isArray(entry));
   });
+}
+
+/**
+ * SSO 能否发起登录取决于两侧：Agent 能验签（它报的 `available`），BFF 持有完整的
+ * client 配置（secret、回调地址、事务密钥）。任一侧缺失都压成 false——不给出
+ * 「按钮可点、回调必失败」的入口。BFF 只能把 true 压成 false，不能反向。
+ */
+function withBffSsoAvailability(dto: any): any {
+  const sso = dto?.methods?.sso;
+  if (!sso || typeof sso !== 'object' || sso.available !== true || config.SSO.available) return dto;
+  return { ...dto, methods: { ...dto.methods, sso: { ...sso, available: false } } };
 }
 
 /**
@@ -103,7 +115,7 @@ export async function handleAuthConfig(res: ServerResponse, req: ReqWithTrace | 
       });
       return;
     }
-    json(res, 200, data);
+    json(res, 200, withBffSsoAvailability(data));
   } catch (err: any) {
     console.error('[auth] config:', err?.message || err);
     const code =

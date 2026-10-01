@@ -99,6 +99,8 @@ describe('auth config DTO', () => {
       localEnabled: false,
       registrationEnabled: false,
       ssoAvailable: false,
+      ssoEnabled: false,
+      localAdminOnly: false,
       ssoLabel: DEFAULT_SSO_LABEL,
       defaultEditableFields: [],
       modeDiagnosed: false,

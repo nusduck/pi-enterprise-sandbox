@@ -8,6 +8,7 @@ export {
 export { ConversationRepository } from './conversation-repository.js';
 export { AuthCredentialRepository } from './auth-credential-repository.js';
 export { BrowserAuthSessionRepository } from './browser-auth-session-repository.js';
+export { SsoIdentityRepository } from './sso-identity-repository.js';
 export { MessageRepository } from './message-repository.js';
 export {
   SessionJournalRepository,

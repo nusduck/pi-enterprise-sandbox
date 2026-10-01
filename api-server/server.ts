@@ -47,6 +47,7 @@ import {
   handleRunEvents,
 } from './src/routes/runs.js';
 import { handleRegister, handleLogin, handleLogout, handleMe, handleAuthConfig, handleProfile } from './src/routes/auth.js';
+import { handleSsoCallback, handleSsoLogin } from './src/routes/sso.js';
 import { handleEnsureSession } from './src/routes/sessions.js';
 import {
   handleGetProcess,
@@ -250,6 +251,17 @@ const server = http.createServer(async (rawReq, res) => {
       if (rejectCrossSiteAuthWrite(res, req)) return;
       const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
       await handleLogin(parsed, res, req);
+      return;
+    }
+    // Company SSO: top-level browser navigations, so they redirect rather than
+    // return JSON. Not behind the cross-site write guard — the IdP callback is
+    // by definition a cross-site GET; state + PKCE + nonce protect it instead.
+    if (req.method === 'GET' && path === '/api/auth/sso/login') {
+      await handleSsoLogin(req, parsedUrl.searchParams, res);
+      return;
+    }
+    if (req.method === 'GET' && path === '/api/auth/sso/callback') {
+      await handleSsoCallback(req, parsedUrl.searchParams, res);
       return;
     }
     if (req.method === 'GET' && path === '/api/auth/config') {

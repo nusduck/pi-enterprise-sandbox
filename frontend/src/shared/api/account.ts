@@ -2,8 +2,8 @@
  * 本人账户资料（`/api/auth/profile`）。可改的字段由 Agent 决定（目前是显示名称、邮箱与
  * 长任务完成邮件开关），其余字段只读；提交不可改的字段会得到 422 `PROFILE_FIELD_NOT_EDITABLE`。
  * 邮件通知是否可用由服务端在 `notifications.email` 里给出，前端不自行判断。
- * `login_method` / `identity_provider` 是只读来源字段：本轮 local / null，SSO 阶段
- * 才可能是 sso/公司 provider；缺字段时显示「—」而不是猜成账号密码。
+ * `login_method` / `identity_provider` 是只读来源字段：本地账号为 local / null，公司 SSO
+ * 账号为 sso / issuer；缺字段时显示「—」而不是猜成账号密码。
  */
 import { z } from 'zod';
 import { parseApi } from '../schemas/api';
@@ -18,7 +18,7 @@ const ProfileSchema = z
     roles: z.array(z.string()).optional(),
     organization_id: z.string().optional(),
     organization_name: z.string().nullable().optional(),
-    // SSO 预留（sso-reservation-tasks §锁定 DTO）：本轮恒为 local / null。
+    // 登录来源：local / null 或 sso / issuer（design sso-oidc-dev §4.2）。
     // 缺字段的旧服务端保持 undefined，不伪装成「账号密码」。
     login_method: z.string().optional().nullable(),
     identity_provider: z.string().optional().nullable(),

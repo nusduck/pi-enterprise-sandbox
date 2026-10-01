@@ -540,5 +540,15 @@ Agent 的 `BrowserSessionService` 与 `BrowserSessionTokens` 将应用 JWT 载�
 BFF 只代理 config/login/logout/profile，JWT 仅入 Cookie；Run SSE 有界重授权。
 前端以服务端 config 投影登录方式，认证依赖故障保留草稿并允许重试，退出清理本机身份。
 
-本期仅 local；公司 OIDC 验证、关联和准入属于后续阶段，SSO disabled/unavailable。
 协议分层与进入门槛见 [SSO 设计](design/sso-integration-reservation.md)。
+
+### 公司 SSO（OIDC）
+
+`SSO_ENABLED=true` 时：BFF 用 openid-client 走授权码 + PKCE，登录事务存在加密的短期
+HttpOnly Cookie（BFF 无存储权威，多副本回调不依赖进程内存）；client secret 只在 BFF。
+换回的 ID token 交给 Agent `POST /internal/auth/oidc/exchange`，由 Agent 用 jose **独立**验签
+（固定 issuer、JWKS 同源、算法白名单、aud/azp/nonce），按 `(iss, sub)` 查
+`tbl_agsvc_sso_identities`，没有就 JIT 建一行无可用密码的凭据并落入 `SSO_ORG_ID`，然后与本地登录
+共用活跃准入与 sid 签发。角色仍只来自 `member_roles`；SSO 会话不走按用户名的管理员名单引导。
+本地密码在 SSO 模式下只留给管理员名单。开发用 mock-oauth2-server 替身，详见
+[sso-oidc-dev.md](design/sso-oidc-dev.md)。

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — 公司 SSO（OIDC）登录
+
+- 可选启用公司 SSO（`SSO_ENABLED`）：授权码 + PKCE，员工首次登录自动开通账号（用户名为工号，无角色，统一组织），角色由管理员在成员页授予。
+- SSO 模式下账号密码只留给部署管理员作应急入口，公开注册关闭；登录页以「使用公司 SSO 登录」为主入口，回调失败显示中文提示。
+- 开发环境提供 mock-oauth2-server 替身（`--profile sso-dev`）。尚未与公司 IdP 联调。
+
 ### Changed — SSO 预留与可撤销本地会话
 
 - 本地登录签发带 sid 的应用会话；退出撤销当前会话，旧凭据重放被拒绝。升级后旧无 sid JWT 需重新登录。

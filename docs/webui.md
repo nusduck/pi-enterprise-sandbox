@@ -570,7 +570,10 @@ FlashZone（`role="status"` + `aria-live="assertive"`）统一播报。
 
 ### 登录能力与身份边界（SSO 预留 P1）
 
-侧栏先加载 `/api/auth/config`：本地登录/注册按服务端能力显示；SSO 尚未接入，没有可用假按钮。
+侧栏先加载 `/api/auth/config`：本地登录/注册按服务端能力显示。`mode=sso` 且 SSO 可用时，
+主入口是「使用公司 SSO 登录」（整页跳到 `/api/auth/sso/login?return_to=<当前路径>`），账号密码
+收起为「管理员账号登录」；SSO 打开但不可用时只显示「暂不可用」，没有可点入口。回调失败带回的
+`?sso_error=` 翻成固定中文提示后从地址栏移除（不回显 URL 文本）；员工误用账号密码时提示改走 SSO。
 加载失败展示错误与重试，不当成空登录方式。`me` 401 进入重新登录；503/网络故障显示认证服务
 不可用并保留草稿与已有身份，重试成功后才恢复账户目录/会话。
 账户页从 profile.login_method/identity_provider 显示来源，editable_fields 仍决定编辑权。

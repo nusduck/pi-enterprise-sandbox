@@ -12,7 +12,7 @@ export const AuthUserSchema = z
     // 角色权威（design §4.1）：`me` / 登录响应里的 `roles`；`role` 只是兼容主角色。
     // 缺省时保留 undefined，由 hasAdminRole 回退到 `role`，不在这里猜默认角色。
     roles: z.array(z.string()).optional(),
-    // SSO 预留（sso-reservation-tasks §锁定 DTO）：本轮恒为 local / null。
+    // 登录来源：local / null 或 sso / issuer（design sso-oidc-dev §4.2）。
     // 旧版服务端没有这两个字段时保持 undefined，不伪造身份来源。
     login_method: z.string().optional().nullable(),
     identity_provider: z.string().optional().nullable(),

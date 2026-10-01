@@ -36,6 +36,7 @@ import { AgentVersionSkillRefRepository } from '../infrastructure/mysql/reposito
 import { SkillShareRequestRepository } from '../infrastructure/mysql/repositories/skill-share-request-repository.js';
 import { AuthCredentialRepository } from '../infrastructure/mysql/repositories/auth-credential-repository.js';
 import { BrowserAuthSessionRepository } from '../infrastructure/mysql/repositories/browser-auth-session-repository.js';
+import { SsoIdentityRepository } from '../infrastructure/mysql/repositories/sso-identity-repository.js';
 import { MemberRoleRepository } from '../infrastructure/mysql/repositories/member-role-repository.js';
 import { ReviewRepository } from '../infrastructure/mysql/repositories/review-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
@@ -314,6 +315,8 @@ export function createRepositoryBundle(
     authCredentials: new AuthCredentialRepository(db, { now }),
     /** 可撤销浏览器会话账本（design sso-integration-reservation §5.2）。 */
     browserAuthSessions: new BrowserAuthSessionRepository(db, { now }),
+    /** 公司 SSO `(iss, sub)` → 平台用户关联（design sso-oidc-dev §3）。 */
+    ssoIdentities: new SsoIdentityRepository(db, { now }),
     /** 平台角色账本（admin / reviewer）：授予、撤销与审计（design rbac-roles §2）。 */
     memberRoles: new MemberRoleRepository(db, { now }),
     /** 审核账本（design agent-output-review §5.1）：任务 / 交付物 / 材料 / 审计。 */

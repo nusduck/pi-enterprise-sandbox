@@ -249,6 +249,30 @@
 }
 .authActions .primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
 .authError { color: var(--color-danger-text); font-size: 12px; }
+/* 公司 SSO 入口：整页跳转的链接，按主按钮呈现（SSO 模式下它是员工的唯一入口）。 */
+.ssoBtn {
+  display: block;
+  text-align: center;
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  color: #fff;
+  border-radius: 7px;
+  padding: 6px;
+  font-size: 13px;
+  text-decoration: none;
+}
+.ssoBtn:focus-visible { outline: 2px solid var(--color-primary-tint); outline-offset: 2px; }
+/* SSO 模式下收起的管理员本地登录：弱化成文字按钮，不与 SSO 主入口抢注意力。 */
+.linkBtn {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
 /* 未登录面板的纯提示（加载中/无可用登录方式/SSO 未开放）：与 .empty 的
    列表占位语义区分开，也不冒充可点击按钮。 */
 .authNotice { color: var(--color-text-muted); font-size: 12px; margin: 0; }

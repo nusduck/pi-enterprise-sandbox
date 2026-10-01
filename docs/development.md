@@ -652,3 +652,20 @@ npm test --prefix exec -- test/internal-v1-security.test.ts test/shell-policy.te
 user/org/Membership 停用立即拒绝、角色撤销下一请求生效、SSE 有界关流。
 浏览器另覆盖 config/me 故障与重试、草稿保留、切号与退出失败清理。
 公司 OIDC、claims 和停用传播语义不由本期测试证明。
+
+### 公司 SSO 的本地联调（开发替身）
+
+用 mock-oauth2-server 替身走完整 OIDC 链路，不改 `.env` 也可以——用 shell 环境覆盖：
+
+```bash
+export SSO_ENABLED=true SSO_ISSUER=http://oidc.localhost:8090/default \
+  SSO_CLIENT_ID=dsh-sandbox-dev SSO_CLIENT_SECRET=<任意占位> \
+  SSO_REDIRECT_URI=http://localhost:3000/api/auth/sso/callback \
+  SSO_TRANSACTION_SECRET="$(openssl rand -hex 32)" SSO_ALLOW_INSECURE_HTTP=true
+docker compose --profile sso-dev up -d mock-oidc agent agent-worker api-server frontend
+```
+
+浏览器打开 **`http://localhost:3000`**（不要用 127.0.0.1：回调地址的 host 决定会话 Cookie 落在哪），
+点「使用公司 SSO 登录」，在替身登录页任填 subject，claims 填 `{"employee_id":"E1001","name":"张三"}`。
+shell 覆盖只对这次 `up` 生效，普通重启会丢；新增 `tbl_agsvc_sso_identities` 迁移按上一节同样的
+manifest/增量发布流程升级开发库。替身只证明协议接线，不代表公司 IdP 的 claims 与登记已验证。

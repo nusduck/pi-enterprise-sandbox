@@ -2,7 +2,7 @@
  * 登录能力投影（`GET /api/auth/config`）的强类型 DTO 与展示判定。
  *
  * 权威在 Agent（login 能力），BFF 只代理；前端把服务端事实投影成 UI 状态，
- * 不自己生成登录方式。SSO 到 P3 之前都必须是「不可用」：`sso.available` 只有
+ * 不自己生成登录方式。`sso.available` 只有
  * 服务端明确给 true 才成立，字段缺失/模式未知一律按不可用处理（fail-closed），
  * 避免 disabled 的 SSO 出现可点击的假入口。
  */
@@ -62,6 +62,13 @@ export type LoginCapabilities = {
   registrationEnabled: boolean;
   /** enabled && available 同时成立才算可用；否则 UI 不得渲染可用的 SSO 入口。 */
   ssoAvailable: boolean;
+  /** 部署打开了 SSO（不论当前是否可用）：用于「暂不可用」与「未开放」的文案区分。 */
+  ssoEnabled: boolean;
+  /**
+   * `mode=sso`：员工走 SSO，账号密码只留给管理员（应急入口），UI 默认收起本地表单。
+   * 真正的限制在服务端（非管理员本地登录 403 LOCAL_LOGIN_RESTRICTED）。
+   */
+  localAdminOnly: boolean;
   ssoLabel: string;
   /** profile_policy 只是部署默认；个人资料仍以 profile.editable_fields 为准。 */
   defaultEditableFields: string[];
@@ -89,6 +96,8 @@ export function projectLoginCapabilities(config: AuthConfig | null): LoginCapabi
     localEnabled: local?.enabled === true,
     registrationEnabled: local?.registration_enabled === true,
     ssoAvailable: sso?.enabled === true && sso?.available === true,
+    ssoEnabled: sso?.enabled === true,
+    localAdminOnly: mode === 'sso' && local?.enabled === true,
     ssoLabel: (typeof sso?.label === 'string' && sso.label) || DEFAULT_SSO_LABEL,
     defaultEditableFields: config?.profile_policy?.editable_fields ?? [],
     modeDiagnosed: mode !== null && !KNOWN_AUTH_MODES.includes(mode),
