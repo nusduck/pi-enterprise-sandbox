@@ -106,3 +106,37 @@ export function extractSubmittedArtifact(result) {
     description: rawDescription == null ? null : rawDescription,
   };
 }
+
+/**
+ * `artifact.ready` 事件的负载（design `agent-output-review.md` §4 A1）。
+ *
+ * 单独成函数是为了让「review 会话多一个 `review_status`」这条规则只有一个写入点：
+ * 它同时是前端「已提交审核」卡片与「Run 终态建审核任务」的判据，两个方向都错不得
+ * ——多写了 direct 会话会凭空出现审核卡片，少写了 review 会话的交付物会直接当成交付。
+ *
+ * @param deliveryMode 会话绑定版本的交付模式；缺省 `direct`（漏传只会更保守）。
+ */
+export function buildArtifactReadyEventData(
+  artifact: {
+    artifactId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    sha256: string;
+    description?: unknown;
+  },
+  ids: { toolCallId: string; toolExecutionId: string },
+  deliveryMode?: string | null,
+): Record<string, unknown> {
+  return {
+    artifactId: artifact.artifactId,
+    name: artifact.name,
+    mimeType: artifact.mimeType,
+    size: artifact.size,
+    sha256: artifact.sha256,
+    description: artifact.description,
+    toolCallId: ids.toolCallId,
+    toolExecutionId: ids.toolExecutionId,
+    ...(deliveryMode === 'review' ? { review_status: 'pending' } : {}),
+  };
+}

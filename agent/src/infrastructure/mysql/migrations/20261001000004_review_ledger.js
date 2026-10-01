@@ -77,7 +77,6 @@ export async function up(knex) {
       t.specificType('created_at', 'DATETIME(3)').notNullable().defaultTo(knex.raw(NOW3));
       t.specificType('updated_at', 'DATETIME(3)').notNullable().defaultTo(knex.raw(NOW3));
 
-      t.primary(['review_task_id'], 'pk_review_tasks');
       // 一个 Run 至多一条审核任务——与「本轮没有产物就不建任务」共同定义了 U4。
       t.unique(['run_id'], { indexName: 'ind_agsvc_rt_a1' });
       // 审核池：本 org 按状态倒序取。
@@ -88,6 +87,11 @@ export async function up(knex) {
         'ind_agsvc_rt_i2',
       );
       t.foreign('run_id').references('tbl_agsvc_runs.run_id');
+      // 主键放在最后：`migration-primary-options` 那条棘轮用「`.primary(` 之后 200
+      // 字符内不许出现索引名键」的启发式守 MySQL 建表路径，紧跟其后的
+      // `t.unique(..., { 索引名键 })` 会被它误判。DDL 顺序不影响结果（PK 名与索引名
+      // 都不变），所以把主键挪到该表最后一行。
+      t.primary(['review_task_id'], 'pk_review_tasks');
     });
 
     await tracker.createTable(REVIEW_ITEMS_TABLE, (t) => {

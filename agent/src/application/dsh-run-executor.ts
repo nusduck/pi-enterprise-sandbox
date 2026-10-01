@@ -52,6 +52,8 @@ import {
 } from './dsh-run-executor-deps.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { ensureRunSandboxSession } from './run-sandbox-ensure.js';
+import { attachPromptImages, buildTriggeringPrompt } from './run-prompt-build.js';
+import { buildReviewContextInjection } from './review-context-injection.js';
 import { SessionRecoveryService } from './session-recovery-service.js';
 import { captureSessionSnapshotPayload } from './session-json-codec.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
@@ -66,10 +68,7 @@ import {
   INTERACTION_STATUS,
 } from '../domain/interaction/interaction-status.js';
 import {
-  appendCurrentTurnAttachmentContext,
-  appendNonVisionImageNotice,
   attachmentsFromTriggeringMessage,
-  derivePromptFromTriggeringMessage,
   imageAttachmentsFromTriggeringMessage,
   requestedModelIdFromTriggeringMessage,
   toDshPromptInvocation,
@@ -898,44 +897,40 @@ export class DshRunExecutor {
           }),
         );
       } else {
-        prompt = toDshPromptInvocation(
-          appendNonVisionImageNotice(
-            appendCurrentTurnAttachmentContext(
-              derivePromptFromTriggeringMessage(triggering),
-              currentTurnAttachments,
-            ),
-            modelAcceptsImages ? [] : imageAttachments,
-            String(model.id || ''),
-          ),
-        );
-        if (imageAttachments.length > 0 && modelAcceptsImages) {
-          if (!this.promptImageLoader) {
-            return {
-              outcome: RUN_STATUS.FAILED,
-              statusReason: 'image attachments require a configured attachment store',
-            };
-          }
-          let images;
-          try {
-            images = await this.promptImageLoader({
-              attachments: imageAttachments,
-              sandboxSessionId: session.sandboxSessionId,
-              workspaceId: session.workspaceId,
-              scope,
-              traceId,
-              traceState,
-              signal,
-            });
-          } catch (error) {
-            return {
-              outcome: RUN_STATUS.FAILED,
-              statusReason:
-                sanitizeStatusReason(error) ?? 'image attachment resolution failed',
-            };
-          }
-          if (images.length > 0) {
-            prompt.options = { ...(prompt.options || {}), images };
-          }
+        // §5.4 的平台注入：已决审核任务每个只注入一次，文本由服务端生成，只进
+        // 提示词、不进消息行（所以不会出现在会话界面里）。
+        const reviewContext = await buildReviewContextInjection({
+          transactionManager: this.tx,
+          createRepositories: this.createRepositories,
+          conversationId: run.conversationId,
+          orgId: scope.orgId,
+          userId: scope.userId,
+          runId,
+          generateId: this.generateId,
+        });
+        prompt = buildTriggeringPrompt({
+          triggering,
+          currentTurnAttachments,
+          imageAttachments,
+          modelAcceptsImages,
+          modelId: String(model.id || ''),
+          reviewContext,
+        });
+        const images = await attachPromptImages({
+          prompt,
+          imageAttachments,
+          modelAcceptsImages,
+          loader: this.promptImageLoader,
+          sandboxSessionId: session.sandboxSessionId,
+          workspaceId: session.workspaceId,
+          scope,
+          traceId,
+          traceState,
+          signal,
+          sanitizeStatusReason,
+        });
+        if (images.ok === false) {
+          return { outcome: RUN_STATUS.FAILED, statusReason: images.statusReason };
         }
       }
 

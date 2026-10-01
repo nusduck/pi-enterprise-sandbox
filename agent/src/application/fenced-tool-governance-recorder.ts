@@ -18,6 +18,7 @@
 
 import { assertUlid } from '../domain/shared/ulid.js';
 import {
+  buildArtifactReadyEventData,
   extractStartedProcessId,
   extractSubmittedArtifact,
 } from './tool-result-projections.js';
@@ -80,7 +81,6 @@ export class FencedToolGovernanceRecorder {
   now: Loose;
   emit: Loose;
   isLockLost: Loose;
-  /** 绑定版本的交付模式（`direct` | `review`），只用于 A1 的事件负载。 */
   deliveryMode: 'direct' | 'review';
   _tail: Loose;
   _inflight: Map<any, any>;
@@ -126,10 +126,8 @@ export class FencedToolGovernanceRecorder {
     this.now = deps.now ?? (() => new Date());
     this.emit = typeof deps.emit === 'function' ? deps.emit : null;
     this.isLockLost = deps.isLockLost ?? (() => false);
-    // 审核模式的交付物在 exec 侧是 `held`（design §3.2），但那个事实在 exec 里，
-    // 而 agent 需要在**同一事务**里就给 `artifact.ready` 打上标记（A1）。权威是
-    // 绑定版本（不是"当前活跃版本"），由 `dsh-run-executor` 从 boundVersion 传入。
-    // 缺省 `direct`：漏传只会更保守（不进审核），不会凭空打开审核。
+    // A1：审核模式的权威是**绑定版本**（不是"当前活跃版本"），由执行器传入；
+    // 缺省 direct —— 漏传只会更保守，不会凭空打开审核。
     this.deliveryMode = deps.deliveryMode === 'review' ? 'review' : 'direct';
     this._tail = createPromiseTail();
     /**
@@ -1257,20 +1255,10 @@ export class FencedToolGovernanceRecorder {
             artifactEnvelope = await this.#appendEventInTrx(repos, {
               type: 'artifact.ready',
               timestamp,
-              data: {
-                artifactId: artifact.artifactId,
-                name: artifact.name,
-                mimeType: artifact.mimeType,
-                size: artifact.size,
-                sha256: artifact.sha256,
-                description: artifact.description,
+              data: buildArtifactReadyEventData(artifact, {
                 toolCallId,
                 toolExecutionId: toolExecution.toolExecutionId,
-                // A1（design §4）：review 会话里这份交付物在 exec 是 `held`，先给
-                // 前端「已提交审核」卡片；direct 会话不带这个字段（事件形状不变）。
-                // 终态建审核任务也以这个字段为判据（`review-task-create.ts`）。
-                ...(this.deliveryMode === 'review' ? { review_status: 'pending' } : {}),
-              },
+              }, this.deliveryMode),
             });
           }
         }
