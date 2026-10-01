@@ -15,6 +15,7 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { listAgents, type Agent } from '../../shared/api';
+import { isCurrentIdentity, type IdentityRevision } from './identityRevision';
 
 export interface AgentSelection {
   /** org 内 status=active 的智能体；只有一个时前端不渲染选择器。 */
@@ -22,36 +23,43 @@ export interface AgentSelection {
   /** 新会话要用的 Agent；null = 用租户默认 Agent（与多 Agent 上线前一致）。 */
   selectedAgentId: string | null;
   setSelectedAgentId: (agentId: string | null) => void;
-  refreshAgents: () => Promise<void>;
+  /** 拉取 org 内的 Agent 目录；可传入发起时的身份代次。 */
+  refreshAgents: (snapshot?: number) => Promise<void>;
   /** agentId → 展示名。会话头部用它显示"这个会话绑在哪个 Agent 上"。 */
   agentNameById: (agentId: string | null | undefined) => string | null;
   /** 登出是身份边界：丢掉上一个账号的目录。 */
   resetAgents: () => void;
 }
 
-export function useAgentSelection(): AgentSelection {
+export function useAgentSelection(revision: IdentityRevision): AgentSelection {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentIdState] = useState<string | null>(null);
 
-  const refreshAgents = useCallback(async () => {
-    try {
-      const list = await listAgents();
-      const selectable = list.filter(
-        (agent) => String(agent.status || '').toLowerCase() === 'active',
-      );
-      setAgents(selectable);
-      // 选中的 Agent 被停用或删掉时回落到"租户默认"，而不是继续送一个
-      // 服务端会拒绝的 id。
-      setSelectedAgentIdState((current) =>
-        current && selectable.some((agent) => agent.agent_id === current)
-          ? current
-          : null,
-      );
-    } catch {
-      setAgents([]);
-      setSelectedAgentIdState(null);
-    }
-  }, []);
+  const refreshAgents = useCallback(
+    async (snapshot: number = revision.current()) => {
+      try {
+        const list = await listAgents();
+        // 身份已换人：旧账号的 Agent 目录不能灌回新界面。
+        if (!isCurrentIdentity(revision, snapshot)) return;
+        const selectable = list.filter(
+          (agent) => String(agent.status || '').toLowerCase() === 'active',
+        );
+        setAgents(selectable);
+        // 选中的 Agent 被停用或删掉时回落到"租户默认"，而不是继续送一个
+        // 服务端会拒绝的 id。
+        setSelectedAgentIdState((current) =>
+          current && selectable.some((agent) => agent.agent_id === current)
+            ? current
+            : null,
+        );
+      } catch {
+        if (!isCurrentIdentity(revision, snapshot)) return;
+        setAgents([]);
+        setSelectedAgentIdState(null);
+      }
+    },
+    [revision],
+  );
 
   const setSelectedAgentId = useCallback((agentId: string | null) => {
     setSelectedAgentIdState(String(agentId || '').trim() || null);

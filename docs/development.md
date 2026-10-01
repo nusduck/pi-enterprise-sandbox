@@ -638,3 +638,17 @@ npm test --prefix exec -- test/internal-v1-security.test.ts test/shell-policy.te
 ```
 
 详见 [architecture.md](./architecture.md)「双重强制」一节。
+
+### SSO 预留 P1 的本地验证
+
+本期只做 local 会话底座，无需公司 issuer/client。新增会话 migration 后必须按
+[manifest runbook](runbooks/schema-manifest-regenerate.md) 在空影子库真实重放，检查只新增
+`tbl_agsvc_browser_auth_sessions`，再生成增量发布 SQL、升级目标库并重建所有消费者。
+不要用非空开发库执行完整首次安装包；数据库迁移不由启动服务自动执行。
+
+在独立测试库启用 `TEST_MYSQL_URL`，执行
+`agent/tests/mysql/browser-auth-session.integration.test.js`（会清理该测试库的身份表，勿指向业务库）；
+再经实际 BFF 验证带 sid 登录、退出后 Cookie/Bearer 重放 401、另一个 sid 仍有效、
+user/org/Membership 停用立即拒绝、角色撤销下一请求生效、SSE 有界关流。
+浏览器另覆盖 config/me 故障与重试、草稿保留、切号与退出失败清理。
+公司 OIDC、claims 和停用传播语义不由本期测试证明。

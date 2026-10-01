@@ -530,3 +530,15 @@ Exec internal plane (TypeScript)
 | `GET /health/ready` | BFF 在跑，且 Agent `/ready` 与 Sandbox `/ready` 都报 `status: ready`（不看下游 liveness） | 503 |
 
 探针响应不包含密钥、连接串或环境 dump。
+
+### 浏览器认证底座与 SSO 预留（P1）
+
+Agent 的 `BrowserSessionService` 与 `BrowserSessionTokens` 将应用 JWT 载具和可撤销会话账本分开；
+`ActivePrincipalService` 每次读取 active user/org/Membership 并核对 owner 映射。
+`tbl_agsvc_browser_auth_sessions` 存 sid、内部及外部 owner、来源、有效期和撤销时间，
+不改变既有 Run/Conversation owner。角色继续以 `tbl_agsvc_member_roles` 为权威。
+BFF 只代理 config/login/logout/profile，JWT 仅入 Cookie；Run SSE 有界重授权。
+前端以服务端 config 投影登录方式，认证依赖故障保留草稿并允许重试，退出清理本机身份。
+
+本期仅 local；公司 OIDC 验证、关联和准入属于后续阶段，SSO disabled/unavailable。
+协议分层与进入门槛见 [SSO 设计](design/sso-integration-reservation.md)。

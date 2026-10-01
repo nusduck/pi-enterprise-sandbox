@@ -65,6 +65,7 @@ describe('ServiceContainer', () => {
       'outbox',
       'skillEnablements',
       'authCredentials',
+      'browserAuthSessions',
     ]) {
       assert.ok(bundle[k], `missing ${k}`);
     }

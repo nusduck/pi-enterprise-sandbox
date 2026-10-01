@@ -29,6 +29,7 @@ import {
   parseSseResumeCursor,
   presentCreateRunAccepted,
 } from '../application/event-replay-service.js';
+import { startSseReauthorization } from '../application/sse-reauthorization.js';
 import { sendError, sendJson as json } from '../http/response.js';
 
 /**
@@ -350,6 +351,7 @@ export async function handleRunEvents(
   res?.on?.('error', onClose);
 
   let reader: any = null;
+  let reauthorization: { stop(): void } | null = null;
   try {
     // Fail-closed ownership before any stream headers (403/404 via Agent).
     const { auth } = await authorizeRunRequest(runId, req);
@@ -365,6 +367,26 @@ export async function handleRunEvents(
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
+    // A revoked session must not keep streaming through an already-open relay.
+    // Re-authorize on a bounded cadence; a 401 or authority-dependency failure
+    // closes this subscription fail-closed. It never cancels the Run.
+    reauthorization = startSseReauthorization({
+      req,
+      onRevoked: () => {
+        try {
+          controller.abort();
+        } catch {
+          /* ignore */
+        }
+        if (!res.writableEnded) {
+          try {
+            res.end();
+          } catch {
+            /* ignore */
+          }
+        }
+      },
+    });
     reader = upstream.body?.getReader?.();
     await proxySseUpstream({
       reader,
@@ -378,6 +400,7 @@ export async function handleRunEvents(
     if (!res.headersSent) sendError(res, err, req?.traceId);
     else if (!res.writableEnded) res.end();
   } finally {
+    reauthorization?.stop();
     req?.off?.('close', onClose);
     res?.off?.('close', onClose);
     res?.off?.('error', onClose);

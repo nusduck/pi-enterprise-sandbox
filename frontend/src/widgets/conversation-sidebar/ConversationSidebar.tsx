@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useChat } from '../../features/chat/ChatContext';
+import { useChat, type AuthConfigState } from '../../features/chat/ChatContext';
 import { conversationTitle } from '../../shared/state';
 import { useTheme } from '../../shared/ui/theme';
+import { noLoginMethodMessage } from '../../shared/schemas/auth';
 import { conversationRunMarkers, listPendingApprovals } from '../runtime-timeline/buildTimeline';
 import {
   IconCheck,
@@ -29,6 +30,148 @@ import { hasAdminRole, hasReviewerRole } from '../../shared/security/roles';
 import s from './sidebar.module.css';
 
 /**
+ * 未登录时的底部面板：登录方式完全来自服务端 config 投影。
+ *
+ * - 加载/失败：显示状态与重试，**绝不**默认成「账号密码可用」；
+ *   失败时连表单都不渲染，避免对服务故障做出「未开放登录」的假结论。
+ * - `local.enabled` 才渲染账号密码表单；`registration_enabled` 才渲染注册。
+ * - SSO 只有服务端明确 `enabled && available` 才渲染入口；P1 阶段固定不可用，
+ *   渲染为禁用按钮而不是可点击的假路由。
+ */
+function SignInPanel({
+  config,
+  authError,
+  logoutWarning,
+  username,
+  password,
+  authErrorText,
+  onRetry,
+  onUsername,
+  onPassword,
+  onSubmit,
+  onRegister,
+}: {
+  config: AuthConfigState;
+  authError: string | null;
+  /** 退出后服务端撤销未确认的可见提示；普通退出为 null。 */
+  logoutWarning: string | null;
+  username: string;
+  password: string;
+  authErrorText: string;
+  onRetry: () => void;
+  onUsername: (value: string) => void;
+  onPassword: (value: string) => void;
+  onSubmit: (e: FormEvent) => void;
+  onRegister: () => void;
+}) {
+  const [localError, setLocalError] = useState('');
+
+  // 服务端身份/能力状态一变就清掉上一次的表单级提示（例如 503 后重试成功）。
+  useEffect(() => {
+    setLocalError('');
+  }, [authError, config.error, config.config, config.loading]);
+
+  // 撤销未确认的提示在任何未登录形态下都要可见：这是「本机已退出，但服务端
+  // 撤销没确认」的安全事实，不能因为 config/身份检查失败而消失。
+  const revocationNotice = logoutWarning ? (
+    <p className={s.authError} role="alert">{logoutWarning}</p>
+  ) : null;
+
+  if (authError) {
+    return (
+      <div className={s.auth}>
+        {revocationNotice}
+        <p className={s.authError} role="alert">{authError}</p>
+        <div className={s.authActions}>
+          <button type="button" className={s.btn} onClick={onRetry}>重试</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (config.loading) {
+    return (
+      <div className={s.auth}>
+        {revocationNotice}
+        <p className={s.authNotice}>正在加载登录方式…</p>
+      </div>
+    );
+  }
+
+  if (config.error) {
+    return (
+      <div className={s.auth}>
+        {revocationNotice}
+        <p className={s.authError} role="alert">{config.error}</p>
+        <div className={s.authActions}>
+          <button type="button" className={s.btn} onClick={onRetry}>重试</button>
+        </div>
+      </div>
+    );
+  }
+
+  const caps = config.capabilities;
+  if (!caps) {
+    return (
+      <div className={s.auth}>
+        {revocationNotice}
+        <p className={s.authError} role="alert">登录方式不可用，请重试。</p>
+        <div className={s.authActions}>
+          <button type="button" className={s.btn} onClick={onRetry}>重试</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <form className={s.auth} onSubmit={onSubmit} autoComplete="on">
+      {revocationNotice}
+      {caps.localEnabled ? (
+        <>
+          <input
+            name="username"
+            placeholder="用户名"
+            autoComplete="username"
+            minLength={2}
+            required
+            value={username}
+            onChange={(e) => onUsername(e.target.value)}
+          />
+          <input
+            type="password"
+            name="password"
+            placeholder="密码"
+            autoComplete="current-password"
+            minLength={6}
+            required
+            value={password}
+            onChange={(e) => onPassword(e.target.value)}
+          />
+          <div className={s.authActions}>
+            <button type="submit" className={s.primary}>登录</button>
+            {caps.registrationEnabled ? (
+              <button type="button" onClick={onRegister}>注册</button>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+      {caps.ssoAvailable ? (
+        <button type="button" className={s.btn} disabled title="SSO 入口尚未开放">
+          {caps.ssoLabel}
+        </button>
+      ) : (
+        <p className={s.empty}>
+          {noLoginMethodMessage(caps) || `${caps.ssoLabel} 尚未开放，本次仅支持账号密码登录。`}
+        </p>
+      )}
+      {localError || authErrorText ? (
+        <p className={s.authError} role="alert">{localError || authErrorText}</p>
+      ) : null}
+    </form>
+  );
+}
+
+/**
  * Left rail: brand, primary navigation, search, the conversation list grouped
  * by day, and the account menu. Conversations show which agent they are bound
  * to (the org default carries no tag) and whether a run is live or waiting.
@@ -48,6 +191,9 @@ export function ConversationSidebar() {
     login,
     register,
     logout,
+    authConfig,
+    retryAuth,
+    logoutWarning,
   } = useChat();
   const [theme, toggleTheme] = useTheme();
 
@@ -380,32 +526,19 @@ export function ConversationSidebar() {
               </button>
             </>
           ) : (
-            <form className={s.auth} onSubmit={onLogin} autoComplete="on">
-              <input
-                name="username"
-                placeholder="用户名"
-                autoComplete="username"
-                minLength={2}
-                required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-              />
-              <input
-                type="password"
-                name="password"
-                placeholder="密码"
-                autoComplete="current-password"
-                minLength={6}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-              <div className={s.authActions}>
-                <button type="submit" className={s.primary}>登录</button>
-                <button type="button" onClick={() => void onRegister()}>注册</button>
-              </div>
-              {authError ? <p className={s.authError}>{authError}</p> : null}
-            </form>
+            <SignInPanel
+              config={authConfig}
+              authError={state.authError}
+              logoutWarning={logoutWarning}
+              username={username}
+              password={password}
+              authErrorText={authError}
+              onRetry={() => { void retryAuth(); }}
+              onUsername={setUsername}
+              onPassword={setPassword}
+              onSubmit={onLogin}
+              onRegister={() => { void onRegister(); }}
+            />
           )}
         </div>
       </aside>

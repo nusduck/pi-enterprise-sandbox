@@ -1,4 +1,5 @@
 export * from './client';
+export * from './authConfig';
 export * from './runs';
 export * from './processes';
 export * from './approvals';

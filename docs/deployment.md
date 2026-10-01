@@ -1123,3 +1123,21 @@ docker compose up -d api-server
 # 清理
 docker compose down -v                  # 移除 volumes (⚠️ 删除数据!)
 ```
+
+## SSO 预留 P1：可撤销浏览器会话升级
+
+新增迁移 `20261002000001_browser_auth_sessions.js` 建
+`tbl_agsvc_browser_auth_sessions`；通过真实迁移重放生成 schema manifest，再走现有 schema 发布流程。
+服务启动仍只核对清单，不自动迁移；非空目标库不能执行完整 first-install 发布包。
+按 schema 发布 → Agent/Worker → BFF → frontend 更新所有消费者，保留原 user/org owner。
+旧无 sid JWT 升级后统一 401，所有已有浏览器/API 用户需重新登录。
+会话期限继续读取 `SANDBOX_JWT_TTL_SECONDS`，没有新增 SSO 环境变量或未接通的登录模式。
+
+本期 config 的 mode 固定 local，SSO disabled/unavailable。已有 HTTP 开发 Cookie 策略保留；
+未来公司 OIDC 开启之前必须确认 HTTPS/Secure、client、code/S256 与平台准入，不能仅加按钮上线。
+退出只撤销当前 sid，不取消 Run；已打开的 Run SSE 每 15 秒重查认证（另加有限请求耗时）。
+DB/内部网络故障仍清 Cookie，但 503 `AUTH_REVOCATION_UNCONFIRMED` 不能解释为服务器已撤销。
+
+回退保留新表与数据，不 drop；旧消费者会恢复旧 JWT 校验语义，属于撤销能力退回。
+不要通过关闭 `AUTH_ENABLED` 回退，也不要宣称新版本撤销事实会自动被旧版本读取。
+细节见 [设计与迁移策略](design/sso-integration-reservation.md)。

@@ -5,6 +5,7 @@ This directory is the **active** documentation set for DSH Enterprise Sandbox.
 
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent / api-server / exec / frontend / contract)
 - [`design/updrdb-dbpm-deployment.md`](./design/updrdb-dbpm-deployment.md) — UPDRDB / DBPM 与双集群 + VM 的统一迁移设计（未实施；共享 Skill 存储、HTTPS 入口及验收门槛）
+- [`design/sso-integration-reservation.md`](./design/sso-integration-reservation.md) — 公司 OIDC SSO 实施设计（未联调；复用 RBAC、可撤销会话、浏览器身份边界及分阶段门槛）
 - [`design/skill-catalog-and-agent-binding.md`](./design/skill-catalog-and-agent-binding.md) — Skill 目录与 Agent 绑定、组织共享层（**已实施**；ADR 0015）
 - [`design/rbac-roles.md`](./design/rbac-roles.md) — 平台角色管理（RBAC 一期：`admin` / `reviewer`）（**已实施**；角色权威为 `tbl_agsvc_member_roles`）
 - [`design/agent-output-review.md`](./design/agent-output-review.md) — 智能体交付物（artifact）人工审核后交付（**已实施**；ADR 0016，依赖 RBAC `reviewer`）

@@ -7,16 +7,12 @@ import {
   ApprovalDecisionSchema,
   ArtifactImportResponseSchema,
   ArtifactListSchema,
-  AuthResponseSchema,
   ConversationDetailSchema,
   ConversationEventsResponseSchema,
   ConversationListSchema,
   EnsureSessionSchema,
-  MeResponseSchema,
   parseApi,
   parseApiStrict,
-  type AuthResponse,
-  type AuthUser,
   type ArtifactImportResponse,
   type Conversation,
   type ConversationEventsResponse,
@@ -46,73 +42,6 @@ export class ApiError extends Error {
 
 async function errorBody(resp: Response): Promise<Record<string, unknown>> {
   return (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-}
-
-// ── Auth ────────────────────────────────────────
-
-export async function register(body: {
-  username: string;
-  password: string;
-  display_name?: string;
-}): Promise<AuthResponse> {
-  const resp = await fetch(`${BASE}/auth/register`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(
-      String(err.error || err.detail || `Register failed: ${resp.status}`),
-    );
-  }
-  const data = parseApi(AuthResponseSchema, await resp.json(), 'register');
-  return data;
-}
-
-export async function login(body: {
-  username: string;
-  password: string;
-}): Promise<AuthResponse> {
-  const resp = await fetch(`${BASE}/auth/login`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || err.detail || `Login failed: ${resp.status}`));
-  }
-  const data = parseApi(AuthResponseSchema, await resp.json(), 'login');
-  return data;
-}
-
-export async function logout(): Promise<void> {
-  const resp = await fetch(`${BASE}/auth/logout`, {
-    method: 'POST',
-    credentials: 'include',
-  });
-  if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || `Logout failed: ${resp.status}`));
-  }
-}
-
-export async function me(): Promise<AuthUser> {
-  const resp = await fetch(`${BASE}/auth/me`, {
-    credentials: 'include',
-    headers: authHeaders(),
-  });
-  if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new ApiError(
-      String(err.error || err.detail || `Me failed: ${resp.status}`),
-      { status: resp.status },
-    );
-  }
-  return parseApi(MeResponseSchema, await resp.json(), 'me');
 }
 
 // ── Conversations ───────────────────────────────
@@ -290,3 +219,7 @@ export function getWorkspaceFileUrl(sessionId: string, path: string): string | n
   const url = `${BASE}/files/download?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`;
   return isAllowedApiUrl(url) ? url : null;
 }
+
+// 认证请求已按职责拆到 ./auth.ts；这里保留同名再导出，旧导入路径（含测试夹具）
+// 继续可用，避免一次无谓的全仓改 import。
+export { login, register, logout, me, getAuthConfig } from './auth';

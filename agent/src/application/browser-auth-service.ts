@@ -1,13 +1,27 @@
-import {
-  createHmac,
-  pbkdf2 as pbkdf2Callback,
-  randomBytes,
-  timingSafeEqual,
-} from 'node:crypto';
+import { pbkdf2 as pbkdf2Callback, randomBytes, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { formatUserExternalSubject } from '../infrastructure/mysql/repositories/organization-repository.js';
 import { ulid } from '../domain/shared/ulid.js';
 import { parseRoleSet, primaryRole, type KnownRole } from '../domain/identity/roles.js';
+import {
+  ActivePrincipalService,
+  type ActivePrincipalIdentity,
+} from './active-principal-service.js';
+import {
+  BrowserAuthError,
+  browserAuthStoreUnavailable,
+  invalidBrowserToken,
+} from './browser-auth-errors.js';
+import {
+  BrowserSessionService,
+  type BrowserSessionRecord,
+  type BrowserSessionStore,
+  type IssuedBrowserSession,
+} from './browser-session-service.js';
+import { BrowserSessionTokens } from './browser-session-tokens.js';
+
+// 既有调用方（HTTP 路由与测试）从这里取错误类；实现在 browser-auth-errors.ts。
+export { BrowserAuthError } from './browser-auth-errors.js';
 
 const pbkdf2 = promisify(pbkdf2Callback);
 /** Pragmatic shape check; deliverability is the mail gateway's business. */
@@ -57,6 +71,9 @@ type OrganizationStore = {
   }): Promise<unknown>;
   /** Only the profile page reads it; optional so older test doubles still fit. */
   getOrganization?(orgId: string): Promise<{ name: string } | null>;
+  /** 活跃准入（`ActivePrincipalService`）需要；旧替身可省略。 */
+  getUser?(userId: string): Promise<{ userId: string; externalSubject: string; status: string } | null>;
+  getMembership?(scope: { orgId: string; userId: string }): Promise<{ status: string } | null>;
 };
 
 type ExternalRefStore = {
@@ -113,23 +130,11 @@ export type NotificationCapability = {
   min_run_duration_ms: number | null;
 };
 
+/** 本轮固定 local：不新增没有真实消费者的 SSO 环境变量（tasks §25）。 */
+export const AUTH_MODE_LOCAL = 'local';
+const SSO_LABEL = '公司 SSO';
+
 const EDITABLE_PROFILE_FIELDS = ['display_name', 'email', 'notify_run_complete'];
-
-export class BrowserAuthError extends Error {
-  status: number;
-  code: string;
-
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.name = 'BrowserAuthError';
-    this.status = status;
-    this.code = code;
-  }
-}
-
-function base64urlJson(value: unknown) {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
 
 function safeText(value: unknown, field: string, max: number): string | null {
   if (value == null || value === '') return null;
@@ -165,16 +170,13 @@ export class BrowserAuthService {
   memberRoles?: MemberRolePort | undefined;
   generateId?: (() => string) | undefined;
   /**
-   * 本进程内已经确认 provisioned 的 credential id → 内部身份 ULID。
-   *
-   * `me()` 挂在 BFF 的 `resolveTrustedAuth()` 上，**每一个**已认证请求都会走一次；
-   * 不记住就是每请求 3~4 次 MySQL 往返。补建本身是幂等的一次性修复
-   * （register/login 之后正常不会缺），所以每进程每用户做一次就够。
-   *
-   * 注意：**角色本身不进这个缓存**——授予与撤销必须在下一个请求就生效
-   * （design §4.4），每次都要读账本。缓存的是映射，不是授权。
+   * 可撤销会话账本（design sso-integration-reservation §5.2）。生产由 `http-main`
+   * 注入 `repos.browserAuthSessions`；缺省时登录/me/config/logout 一律 503，不会
+   * 退回无 sid 的旧 JWT 语义。没有进程内身份缓存：**身份/组织不得仅用缓存**，
+   * 每次请求都回权威表核对。
    */
-  private readonly identities = new Map<string, { orgId: string; userId: string }>();
+  sessionService: BrowserSessionService | null;
+  principal: ActivePrincipalService | null;
   secret: string;
   issuer: string;
   audience: string;
@@ -188,6 +190,7 @@ export class BrowserAuthService {
     organizations?: OrganizationStore;
     externalRefs?: ExternalRefStore;
     memberRoles?: MemberRolePort;
+    sessions?: BrowserSessionStore;
     generateId?: () => string;
     secret?: string;
     issuer?: string;
@@ -212,29 +215,76 @@ export class BrowserAuthService {
       min_run_duration_ms: null,
     };
     this.now = input.now || (() => new Date());
+    this.sessionService = input.sessions
+      ? new BrowserSessionService({
+          sessions: input.sessions,
+          tokens: new BrowserSessionTokens({
+            secret: this.secret,
+            issuer: this.issuer,
+            audience: this.audience,
+            now: this.now,
+          }),
+          generateId: this.generateId,
+          now: this.now,
+        })
+      : null;
+    this.principal = input.organizations && input.externalRefs
+      ? new ActivePrincipalService({
+          organizations: input.organizations,
+          externalRefs: input.externalRefs,
+        })
+      : null;
+  }
+
+  private requireSecret() {
+    if (!this.secret) {
+      throw new BrowserAuthError(503, 'AUTH_CONFIG_UNAVAILABLE', 'Authentication unavailable');
+    }
+  }
+
+  private requireSessions(): BrowserSessionService {
+    this.requireSecret();
+    if (!this.sessionService) throw browserAuthStoreUnavailable();
+    return this.sessionService;
+  }
+
+  /**
+   * 登录能力投影（锁定 DTO，tasks §24–42）。Agent 是登录能力权威：不返回假的可用
+   * 能力，JWT secret 或会话权威缺失一律 503，而不是把 local.enabled 说成 true。
+   * 本轮固定 local；SSO 恒为 disabled + unavailable，不伪造回调路由。
+   */
+  authConfig() {
+    this.requireSecret();
+    if (!this.sessionService) throw browserAuthStoreUnavailable();
+    return {
+      mode: AUTH_MODE_LOCAL,
+      methods: {
+        local: {
+          enabled: true,
+          registration_enabled: this.allowPublicRegister,
+        },
+        sso: { enabled: false, available: false, label: SSO_LABEL },
+      },
+      profile_policy: { editable_fields: [...EDITABLE_PROFILE_FIELDS] },
+    };
   }
 
   /**
    * 把一个浏览器凭据补成正式的 org / user / membership，并返回**内部身份 ULID**。
    *
    * 角色账本挂在 `(org_id, user_id)` 上，而这里正是把外部凭据翻译成那两个 ULID 的
-   * 唯一一跳，所以它必须把结果交出来（改造前它是 void）。
+   * 唯一一跳，所以它必须把结果交出来。**只在登录/注册与写通知开关前调用**；
+   * `me`/`profile` 走会话行里的 owner，不在这里重放 provisioning（身份/组织不得
+   * 仅用缓存，见 `ActivePrincipalService`）。
    *
    * 失败只记日志不抛：这一步是**补建**，它缺席的后果是下游 400，而不是让
-   * 登录本身失败——把它变成硬失败会让一次 MySQL 抖动直接锁死所有人登录。代价是
-   * 返回 null 时调用方拿不到角色（fail-closed：少权限，不是多权限）。
-   *
-   * @param force register/login 走 true：那两条路上凭据刚变过，必须重新对账。
+   * 登录本身失败——把它变成硬失败会让一次 MySQL 抖动直接锁死所有人登录。登录/注册
+   * 拿不到身份时由调用方转成 503，绝不签发一个没有 owner 的会话。
    */
   private async ensureUserProvisioned(
     entry: Credential,
-    force = false,
   ): Promise<{ orgId: string; userId: string } | null> {
     if (!this.organizations || !this.externalRefs) return null;
-    if (!force) {
-      const cached = this.identities.get(entry.id);
-      if (cached) return cached;
-    }
     try {
       const provider = 'bff';
       const externalOrgId = entry.organizationId || BOOTSTRAP_ORG_ID;
@@ -282,9 +332,7 @@ export class BrowserAuthService {
         role: 'member',
         status: 'active',
       });
-      const identity = { orgId, userId: user.userId };
-      this.identities.set(entry.id, identity);
-      return identity;
+      return { orgId, userId: user.userId };
     } catch (err) {
       console.error('[browser-auth] Failed to provision user in organizations:', err);
       return null;
@@ -292,35 +340,32 @@ export class BrowserAuthService {
   }
 
   /**
-   * 这个凭据当前的平台角色集合：环境变量引导 + 账本读取。
+   * 这个身份当前的平台角色集合：环境变量名单引导 + 账本读取。
    *
    * 顺序不能反：先引导再读，名单内账号的**首个** `me` 才能立刻看到 admin。
-   * 账本没注入、或身份补建失败时返回空集合（fail-closed）。
-   *
-   * @param force register/login 走 true：那两条路上凭据刚变过，必须重新对账
-   *   （`me` 走缓存，否则每请求 3~4 次 MySQL 往返）。
+   * 账本没注入时返回空集合（fail-closed）。角色**每次请求**都从账本重读，
+   * 撤销 admin 必须在下一个请求生效，不必等 JWT 过期（design §4.4）。
    */
-  private async rolesFor(entry: Credential, force = false): Promise<KnownRole[]> {
-    const identity = await this.ensureUserProvisioned(entry, force);
-    if (!identity) return [];
+  private async rolesForIdentity(
+    identity: ActivePrincipalIdentity | { orgId: string; userId: string },
+    username: string | null | undefined,
+  ): Promise<KnownRole[]> {
     if (!this.memberRoles) return [];
     await this.memberRoles.ensureDeploymentGrant({
       orgId: identity.orgId,
       userId: identity.userId,
-      username: entry.username,
+      username,
     });
     return parseRoleSet(
       await this.memberRoles.listRolesForMember(identity.orgId, identity.userId),
     );
   }
 
-  private requireSecret() {
-    if (!this.secret) {
-      throw new BrowserAuthError(503, 'AUTH_CONFIG_UNAVAILABLE', 'Authentication unavailable');
-    }
-  }
-
-  private publicUser(entry: Credential, roles: readonly string[]) {
+  private publicUser(
+    entry: Credential,
+    roles: readonly string[],
+    session?: Pick<IssuedBrowserSession, 'loginMethod' | 'identityProvider'> | null,
+  ) {
     const granted = parseRoleSet(roles);
     return {
       id: entry.id,
@@ -331,63 +376,9 @@ export class BrowserAuthService {
       role: primaryRole(granted),
       roles: granted,
       organization_id: entry.organizationId || BOOTSTRAP_ORG_ID,
+      login_method: session?.loginMethod ?? AUTH_MODE_LOCAL,
+      identity_provider: session?.identityProvider ?? null,
     };
-  }
-
-  private createToken(entry: Credential, roles: readonly string[]) {
-    this.requireSecret();
-    const now = Math.floor(this.now().getTime() / 1000);
-    const header = base64urlJson({ alg: 'HS256', typ: 'JWT' });
-    const payload = base64urlJson({
-      sub: entry.id,
-      username: entry.username,
-      // JWT 里的 role 只作展示，不作权威：撤销要能在下一个请求生效，
-      // 而 token 会一直活到过期（design §4.4）。
-      role: primaryRole(roles),
-      organization_id: entry.organizationId || BOOTSTRAP_ORG_ID,
-      iat: now,
-      exp: now + this.ttlSeconds,
-      iss: this.issuer,
-      aud: this.audience,
-    });
-    const signature = createHmac('sha256', this.secret)
-      .update(`${header}.${payload}`)
-      .digest('base64url');
-    return `${header}.${payload}.${signature}`;
-  }
-
-  private verifyToken(token: string): Record<string, unknown> | null {
-    this.requireSecret();
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const [header, payload, signature] = parts as [string, string, string];
-    const expected = createHmac('sha256', this.secret)
-      .update(`${header}.${payload}`)
-      .digest();
-    let actual: Buffer;
-    try {
-      actual = Buffer.from(signature, 'base64url');
-    } catch {
-      return null;
-    }
-    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
-    try {
-      const parsedHeader = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
-      const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-      const now = Math.floor(this.now().getTime() / 1000);
-      if (
-        parsedHeader?.alg !== 'HS256' ||
-        parsedHeader?.typ !== 'JWT' ||
-        typeof parsed?.sub !== 'string' ||
-        !Number.isFinite(parsed?.exp) ||
-        parsed.exp < now ||
-        parsed.iss !== this.issuer ||
-        parsed.aud !== this.audience
-      ) return null;
-      return parsed;
-    } catch {
-      return null;
-    }
   }
 
   /**
@@ -408,8 +399,58 @@ export class BrowserAuthService {
     return { ...entry, role: compat };
   }
 
+  /**
+   * 登录/注册共建会话：先补建权威身份，再确认主体活跃，最后才引导角色并写 sid。
+   *
+   * 活跃准入（`resolveActive`）必须排在 `rolesForIdentity` 与 `issue` **之前**：
+   * `rolesForIdentity` 会调用 `ensureDeploymentGrant` 做部署名单引导，停用的
+   * user/org/Membership 若能走到那里，就会在被停用主体上写出 admin，再拿到一个 sid。
+   * 所以这里先过准入门槛，拒绝时既没有新会话，也没有新授予。
+   */
+  private async establishLocalSession(
+    entry: Credential,
+    source: 'login' | 'register',
+  ): Promise<{ token: string; user: Record<string, unknown> }> {
+    const sessions = this.requireSessions();
+    const identity = await this.ensureUserProvisioned(entry);
+    if (!identity) throw browserAuthStoreUnavailable();
+    if (!this.principal) throw browserAuthStoreUnavailable();
+    let active: ActivePrincipalIdentity;
+    try {
+      active = await this.principal.resolveActive({
+        orgId: identity.orgId,
+        userId: identity.userId,
+        externalUserId: entry.id,
+        externalOrgId: entry.organizationId || BOOTSTRAP_ORG_ID,
+      });
+    } catch (error) {
+      // resolveActive 的 401（状态/映射不成立）与 503（权威存储不可达）原样保留。
+      if (error instanceof BrowserAuthError) throw error;
+      throw browserAuthStoreUnavailable();
+    }
+    let roles: KnownRole[];
+    try {
+      roles = await this.rolesForIdentity(active, entry.username);
+    } catch {
+      throw browserAuthStoreUnavailable();
+    }
+    const synced = await this.syncCompatRole(entry, roles);
+    const issued = await sessions.issue({
+      // 会话 owner 以准入读回的活跃身份为准，不用 provisioning 的返回值。
+      userId: active.userId,
+      orgId: active.orgId,
+      externalUserId: synced.id,
+      externalOrgId: synced.organizationId || BOOTSTRAP_ORG_ID,
+      loginMethod: AUTH_MODE_LOCAL,
+      identityProvider: null,
+      source,
+      ttlSeconds: this.ttlSeconds,
+    });
+    return { token: issued.token, user: this.publicUser(synced, roles, issued) };
+  }
+
   async register(body: Record<string, unknown>) {
-    this.requireSecret();
+    this.requireSessions();
     if (!this.allowPublicRegister) {
       throw new BrowserAuthError(403, 'REGISTRATION_DISABLED', 'Public registration is disabled');
     }
@@ -432,25 +473,23 @@ export class BrowserAuthService {
         externalOrgId: BOOTSTRAP_ORG_ID,
         email: safeText(body.email, 'email', 320),
         displayName: safeText(body.display_name, 'display_name', 255),
-        // 凭据创建时还不知道角色：权威账本随后由 rolesFor() 决定（名单内账号
+        // 凭据创建时还不知道角色：权威账本随后由 rolesForIdentity() 决定（名单内账号
         // 会在这里被引导成 admin）。先写默认身份，绝不在创建时按用户名猜角色。
         role: 'user',
       });
       if (!entry) throw new Error('credential insert did not persist');
-      const roles = await this.rolesFor(entry, true);
-      const synced = await this.syncCompatRole(entry, roles);
-      return { token: this.createToken(synced, roles), user: this.publicUser(synced, roles) };
+      return await this.establishLocalSession(entry, 'register');
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
       if (/duplicate|unique/i.test(String((error as Error)?.message || ''))) {
         throw new BrowserAuthError(409, 'USERNAME_EXISTS', 'Username already exists');
       }
-      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      throw browserAuthStoreUnavailable();
     }
   }
 
   async login(body: Record<string, unknown>) {
-    this.requireSecret();
+    this.requireSessions();
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     if (!username || password.length > 128) {
@@ -460,56 +499,71 @@ export class BrowserAuthService {
     try {
       entry = await this.credentials.getByUsername(username);
     } catch {
-      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      throw browserAuthStoreUnavailable();
     }
     if (!entry?.isActive || !(await verifyPassword(password, entry.passwordHash))) {
       throw new BrowserAuthError(401, 'INVALID_CREDENTIALS', 'Invalid credentials');
     }
-    let roles: KnownRole[];
     try {
-      roles = await this.rolesFor(entry, true);
-      entry = await this.syncCompatRole(entry, roles);
       await this.credentials.touchLogin(entry.id);
     } catch {
-      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      throw browserAuthStoreUnavailable();
     }
-    return { token: this.createToken(entry, roles), user: this.publicUser(entry, roles) };
+    return this.establishLocalSession(entry, 'login');
   }
 
   /**
-   * Verified, active credential behind a bearer token, or 401.
+   * 当前有效会话背后的活跃身份与角色，或 401/503。
    *
-   * 角色**每次请求**都从账本重读（design §4.4）：JWT 里的 role 只作展示，
-   * 撤销 admin 必须在同一个会话的下一个请求就生效，不必等 token 过期。
+   * 顺序：JWT + sid + 会话行（`BrowserSessionService`）→ 凭据仍 active →
+   * 活跃 user/org/Membership 与 owner 映射一致（`ActivePrincipalService`）→
+   * 角色每次从账本重读。身份/组织不读进程内缓存。
    */
   private async authenticated(
     authorization: string | undefined,
-  ): Promise<{ entry: Credential; roles: KnownRole[] }> {
-    const match = /^Bearer\s+(.+)$/i.exec(String(authorization || ''));
-    const payload = match ? this.verifyToken(match[1] as string) : null;
-    if (!payload) {
-      throw new BrowserAuthError(401, 'INVALID_TOKEN', 'Invalid or expired token');
-    }
+  ): Promise<{
+    entry: Credential;
+    roles: KnownRole[];
+    session: BrowserSessionRecord;
+  }> {
+    const sessions = this.requireSessions();
+    const resolved = await sessions.resolve(authorization);
+    const { session } = resolved;
     let entry: Credential | null;
-    let roles: KnownRole[] = [];
     try {
-      entry = await this.credentials.getByExternalUserId(String(payload.sub));
-      if (entry?.isActive) {
-        roles = await this.rolesFor(entry);
-        entry = await this.syncCompatRole(entry, roles);
-      }
+      entry = await this.credentials.getByExternalUserId(resolved.sub);
     } catch {
-      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      throw browserAuthStoreUnavailable();
     }
-    if (!entry?.isActive) {
-      throw new BrowserAuthError(401, 'INVALID_TOKEN', 'Invalid or expired token');
+    if (!entry?.isActive) throw invalidBrowserToken();
+    if (!this.principal) throw browserAuthStoreUnavailable();
+    // 会话固定 org 是签发时写进 JWT 与会话行的事实（JWT/org 一致性已在
+    // `BrowserSessionService.resolve` 校验）。这里再要求当前 credential 的 org 仍与它
+    // 一致，并且用会话行里的 externalOrgId 做准入查询——不能凭当前 credential 把
+    // 会话 owner 换到另一个外部 org，即使那个 org 映射到同一个内部 org。
+    const sessionExternalOrgId = String(session.externalOrgId || BOOTSTRAP_ORG_ID);
+    const credentialExternalOrgId = String(entry.organizationId || BOOTSTRAP_ORG_ID);
+    if (credentialExternalOrgId !== sessionExternalOrgId) throw invalidBrowserToken();
+    const identity = await this.principal.resolveActive({
+      orgId: session.orgId,
+      userId: session.userId,
+      externalUserId: entry.id,
+      externalOrgId: sessionExternalOrgId,
+    });
+    let roles: KnownRole[];
+    try {
+      roles = await this.rolesForIdentity(identity, entry.username);
+    } catch {
+      // 角色账本不可达必须 503，不能当成空角色集放行。
+      throw browserAuthStoreUnavailable();
     }
-    return { entry, roles };
+    entry = await this.syncCompatRole(entry, roles);
+    return { entry, roles, session };
   }
 
   async me(authorization: string | undefined) {
-    const { entry, roles } = await this.authenticated(authorization);
-    return this.publicUser(entry, roles);
+    const { entry, roles, session } = await this.authenticated(authorization);
+    return this.publicUser(entry, roles, session);
   }
 
   /**
@@ -517,11 +571,29 @@ export class BrowserAuthService {
    * Kept off `me()`, which runs on every BFF request and must stay cheap.
    */
   async profile(authorization: string | undefined) {
-    const { entry, roles } = await this.authenticated(authorization);
-    return this.presentProfile(entry, roles);
+    const { entry, roles, session } = await this.authenticated(authorization);
+    return this.presentProfile(entry, roles, session);
   }
 
-  private async presentProfile(entry: Credential, roles: readonly string[]) {
+  /**
+   * 退出：撤销当前 sid（幂等），只清当前会话。契约见 `BrowserSessionService.revoke`。
+   */
+  async logout(authorization: string | undefined) {
+    if (!this.sessionService) {
+      throw new BrowserAuthError(
+        503,
+        'AUTH_REVOCATION_UNCONFIRMED',
+        'Session revocation could not be confirmed',
+      );
+    }
+    return this.sessionService.revoke(authorization);
+  }
+
+  private async presentProfile(
+    entry: Credential,
+    roles: readonly string[],
+    session?: Pick<IssuedBrowserSession, 'loginMethod' | 'identityProvider'> | null,
+  ) {
     let organizationName: string | null = null;
     try {
       const ref = await this.externalRefs?.getOrganizationRef('bff', entry.organizationId || BOOTSTRAP_ORG_ID);
@@ -539,11 +611,11 @@ export class BrowserAuthService {
           formatUserExternalSubject('bff', entry.id),
         );
       } catch {
-        throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+        throw browserAuthStoreUnavailable();
       }
     }
     return {
-      ...this.publicUser(entry, roles),
+      ...this.publicUser(entry, roles, session),
       organization_name: organizationName,
       status: entry.isActive ? 'active' : 'disabled',
       created_at: entry.createdAt ?? null,
@@ -564,7 +636,7 @@ export class BrowserAuthService {
    * no mail would ever go out.
    */
   async updateProfile(authorization: string | undefined, body: Record<string, unknown>) {
-    const { entry, roles } = await this.authenticated(authorization);
+    const { entry, roles, session } = await this.authenticated(authorization);
     const unknown = Object.keys(body || {}).filter((k) => !EDITABLE_PROFILE_FIELDS.includes(k));
     if (unknown.length) {
       throw new BrowserAuthError(422, 'PROFILE_FIELD_NOT_EDITABLE', `Not editable: ${unknown.join(', ')}`);
@@ -609,7 +681,7 @@ export class BrowserAuthService {
       try {
         enabled = await this.credentials.getNotifyRunComplete(formatUserExternalSubject('bff', entry.id));
       } catch {
-        throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+        throw browserAuthStoreUnavailable();
       }
       if (enabled) {
         throw new BrowserAuthError(422, 'NOTIFY_EMAIL_REQUIRED', 'Turn off email notification before clearing the email address');
@@ -621,14 +693,14 @@ export class BrowserAuthService {
     // 开关只存在 users 行上：先确保这一行存在，否则更新会落空。
     if (patch.notifyRunComplete !== undefined) await this.ensureUserProvisioned(entry);
     if (!this.credentials.updateProfile) {
-      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      throw browserAuthStoreUnavailable();
     }
     let updated: Credential | null;
     try {
       updated = await this.credentials.updateProfile(entry.id, formatUserExternalSubject('bff', entry.id), patch);
     } catch {
-      throw new BrowserAuthError(503, 'AUTH_STORE_UNAVAILABLE', 'Authentication unavailable');
+      throw browserAuthStoreUnavailable();
     }
-    return this.presentProfile(updated ?? entry, roles);
+    return this.presentProfile(updated ?? entry, roles, session);
   }
 }

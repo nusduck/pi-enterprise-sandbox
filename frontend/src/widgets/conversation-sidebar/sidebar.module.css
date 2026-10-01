@@ -249,6 +249,9 @@
 }
 .authActions .primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
 .authError { color: var(--color-danger-text); font-size: 12px; }
+/* 未登录面板的纯提示（加载中/无可用登录方式/SSO 未开放）：与 .empty 的
+   列表占位语义区分开，也不冒充可点击按钮。 */
+.authNotice { color: var(--color-text-muted); font-size: 12px; margin: 0; }
 
 .backdrop { display: none; }
 

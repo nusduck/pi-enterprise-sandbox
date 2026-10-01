@@ -17,6 +17,7 @@ import {
 import { listModels } from '../../shared/api';
 import type { ModelItem } from '../../shared/api';
 import type { EntityBridge } from './entityBridge';
+import { isCurrentIdentity, type IdentityRevision } from './identityRevision';
 
 export interface ModelSelection {
   models: ModelItem[];
@@ -25,8 +26,8 @@ export interface ModelSelection {
   fixedModelId: string | null;
   /** 用户显式换模型；写入当前会话的偏好。 */
   setSelectedModelId: (modelId: string | null) => void;
-  /** 拉取启用的模型清单，并按当前会话重算选中项。 */
-  refreshModels: () => Promise<void>;
+  /** 拉取启用的模型清单，并按当前会话重算选中项。可传入发起时的身份代次。 */
+  refreshModels: (snapshot?: number) => Promise<void>;
   /** 切换会话时重算选中项：会话偏好 → 上一轮 Run 用的模型 → 第一个可用。 */
   applyModelForConversation: (conversationId: string | null | undefined) => void;
   /** 登出是身份边界：丢掉上一个账号的模型清单。 */
@@ -44,6 +45,7 @@ export function useModelSelection(
   fixedModelIdForConversation: (
     conversationId: string | null | undefined,
   ) => string | null,
+  revision: IdentityRevision,
 ): ModelSelection {
   const [models, setModels] = useState<ModelItem[]>([]);
   const [selectedModelId, setSelectedModelIdState] = useState<string | null>(() => {
@@ -92,17 +94,22 @@ export function useModelSelection(
     [currentConversationId, fixedModelIdForConversation],
   );
 
-  const refreshModels = useCallback(async () => {
-    const result = await listModels();
-    const enabled = result.items.filter(
-      (model) => model.enabled !== false && Boolean(model.model_id || model.id),
-    );
-    setModels(enabled);
-    modelsRef.current = enabled;
-    applyModelForConversation(
-      currentConversationId() || loadPersistedConversationId(),
-    );
-  }, [applyModelForConversation, currentConversationId]);
+  const refreshModels = useCallback(
+    async (snapshot: number = revision.current()) => {
+      const result = await listModels();
+      // 身份已换人：旧账号的模型目录不能灌回新界面。
+      if (!isCurrentIdentity(revision, snapshot)) return;
+      const enabled = result.items.filter(
+        (model) => model.enabled !== false && Boolean(model.model_id || model.id),
+      );
+      setModels(enabled);
+      modelsRef.current = enabled;
+      applyModelForConversation(
+        currentConversationId() || loadPersistedConversationId(),
+      );
+    },
+    [applyModelForConversation, currentConversationId, revision],
+  );
 
   const resetModels = useCallback(() => {
     setModels([]);

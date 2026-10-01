@@ -123,6 +123,11 @@ export type ChatState = {
   authReady: boolean;
   /** Auth user label */
   authUser: { username?: string; [k: string]: unknown } | null;
+  /**
+   * 认证检查的可见错误（`me` 503/网络/契约失败）。非空表示身份暂时无法确认：
+   * 保留本机草稿与已有身份，只提示重试，**不**当成匿名。
+   */
+  authError: string | null;
 };
 
 export type AttachmentLimits = {

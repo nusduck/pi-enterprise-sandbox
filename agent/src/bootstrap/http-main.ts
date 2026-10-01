@@ -641,6 +641,8 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       credentials: repos.authCredentials,
       organizations: repos.organizations,
       externalRefs: repos.externalRefs,
+      // 可撤销会话账本：生产工厂注入真实仓储（design sso-integration-reservation §5.2）。
+      sessions: repos.browserAuthSessions,
       // 角色权威是 member_roles；名单引导与「部署锁定」判定都在服务里（design §3）。
       memberRoles: memberRoleService,
       generateId: container.generateId,

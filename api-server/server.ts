@@ -46,7 +46,7 @@ import {
   handleListRuns,
   handleRunEvents,
 } from './src/routes/runs.js';
-import { handleRegister, handleLogin, handleLogout, handleMe, handleProfile } from './src/routes/auth.js';
+import { handleRegister, handleLogin, handleLogout, handleMe, handleAuthConfig, handleProfile } from './src/routes/auth.js';
 import { handleEnsureSession } from './src/routes/sessions.js';
 import {
   handleGetProcess,
@@ -95,6 +95,7 @@ import { authFromRequest, checkSandboxReady } from './src/services/sandbox-clien
 import { checkAgentReady } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
 import { sendError } from './src/http/response.js';
+import { rejectCrossSiteAuthWrite } from './src/http/auth-request-guard.js';
 import {
   formatTraceparent,
   resolveRequestTraceContext,
@@ -236,14 +237,23 @@ const server = http.createServer(async (rawReq, res) => {
 
 
     // ── Auth proxy (public) ──
+    // `login` / `register` / `logout` / `PATCH profile` mutate the browser
+    // session, so an explicit cross-site Origin / Fetch Metadata is rejected
+    // before the handler. `GET`s (config/me/profile) carry no CSRF surface.
     if (req.method === 'POST' && path === '/api/auth/register') {
+      if (rejectCrossSiteAuthWrite(res, req)) return;
       const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
       await handleRegister(parsed, res, req);
       return;
     }
     if (req.method === 'POST' && path === '/api/auth/login') {
+      if (rejectCrossSiteAuthWrite(res, req)) return;
       const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
       await handleLogin(parsed, res, req);
+      return;
+    }
+    if (req.method === 'GET' && path === '/api/auth/config') {
+      await handleAuthConfig(res, req);
       return;
     }
     if (req.method === 'GET' && path === '/api/auth/me') {
@@ -251,6 +261,7 @@ const server = http.createServer(async (rawReq, res) => {
       return;
     }
     if (path === '/api/auth/profile' && (req.method === 'GET' || req.method === 'PATCH')) {
+      if (req.method === 'PATCH' && rejectCrossSiteAuthWrite(res, req)) return;
       const parsed = req.method === 'PATCH'
         ? await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES })
         : null;
@@ -258,7 +269,8 @@ const server = http.createServer(async (rawReq, res) => {
       return;
     }
     if (req.method === 'POST' && path === '/api/auth/logout') {
-      handleLogout(res);
+      if (rejectCrossSiteAuthWrite(res, req)) return;
+      await handleLogout(res, req);
       return;
     }
 
