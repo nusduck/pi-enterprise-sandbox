@@ -388,10 +388,11 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
 | `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读）；必传 `session_id` |
 | `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制；JSON body 必传 `session_id` |
-| `GET` | `/api/agents` | org 内可选的智能体（Agent 目录） |
+| `GET` | `/api/agents` | 当前用户可用的智能体（Agent 目录；受限智能体只列给被授权成员与 admin） |
 | `POST` | `/api/agents` | 新建智能体，自带 v1 并指向它（**admin**） |
 | `GET` `POST` | `/api/agents/{id}/versions` | 版本线 / 建新版本（**admin**） |
 | `POST` | `/api/agents/{id}/active-version` | 切活跃版本，也是回滚（**admin**） |
+| `GET` `PUT` | `/api/agents/{id}/access` | 可见范围：全员 / 指定员工及授权名单；PUT 整体替换（**admin**） |
 | `GET` | `/api/agents/config/options` | 配置 schema、字段支持情况、平台约束与 capability revision（**admin**） |
 | `POST` | `/api/agents/config/validate` | 只解析不落库的配置校验（**admin**） |
 | `GET` | `/api/admin/runs` | 全组织运行列表（**admin**）；见下文「管理端运行查询」 |
@@ -441,6 +442,13 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
   `active_version_id` 是单值的，加 version 只会产生历史。
 - **写目录要求 `actingRole === 'admin'`**，否则 403 `ADMIN_REQUIRED`；
   `GET /api/agents` 对 org 内所有成员开放。角色解析不出来时一律拒绝。
+- **可见范围**（[设计](design/agent-visibility.md)）：每项带 `visibility`（`org` | `restricted`）。
+  `restricted` 的智能体只列给授权名单里的成员与 admin；未授权成员显式选择它建会话/发起 Run、
+  或在**已绑定**它的会话里继续下一轮，一律 404（与不存在同形，撤销立即生效）；定时任务创建返回
+  400 同「不存在」文案，执行时记 FAILED。`GET /api/agents/{id}/access` 返回
+  `{agent_id, visibility, grants:[{user_id, username, display_name, granted_at}]}`；
+  `PUT` body `{visibility, user_ids}`，名单须为本 org 活跃成员（≤500），`org` 时清空名单；
+  默认智能体不能设为 `restricted`；非法输入 400，非 admin 403。内部镜像 `/internal/agents/{id}/access`。
 - **改配置 = 建新版本**，永不原地改写。`POST .../versions` 默认 `activate: true`；
   传 `activate: false` 只建不切。回滚就是把 `active_version_id` 指回旧版本。
 - **切活跃版本只影响新建的会话**：正在跑的 Run 与已存在的 AgentSession

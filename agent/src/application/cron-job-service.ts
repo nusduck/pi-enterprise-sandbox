@@ -8,6 +8,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
+import { canUseAgent } from './agent-access-service.js';
 import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 import { CRON_OWNER_RUN_LIST_MAX_LIMIT } from '../infrastructure/mysql/repositories/cron-job-repository.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
@@ -152,13 +153,29 @@ export class CronJobService {
     return resolver.resolveOwner(auth);
   }
 
-  async #assertAgentForOwner(agentId, owner, repos) {
+  /**
+   * 定时任务绑定的智能体必须本 org、active，且对任务 owner 可用（可见范围，design
+   * agent-visibility §4）。受限且未授予与「不存在」报同一句话，不泄漏存在性。
+   */
+  async #assertAgentForOwner(agentId, owner, repos, role) {
     if (!agentId) return null;
     const definition = await repos.catalog.getDefinitionById(agentId);
-    if (!definition || definition.orgId !== owner.orgId || String(definition.status).toLowerCase() !== 'active') {
+    if (
+      !definition ||
+      definition.orgId !== owner.orgId ||
+      String(definition.status).toLowerCase() !== 'active' ||
+      !(await canUseAgent(repos, definition, { userId: owner.userId, role }))
+    ) {
       throw new ValidationError('Selected agent is not active for this organization');
     }
     return agentId;
+  }
+
+  /** 后台执行没有 BFF 角色头：角色以 member_roles 为权威，按任务 owner 当下读取。 */
+  async #ownerRole(repos, orgId, userId) {
+    if (!repos.memberRoles?.listRoles) return null;
+    const roles = await repos.memberRoles.listRoles(orgId, userId);
+    return roles.map((entry) => entry.role).join(',') || null;
   }
 
   #normalizeInput(input, existing = null) {
@@ -248,7 +265,7 @@ export class CronJobService {
     return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const owner = await this.#resolveOwner(auth, repos);
-      await this.#assertAgentForOwner(normalized.agentId, owner, repos);
+      await this.#assertAgentForOwner(normalized.agentId, owner, repos, auth?.role);
       const job = await repos.cronJobs.create({
         cronJobId: assertUlid(this.generateId(), 'cronJobId'),
         orgId: owner.orgId,
@@ -268,7 +285,7 @@ export class CronJobService {
       const owner = await this.#resolveOwner(auth, repos);
       const existing = await repos.cronJobs.requireById(cronJobId, owner, { forUpdate: true });
       const normalized = this.#normalizeInput(input, existing);
-      await this.#assertAgentForOwner(normalized.agentId, owner, repos);
+      await this.#assertAgentForOwner(normalized.agentId, owner, repos, auth?.role);
       const job = await repos.cronJobs.update(cronJobId, owner, normalized);
       return presentCronJob(job);
     });
@@ -420,13 +437,15 @@ export class CronJobService {
       if (!user || String(user.status).toLowerCase() !== 'active' || !membership || String(membership.status).toLowerCase() !== 'active') {
         throw new ValidationError('Cron job owner is no longer active');
       }
-      if (job.agentId) await this.#assertAgentForOwner(job.agentId, job, repos);
+      const ownerRole = await this.#ownerRole(repos, job.orgId, job.userId);
+      if (job.agentId) await this.#assertAgentForOwner(job.agentId, job, repos, ownerRole);
       const result = await this.createRunService.execute({
         messages: [{ role: 'user', content: job.prompt }],
         auth: {
           provider: job.authProvider,
           externalOrgId: job.externalOrgId,
           externalUserId: job.externalUserId,
+          role: ownerRole,
         },
         traceId: traceId(),
         idempotencyKey: execution.idempotencyKey,

@@ -19,8 +19,8 @@
 | 5 | 公司员工都可登录，统一落入一个 org | 准入策略固定为 JIT + 单 org（`SSO_ORG_ID`） |
 | 6 | 工号来自可配置 claim；内部 userid 由平台生成 | `(iss, sub)` 为绑定键，工号只是属性（同时作为用户名） |
 
-未做、等公司资料或另立 PR：通讯录同步与按部门授权、智能体发布范围（按人可见）、
-HTTPS/Secure Cookie、多 IdP、refresh token。
+未做、等公司资料或另立 PR：通讯录同步与按部门授权、
+HTTPS/Secure Cookie、多 IdP、refresh token。智能体按员工可见见 [agent-visibility.md](agent-visibility.md)。
 
 与[预留设计 §4.2](sso-integration-reservation.md) 的有意偏差：**没有** Agent 侧的「登录事务消费账本」。
 浏览器路径上，事务 Cookie 一次性清除、IdP 的 code 一次性，重放已在真实链路验证失败；但持有

@@ -542,6 +542,14 @@ BFF 只代理 config/login/logout/profile，JWT 仅入 Cookie；Run SSE 有界�
 
 协议分层与进入门槛见 [SSO 设计](design/sso-integration-reservation.md)。
 
+### 智能体可见范围
+
+智能体在 org 内的使用范围是 `org`（全员）或 `restricted`（`tbl_agsvc_agent_user_grants` 里的成员 + admin）。
+判定在 Agent 的 `agent-access-service.ts`，并在每个使用入口执行：目录列表、建会话/Run 的显式选择、
+已绑定会话的后续轮次（撤销立即生效）、定时任务的创建与执行（执行时按 owner 当下的 `member_roles`
+取角色）。不可用与不存在同形 404。授权键是内部 user_id，不是工号。详见
+[agent-visibility.md](design/agent-visibility.md)。
+
 ### 公司 SSO（OIDC）
 
 `SSO_ENABLED=true` 时：BFF 用 openid-client 走授权码 + PKCE，登录事务存在加密的短期

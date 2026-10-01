@@ -1142,6 +1142,13 @@ DB/内部网络故障仍清 Cookie，但 503 `AUTH_REVOCATION_UNCONFIRMED` 不�
 不要通过关闭 `AUTH_ENABLED` 回退，也不要宣称新版本撤销事实会自动被旧版本读取。
 细节见 [设计与迁移策略](design/sso-integration-reservation.md)。
 
+## 智能体可见范围
+
+迁移 `20261002000003_agent_visibility.js` 给 `tbl_agsvc_agent_definitions` 加 `visibility`（默认 `org`）
+并新建 `tbl_agsvc_agent_user_grants`。存量智能体全部保持全员可用，行为不变；没有新增环境变量。
+按既有 schema 发布流程升级，并重建 agent / agent-worker / sandbox / sandbox-mcp（随镜像的清单）、
+api-server 与 frontend。回退时保留表与列不 drop；旧版本不读这两处，受限智能体会退回全员可用。
+
 ## 公司 SSO（OIDC）
 
 迁移 `20261002000002_sso_identities.js` 新建 `tbl_agsvc_sso_identities`，按既有 schema 发布流程升级。

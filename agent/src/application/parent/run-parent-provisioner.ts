@@ -23,6 +23,7 @@
 import {
   formatUserExternalSubject,
 } from '../../infrastructure/mysql/repositories/organization-repository.js';
+import { assertAgentUsable } from '../agent-access-service.js';
 import { ConflictError } from '../../infrastructure/mysql/errors.js';
 import { DEFAULT_AGENT_DEFINITION_NAME } from '../../infrastructure/mysql/repositories/agent-catalog-repository.js';
 import { parseDeliveryPolicy } from '@dsh/contract/delivery-policy.js';
@@ -88,7 +89,7 @@ export class RunParentProvisioner {
    *   db?: import('knex').Knex | import('knex').Knex.Transaction,
    * }} opts
    */
-  constructor(repos: { organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository, externalRefs: import('../../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository, catalog: import('../../infrastructure/mysql/repositories/agent-catalog-repository.js').AgentCatalogRepository, conversations: import('../../infrastructure/mysql/repositories/conversation-repository.js').ConversationRepository, sessions: import('../../infrastructure/mysql/repositories/agent-session-repository.js').AgentSessionRepository, }, opts: { generateId: () => string, now?: () => Date, defaultProvider?: string, db?: import('knex').Knex | import('knex').Knex.Transaction, }) {
+  constructor(repos: { organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository, externalRefs: import('../../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository, catalog: import('../../infrastructure/mysql/repositories/agent-catalog-repository.js').AgentCatalogRepository, conversations: import('../../infrastructure/mysql/repositories/conversation-repository.js').ConversationRepository, sessions: import('../../infrastructure/mysql/repositories/agent-session-repository.js').AgentSessionRepository, agentAccess: import('../../infrastructure/mysql/repositories/agent-access-repository.js').AgentAccessRepository, }, opts: { generateId: () => string, now?: () => Date, defaultProvider?: string, db?: import('knex').Knex | import('knex').Knex.Transaction, }) {
     if (!repos?.organizations || !repos?.externalRefs || !repos?.catalog) {
       throw new Error(
         'RunParentProvisioner requires organizations, externalRefs, catalog',
@@ -184,7 +185,7 @@ export class RunParentProvisioner {
    * @param [selection]
    * @returns {Promise<ParentGraph>}
    */
-  async provision(auth: { provider?: string, externalOrgId: string, externalUserId: string, externalConversationId?: string | null, displayName?: string | null, email?: string | null, orgName?: string | null, }, selection: { agentId?: string | null } = {}) {
+  async provision(auth: { provider?: string, externalOrgId: string, externalUserId: string, externalConversationId?: string | null, displayName?: string | null, email?: string | null, orgName?: string | null, role?: string | null, }, selection: { agentId?: string | null } = {}) {
     if (!auth || typeof auth !== 'object') {
       throw new ValidationError('auth context is required for parent provisioning');
     }
@@ -356,6 +357,9 @@ export class RunParentProvisioner {
           id: requestedAgentId,
         });
       }
+      // 可见范围（design agent-visibility §4）：受限智能体只有被授予的成员（与 admin）
+      // 能用。对已绑定的会话同样生效——撤销授予后下一轮就是 404，与不存在同形。
+      await assertAgentUsable(this.repos, definition, { userId, role: auth.role });
       if (!definition.activeVersionId) {
         throw new ValidationError('Selected agent has no active version');
       }

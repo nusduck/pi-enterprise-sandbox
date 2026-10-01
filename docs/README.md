@@ -5,6 +5,7 @@ This directory is the **active** documentation set for DSH Enterprise Sandbox.
 
 - [`module-layout.md`](./module-layout.md) — conventional source roots per service (agent / api-server / exec / frontend / contract)
 - [`design/updrdb-dbpm-deployment.md`](./design/updrdb-dbpm-deployment.md) — UPDRDB / DBPM 与双集群 + VM 的统一迁移设计（未实施；共享 Skill 存储、HTTPS 入口及验收门槛）
+- [`design/agent-visibility.md`](./design/agent-visibility.md) — 智能体可见范围：全员 / 指定员工、判定入口、API 与管理页
 - [`design/sso-oidc-dev.md`](./design/sso-oidc-dev.md) — 公司 SSO（OIDC）研发环境实施：产品决定、身份模型、流程、配置、开发替身与换成公司 IdP 的步骤
 - [`design/sso-integration-reservation.md`](./design/sso-integration-reservation.md) — 公司 OIDC SSO 实施设计（未联调；复用 RBAC、可撤销会话、浏览器身份边界及分阶段门槛）
 - [`design/skill-catalog-and-agent-binding.md`](./design/skill-catalog-and-agent-binding.md) — Skill 目录与 Agent 绑定、组织共享层（**已实施**；ADR 0015）

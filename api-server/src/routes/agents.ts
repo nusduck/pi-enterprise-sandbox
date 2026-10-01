@@ -4,9 +4,11 @@ import type { ServerResponse } from 'node:http';
 import {
   createAgentDefinition,
   createAgentDefinitionVersion,
+  getAgentAccess,
   getAgentConfigOptions,
   listAgentDefinitionVersions,
   listAgentDefinitions,
+  setAgentAccess,
   setAgentDefinitionActiveVersion,
   validateAgentConfig,
 } from '../services/agent-catalog-client.js';
@@ -81,6 +83,25 @@ export async function handleSetAgentActiveVersion(
     json(res, 200, await setAgentDefinitionActiveVersion(
       agentId, body, { auth, traceId: req?.traceId },
     ));
+  } catch (error) {
+    sendError(res, error, req?.traceId);
+  }
+}
+
+/** GET / PUT /api/agents/:id/access — 可见范围（admin；角色与名单校验由 agent/ 判定）。 */
+export async function handleAgentAccess(
+  method: 'GET' | 'PUT',
+  agentId: string,
+  body: any,
+  res: ServerResponse,
+  req: ReqWithTrace | null = null,
+): Promise<void> {
+  try {
+    const auth = await resolveTrustedAuth(req);
+    const options = { auth, traceId: req?.traceId };
+    json(res, 200, method === 'GET'
+      ? await getAgentAccess(agentId, options)
+      : await setAgentAccess(agentId, body, options));
   } catch (error) {
     sendError(res, error, req?.traceId);
   }

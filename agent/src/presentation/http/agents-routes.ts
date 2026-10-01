@@ -36,6 +36,9 @@ export interface AgentCatalogServiceLike {
     opts?: { expectedActiveVersionId?: unknown },
   ): Promise<unknown>;
   configOptions(auth: AuthSubjects): Promise<unknown>;
+  /** 可见范围与授予名单（admin，design agent-visibility §5）。 */
+  getAccess(auth: AuthSubjects, agentId: string): Promise<unknown>;
+  setAccess(auth: AuthSubjects, agentId: string, body: unknown): Promise<unknown>;
   validateConfig(
     auth: AuthSubjects,
     body: { config?: unknown, agentId?: unknown },
@@ -173,6 +176,25 @@ export async function handleAgentCatalogRoute({
         config: parsed.body['config'],
         agentId: parsed.body['agent_id'] ?? parsed.body['agentId'],
       }));
+    } catch (error) {
+      respondWithMappedError(res, error);
+    }
+    return true;
+  }
+
+  const accessMatch = path.match(/^\/internal\/agents\/([^/]+)\/access$/);
+  if (accessMatch && (req.method === 'GET' || req.method === 'PUT')) {
+    const ctx = requireCatalogContext(req, res, agentCatalogService);
+    if (!ctx) return true;
+    const agentId = decodeURIComponent(accessMatch[1] as string);
+    try {
+      if (req.method === 'GET') {
+        json(res, 200, await ctx.service.getAccess(ctx.auth, agentId));
+        return true;
+      }
+      const parsed = await parseJsonBody(req, res);
+      if (!parsed.ok) return true;
+      json(res, 200, await ctx.service.setAccess(ctx.auth, agentId, parsed.body));
     } catch (error) {
       respondWithMappedError(res, error);
     }

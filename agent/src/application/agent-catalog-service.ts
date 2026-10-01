@@ -47,6 +47,12 @@ import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import { parseDelegationConfig } from '../domain/agent/delegation-config.js';
 import { parseDataSourceConfig, unknownDataSources } from '../domain/agent/data-source-config.js';
 import { ROLE_ADMIN, hasRole } from '../domain/identity/roles.js';
+import {
+  agentNotFound,
+  filterUsableAgents,
+  normalizeAccessInput,
+  presentAccess,
+} from './agent-access-service.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -100,6 +106,8 @@ export function presentAgent(
     status: definition.status,
     active_version_id: definition.activeVersionId ?? null,
     active_version_no: activeVersion ? Number(activeVersion.versionNo) : null,
+    // 可见范围（design agent-visibility）：`org` 全员 / `restricted` 指定成员。
+    visibility: definition.visibility === 'restricted' ? 'restricted' : 'org',
     created_at: definition.createdAt ?? null,
     updated_at: definition.updatedAt ?? null,
   };
@@ -496,8 +504,13 @@ export class AgentCatalogService {
       if (err instanceof OwnerScopedNotFoundError) return { agents: [] };
       throw err;
     }
-    const definitions = await repos.catalog.listDefinitionsByOrg(owner.orgId, {
+    const listed = await repos.catalog.listDefinitionsByOrg(owner.orgId, {
       limit: opts.limit ?? 50,
+    });
+    // 受限智能体只列给被授予的成员（admin 看全部）；用不了的不出现在选择器里。
+    const definitions = await filterUsableAgents<Loose>(repos, owner.orgId, listed, {
+      userId: owner.userId,
+      role: auth.role,
     });
     const agents = [];
     for (const definition of definitions) {
@@ -507,6 +520,46 @@ export class AgentCatalogService {
       agents.push(presentAgent(definition, activeVersion));
     }
     return { agents };
+  }
+
+  /** 某个 Agent 的可见范围与授予名单（admin，design agent-visibility §5）。 */
+  async getAccess(auth: CatalogAuth, agentId: string) {
+    this.#requireAdmin(auth);
+    const repos = this.createRepositories(this.db);
+    const owner = await this.#resolveOwner(auth, repos);
+    const definition = await this.#requireOwnedAgent(repos, owner, agentId);
+    return presentAccess(definition, await repos.agentAccess.listGrants(definition.agentId));
+  }
+
+  /**
+   * 整体替换可见范围与名单（admin）。在一个事务里改列 + 换名单，读到的永远是
+   * 一致的一对；名单里的人必须是本 org 的活跃成员。
+   */
+  async setAccess(auth: CatalogAuth, agentId: string, body: unknown) {
+    this.#requireAdmin(auth);
+    return this.tx.run(async (trx: Loose) => {
+      const repos = this.createRepositories(trx);
+      const owner = await this.#resolveOwner(auth, repos);
+      const definition = await this.#requireOwnedAgent(repos, owner, agentId);
+      const access = await normalizeAccessInput(repos, owner.orgId, definition, body);
+      try {
+        await repos.agentAccess.replaceAccess({
+          agentId: definition.agentId,
+          orgId: owner.orgId,
+          visibility: access.visibility,
+          userIds: access.userIds,
+          grantedBy: owner.userId,
+        });
+      } catch (error) {
+        // 并发删除等导致定义行不在：与不存在同形。
+        if (/not found for access update/.test(String((error as Error)?.message))) {
+          throw agentNotFound(agentId);
+        }
+        throw error;
+      }
+      const updated = await repos.catalog.getDefinitionById(definition.agentId);
+      return presentAccess(updated ?? definition, await repos.agentAccess.listGrants(definition.agentId));
+    });
   }
 
   /** 某个 Agent 的版本线（admin）。 */

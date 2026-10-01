@@ -18,10 +18,33 @@ const AgentSchema = z
     status: z.string(),
     active_version_id: z.string().nullable().optional(),
     active_version_no: z.number().nullable().optional(),
+    // 可见范围：缺字段的旧服务端按全员处理（迁移前的行为），不臆测成受限。
+    visibility: z.enum(['org', 'restricted']).optional(),
     created_at: z.string().nullable().optional(),
     updated_at: z.string().nullable().optional(),
   })
   .passthrough();
+
+/** 可见范围（design agent-visibility §5）：服务端是权威，未知值严格拒绝而不是当成全员。 */
+const AgentAccessSchema = z
+  .object({
+    agent_id: z.string(),
+    visibility: z.enum(['org', 'restricted']),
+    grants: z.array(
+      z
+        .object({
+          user_id: z.string(),
+          username: z.string().nullable(),
+          display_name: z.string().nullable(),
+          granted_at: z.string().nullable().optional(),
+        })
+        .passthrough(),
+    ),
+  })
+  .passthrough();
+
+export type AgentAccess = z.infer<typeof AgentAccessSchema>;
+export type AgentVisibility = AgentAccess['visibility'];
 
 const AgentListSchema = z
   .object({ agents: z.array(AgentSchema) })
@@ -215,6 +238,30 @@ export async function setAgentActiveVersion(
       }),
     }),
     'setAgentActiveVersion',
+  );
+}
+
+/** GET /api/agents/:id/access — 可见范围与授予名单（admin）。 */
+export async function getAgentAccess(agentId: string): Promise<AgentAccess> {
+  return parseApiStrict(
+    AgentAccessSchema,
+    await request(`/${encodeURIComponent(agentId)}/access`),
+    'agent access',
+  );
+}
+
+/** PUT /api/agents/:id/access — 整体替换；`org` 时服务端清空名单。 */
+export async function setAgentAccess(
+  agentId: string,
+  body: { visibility: AgentVisibility; user_ids: string[] },
+): Promise<AgentAccess> {
+  return parseApiStrict(
+    AgentAccessSchema,
+    await request(`/${encodeURIComponent(agentId)}/access`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+    'agent access',
   );
 }
 
