@@ -4,6 +4,7 @@ import { useChat, type AuthConfigState } from '../../features/chat/ChatContext';
 import { conversationTitle } from '../../shared/state';
 import { useTheme } from '../../shared/ui/theme';
 import { noLoginMethodMessage } from '../../shared/schemas/auth';
+import { localLoginErrorMessage, ssoLoginUrl, takeSsoError } from '../../shared/api/sso';
 import { conversationRunMarkers, listPendingApprovals } from '../runtime-timeline/buildTimeline';
 import {
   IconCheck,
@@ -35,8 +36,10 @@ import s from './sidebar.module.css';
  * - 加载/失败：显示状态与重试，**绝不**默认成「账号密码可用」；
  *   失败时连表单都不渲染，避免对服务故障做出「未开放登录」的假结论。
  * - `local.enabled` 才渲染账号密码表单；`registration_enabled` 才渲染注册。
- * - SSO 只有服务端明确 `enabled && available` 才渲染入口；P1 阶段固定不可用，
- *   渲染为禁用按钮而不是可点击的假路由。
+ * - SSO 只有服务端明确 `enabled && available` 才渲染可点击入口（整页跳转到 BFF）；
+ *   打开但不可用时只显示「暂不可用」，不给假入口。
+ * - `mode=sso` 时账号密码只留给管理员：默认收起，点「管理员账号登录」才展开。
+ * - SSO 回调失败带回的 `sso_error` 由调用方翻成文案后经 `ssoError` 传入。
  */
 function SignInPanel({
   config,
@@ -50,6 +53,7 @@ function SignInPanel({
   onPassword,
   onSubmit,
   onRegister,
+  ssoError,
 }: {
   config: AuthConfigState;
   authError: string | null;
@@ -63,8 +67,11 @@ function SignInPanel({
   onPassword: (value: string) => void;
   onSubmit: (e: FormEvent) => void;
   onRegister: () => void;
+  /** SSO 回调失败的文案（来自 `?sso_error=`）；没有为 null。 */
+  ssoError: string | null;
 }) {
   const [localError, setLocalError] = useState('');
+  const [adminFormOpen, setAdminFormOpen] = useState(false);
 
   // 服务端身份/能力状态一变就清掉上一次的表单级提示（例如 503 后重试成功）。
   useEffect(() => {
@@ -123,14 +130,23 @@ function SignInPanel({
     );
   }
 
+  const showLocalForm = caps.localEnabled && (!caps.localAdminOnly || adminFormOpen);
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+
   return (
     <form className={s.auth} onSubmit={onSubmit} autoComplete="on">
       {revocationNotice}
-      {caps.localEnabled ? (
+      {ssoError ? <p className={s.authError} role="alert">{ssoError}</p> : null}
+      {caps.ssoAvailable ? (
+        <a className={s.ssoBtn} href={ssoLoginUrl(returnTo)}>
+          使用{caps.ssoLabel} 登录
+        </a>
+      ) : null}
+      {showLocalForm ? (
         <>
           <input
             name="username"
-            placeholder="用户名"
+            placeholder={caps.localAdminOnly ? '管理员用户名' : '用户名'}
             autoComplete="username"
             minLength={2}
             required
@@ -148,17 +164,20 @@ function SignInPanel({
             onChange={(e) => onPassword(e.target.value)}
           />
           <div className={s.authActions}>
-            <button type="submit" className={s.primary}>登录</button>
+            <button type="submit" className={caps.localAdminOnly ? s.btn : s.primary}>登录</button>
             {caps.registrationEnabled ? (
               <button type="button" onClick={onRegister}>注册</button>
             ) : null}
           </div>
         </>
       ) : null}
-      {caps.ssoAvailable ? (
-        <button type="button" className={s.btn} disabled title="SSO 入口尚未开放">
-          {caps.ssoLabel}
+      {caps.localEnabled && caps.localAdminOnly && !adminFormOpen ? (
+        <button type="button" className={s.linkBtn} onClick={() => setAdminFormOpen(true)}>
+          管理员账号登录
         </button>
+      ) : null}
+      {caps.ssoAvailable ? null : caps.ssoEnabled ? (
+        <p className={s.empty}>{caps.ssoLabel} 暂不可用，请稍后重试或联系管理员。</p>
       ) : (
         <p className={s.empty}>
           {noLoginMethodMessage(caps) || `${caps.ssoLabel} 尚未开放，本次仅支持账号密码登录。`}
@@ -208,6 +227,9 @@ export function ConversationSidebar() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
+  // SSO 回调失败时 BFF 带回 `?sso_error=`：读出一次、从地址栏抹掉，再在登录面板展示。
+  // 放在 effect 里（不是 useState 初始化）：它会改 history，StrictMode 的二次调用无副作用。
+  const [ssoError, setSsoError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const footRef = useRef<HTMLDivElement>(null);
 
@@ -232,6 +254,11 @@ export function ConversationSidebar() {
       ),
     [state.conversations, query, agentFilter],
   );
+
+  useEffect(() => {
+    const message = takeSsoError();
+    if (message) setSsoError(message);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -293,11 +320,13 @@ export function ConversationSidebar() {
   async function onLogin(e: FormEvent) {
     e.preventDefault();
     if (!username.trim() || !password) return;
+    // 新的一次登录尝试：上一次 SSO 回调的错误不再相关，避免两条错误叠在一起。
+    setSsoError(null);
     try {
       setAuthError('');
       await login(username.trim(), password);
     } catch (err) {
-      setAuthError((err as Error).message || '登录失败');
+      setAuthError(localLoginErrorMessage(err, '登录失败'));
     }
   }
 
@@ -538,6 +567,7 @@ export function ConversationSidebar() {
               onPassword={setPassword}
               onSubmit={onLogin}
               onRegister={() => { void onRegister(); }}
+              ssoError={ssoError}
             />
           )}
         </div>

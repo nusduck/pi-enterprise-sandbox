@@ -49,6 +49,7 @@ import { isDataPlaneReachable } from './worker-probe.js';
 import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../application/extension-diagnostics-service.js';
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { BrowserAuthService } from '../application/browser-auth-service.js';
+import { createSsoLogin } from './sso-login-wiring.js';
 import { createMemberRoleService } from './member-role-wiring.js';
 import { createReviewService } from './review-wiring.js';
 import {
@@ -654,6 +655,14 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
         String(env.SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER || 'true').toLowerCase() !== 'false',
       // 与 worker 同一份判定：配置不全时账户页的开关禁用，打开会被 422 拒绝。
       notificationCapability: emailNotificationCapability(resolveEmailNotificationConfig(env)),
+      ...createSsoLogin.options(env),
+    });
+    // 公司 SSO（design sso-oidc-dev）：未打开时不挂，兑换接口 503。
+    browserAuthService.ssoLogin = createSsoLogin.service({
+      env,
+      repos,
+      auth: browserAuthService,
+      generateId: container.generateId,
     });
   }
 

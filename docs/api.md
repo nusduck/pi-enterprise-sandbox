@@ -352,6 +352,8 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/auth/login` | 登录 |
 | `POST` | `/api/auth/logout` | 撤销当前 sid 并清 Cookie；失败仍清本机 Cookie，返回撤销未确认 |
 | `GET` | `/api/auth/config` | 未登录可读的登录方式投影；Agent 是能力权威，读取失败返回 503 |
+| `GET` | `/api/auth/sso/login` | 公司 SSO 入口（顶层导航）：302 到 IdP，写加密事务 Cookie；`?return_to=` 仅站内路径 |
+| `GET` | `/api/auth/sso/callback` | IdP 回调：换票 → Agent 验签兑换 → 写会话 Cookie，303 回站内路径；失败 303 `/?sso_error=<码>` |
 | `GET` | `/api/auth/me` | 当前用户 |
 | `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称、邮箱与长任务完成邮件开关 |
 | `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation |
@@ -579,12 +581,23 @@ Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不
 active user/org/Membership，再读当前 `member_roles`。旧无 sid JWT 返回 401，升级后重新登录。
 登录/me/profile 增加 `login_method:"local"`、`identity_provider:null`，保留现有 `roles` 与身份字段。
 
-`GET /api/auth/config` 返回 `{mode,methods,profile_policy}`：本期 mode 固定 `local`，
-`methods.local.enabled=true`，`registration_enabled` 由真实注册策略决定；
-`methods.sso={enabled:false,available:false,label:"公司 SSO"}`。profile_policy 是默认策略，
+`GET /api/auth/config` 返回 `{mode,methods,profile_policy}`。`SSO_ENABLED=false` 时 mode 为
+`local`，`methods.local.enabled=true`，`registration_enabled` 由真实注册策略决定，
+`methods.sso={enabled:false,available:false,label:"公司 SSO"}`。`SSO_ENABLED=true` 时 mode 为
+`sso`：`registration_enabled=false`，本地登录只对部署管理员名单开放（其他人 403
+`LOCAL_LOGIN_RESTRICTED`，注册 403 `REGISTRATION_DISABLED`），`methods.sso.enabled=true`，
+`available` 为 Agent 与 BFF 两侧配置都完整时才为 true。profile_policy 是默认策略，
 个人编辑字段以 profile.editable_fields 为准。配置/权威依赖不可用返回 503，不返回空能力集。
-本期没有公司 OIDC 回调、身份绑定或 JIT；设计与后续门槛见
-[SSO 设计](design/sso-integration-reservation.md)。
+
+公司 SSO（OIDC 授权码 + PKCE，[设计](design/sso-oidc-dev.md)）：`/api/auth/sso/login` 与
+`/callback` 是浏览器顶层导航，不返回 JSON；失败一律 303 到 `/?sso_error=<码>`，码为
+`SSO_STATE_INVALID` / `SSO_CALLBACK_INVALID` / `SSO_ACCESS_DENIED` / `SSO_CONFIG_UNAVAILABLE` /
+`SSO_UPSTREAM_UNAVAILABLE` / `SSO_TOKEN_INVALID` / `SSO_ACCESS_UNAVAILABLE` /
+`IDENTITY_BINDING_CONFLICT` 等稳定码，不带 IdP 原文。回调不经认证写请求的跨站防护
+（IdP 回跳本身就是跨站 GET），由 state、PKCE、nonce 与加密事务 Cookie 保护。
+SSO 会话的 me/profile 返回 `login_method:"sso"`、`identity_provider:<issuer>`，用户名为工号。
+内部镜像 `POST /internal/auth/oidc/exchange`（内部 token；body `{id_token,nonce}`，返回
+`{token,user}` 仅给 BFF）：Agent 独立验签，按 `(iss, sub)` 找人或 JIT 建号（零角色、固定 org）。
 
 `POST /api/auth/logout`：200 `{ok:true,revocation:"confirmed"}` 表示当前有效 sid 已撤销；
 200 `{ok:true,revocation:"not_required"}` 表示无凭据、无效/已过期/已撤销凭据无需写入；

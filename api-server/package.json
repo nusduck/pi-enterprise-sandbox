@@ -22,7 +22,9 @@
     "@opentelemetry/resources": "^2.9.0",
     "@opentelemetry/sdk-node": "^0.220.0",
     "@opentelemetry/sdk-trace-base": "^2.9.0",
-    "@opentelemetry/semantic-conventions": "^1.43.0"
+    "@opentelemetry/semantic-conventions": "^1.43.0",
+    "jose": "^6.2.12",
+    "openid-client": "^6.8.8"
   },
   "devDependencies": {
     "@types/node": "26.4.0",

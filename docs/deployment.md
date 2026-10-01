@@ -1141,3 +1141,26 @@ DB/内部网络故障仍清 Cookie，但 503 `AUTH_REVOCATION_UNCONFIRMED` 不�
 回退保留新表与数据，不 drop；旧消费者会恢复旧 JWT 校验语义，属于撤销能力退回。
 不要通过关闭 `AUTH_ENABLED` 回退，也不要宣称新版本撤销事实会自动被旧版本读取。
 细节见 [设计与迁移策略](design/sso-integration-reservation.md)。
+
+## 公司 SSO（OIDC）
+
+迁移 `20261002000002_sso_identities.js` 新建 `tbl_agsvc_sso_identities`，按既有 schema 发布流程升级。
+默认 `SSO_ENABLED=false`，行为与 P1 相同。打开时：
+
+| 变量 | 注入到 | 说明 |
+|------|--------|------|
+| `SSO_ENABLED` / `SSO_ISSUER` / `SSO_CLIENT_ID` | BFF + Agent | 两侧一致；issuer 与 discovery 逐字一致，生产必须 https |
+| `SSO_CLIENT_SECRET` | **仅 BFF** | client_secret_post；来自密钥管理 |
+| `SSO_REDIRECT_URI` | 仅 BFF | 公司 IdP 登记的回调：`<站点 origin>/api/auth/sso/callback` |
+| `SSO_TRANSACTION_SECRET` | **仅 BFF** | ≥32 字符，加密登录事务 Cookie |
+| `SSO_SCOPES` / `SSO_TRANSACTION_TTL_SECONDS` | 仅 BFF | 默认 `openid profile` / 600 |
+| `SSO_EMPLOYEE_ID_CLAIM` / `SSO_ORG_ID` | 仅 Agent | 工号 claim 名（默认 `employee_id`）；SSO 用户统一落入的外部 org |
+| `SSO_JWKS_URI` / `SSO_LABEL` | 仅 Agent | JWKS 非 issuer 同源时显式配置；按钮文案 |
+| `SSO_REQUEST_TIMEOUT_MS` | BFF + Agent | discovery / 换票 / JWKS 出站超时，默认 5000，上限 30000 |
+| `SSO_ALLOW_INSECURE_HTTP` | BFF + Agent | 仅开发替身；生产 false |
+
+Compose 已把 client secret 与事务密钥在 Agent / Worker / exec 中显式清空（`env_file` 会整体注入 `.env`）。
+任一必需项缺失时 SSO 显示「暂不可用」，不会退回宽松校验。打开 SSO 后公开注册关闭，本地密码只对
+`SANDBOX_AUTH_ADMIN_USERNAMES` 名单开放（应急入口）；角色仍由 admin 在成员页授予。
+生产上线前还需：站点 HTTPS 与会话 Cookie `Secure`、公司 IdP 登记回调、确认工号 claim。
+详见 [sso-oidc-dev.md](design/sso-oidc-dev.md)。

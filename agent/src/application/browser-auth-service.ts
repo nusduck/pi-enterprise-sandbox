@@ -19,18 +19,19 @@ import {
   type IssuedBrowserSession,
 } from './browser-session-service.js';
 import { BrowserSessionTokens } from './browser-session-tokens.js';
+import type { SsoConfig } from './sso-config.js';
 
 // 既有调用方（HTTP 路由与测试）从这里取错误类；实现在 browser-auth-errors.ts。
 export { BrowserAuthError } from './browser-auth-errors.js';
 
 const pbkdf2 = promisify(pbkdf2Callback);
 /** Pragmatic shape check; deliverability is the mail gateway's business. */
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const USERNAME = /^[A-Za-z0-9_./@+-]{2,64}$/;
+export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const USERNAME = /^[A-Za-z0-9_./@+-]{2,64}$/;
 const BOOTSTRAP_ORG_ID = 'org_bootstrap';
 const PASSWORD_ITERATIONS = 120_000;
 
-type Credential = {
+export type Credential = {
   id: string;
   username: string;
   passwordHash: string;
@@ -88,7 +89,7 @@ type ExternalRefStore = {
   }): Promise<{ orgId: string }>;
 };
 
-type CredentialStore = {
+export type CredentialStore = {
   create(input: Record<string, unknown>): Promise<Credential | null>;
   getByUsername(username: string): Promise<Credential | null>;
   getByExternalUserId(id: string): Promise<Credential | null>;
@@ -130,8 +131,13 @@ export type NotificationCapability = {
   min_run_duration_ms: number | null;
 };
 
-/** 本轮固定 local：不新增没有真实消费者的 SSO 环境变量（tasks §25）。 */
 export const AUTH_MODE_LOCAL = 'local';
+/**
+ * 打开公司 SSO 后的模式：员工走 SSO，本地密码只留给部署名单里的管理员
+ * （`SANDBOX_AUTH_ADMIN_USERNAMES`，design sso-oidc-dev §2）。
+ */
+export const AUTH_MODE_SSO = 'sso';
+export const LOGIN_METHOD_SSO = 'sso';
 const SSO_LABEL = '公司 SSO';
 
 const EDITABLE_PROFILE_FIELDS = ['display_name', 'email', 'notify_run_complete'];
@@ -183,6 +189,15 @@ export class BrowserAuthService {
   ttlSeconds: number;
   allowPublicRegister: boolean;
   notificationCapability: NotificationCapability;
+  /** 公司 SSO 配置；缺省 = 未打开。 */
+  sso: SsoConfig | null;
+  /** SSO 打开时仍允许本地密码登录的用户名（小写），即部署管理员名单。 */
+  localLoginAllowlist: ReadonlySet<string>;
+  /**
+   * 公司 SSO 兑换（`SsoLoginService`，由 `http-main` 在 SSO 打开时挂上）。
+   * 放在这里是为了复用既有 `/internal/auth/*` 路由接线，不多开一条依赖通道。
+   */
+  ssoLogin: { exchange(body: Record<string, unknown>): Promise<unknown> } | null = null;
   now: () => Date;
 
   constructor(input: {
@@ -198,6 +213,8 @@ export class BrowserAuthService {
     ttlSeconds?: number;
     allowPublicRegister?: boolean;
     notificationCapability?: NotificationCapability;
+    sso?: SsoConfig | null;
+    localLoginAllowlist?: readonly string[];
     now?: () => Date;
   }) {
     this.credentials = input.credentials;
@@ -214,6 +231,12 @@ export class BrowserAuthService {
       available: false,
       min_run_duration_ms: null,
     };
+    this.sso = input.sso?.enabled ? input.sso : null;
+    this.localLoginAllowlist = new Set(
+      (input.localLoginAllowlist ?? [])
+        .map((name) => String(name || '').trim().toLowerCase())
+        .filter(Boolean),
+    );
     this.now = input.now || (() => new Date());
     this.sessionService = input.sessions
       ? new BrowserSessionService({
@@ -251,19 +274,25 @@ export class BrowserAuthService {
   /**
    * 登录能力投影（锁定 DTO，tasks §24–42）。Agent 是登录能力权威：不返回假的可用
    * 能力，JWT secret 或会话权威缺失一律 503，而不是把 local.enabled 说成 true。
-   * 本轮固定 local；SSO 恒为 disabled + unavailable，不伪造回调路由。
+   *
+   * SSO 未打开：mode=local，SSO disabled + unavailable。
+   * SSO 打开：mode=sso，本地登录只剩管理员入口、注册关闭；`sso.available` 反映
+   * Agent 侧配置是否完整（BFF 还会再与自己的 client 配置取与）。
    */
   authConfig() {
     this.requireSecret();
     if (!this.sessionService) throw browserAuthStoreUnavailable();
+    const sso = this.sso;
     return {
-      mode: AUTH_MODE_LOCAL,
+      mode: sso ? AUTH_MODE_SSO : AUTH_MODE_LOCAL,
       methods: {
         local: {
           enabled: true,
-          registration_enabled: this.allowPublicRegister,
+          registration_enabled: sso ? false : this.allowPublicRegister,
         },
-        sso: { enabled: false, available: false, label: SSO_LABEL },
+        sso: sso
+          ? { enabled: true, available: sso.available, label: sso.label || SSO_LABEL }
+          : { enabled: false, available: false, label: SSO_LABEL },
       },
       profile_policy: { editable_fields: [...EDITABLE_PROFILE_FIELDS] },
     };
@@ -349,13 +378,18 @@ export class BrowserAuthService {
   private async rolesForIdentity(
     identity: ActivePrincipalIdentity | { orgId: string; userId: string },
     username: string | null | undefined,
+    loginMethod: string,
   ): Promise<KnownRole[]> {
     if (!this.memberRoles) return [];
-    await this.memberRoles.ensureDeploymentGrant({
-      orgId: identity.orgId,
-      userId: identity.userId,
-      username,
-    });
+    // 部署名单按**用户名**引导 admin，只对本地密码账号成立。SSO 用户名来自公司 claim，
+    // 同名不代表同一个人：SSO 会话从不走名单引导，角色只由 admin 在成员页授予。
+    if (loginMethod === AUTH_MODE_LOCAL) {
+      await this.memberRoles.ensureDeploymentGrant({
+        orgId: identity.orgId,
+        userId: identity.userId,
+        username,
+      });
+    }
     return parseRoleSet(
       await this.memberRoles.listRolesForMember(identity.orgId, identity.userId),
     );
@@ -407,9 +441,11 @@ export class BrowserAuthService {
    * user/org/Membership 若能走到那里，就会在被停用主体上写出 admin，再拿到一个 sid。
    * 所以这里先过准入门槛，拒绝时既没有新会话，也没有新授予。
    */
-  private async establishLocalSession(
+  private async establishSession(
     entry: Credential,
-    source: 'login' | 'register',
+    source: 'login' | 'register' | 'sso',
+    loginMethod: string = AUTH_MODE_LOCAL,
+    identityProvider: string | null = null,
   ): Promise<{ token: string; user: Record<string, unknown> }> {
     const sessions = this.requireSessions();
     const identity = await this.ensureUserProvisioned(entry);
@@ -430,7 +466,7 @@ export class BrowserAuthService {
     }
     let roles: KnownRole[];
     try {
-      roles = await this.rolesForIdentity(active, entry.username);
+      roles = await this.rolesForIdentity(active, entry.username, loginMethod);
     } catch {
       throw browserAuthStoreUnavailable();
     }
@@ -441,17 +477,25 @@ export class BrowserAuthService {
       orgId: active.orgId,
       externalUserId: synced.id,
       externalOrgId: synced.organizationId || BOOTSTRAP_ORG_ID,
-      loginMethod: AUTH_MODE_LOCAL,
-      identityProvider: null,
+      loginMethod,
+      identityProvider,
       source,
       ttlSeconds: this.ttlSeconds,
     });
     return { token: issued.token, user: this.publicUser(synced, roles, issued) };
   }
 
+  /**
+   * 公司 SSO 兑换后的会话签发（`SsoLoginService` 调用）。与本地登录共用准入与 sid
+   * 签发；区别只在 login_method / identity_provider，以及不走部署名单引导。
+   */
+  establishSsoSession(entry: Credential, issuer: string) {
+    return this.establishSession(entry, 'sso', LOGIN_METHOD_SSO, issuer);
+  }
+
   async register(body: Record<string, unknown>) {
     this.requireSessions();
-    if (!this.allowPublicRegister) {
+    if (!this.allowPublicRegister || this.sso) {
       throw new BrowserAuthError(403, 'REGISTRATION_DISABLED', 'Public registration is disabled');
     }
     const username = typeof body.username === 'string' ? body.username.trim() : '';
@@ -478,7 +522,7 @@ export class BrowserAuthService {
         role: 'user',
       });
       if (!entry) throw new Error('credential insert did not persist');
-      return await this.establishLocalSession(entry, 'register');
+      return await this.establishSession(entry, 'register');
     } catch (error) {
       if (error instanceof BrowserAuthError) throw error;
       if (/duplicate|unique/i.test(String((error as Error)?.message || ''))) {
@@ -495,6 +539,11 @@ export class BrowserAuthService {
     if (!username || password.length > 128) {
       throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', 'Username and password are required');
     }
+    // SSO 打开后，本地密码只留给部署管理员（应急入口）；其他人提示改走公司 SSO。
+    // 放在查库/验密码之前：不为注定被拒的请求付 PBKDF2 的代价。
+    if (this.sso && !this.localLoginAllowlist.has(username.toLowerCase())) {
+      throw new BrowserAuthError(403, 'LOCAL_LOGIN_RESTRICTED', 'Use company SSO to sign in');
+    }
     let entry: Credential | null;
     try {
       entry = await this.credentials.getByUsername(username);
@@ -509,7 +558,7 @@ export class BrowserAuthService {
     } catch {
       throw browserAuthStoreUnavailable();
     }
-    return this.establishLocalSession(entry, 'login');
+    return this.establishSession(entry, 'login');
   }
 
   /**
@@ -552,13 +601,22 @@ export class BrowserAuthService {
     });
     let roles: KnownRole[];
     try {
-      roles = await this.rolesForIdentity(identity, entry.username);
+      roles = await this.rolesForIdentity(identity, entry.username, session.loginMethod);
     } catch {
       // 角色账本不可达必须 503，不能当成空角色集放行。
       throw browserAuthStoreUnavailable();
     }
     entry = await this.syncCompatRole(entry, roles);
     return { entry, roles, session };
+  }
+
+  /** `POST /internal/auth/oidc/exchange`。SSO 未打开或未接线：503，不伪造能力。 */
+  async ssoExchange(body: Record<string, unknown>) {
+    this.requireSessions();
+    if (!this.sso || !this.ssoLogin) {
+      throw new BrowserAuthError(503, 'SSO_CONFIG_UNAVAILABLE', 'SSO is not available');
+    }
+    return this.ssoLogin.exchange(body);
   }
 
   async me(authorization: string | undefined) {

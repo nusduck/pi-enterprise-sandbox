@@ -172,6 +172,33 @@ services:
     networks:
       - backend_internal
 
+  # ── 公司 SSO 开发替身（design docs/design/sso-oidc-dev.md §7）────
+  # 只在 `--profile sso-dev` 下启动。issuer 由请求 Host 决定：浏览器（*.localhost 解析到
+  # 本机）与容器（backend_internal 上的网络别名）都用 http://oidc.localhost:8090/default，
+  # token 里的 iss 才对得上。交互式登录页里填 sub 与 claims（如 {"employee_id":"E1001"}）。
+  mock-oidc:
+    image: ${MOCK_OIDC_IMAGE:-ghcr.io/navikt/mock-oauth2-server:3.0.1}
+    container_name: ${MOCK_OIDC_CONTAINER:-dsh-enterprise-mock-oidc}
+    profiles: ["sso-dev"]
+    environment:
+      SERVER_PORT: "8090"
+      JSON_CONFIG: '{"interactiveLogin": true}'
+    ports:
+      - "127.0.0.1:${MOCK_OIDC_PORT:-8090}:8090"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      backend_internal:
+        aliases:
+          - oidc.localhost
+      dev_ingress: {}
+
   # ── Frontend — SPA (Nginx) ────────────────────────────────
   frontend:
     build:
@@ -217,6 +244,16 @@ services:
       AUTH_ENABLED: ${AUTH_ENABLED:-}
       # JWT signing material belongs only to Agent, despite the legacy prefix.
       SANDBOX_JWT_SECRET: ""
+      # 公司 SSO（OIDC client）：client secret 与事务密钥只在 BFF（design sso-oidc-dev §5）。
+      SSO_ENABLED: ${SSO_ENABLED:-false}
+      SSO_ISSUER: ${SSO_ISSUER:-}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-}
+      SSO_SCOPES: ${SSO_SCOPES:-openid profile}
+      SSO_TRANSACTION_SECRET: ${SSO_TRANSACTION_SECRET:-}
+      SSO_ALLOW_INSECURE_HTTP: ${SSO_ALLOW_INSECURE_HTTP:-false}
+      SSO_REQUEST_TIMEOUT_MS: ${SSO_REQUEST_TIMEOUT_MS:-5000}
       # env_file injects the host .env wholesale. BFF has no MySQL/Redis
       # authority; blank inherited DSNs and passwords so they do not appear
       # in the process environment or docker inspect.
@@ -319,6 +356,19 @@ services:
       SANDBOX_JWT_AUDIENCE: ${SANDBOX_JWT_AUDIENCE:-dsh-enterprise-sandbox}
       SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER: ${SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER:-true}
       SANDBOX_AUTH_ADMIN_USERNAMES: ${SANDBOX_AUTH_ADMIN_USERNAMES:-}
+      # 公司 SSO：Agent 独立验签 ID token、JIT 建号（design sso-oidc-dev §5）。
+      # SSO 打开后本地密码只留给上面的管理员名单。client secret 不进 Agent。
+      SSO_ENABLED: ${SSO_ENABLED:-false}
+      SSO_ISSUER: ${SSO_ISSUER:-}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_JWKS_URI: ${SSO_JWKS_URI:-}
+      SSO_EMPLOYEE_ID_CLAIM: ${SSO_EMPLOYEE_ID_CLAIM:-employee_id}
+      SSO_ORG_ID: ${SSO_ORG_ID:-org_bootstrap}
+      SSO_LABEL: ${SSO_LABEL:-公司 SSO}
+      SSO_ALLOW_INSECURE_HTTP: ${SSO_ALLOW_INSECURE_HTTP:-false}
+      SSO_REQUEST_TIMEOUT_MS: ${SSO_REQUEST_TIMEOUT_MS:-5000}
+      SSO_CLIENT_SECRET: ""
+      SSO_TRANSACTION_SECRET: ""
       A2A_PUBLIC_BASE_URL: ${A2A_PUBLIC_BASE_URL:-http://127.0.0.1:${AGENT_PORT:-4100}}
       A2A_ARTIFACT_DOWNLOAD_SECRET: ${A2A_ARTIFACT_DOWNLOAD_SECRET:-dev_only_a2a_artifact_download_secret_32b}
       A2A_ALLOW_DEV_HOST_FALLBACK: ${A2A_ALLOW_DEV_HOST_FALLBACK:-true}
@@ -439,6 +489,9 @@ services:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       # Browser auth authority is Agent; override broad env_file inheritance.
       SANDBOX_JWT_SECRET: ""
+      # 公司 SSO 的 client secret / 事务密钥只属于 BFF。
+      SSO_CLIENT_SECRET: ""
+      SSO_TRANSACTION_SECRET: ""
       SANDBOX_BASE_URL: http://sandbox:8081
       # Worker persistence is separate; never inherit Sandbox's DSN from
       # env_file.
@@ -589,6 +642,9 @@ services:
       DEPLOYMENT_ENV: ${DEPLOYMENT_ENV:-development}
       # Browser auth authority is Agent; override broad env_file inheritance.
       SANDBOX_JWT_SECRET: ""
+      # 公司 SSO 的 client secret / 事务密钥只属于 BFF。
+      SSO_CLIENT_SECRET: ""
+      SSO_TRANSACTION_SECRET: ""
       # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
       SANDBOX_BIND_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_PORT: 8081

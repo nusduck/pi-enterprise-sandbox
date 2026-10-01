@@ -37,7 +37,8 @@
     "20261001000002_exec_workspace_policies.js",
     "20261001000003_exec_artifact_visibility.js",
     "20261001000004_review_ledger.js",
-    "20261002000001_browser_auth_sessions.js"
+    "20261002000001_browser_auth_sessions.js",
+    "20261002000002_sso_identities.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -7620,6 +7621,107 @@
           "onDelete": "RESTRICT"
         }
       }
+    },
+    "tbl_agsvc_sso_identities": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "employee_id": {
+          "type": "varchar(128)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "external_user_id": {
+          "type": "varchar(128)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "identity_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "issuer": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "last_login_at": {
+          "type": "datetime(3)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "subject": {
+          "type": "varchar(255)",
+          "nullable": false,
+          "default": "",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "identity_id"
+          ]
+        },
+        "ind_agsvc_ssi_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "issuer",
+            "subject"
+          ]
+        },
+        "ind_agsvc_ssi_a2": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "external_user_id"
+          ]
+        },
+        "ind_agsvc_ssi_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "employee_id"
+          ]
+        }
+      },
+      "foreignKeys": {}
     },
     "tbl_agsvc_task_memories": {
       "engine": "InnoDB",

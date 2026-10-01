@@ -12,6 +12,8 @@ type BrowserAuthLike = {
   authConfig?(): unknown;
   /** 撤销当前 sid；契约见 sso-reservation-tasks §50–58。 */
   logout?(authorization: string | undefined): Promise<unknown>;
+  /** 公司 SSO：BFF 交来已消费事务的 ID token + nonce（design sso-oidc-dev §4）。 */
+  ssoExchange?(body: Record<string, unknown>): Promise<unknown>;
 };
 
 async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -43,6 +45,8 @@ export async function handleAuthRoute(input: {
         ? 'config'
         : path === '/internal/auth/logout'
           ? 'logout'
+          : path === '/internal/auth/oidc/exchange'
+            ? 'ssoExchange'
           : path === '/internal/auth/me'
             ? 'me'
             : path === '/internal/auth/profile'
@@ -77,6 +81,12 @@ export async function handleAuthRoute(input: {
       } else {
         // 退出契约的 confirmed/not_required/409/503 由服务的 BrowserAuthError 决定。
         json(res, 200, await browserAuthService.logout(authorization));
+      }
+    } else if (action === 'ssoExchange') {
+      if (typeof browserAuthService.ssoExchange !== 'function') {
+        json(res, 503, { error: 'SSO is not available', code: 'SSO_CONFIG_UNAVAILABLE' });
+      } else {
+        json(res, 200, await browserAuthService.ssoExchange(await readJsonObject(req)));
       }
     } else if (action === 'updateProfile') {
       json(res, 200, await browserAuthService.updateProfile(authorization, await readJsonObject(req)));

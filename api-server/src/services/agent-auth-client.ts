@@ -138,6 +138,18 @@ export async function authLogout(
   return { status: resp.status, body };
 }
 
+/**
+ * POST /internal/auth/oidc/exchange — hand the company ID token and the nonce
+ * from the consumed login transaction to the Agent, which verifies it
+ * independently and issues the platform session (design sso-oidc-dev §4.2).
+ */
+export function authSsoExchange(
+  body: { id_token: string; nonce: string },
+  options: Omit<AgentAuthOptions, 'body' | 'authorization'> = {},
+): Promise<any> {
+  return requestAgentAuth('oidc/exchange', { ...options, body });
+}
+
 export function authRegister(body: unknown, options: Omit<AgentAuthOptions, 'body'> = {}): Promise<any> {
   return requestAgentAuth('register', { ...options, body });
 }

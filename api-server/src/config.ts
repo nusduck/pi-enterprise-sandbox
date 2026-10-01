@@ -4,6 +4,7 @@
  */
 
 import { formatActingRole } from './domain/roles.js';
+import { resolveSsoClientConfig } from './sso-config.js';
 
 const MIN_SECRET_LEN = 32;
 const DEFAULT_DATASET_UPLOAD_MAX_BYTES = 55 * 1024 * 1024;
@@ -292,6 +293,8 @@ export const config = {
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean),
+  /** 公司 SSO（OIDC client）。client secret 只在 BFF；见 `sso-config.ts`。 */
+  SSO: resolveSsoClientConfig(),
 };
 
 export const AUTH_HEADER: Record<string, string> = config.SANDBOX_API_TOKEN
