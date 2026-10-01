@@ -154,7 +154,7 @@ describe('成员与角色页的错误提示映射', () => {
     assert.deepEqual(withRole(['admin', 'reviewer'], 'admin', false), ['reviewer']);
     assert.deepEqual(withRole(['ADMIN'], 'admin', false), []);
 
-    assert.equal(roleEventSourceLabel('console'), '界面授予');
+    assert.equal(roleEventSourceLabel('console'), '管理界面');
     assert.equal(roleEventSourceLabel('bootstrap'), '部署引导');
     assert.equal(roleEventSourceLabel('migration'), '数据迁移');
     assert.equal(roleEventSourceLabel('unknown'), 'unknown');
@@ -251,7 +251,8 @@ describe('成员与角色的界面信息设计（§3.1）', () => {
     // 滑块用 secondary；原来的 rgba(0,0,0,0.08) 边界 + 纯白滑块在浅色下看不见。
     assert.match(css, /\.slider\s*\{[^}]*border:\s*1px solid var\(--color-text-muted\)/);
     assert.match(css, /\.slider::before\s*\{[^}]*background:\s*var\(--color-text-secondary\)/);
-    assert.doesNotMatch(css, /\.slider::before\s*\{[^}]*background:\s*#fff/);
+    // 只约束关闭态（行首的基础规则）；开启态在蓝底上用 #fff 是对的（review-ui-followups.test.ts）。
+    assert.doesNotMatch(css, /^\.slider::before\s*\{[^}]*background:\s*#fff/m);
     assert.doesNotMatch(css, /\.slider\s*\{[^}]*border:\s*1px solid var\(--color-border\)/);
   });
 

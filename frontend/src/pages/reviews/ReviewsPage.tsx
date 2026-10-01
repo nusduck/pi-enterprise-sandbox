@@ -40,6 +40,7 @@ import {
   reviewListState,
   reviewRequesterLabel,
   reviewStatusLabel,
+  shouldScrollDetailIntoView,
   reviewStatusTone,
   reviewTaskAgentLabel,
   reviewTaskItemLabel,
@@ -126,8 +127,22 @@ export function ReviewsPage() {
     void load({ cursor: null });
   }, [load]);
 
+  const detailPaneRef = useRef<HTMLDivElement | null>(null);
+
   const openDetail = useCallback(async (reviewTaskId: string) => {
     setSelectedId(reviewTaskId);
+    // 单栏布局（≤1200px）下详情在列表下方：滚过去，否则点了任务像没反应。
+    // 面板一直在页面上、位置与选中无关，所以不必等下一帧（requestAnimationFrame 在
+    // 后台标签页里不触发）；系统要求减少动态效果时不做平滑动画。
+    window.setTimeout(() => {
+      const pane = detailPaneRef.current;
+      if (!pane) return;
+      const { top } = pane.getBoundingClientRect();
+      if (shouldScrollDetailIntoView({ top, viewportHeight: window.innerHeight })) {
+        const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        pane.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+      }
+    }, 0);
     setDetailLoading(true);
     setDetailError(null);
     setNotice(null);
@@ -190,195 +205,197 @@ export function ReviewsPage() {
   const canAct = detail?.status === 'IN_REVIEW';
 
   return (
-    <div className={a.page}>
-      <div className={a.head}>
-        <div>
-          <h1>交付物审核</h1>
-          <p>
-            智能体按版本配置「交付物需人工审核」时，它在会话里提交的交付物先进入这里。
-            通过前发起人看不到也下载不了；通过后出现在原会话与产物库里。审核员只能看到
-            用户提问与上传的文件，看不到发起人的工作区。
-          </p>
+    <div className={s.scroll}>
+      <div className={a.page}>
+        <div className={a.head}>
+          <div>
+            <h1>交付物审核</h1>
+            <p>
+              智能体按版本配置「交付物需人工审核」时，它在会话里提交的交付物先进入这里。
+              通过前发起人看不到也下载不了；通过后出现在原会话与产物库里。审核员只能看到
+              用户提问与上传的文件，看不到发起人的工作区。
+            </p>
+          </div>
+          <span className={a.sp} />
+          <button type="button" className={a.btn} onClick={() => void load({ cursor: null })} disabled={loading}>
+            {loading ? '刷新中…' : '刷新'}
+          </button>
         </div>
-        <span className={a.sp} />
-        <button type="button" className={a.btn} onClick={() => void load({ cursor: null })} disabled={loading}>
-          {loading ? '刷新中…' : '刷新'}
-        </button>
-      </div>
 
-      <div className={a.toolbar}>
-        <div className={a.seg} role="group" aria-label="审核筛选">
-          {FILTERS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              className={a.btn}
-              aria-pressed={filter === entry.id}
-              onClick={() => setFilter(entry.id)}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {notice ? <p className={a.notice} role="status">{notice}</p> : null}
-      {actionError ? <p className={a.error} role="alert">{actionError}</p> : null}
-
-      <div className={s.layout}>
-        <div className={s.listPane}>
-          {listState === 'error' ? (
-            // 读取失败不是空队列（AGENTS.md §3）；视觉与 RunsPage 的空态同款（a.empty）。
-            <div className={a.empty} role="alert">
-              <p className={a.error} style={{ margin: '0 0 8px' }}>读取审核队列失败：{loadError}</p>
-              <button type="button" className={a.btn} onClick={() => void load({ cursor: null })}>
-                重试
-              </button>
-            </div>
-          ) : null}
-          {listState === 'loading' ? <div className={a.empty}>正在读取…</div> : null}
-          {listState === 'empty' ? (
-            <div className={a.empty}>
-              {filter === 'pending' ? '没有待领取的审核任务。' : filter === 'mine' ? '你没有正在审核的任务。' : '还没有历史任务。'}
-            </div>
-          ) : null}
-          {listState === 'ready' ? (
-            <div className={a.tableWrap}>
-              <table className={`${a.table} ${s.listTable}`}>
-                <colgroup>
-                  <col className={s.colItem} />
-                  <col className={s.colAgent} />
-                  <col className={s.colRequester} />
-                  <col className={s.colStatus} />
-                  <col className={s.colRun} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>交付物</th>
-                    <th>智能体</th>
-                    <th>发起人</th>
-                    <th>状态</th>
-                    <th>运行结果</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tasks!.map((task) => (
-                    <tr
-                      key={task.review_task_id}
-                      className={task.review_task_id === selectedId ? s.rowActive : undefined}
-                      tabIndex={0}
-                      aria-label={`查看任务 ${reviewTaskItemLabel(task)}`}
-                      onClick={() => void openDetail(task.review_task_id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          void openDetail(task.review_task_id);
-                        }
-                      }}
-                    >
-                      <td>
-                        <div className={s.cellTitle} title={reviewTaskItemLabel(task)}>
-                          {reviewTaskItemLabel(task)}
-                        </div>
-                        <small className={a.muted}>
-                          {task.item_count && task.item_count > 1 && task.first_item_name
-                            ? `${task.item_count} 件 · `
-                            : ''}
-                          {formatReviewTimestamp(task.created_at)}
-                        </small>
-                      </td>
-                      <td className={s.cellEllipsis} title={reviewTaskAgentLabel(task)}>
-                        {reviewTaskAgentLabel(task)}
-                      </td>
-                      <td className={s.cellEllipsis} title={reviewRequesterLabel(task)}>
-                        {reviewRequesterLabel(task)}
-                      </td>
-                      <td>
-                        <span className={`${a.pill} ${toneClass(reviewStatusTone(task.status), a)}`}>
-                          {reviewStatusLabel(task.status)}
-                        </span>
-                      </td>
-                      <td>{runStatusLabel(task.run_status)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-          {nextCursor && listState === 'ready' ? (
-            <div className={a.cardActions}>
+        <div className={a.toolbar}>
+          <div className={a.seg} role="group" aria-label="审核筛选">
+            {FILTERS.map((entry) => (
               <button
+                key={entry.id}
                 type="button"
                 className={a.btn}
-                disabled={loadingMore}
-                onClick={() => void load({ cursor: nextCursor, append: true })}
+                aria-pressed={filter === entry.id}
+                onClick={() => setFilter(entry.id)}
               >
-                {loadingMore ? '正在加载…' : '加载更多'}
+                {entry.label}
               </button>
-            </div>
-          ) : null}
+            ))}
+          </div>
         </div>
 
-        <div className={s.detailPane}>
-          {!selectedId ? <div className={a.empty}>从左侧选择一个任务查看详情。</div> : null}
-          {selectedId && detailLoading ? <div className={a.empty}>正在读取详情…</div> : null}
-          {selectedId && detailError ? (
-            <div className={a.empty} role="alert">
-              <p className={a.error} style={{ margin: '0 0 8px' }}>读取任务详情失败：{detailError}</p>
-              <button type="button" className={a.btn} onClick={() => void refreshDetail()}>
-                重试
-              </button>
-            </div>
-          ) : null}
-          {detail && !detailLoading ? (
-            <ReviewDetailPane
-              detail={detail}
-              busy={busy}
-              approveNote={approveNote}
-              onApproveNote={setApproveNote}
-              rejectFeedback={rejectFeedback}
-              onRejectFeedback={setRejectFeedback}
-              rejectOpen={rejectOpen}
-              onRejectOpen={setRejectOpen}
-              revisionFile={revisionFile}
-              revisionItemNo={revisionItemNo}
-              onPickRevision={(itemNo, file) => {
-                setRevisionItemNo(itemNo);
-                setRevisionFile(file);
-              }}
-              canAct={canAct}
-              onClaim={() => void runAction('claim', () => claimReview(detail.review_task_id), '已领取')}
-              onRelease={() => void runAction('release', () => releaseReview(detail.review_task_id), '已释放领取')}
-              onApprove={() =>
-                void runAction(
-                  'approve',
-                  () => approveReview(detail.review_task_id, { baseRevision: detail.revision, note: approveNote }),
-                  '已通过，正在发布',
-                )
-              }
-              onReject={() =>
-                void runAction(
-                  'reject',
-                  () => rejectReview(detail.review_task_id, { baseRevision: detail.revision, feedback: rejectFeedback }),
-                  '已驳回',
-                )
-              }
-              onUploadRevision={(itemNo) =>
-                void runAction(
-                  `revision:${itemNo}`,
-                  () => {
-                    if (!revisionFile) throw new Error('请先选择修订文件');
-                    return uploadReviewRevision(detail.review_task_id, itemNo, {
-                      baseRevision: detail.revision,
-                      file: revisionFile,
-                      filename: revisionFile.name,
-                    });
-                  },
-                  '已上传修订版',
-                )
-              }
-            />
-          ) : null}
+        {notice ? <p className={a.notice} role="status">{notice}</p> : null}
+        {actionError ? <p className={a.error} role="alert">{actionError}</p> : null}
+
+        <div className={s.layout}>
+          <div className={s.listPane}>
+            {listState === 'error' ? (
+              // 读取失败不是空队列（AGENTS.md §3）；视觉与 RunsPage 的空态同款（a.empty）。
+              <div className={a.empty} role="alert">
+                <p className={a.error} style={{ margin: '0 0 8px' }}>读取审核队列失败：{loadError}</p>
+                <button type="button" className={a.btn} onClick={() => void load({ cursor: null })}>
+                  重试
+                </button>
+              </div>
+            ) : null}
+            {listState === 'loading' ? <div className={a.empty}>正在读取…</div> : null}
+            {listState === 'empty' ? (
+              <div className={a.empty}>
+                {filter === 'pending' ? '没有待领取的审核任务。' : filter === 'mine' ? '你没有正在审核的任务。' : '还没有历史任务。'}
+              </div>
+            ) : null}
+            {listState === 'ready' ? (
+              <div className={a.tableWrap}>
+                <table className={`${a.table} ${s.listTable}`}>
+                  <colgroup>
+                    <col className={s.colItem} />
+                    <col className={s.colAgent} />
+                    <col className={s.colRequester} />
+                    <col className={s.colStatus} />
+                    <col className={s.colRun} />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>交付物</th>
+                      <th>智能体</th>
+                      <th>发起人</th>
+                      <th>状态</th>
+                      <th>运行结果</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tasks!.map((task) => (
+                      <tr
+                        key={task.review_task_id}
+                        className={task.review_task_id === selectedId ? s.rowActive : undefined}
+                        tabIndex={0}
+                        aria-label={`查看任务 ${reviewTaskItemLabel(task)}`}
+                        onClick={() => void openDetail(task.review_task_id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            void openDetail(task.review_task_id);
+                          }
+                        }}
+                      >
+                        <td>
+                          <div className={s.cellTitle} title={reviewTaskItemLabel(task)}>
+                            {reviewTaskItemLabel(task)}
+                          </div>
+                          <small className={a.muted}>
+                            {task.item_count && task.item_count > 1 && task.first_item_name
+                              ? `${task.item_count} 件 · `
+                              : ''}
+                            {formatReviewTimestamp(task.created_at)}
+                          </small>
+                        </td>
+                        <td className={s.cellEllipsis} title={reviewTaskAgentLabel(task)}>
+                          {reviewTaskAgentLabel(task)}
+                        </td>
+                        <td className={s.cellEllipsis} title={reviewRequesterLabel(task)}>
+                          {reviewRequesterLabel(task)}
+                        </td>
+                        <td>
+                          <span className={`${a.pill} ${toneClass(reviewStatusTone(task.status), a)}`}>
+                            {reviewStatusLabel(task.status)}
+                          </span>
+                        </td>
+                        <td>{runStatusLabel(task.run_status)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {nextCursor && listState === 'ready' ? (
+              <div className={a.cardActions}>
+                <button
+                  type="button"
+                  className={a.btn}
+                  disabled={loadingMore}
+                  onClick={() => void load({ cursor: nextCursor, append: true })}
+                >
+                  {loadingMore ? '正在加载…' : '加载更多'}
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className={s.detailPane} ref={detailPaneRef}>
+            {!selectedId ? <div className={a.empty}>从左侧选择一个任务查看详情。</div> : null}
+            {selectedId && detailLoading ? <div className={a.empty}>正在读取详情…</div> : null}
+            {selectedId && detailError ? (
+              <div className={a.empty} role="alert">
+                <p className={a.error} style={{ margin: '0 0 8px' }}>读取任务详情失败：{detailError}</p>
+                <button type="button" className={a.btn} onClick={() => void refreshDetail()}>
+                  重试
+                </button>
+              </div>
+            ) : null}
+            {detail && !detailLoading ? (
+              <ReviewDetailPane
+                detail={detail}
+                busy={busy}
+                approveNote={approveNote}
+                onApproveNote={setApproveNote}
+                rejectFeedback={rejectFeedback}
+                onRejectFeedback={setRejectFeedback}
+                rejectOpen={rejectOpen}
+                onRejectOpen={setRejectOpen}
+                revisionFile={revisionFile}
+                revisionItemNo={revisionItemNo}
+                onPickRevision={(itemNo, file) => {
+                  setRevisionItemNo(itemNo);
+                  setRevisionFile(file);
+                }}
+                canAct={canAct}
+                onClaim={() => void runAction('claim', () => claimReview(detail.review_task_id), '已领取')}
+                onRelease={() => void runAction('release', () => releaseReview(detail.review_task_id), '已释放领取')}
+                onApprove={() =>
+                  void runAction(
+                    'approve',
+                    () => approveReview(detail.review_task_id, { baseRevision: detail.revision, note: approveNote }),
+                    '已通过，正在发布',
+                  )
+                }
+                onReject={() =>
+                  void runAction(
+                    'reject',
+                    () => rejectReview(detail.review_task_id, { baseRevision: detail.revision, feedback: rejectFeedback }),
+                    '已驳回',
+                  )
+                }
+                onUploadRevision={(itemNo) =>
+                  void runAction(
+                    `revision:${itemNo}`,
+                    () => {
+                      if (!revisionFile) throw new Error('请先选择修订文件');
+                      return uploadReviewRevision(detail.review_task_id, itemNo, {
+                        baseRevision: detail.revision,
+                        file: revisionFile,
+                        filename: revisionFile.name,
+                      });
+                    },
+                    '已上传修订版',
+                  )
+                }
+              />
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

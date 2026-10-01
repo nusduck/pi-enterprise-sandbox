@@ -1,5 +1,15 @@
 /* 审核工作台自己的布局；通用样式复用 pages/settings/adminPage.module.css。 */
 
+/* 审核页挂在对话工作台外壳里，`.workbench-center` 是 overflow: hidden，页面要自己滚
+   （同产物库 artifacts.module.css 的 .page）。没有这一层时滚轮完全无效，第一屏以下的
+   任务、「加载更多」与单栏布局下的详情都够不着（2026-10-01 浏览器复核）。详情面板的
+   sticky 也以它为滚动容器。 */
+.scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .layout {
   display: grid;
   /* 详情面板需要放得下版本表的 5 列（版本/上传者/时间/大小/下载），所以给它一个

@@ -526,7 +526,8 @@ export function ArtifactCard({
         {open ? (
           <button type="button" className={`${s.artName} ${s.artOpen}`} onClick={open}>
             {name}
-            <small>{[artifact.mimeType, formatSize(artifact.size)].filter(Boolean).join(' · ') || '交付物'} · 点击预览</small>
+            <small>{[artifact.mimeType, formatSize(artifact.size)].filter(Boolean).join(' · ') || '交付物'}</small>
+            <small className={s.artPreview}>点击预览</small>
             {hint ? <small className={s.artHint}>{hint}</small> : null}
           </button>
         ) : (
