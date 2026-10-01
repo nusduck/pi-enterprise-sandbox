@@ -32,6 +32,7 @@ import {
 import { isReviewTerminalStatus, MATERIAL_SNAPSHOT_STATUS } from '../infrastructure/mysql/repositories/review-repository.js';
 import type { InternalReviewTransport, ReviewIdentity } from '../infrastructure/sandbox/internal-review-http.js';
 import { InternalReviewError } from '../infrastructure/sandbox/internal-review-http.js';
+import { REVIEW_TRANSFER_MAX_BYTES } from '@dsh/contract/delivery-policy.js';
 
 type Loose = any;
 
@@ -70,7 +71,22 @@ const MAX_LIST_LIMIT = 100;const DEFAULT_LIST_LIMIT = 20;
 const MAX_FEEDBACK_LEN = 4_000;
 const MAX_NOTE_LEN = 1_000;
 const MAX_QUESTIONS = 200;
-const MAX_REVISION_BYTES = 512 * 1024 * 1024;
+const MAX_REVISION_BYTES = REVIEW_TRANSFER_MAX_BYTES;
+
+/**
+ * exec 拒绝超过审核传输上限的读取时（`review_transfer_too_large`），给审核员一个明确的 413，
+ * 而不是让 `InternalReviewError` 落到路由兜底变成 500。
+ */
+async function withTransferLimit<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (err) {
+    if (err instanceof InternalReviewError && err.code === 'review_transfer_too_large') {
+      throw new ReviewError(413, 'REVIEW_FILE_TOO_LARGE', 'File exceeds the review transfer limit (100 MiB)');
+    }
+    throw err;
+  }
+}
 
 /** 修订版在工作区里的落点目录（design §5.3 第 3 步 / §5.4）。 */
 export const REVIEW_REVISION_DIR = '审核版';
@@ -574,10 +590,10 @@ export class ReviewService {
       throw notFound();
     }
     const identity = await this.#identityFor(task);
-    const artifact = await this.#requireTransport().getArtifact(
-      { artifactId: material.snapshotArtifactId },
+    const artifact = await withTransferLimit(() => this.#requireTransport().getArtifact(
+      { artifactId: material.snapshotArtifactId! },
       identity,
-    );
+    ));
     return {
       filename: material.filename,
       mimeType: material.mimeType,
@@ -594,7 +610,7 @@ export class ReviewService {
     const { ids } = await this.#allVersions(repos, reviewTaskId);
     if (!ids.has(artifactId)) throw notFound();
     const identity = await this.#identityFor(task);
-    const artifact = await this.#requireTransport().getArtifact({ artifactId }, identity);
+    const artifact = await withTransferLimit(() => this.#requireTransport().getArtifact({ artifactId }, identity));
     return {
       filename: artifact.name || artifactId,
       mimeType: artifact.mimeType,

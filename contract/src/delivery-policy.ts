@@ -150,6 +150,16 @@ export function parseSessionDelivery(raw: unknown): 'review' | null {
   return 'review';
 }
 
+/**
+ * 审核面单件文件的传输上限（修订上传、审核员下载交付物与附件快照）：100 MiB。
+ *
+ * agent ↔ exec 的内部面是 JSON + HMAC（签名覆盖 `body_sha256`），文件以 base64 放在 JSON 里，
+ * 两侧都要整件进内存。Node 22 单个字符串上限约 2^29-24 个字符，超过约 384 MiB 的文件
+ * 编码时直接抛 `ERR_STRING_TOO_LONG`（2026-10-01 实测 390 MiB 失败）。100 MiB 远在其下，
+ * 也把每次传输的内存峰值限制在几百 MiB 以内。更大的交付物需要流式通道（二期）。
+ */
+export const REVIEW_TRANSFER_MAX_BYTES = 100 * 1024 * 1024;
+
 /** 交付策略的契约错误；调用方映射成 400 `CONFIG_INVALID`。 */
 export class DeliveryPolicyError extends Error {
   readonly code = 'CONFIG_INVALID';

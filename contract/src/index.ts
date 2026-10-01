@@ -248,6 +248,7 @@ export {
   normalizedDeliveryPolicy,
   parseDeliveryPolicy,
   parseSessionDelivery,
+  REVIEW_TRANSFER_MAX_BYTES,
   SESSION_DELIVERY_FIELD,
   sessionDeliveryField,
 } from './delivery-policy.js';

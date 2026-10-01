@@ -51,7 +51,7 @@ function taskRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: number; decide?: number } = {}) {
+function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: number; decide?: number; transport?: any } = {}) {
   const state = {
     task: options.task ?? taskRow(),
     items: options.items ?? [{
@@ -89,6 +89,7 @@ function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: n
     },
     async appendEvent(input: any) { state.appendedEvents.push(input); return undefined; },
     async updateItemCurrentArtifact() { return 1; },
+    async getItem(_id: string, no: number) { return state.items.find((item: any) => item.itemNo === no) ?? null; },
   };
 
   const repos = {
@@ -109,7 +110,7 @@ function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: n
     transactionManager: { run: async (work: any) => await work({}) },
     generateId: () => `01K0G2PAV8FPMVC9QHJG7JPN${String(60 + n++).padStart(2, '0')}`,
     now: () => new Date('2026-10-01T12:00:00.000Z'),
-    reviewTransport: null,
+    reviewTransport: options.transport ?? null,
     resolveOwner: async (actor: any) => {
       if (!String(actor?.externalOrgId ?? '').trim()) throw new Error('no org');
       if (actor.externalUserId === 'requester') return { orgId: ORG, userId: REQUESTER };
@@ -294,5 +295,32 @@ describe('审核服务：驳回', () => {
     const reviewRow = state.insertedOutbox.find((row) => row.aggregateType === 'review');
     assert.deepEqual(reviewRow.payloadJson.updates, [{ artifactId: ARTIFACT, visibility: 'withdrawn' }]);
     assert.deepEqual(reviewRow.payloadJson.imports, []);
+  });
+});
+
+describe('审核服务：修订上传的大小上限', () => {
+  it('超过 REVIEW_TRANSFER_MAX_BYTES（100 MiB）→ REVIEW_FILE_INVALID，且不调用 exec', async () => {
+    const { REVIEW_TRANSFER_MAX_BYTES } = await import('@dsh/contract/delivery-policy.js');
+    const { service } = harness();
+    await expectCode(
+      () => service.uploadRevision(ACTOR, TASK, 1, {
+        baseRevision: 3,
+        bytes: Buffer.alloc(REVIEW_TRANSFER_MAX_BYTES + 1),
+      }),
+      'REVIEW_FILE_INVALID',
+    );
+  });
+});
+
+describe('审核服务：下载超过审核传输上限', () => {
+  it('exec 报 review_transfer_too_large → 413 REVIEW_FILE_TOO_LARGE（不是 500）', async () => {
+    const { InternalReviewError } = await import('../../src/infrastructure/sandbox/internal-review-http.js');
+    const transport = {
+      async getArtifact() {
+        throw new InternalReviewError('review_transfer_too_large', 'Sandbox review request failed (413)', { httpStatus: 413 });
+      },
+    };
+    const { service } = harness({ transport });
+    await expectCode(() => service.readArtifact(ACTOR, TASK, ARTIFACT), 'REVIEW_FILE_TOO_LARGE');
   });
 });

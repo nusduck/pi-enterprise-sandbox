@@ -132,3 +132,31 @@
 - 验收脚本放在 `.runtime/`（gitignored），不是仓库资产；它们对运行栈发真实请求，可重跑。
 - 模型是真实模型，所以「模型是否调用工具」由工具台账证明，而不是由 fake provider 断言；
   「模型是否收到注入文本」由 DSH 会话事件（模型请求记录）证明。
+
+## 6. 审阅后补充：审核面传输上限（2026-10-01）
+
+审阅发现修订上传声明的 512 MiB 上限实际不可达：agent ↔ exec 内部面以 base64 放进 JSON 整件传输，
+Node 22 单字符串上限约 2^29-24 个字符。`node:22` 容器实测：380 MiB 编码成功，390 MiB 抛
+`ERR_STRING_TOO_LONG`。同一限制也让审核员无法下载超过约 384 MiB 的交付物，而且 exec 的 413 在 agent 侧
+被包成 `InternalReviewError`，落到路由兜底变成 500。
+
+修复：contract 新增 `REVIEW_TRANSFER_MAX_BYTES = 100 MiB`。修订上传在 BFF、agent、exec 三层都按它拒绝；
+exec 下载在读取前按记录大小拒绝（`review_transfer_too_large`），agent 转成 413 `REVIEW_FILE_TOO_LARGE`。
+回归用例在 contract、exec、agent、api-server 各一组，修复前均失败。
+
+真机（重建 `agent agent-worker api-server sandbox sandbox-mcp frontend`，真实模型，compose 栈，
+脚本在 compose 网络内直连 `api-server:4000`）：
+
+| 项 | 结果 |
+|---|---|
+| 模型生成并提交 101 MiB `big.bin` 与 6 字节 `small.txt`，建出含两件交付物的任务 | PASS |
+| 下载 101 MiB 交付物 | 413 `REVIEW_FILE_TOO_LARGE` |
+| 下载小交付物（对照） | 200，6 字节 |
+| 上传 100 MiB+1 修订 | 413 `REVIEW_FILE_INVALID` |
+| 上传 99 MiB 修订，再下载 | 200，103809024 字节一致 |
+| 驳回清理 | 200 |
+
+**环境陷阱**：在 OrbStack 上用 `docker run --network host` 访问 `127.0.0.1:4000`，到达的是 K8s `dsh-dev` 的
+api-server（LoadBalancer，旧镜像，没有 `/api/reviews`），而不是 compose 的 BFF。两套栈共享 MySQL 与 Redis，
+所以登录、建 Run 都会成功，只有新路由 404。验收脚本应在 compose 网络内运行（`--network pi-enterprise-sandbox-dev-ingress`，
+`BFF_BASE_URL=http://api-server:4000`）。

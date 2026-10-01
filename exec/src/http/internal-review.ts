@@ -23,6 +23,7 @@
 import type { Hono } from 'hono';
 import { ContractError, toWireError } from '@dsh/contract/errors.js';
 import { parseEnvelope } from '@dsh/contract/envelope.js';
+import { REVIEW_TRANSFER_MAX_BYTES } from '@dsh/contract/delivery-policy.js';
 import {
   assertNoDuplicateSkillScopes,
   parseEnabledSkills,
@@ -46,6 +47,13 @@ export interface InternalReviewDeps {
   readonly enabledSkillPackagesFor: EnabledSkillPackagesResolver;
   readonly systemSkillPackagesFor: SystemSkillPackagesResolver;
   readonly artifactService: ArtifactService;
+  /** 单件传输上限；省略取 `REVIEW_TRANSFER_MAX_BYTES`（100 MiB）。测试注入小值。 */
+  readonly transferMaxBytes?: number;
+}
+
+/** 超过审核传输上限：在读全文件或解码 base64 之前就拒绝（见 `REVIEW_TRANSFER_MAX_BYTES`）。 */
+function transferTooLarge(): ArtifactError {
+  return new ArtifactError('review_transfer_too_large', 'file exceeds the review transfer limit', 413);
 }
 
 interface Envelope {
@@ -171,6 +179,7 @@ function parseVisibilityUpdates(payload: Record<string, unknown>): ArtifactVisib
 }
 
 export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps): void {
+  const maxBytes = deps.transferMaxBytes ?? REVIEW_TRANSFER_MAX_BYTES;
   app.post('/internal/v1/review/artifacts/snapshot', async (c) => {
     try {
       const { envelope: rawEnv, payload, enabledSkills, systemSkills } = await parseBody(c);
@@ -224,6 +233,7 @@ export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps
       if (record === null) {
         throw new ArtifactError('artifact_not_found', 'artifact not found', 404);
       }
+      if (record.sizeBytes > maxBytes) throw transferTooLarge();
       const chunks: Buffer[] = [];
       for await (const chunk of deps.artifactService.openSnapshot(record)) chunks.push(chunk);
       return c.json({
@@ -251,7 +261,11 @@ export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps
       parseEnvelope(rawEnv);
       const env = rawEnv as Envelope;
       const originalArtifactId = requiredString(payload, 'originalArtifactId');
+      // 先按 base64 长度挡掉超限（不必先解码出一份大 buffer），解码后再按真实字节数判一次。
+      const encoded = payload['bytesBase64'];
+      if (typeof encoded === 'string' && encoded.length > Math.ceil(maxBytes / 3) * 4) throw transferTooLarge();
       const bytes = decodeBase64(payload, 'bytesBase64');
+      if (bytes.byteLength > maxBytes) throw transferTooLarge();
       // 修订上传走 base64 而不是流式：整条内部面是 JSON + HMAC（签名覆盖
       // `body_sha256`），加一条二进制通道要同时改签名、重试与幂等语义。
       // 代价是内存里多一份 4/3 的字节；单件上限仍受 `maxBytes` 约束。

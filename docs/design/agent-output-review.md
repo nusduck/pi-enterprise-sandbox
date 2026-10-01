@@ -241,13 +241,13 @@ exec 侧幂等，所以不会出现「任务已通过、产物却永远不放行
 | GET | `/api/reviews/{id}/artifacts/{aid}/download` | 交付物的任一版本（限本任务内的 artifact） |
 | POST | `/api/reviews/{id}/claim` | 领取 |
 | POST | `/api/reviews/{id}/release` | 释放领取（领取人或 admin） |
-| POST | `/api/reviews/{id}/items/{no}/revisions?base_revision=` | 上传修订文件（流式 body，大小上限与产物一致） |
+| POST | `/api/reviews/{id}/items/{no}/revisions?base_revision=` | 上传修订文件（流式 body，上限 100 MiB，见 §11） |
 | POST | `/api/reviews/{id}/approve` | 通过：`{ base_revision, note? }` |
 | POST | `/api/reviews/{id}/reject` | 驳回：`{ base_revision, feedback }`，`feedback` 必填 |
 
 错误码：403 `REVIEWER_REQUIRED` / `REVIEW_SELF_FORBIDDEN` / `REVIEW_NOT_ASSIGNEE`；404 `NOT_FOUND`；
 409 `REVIEW_ALREADY_CLAIMED` / `REVIEW_VERSION_CONFLICT` / `REVIEW_ALREADY_DECIDED`；
-422 `REVIEW_FEEDBACK_REQUIRED` / `REVIEW_FILE_INVALID`。
+413 `REVIEW_FILE_TOO_LARGE`；422 `REVIEW_FEEDBACK_REQUIRED` / `REVIEW_FILE_INVALID`。
 
 ## 8. 前端
 
@@ -316,6 +316,11 @@ P5 = `68a27731`，P6 = `80341922`，P7 = 本次提交。§10 逐条结果与三�
   一期的缓解措施：review 智能体的 system prompt 要求结论只写进交付文件，聊天中只说明进度。
 - **review 会话里发起人看不到工作区文件。** 这是 E5 的代价：不关工作区就能绕过审核直接下载源文件。
   自己上传的文件，发起人在自己的消息里仍能看到文件名，但不能再从工作区下载。
+- **审核面单件文件上限 100 MiB**（2026-10-01 审阅后补充）。agent ↔ exec 内部面以 base64 放进 JSON 整件传输，
+  Node 22 单字符串上限使超过约 384 MiB 的文件必然失败（实测 390 MiB 抛 `ERR_STRING_TOO_LONG`），且每次传输在两侧
+  各占数倍文件大小的内存。因此修订上传、交付物与附件快照的下载都限 100 MiB（contract `REVIEW_TRANSFER_MAX_BYTES`）：
+  超限上传 413 `REVIEW_FILE_INVALID`，超限下载 413 `REVIEW_FILE_TOO_LARGE`。智能体产出的交付物本身上限仍是 512 MiB，
+  超过 100 MiB 的交付物审核员目前无法下载，只能驳回；需要时二期改为流式通道。
 
 ## 12. 本期不做
 

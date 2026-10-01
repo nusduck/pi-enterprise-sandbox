@@ -71,7 +71,7 @@ function makeReviewToken(opts: { path: string; body: string; orgId?: string; sco
   });
 }
 
-async function makeApp() {
+async function makeApp(opts: { transferMaxBytes?: number } = {}) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'dsh-review-internal-')));
   const workspaceManager = new WorkspaceManager({
     workspacesBaseRoot: join(base, 'workspaces'),
@@ -100,6 +100,7 @@ async function makeApp() {
     allowCidr: TEST_ALLOW_CIDR,
     artifactService,
     workspacePolicies: new InMemoryWorkspacePolicyStore(),
+    ...(opts.transferMaxBytes !== undefined ? { reviewTransferMaxBytes: opts.transferMaxBytes } : {}),
   } as never);
   await mkdir(join(base, 'skills'), { recursive: true });
   const workspaceId = 'ws-review-1';
@@ -305,6 +306,35 @@ test('review: 修订版导入工作区 审核版/（含建子目录），越界�
       payload: { artifactId: revisedId, targetPath: '../outside.md' },
     });
     assert.notEqual(escaped.status, 200);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('review: 超过审核传输上限的读取与修订 → 413 review_transfer_too_large，不读全文件', async () => {
+  // 上限压到 4 字节，免得测试真的造 100 MiB：判定按记录的 size，与上限的取值无关。
+  const { app, workspaceId, cleanup } = await makeApp({ transferMaxBytes: 4 });
+  try {
+    const snap = await post(app, '/internal/v1/review/artifacts/snapshot', {
+      envelope: envelope(workspaceId),
+      payload: { sourcePath: 'uploads/材料.txt' },
+    });
+    assert.equal(snap.status, 200);
+    const artifactId = ((await snap.json()) as any).data.artifactId;
+
+    const get = await post(app, '/internal/v1/review/artifacts/get', {
+      envelope: envelope(workspaceId),
+      payload: { artifactId },
+    });
+    assert.equal(get.status, 413);
+    assert.equal(((await get.json()) as any).error.code, 'review_transfer_too_large');
+
+    const revision = await post(app, '/internal/v1/review/artifacts/revision', {
+      envelope: envelope(workspaceId),
+      payload: { originalArtifactId: artifactId, bytesBase64: Buffer.from('12345').toString('base64') },
+    });
+    assert.equal(revision.status, 413);
+    assert.equal(((await revision.json()) as any).error.code, 'review_transfer_too_large');
   } finally {
     await cleanup();
   }

@@ -78,6 +78,8 @@ export interface InternalRouterDeps {
    * 退回「谁都不用审核」——那等于把审核静默关掉。
    */
   readonly workspacePolicies?: WorkspacePolicyStore;
+  /** 审核内部面单件传输上限；省略取 contract 默认值（测试注入小值）。 */
+  readonly reviewTransferMaxBytes?: number;
   /** 数据源（design `sandbox-data-sources.md`）。省略即未配置。 */
   readonly dataSources?: DataSourceService;
 }
@@ -198,6 +200,7 @@ export function createInternalRouter(deps: InternalRouterDeps): Hono {
       new ArtifactService(
         (ws: WorkspaceContext) => new WorkspaceFileSystem(new CordisContext() as never, ws),
       ),
+    ...(deps.reviewTransferMaxBytes !== undefined ? { transferMaxBytes: deps.reviewTransferMaxBytes } : {}),
   });
 
   // 兜底错误处理：任何未捕获的抛错都脱敏后 500

@@ -38,7 +38,11 @@ const PREFIX = '/api/reviews';
 /** `:id` 或 `:id/<section>[/<tail>[/<action>]]`（`items/:no/revisions` 是四段）。 */
 const REVIEW_PATH = /^([^/]+)(?:\/([a-z]+)(?:\/([^/]+))?(?:\/([a-z]+))?)?$/;
 
-const MAX_REVISION_BYTES = 512 * 1024 * 1024;
+/**
+ * 修订文件上限：100 MiB，与 `contract` 的 `REVIEW_TRANSFER_MAX_BYTES` 同值（BFF 不依赖 contract 包）。
+ * agent ↔ exec 内部面以 base64 放进 JSON 传文件，更大的文件会超出 Node 单字符串上限。
+ */
+const MAX_REVISION_BYTES = 100 * 1024 * 1024;
 
 function decodeSegment(segment: string): string | null {
   try {

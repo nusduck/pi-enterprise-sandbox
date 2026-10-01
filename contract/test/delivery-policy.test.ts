@@ -62,3 +62,11 @@ test('session ensure carries review only, and direct is not a revocation', () =>
   assert.throws(() => parseSessionDelivery('audit'), DeliveryPolicyError);
   assert.throws(() => parseSessionDelivery(42), DeliveryPolicyError);
 });
+
+test('REVIEW_TRANSFER_MAX_BYTES：100 MiB，且 base64 后仍在 V8 单字符串上限之内', async () => {
+  const { REVIEW_TRANSFER_MAX_BYTES } = await import('../src/delivery-policy.js');
+  assert.equal(REVIEW_TRANSFER_MAX_BYTES, 100 * 1024 * 1024);
+  // 内部面是 JSON + base64；Node 22 单个字符串上限约 2^29-24 个字符，
+  // 超过 ~384 MiB 的文件编码时抛 ERR_STRING_TOO_LONG（2026-10-01 实测 390 MiB 失败）。
+  assert.ok(Math.ceil(REVIEW_TRANSFER_MAX_BYTES / 3) * 4 < 2 ** 29 - 24);
+});

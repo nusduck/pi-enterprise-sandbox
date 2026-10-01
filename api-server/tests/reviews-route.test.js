@@ -193,4 +193,20 @@ describe('/api/reviews* BFF 路由', () => {
       false,
     );
   });
+
+  it('修订上传：声明大小超过 100 MiB 在 BFF 就 413，不转发给 Agent', async () => {
+    calls.length = 0;
+    const { captured, response, json } = responseCapture();
+    const path = `/api/reviews/${TASK}/items/1/revisions`;
+    await handleReviewsRoute(
+      'POST',
+      path,
+      new URL(`http://bff${path}?base_revision=0`),
+      response,
+      request('POST', { 'content-length': String(100 * 1024 * 1024 + 1) }),
+    );
+    assert.equal(captured.statusCode, 413);
+    assert.equal(json().code, 'REVIEW_FILE_INVALID');
+    assert.equal(calls.some((c) => c.includes('/internal/reviews')), false);
+  });
 });

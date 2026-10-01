@@ -27,9 +27,10 @@ import {
   type AuthSubjects,
 } from './request-response.js';
 import { ReviewError } from '../../application/review-service.js';
+import { REVIEW_TRANSFER_MAX_BYTES } from '@dsh/contract/delivery-policy.js';
 
-/** 修订文件上限：与产物单件上限一致（512 MiB，exec `ArtifactService` 默认值）。 */
-export const REVIEW_REVISION_MAX_BYTES = 512 * 1024 * 1024;
+/** 修订文件上限：审核面传输上限（100 MiB，见 `REVIEW_TRANSFER_MAX_BYTES` 的说明）。 */
+export const REVIEW_REVISION_MAX_BYTES = REVIEW_TRANSFER_MAX_BYTES;
 /** JSON body（决定、备注）上限。 */
 const JSON_BODY_MAX_BYTES = 64 * 1024;
 

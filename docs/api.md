@@ -262,7 +262,8 @@ review 工作区的**工作区字节读路径**（文件列表/读取/下载、�
 | `REVIEW_VERSION_CONFLICT` | 409 | `base_revision` 不是当前值（响应带 `current_revision`，前端刷新后保留已选文件） |
 | `REVIEW_ALREADY_DECIDED` | 409 | 任务已经通过或驳回 |
 | `REVIEW_FEEDBACK_REQUIRED` | 422 | 驳回没有给 `feedback` |
-| `REVIEW_FILE_INVALID` | 422 | 修订版文件名为空/非法 |
+| `REVIEW_FILE_INVALID` | 413 / 422 | 修订版文件为空、名称非法，或超过审核传输上限 100 MiB（BFF/agent 按请求体大小给 413） |
+| `REVIEW_FILE_TOO_LARGE` | 413 | 下载的交付物或附件快照超过审核传输上限 100 MiB（内部面以 base64 整件传输，见 contract `REVIEW_TRANSFER_MAX_BYTES`） |
 
 关键语义（写错了会静默出错，所以写在这里）：
 
