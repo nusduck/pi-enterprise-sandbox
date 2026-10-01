@@ -12,6 +12,7 @@ import { splitSkillTiers } from '../../pages/settings/skillHelpers';
 import { usePreference, type Preferences } from '../../shared/ui/preferences';
 import { getProfile, updateProfile, type Profile } from '../../shared/api/account';
 import { ApiError } from '../../shared/api/client';
+import { loginMethodLabel } from '../../shared/schemas/auth';
 import { hasAdminRole } from '../../shared/security/roles';
 import {
   buildProfilePatch,
@@ -76,17 +77,35 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
   const [fieldError, setFieldError] = useState<AccountErrors>({});
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // 当前身份代次：账户资料的异步响应必须是同一个人的，过期响应直接丢弃。
+  const accountGeneration = useRef(0);
+  const identityKey = String(fallback?.id ?? fallback?.username ?? '');
 
-  const adopt = useCallback((p: Profile) => {
+  const adopt = useCallback((p: Profile, generation: number) => {
+    if (generation !== accountGeneration.current) return;
     setProfile(p);
     setDraft(draftFromProfile(p));
     setFieldError({});
   }, []);
 
   useEffect(() => {
+    // 身份变化（登录/切号/退出）会让上一份资料失效：清空并重新读取。
+    accountGeneration.current += 1;
+    setProfile(null);
+    setLoadError(null);
+  }, [identityKey]);
+
+  useEffect(() => {
     if (!active || profile) return;
-    getProfile().then(adopt).catch((err: Error) => setLoadError(err.message || '读取账户信息失败'));
-  }, [active, profile, adopt]);
+    const generation = accountGeneration.current;
+    getProfile()
+      .then((p) => adopt(p, generation))
+      .catch((err: Error) => {
+        if (generation === accountGeneration.current) {
+          setLoadError(err.message || '读取账户信息失败');
+        }
+      });
+  }, [active, profile, adopt, identityKey]);
 
   const username = profile?.username || String(fallback?.username || '');
   // 两个来源任一为 admin 即 admin：profile 是权威读，fallback 是已加载的 me。
@@ -107,7 +126,8 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
     setSaving(true);
     setNotice(null);
     try {
-      adopt(await updateProfile(patch));
+      const generation = accountGeneration.current;
+      adopt(await updateProfile(patch), generation);
       setNotice('已保存。侧栏里的名称在下次打开页面时更新。');
     } catch (err) {
       // The server re-validates; keep the draft so nothing typed is lost.
@@ -181,7 +201,7 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
         <div className={s.formActions}>
           {notice ? <span className={s.muted} role="status">{notice}</span> : null}
           <span className={s.sp} />
-          <button type="button" className={s.btn} disabled={!dirty || saving} onClick={() => profile && adopt(profile)}>还原</button>
+          <button type="button" className={s.btn} disabled={!dirty || saving} onClick={() => profile && adopt(profile, accountGeneration.current)}>还原</button>
           <button type="submit" className={s.btnPri} disabled={!dirty || saving}>{saving ? '保存中…' : '保存'}</button>
         </div>
       </form>
@@ -189,7 +209,8 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
         <dt>用户名</dt><dd>{username || '—'}</dd>
         <dt>机构</dt><dd>{profile?.organization_name || '—'}</dd>
         <dt>用户类型</dt><dd>{isAdmin ? '管理员' : '普通用户'}<span className={s.muted}> · 由管理员设置</span></dd>
-        <dt>登录方式</dt><dd>账号密码</dd>
+        <dt>登录方式</dt><dd>{profile ? loginMethodLabel(profile.login_method) : '—'}</dd>
+        <dt>身份来源</dt><dd>{profile?.identity_provider || '本平台账号'}</dd>
         <dt>账户状态</dt><dd>{profile ? (profile.status === 'active' ? '正常' : '已停用') : '—'}</dd>
         <dt>注册时间</dt><dd>{formatDate(profile?.created_at)}</dd>
         <dt>最近登录</dt><dd>{formatDate(profile?.last_login_at)}</dd>

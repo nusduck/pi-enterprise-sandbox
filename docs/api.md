@@ -350,7 +350,8 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 |------|------|------|
 | `POST` | `/api/auth/register` | 注册；成功后写 HttpOnly 会话 Cookie |
 | `POST` | `/api/auth/login` | 登录 |
-| `POST` | `/api/auth/logout` | 清理会话 |
+| `POST` | `/api/auth/logout` | 撤销当前 sid 并清 Cookie；失败仍清本机 Cookie，返回撤销未确认 |
+| `GET` | `/api/auth/config` | 未登录可读的登录方式投影；Agent 是能力权威，读取失败返回 503 |
 | `GET` | `/api/auth/me` | 当前用户 |
 | `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称、邮箱与长任务完成邮件开关 |
 | `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation |
@@ -573,6 +574,34 @@ exec 公共适配器查询或控制；返回给浏览器时仍投影原 `session
 Agent `/internal/auth/*`，成功后只把 JWT 写入 HttpOnly Cookie。exec 不保存密码、
 不签发或验证浏览器 JWT，也没有 `/auth/*` 路由。
 
+登录/注册的应用 JWT 现在携带 `sid`；Agent 每次 `me`/profile 读取
+`tbl_agsvc_browser_auth_sessions` 并校验有效期、撤销状态、内部 owner 与外部兼容映射、
+active user/org/Membership，再读当前 `member_roles`。旧无 sid JWT 返回 401，升级后重新登录。
+登录/me/profile 增加 `login_method:"local"`、`identity_provider:null`，保留现有 `roles` 与身份字段。
+
+`GET /api/auth/config` 返回 `{mode,methods,profile_policy}`：本期 mode 固定 `local`，
+`methods.local.enabled=true`，`registration_enabled` 由真实注册策略决定；
+`methods.sso={enabled:false,available:false,label:"公司 SSO"}`。profile_policy 是默认策略，
+个人编辑字段以 profile.editable_fields 为准。配置/权威依赖不可用返回 503，不返回空能力集。
+本期没有公司 OIDC 回调、身份绑定或 JIT；设计与后续门槛见
+[SSO 设计](design/sso-integration-reservation.md)。
+
+`POST /api/auth/logout`：200 `{ok:true,revocation:"confirmed"}` 表示当前有效 sid 已撤销；
+200 `{ok:true,revocation:"not_required"}` 表示无凭据、无效/已过期/已撤销凭据无需写入；
+合法未到期旧 JWT 缺 sid 返回 409 `LEGACY_SESSION_NOT_REVOCABLE`；
+DB/内部网络故障或超时返回 503 `AUTH_REVOCATION_UNCONFIRMED`。进入 BFF 退出处理器后所有撤销结果均清 Cookie；跨站403拒绝不触发退出。
+内部 gate 的 401 不证明用户会话已失效，不得映射退出成功。退出不取消已有 Run。
+
+上述接口内部镜像为 `/internal/auth/{config,logout}`（GET/POST），沿用 Agent 内部 token gate；
+内部 logout 使用应用 Authorization，不从浏览器 claims 构造 acting 身份。
+所有认证投影响应 `Cache-Control:no-store`。认证 POST 与 profile PATCH 拒绝明确跨站
+Origin/Fetch Metadata，403 `CSRF_ORIGIN_REJECTED`；CORS 不替代这一检查。
+同源浏览器和无 Origin 的合法非浏览器 Bearer 调用继续可用。
+已打开的 Run SSE 每 15 秒重查当前认证，沿用有限的 Agent 请求超时；无法确认即关闭订阅并释放 relay，
+因此实际撤销关流上界包含检查间隔与请求耗时，不能声称严格 15 秒内关闭。
+
+认证依赖连接失败、超时或成功响应无法解析时，login/register/me/profile 返回 `503 AUTH_DEPENDENCY_UNAVAILABLE`；config 和 logout 分别保留自己的错误码。
+
 `/api/auth/profile`（账户页）：`GET` 在 `me` 之外返回 `organization_name`、`status`（`active` /
 `disabled`）、`created_at`、`last_login_at`、`editable_fields`（目前是 `display_name`、`email`、
 `notify_run_complete`）、`notify_run_complete`（布尔，长任务完成邮件开关，默认 `false`）与
@@ -696,7 +725,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   digest），不接受一个永不过期的全局 token 作为执行授权
 - exec 的 public 探针豁免认证：`/health`, `/ready`, `/metrics`；浏览器认证只存在于 BFF `/api/auth/*`
 - **可选用户归属**（BFF `AUTH_ENABLED=true`；`SANDBOX_AUTH_ENABLED` 仅保留为 BFF 的旧配置别名）:
-  - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 清理会话。
+  - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 撤销当前 sid 后清 Cookie（失败契约见认证章节）。
   - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 经 Agent `/internal/auth/me` 验证后写入可信 `X-Acting-*` 上下文。
   - BFF→exec compatibility adapters 只发送服务 `X-API-Key` + 已验证的 `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`；exec 不接收浏览器 JWT。
   - 正式 Agent→Sandbox execution: `/internal/v1/*` HMAC claim（scope + owner + run/session + body digest + replay jti）；不接受浏览器 JWT 或裸 service key 作为执行授权

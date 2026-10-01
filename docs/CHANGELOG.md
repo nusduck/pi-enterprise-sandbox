@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — SSO 预留与可撤销本地会话
+
+- 本地登录签发带 sid 的应用会话；退出撤销当前会话，旧凭据重放被拒绝。升级后旧无 sid JWT 需重新登录。
+- 登录方式和注册入口按服务端能力投影；认证依赖故障可重试并保留草稿，切号与退出清理旧身份数据。
+- 退出撤销未确认会明确提示；Run SSE 有界重授权。公司 OIDC 接入仍禁用，留待后续能力确认与联调。
+
+
 ### Added
 
 - **交付物人工审核（P3–P7：审核账本、审核员 API、放行/驳回、前端工作面）**：把下面

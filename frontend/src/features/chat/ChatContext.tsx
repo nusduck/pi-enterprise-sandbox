@@ -16,6 +16,7 @@ import {
   INITIAL,
   createState,
   update,
+  anonymousState,
   startStream,
   abortStream,
   isActiveGeneration,
@@ -49,13 +50,13 @@ import {
   listArtifacts,
   importArtifact as apiImportArtifact,
   decideApproval,
-  login as apiLogin,
-  register as apiRegister,
-  logout as apiLogout,
-  me as apiMe,
-  ApiError,
 } from '../../shared/api';
 import type { Agent, ModelItem } from '../../shared/api';
+import type { AuthConfig } from '../../shared/schemas/auth';
+import {
+  projectLoginCapabilities,
+  type LoginCapabilities,
+} from '../../shared/schemas/auth';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import { useReviewResultPolling } from './useReviewResultPolling';
 import type { EntityStore } from '../../entities';
@@ -70,6 +71,16 @@ import { fixedModelIdOf, mergeConversation } from './conversationProjection';
 import { effectiveModel, supportsImages } from './effectiveModel';
 import { useAgentSelection } from './useAgentSelection';
 import { resolveApprovalDecision } from './approvalDecision';
+import { createIdentityRevision, type IdentityRevision } from './identityRevision';
+import { useAuthSession } from './useAuthSession';
+
+/** 登录能力投影的加载状态：加载失败不能当成「没有登录方式」。 */
+export type AuthConfigState = {
+  config: AuthConfig | null;
+  capabilities: LoginCapabilities | null;
+  loading: boolean;
+  error: string | null;
+};
 
 export type ChatController = {
   state: ChatState;
@@ -130,6 +141,12 @@ export type ChatController = {
    * 返回 false 表示没刷新成功（调用方应提示手动刷新）。
    */
   refreshAuthUser: () => Promise<boolean>;
+  /** 登录能力投影（`GET /api/auth/config`）；失败时 UI 显示错误与重试。 */
+  authConfig: AuthConfigState;
+  /** 重跑 config + `me` 检查；用于 503/加载失败后的可见重试。 */
+  retryAuth: () => Promise<void>;
+  /** 退出登录后服务端撤销未确认的可见提示；普通退出为 null。 */
+  logoutWarning: string | null;
   // Flash
   clearFlash: () => void;
   // Display helpers
@@ -185,8 +202,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   const activeStreamGenRef = useRef(0);
   const conversationLoadGenerationRef = useRef(0);
-  /** Invalidates account-scoped requests when login/logout changes identity. */
-  const sessionGenerationRef = useRef(0);
+  /** 身份边界（登录/注册/退出）的代次：过期响应不得灌回新身份。 */
+  const sessionRevisionRef = useRef<IdentityRevision | null>(null);
+  if (!sessionRevisionRef.current) sessionRevisionRef.current = createIdentityRevision();
+  const sessionRevision = sessionRevisionRef.current;
   /** F2 entity bridge — multi-run SSE + normalized stores. */
   const bridgeRef = useRef<EntityBridge | null>(null);
   if (!bridgeRef.current) {
@@ -248,7 +267,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     refreshModels,
     applyModelForConversation,
     resetModels,
-  } = useModelSelection(bridge, currentConversationId, fixedModelIdForConversation);
+  } = useModelSelection(bridge, currentConversationId, fixedModelIdForConversation, sessionRevision);
   const {
     agents,
     selectedAgentId,
@@ -256,13 +275,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     refreshAgents,
     agentNameById,
     resetAgents,
-  } = useAgentSelection();
+  } = useAgentSelection(sessionRevision);
 
   const refreshConversations = useCallback(async () => {
-    const generation = sessionGenerationRef.current;
+    const generation = sessionRevision.current();
     try {
       const list = await listConversations();
-      if (generation !== sessionGenerationRef.current) return;
+      if (!sessionRevision.isCurrent(generation)) return;
       const conversations = (Array.isArray(list) ? list : []).map((c) => ({
         ...c,
         title: c.title ?? undefined,
@@ -274,10 +293,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.warn('[conv] list failed:', (err as Error).message);
     }
-  }, []);
+  }, [sessionRevision]);
 
   const refreshArtifacts = useCallback(async (sessionId?: string | null) => {
-    const generation = sessionGenerationRef.current;
+    const generation = sessionRevision.current();
     const conversationGeneration = conversationLoadGenerationRef.current;
     const sid = sessionId || currentSessionId();
     if (!sid) {
@@ -286,11 +305,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
     try {
       const data = await listArtifacts(sid);
-      if (generation !== sessionGenerationRef.current ||
+      if (!sessionRevision.isCurrent(generation) ||
           conversationGeneration !== conversationLoadGenerationRef.current ||
           sid !== currentSessionId()) return;
       setState((s) => {
-        if (generation !== sessionGenerationRef.current ||
+        if (!sessionRevision.isCurrent(generation) ||
             conversationGeneration !== conversationLoadGenerationRef.current ||
             sid !== currentSessionId()) return s;
         return update(s, { artifacts: data.artifacts || [] });
@@ -298,7 +317,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.warn('[artifacts] list failed:', (err as Error).message);
     }
-  }, [currentSessionId]);
+  }, [currentSessionId, sessionRevision]);
 
   const applySSE = useCallback(
     (ev: SSEEvent, generation: number, runId?: string | null) => {
@@ -1068,102 +1087,148 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setInspectorOpen((v) => !v);
   }, []);
 
-  const login = useCallback(
-    async (username: string, password: string) => {
-      sessionGenerationRef.current += 1;
-      const data = await apiLogin({ username, password });
-      setState((s) =>
-        update(s, { authReady: true, authUser: data.user || { username }, restoringConversationId: null }),
-      );
-      setStatus(`Logged in as ${data.user?.username || username}`);
-      await refreshConversations();
-      await refreshModels();
-      await refreshAgents();
+  /**
+   * 身份边界：清空本机用户/流/实体/附件/持久化会话。即使服务端撤销未确认
+   * （409/503/网络失败）也必须清——这是本机已经退出的事实。依赖都是稳定引用，
+   * 回调跨渲染保持稳定，认证该不该跑一次不会被重建的 callback 触发。
+   */
+  const clearIdentity = useCallback((opts: { statusLabel: string; statusColor?: string }) => {
+    sessionRevision.bump();
+    conversationLoadGenerationRef.current += 1;
+    const previous = stateRef.current;
+    previous.abortCtrl?.abort();
+    for (const attachment of previous.attachments) attachment.abortCtrl?.abort();
+    bridge.reset();
+    clearPersistedChat();
+    setDraftText('');
+    setDropzoneVisible(false);
+    resetModels();
+    resetAgents();
+    setInspectorOpen(false);
+    setState(() => {
+      const next = anonymousState(previous, {
+        statusLabel: opts.statusLabel,
+        statusColor: opts.statusColor,
+      });
+      stateRef.current = next;
+      activeStreamGenRef.current = next.streamGeneration;
+      return next;
+    });
+  }, [bridge, resetAgents, resetModels, sessionRevision]);
+
+  /** 切号后重新拉当前身份的会话/模型/Agent 目录。 */
+  const afterIdentitySwitch = useCallback(async () => {
+    await refreshConversations();
+    await refreshModels();
+    await refreshAgents();
+  }, [refreshAgents, refreshConversations, refreshModels]);
+
+  /** 恢复上次聚焦会话：会话切换或身份边界发生后，任何后续落地都必须作废。 */
+  const restoreLastConversation = useCallback(async () => {
+    const savedConvId = loadPersistedConversationId();
+    if (!savedConvId) return;
+    const loadGeneration = ++conversationLoadGenerationRef.current;
+    const snapshot = sessionRevision.current();
+    const stale = () =>
+      loadGeneration !== conversationLoadGenerationRef.current ||
+      !sessionRevision.isCurrent(snapshot);
+    try {
+      const conv = await getConversation(savedConvId);
+      if (stale()) return;
+      const messages = normalizeServerMessages(conv.messages);
+      setState((s) => update(s, {
+        conversationId: conv.id,
+        messages,
+        sessionId: conv.sandbox_session_id || null,
+        conversations: mergeConversation(s.conversations, conv),
+      }));
+      persistConversationId(conv.id);
+      bridge.focusConversation(conv.id);
+      try {
+        await bridge.rehydrateConversation(conv.id);
+      } catch (error) {
+        console.warn('[boot] timeline restore failed:', (error as Error).message);
+        if (!stale()) flashError('Conversation loaded, but activity history could not be restored');
+      }
+      if (stale()) return;
+      setState((s) => finishConversationRestore(s, savedConvId));
+      applyModelForConversation(conv.id);
+      if (conv.sandbox_session_id) {
+        await refreshArtifacts(conv.sandbox_session_id);
+        if (stale()) return;
+        setStatus(`Session ${conv.sandbox_session_id.slice(-8)}`);
+      }
+    } catch {
+      if (!stale()) {
+        setState((s) => finishConversationRestore(s, savedConvId));
+        clearPersistedChat();
+      }
+    }
+  }, [applyModelForConversation, bridge, flashError, refreshArtifacts, sessionRevision, setStatus]);
+
+  /** 认证字段的集中写点（与 clearIdentity 的身份清理分开：这里只写认证投影）。 */
+  const applyAuth = useCallback(
+    (patch: Partial<Pick<ChatState, 'authReady' | 'authUser' | 'authError'>>) => {
+      setState((s) => update(s, patch));
     },
-    [setStatus, refreshConversations, refreshModels, refreshAgents],
+    [],
+  );
+
+  /**
+   * 浏览器会话与身份边界（P1b）：config + `me` 检查、登录/注册/退出、
+   * 401/503 分流与重试。实现在 `useAuthSession.ts`。
+   */
+  const authSession = useAuthSession({
+    authUser: state.authUser,
+    authError: state.authError,
+    authReady: state.authReady,
+    applyAuth,
+    setStatus,
+    flashError,
+    revision: sessionRevision,
+    clearIdentity,
+    afterIdentitySwitch,
+  });
+
+  /** 登录能力投影：加载失败保留错误与重试，绝不静默当成空能力。 */
+  const authConfig: AuthConfigState = {
+    config: authSession.authConfig,
+    capabilities: authSession.authConfig
+      ? projectLoginCapabilities(authSession.authConfig)
+      : null,
+    loading: authSession.configLoading,
+    error: authSession.configError,
+  };
+
+  const login = useCallback(
+    (username: string, password: string) => authSession.login(username, password),
+    [authSession.login],
+  );
+
+  const register = useCallback(
+    (username: string, password: string) => authSession.register(username, password),
+    [authSession.register],
+  );
+
+  const logout = useCallback(
+    () => authSession.logout(),
+    [authSession.logout],
   );
 
   /**
    * 角色权威在服务端：`me` 每次请求都重读账本。撤销自己的 admin 之后重新拉一次，
-   * 闸门立刻生效，不必整页刷新（design §6）。会话已经换人时结果直接丢弃。
+   * 闸门立刻生效，不必整页刷新（design §6）。实现与 401/503 分流的细节在
+   * `useAuthSession.ts`。
    */
-  const refreshAuthUser = useCallback(async (): Promise<boolean> => {
-    const generation = sessionGenerationRef.current;
-    try {
-      const user = await apiMe();
-      if (sessionGenerationRef.current !== generation) return false;
-      setState((s) => update(s, { authReady: true, authUser: user }));
-      return true;
-    } catch (error) {
-      if (sessionGenerationRef.current !== generation) return false;
-      if (error instanceof ApiError && error.status === 401) {
-        try { await apiLogout(); } catch { /* Anonymous logout is best-effort. */ }
-        setState((s) => update(s, { authReady: true, authUser: null }));
-        return false;
-      }
-      flashError((error as Error).message || '刷新账户信息失败');
-      return false;
-    }
-  }, [flashError]);
-
-  const register = useCallback(
-    async (username: string, password: string) => {
-      sessionGenerationRef.current += 1;
-      const data = await apiRegister({ username, password });
-      clearPersistedChat();
-      bridge.reset();
-      setState((s) => update(s, {
-        authReady: true,
-        authUser: data.user || { username },
-        conversationId: null,
-        restoringConversationId: null,
-        sessionId: null,
-        messages: [],
-        attachments: [],
-      }));
-      setStatus(`Registered as ${data.user?.username || username}`);
-      await refreshConversations();
-      await refreshModels();
-      await refreshAgents();
-    },
-    [setStatus, refreshConversations, refreshModels, refreshAgents, bridge],
+  const refreshAuthUser = useCallback(
+    () => authSession.refreshAuthUser(),
+    [authSession.refreshAuthUser],
   );
 
-  const logout = useCallback(async () => {
-    try {
-      await apiLogout();
-      sessionGenerationRef.current += 1;
-      conversationLoadGenerationRef.current += 1;
-
-      const previous = stateRef.current;
-      previous.abortCtrl?.abort();
-      for (const attachment of previous.attachments) attachment.abortCtrl?.abort();
-
-      // A logout is an identity boundary. Disconnect and discard all runtime
-      // entities before the next account can render this provider.
-      bridge.reset();
-      clearPersistedChat();
-      setDraftText('');
-      setDropzoneVisible(false);
-      resetModels();
-      resetAgents();
-      setInspectorOpen(false);
-      setState(() => {
-        const next = createState({
-          ...INITIAL,
-          sidebarOpen: previous.sidebarOpen,
-          statusLabel: 'Logged out',
-          statusColor: '#22c55e',
-          authReady: true,
-        });
-        stateRef.current = next;
-        activeStreamGenRef.current = next.streamGeneration;
-        return next;
-      });
-    } catch (err) {
-      flashError((err as Error).message || 'Logout failed');
-    }
-  }, [bridge, flashError]);
+  const retryAuth = useCallback(async () => {
+    const result = await authSession.retryAuth();
+    if (result.status === 'authenticated') await restoreLastConversation();
+  }, [authSession.retryAuth, restoreLastConversation]);
 
   const toggleSidebar = useCallback(() => {
     setState((s) => {
@@ -1180,89 +1245,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Boot
+  // Boot：config + `me` 检查（401/503 的语义在 useAuthSession），
+  // 只有身份确认后才恢复目录与上次聚焦的会话。
   useEffect(() => {
     let cancelled = false;
-
-    async function boot() {
-      const loadGeneration = ++conversationLoadGenerationRef.current;
-      // Auth
-      let authedUser: Awaited<ReturnType<typeof apiMe>> | null = null;
-      try {
-        const user = await apiMe();
-        authedUser = user;
-        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: user }));
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401) {
-          try { await apiLogout(); } catch { /* Anonymous logout is best-effort. */ }
-        }
-        if (!cancelled) setState((s) => update(s, { authReady: true, authUser: null, restoringConversationId: null }));
-      }
-
-      if (!authedUser || cancelled) return;
-
-      try {
-        await refreshConversations();
-        await refreshModels();
-        await refreshAgents();
-      } catch (error) {
-        console.warn('[boot] catalog restore failed:', (error as Error).message);
-      }
-      if (cancelled) return;
-
-      // UI preference only: restore last conversation id, then load messages
-      // from the server. Never fall back to LocalStorage message cache.
-      const savedConvId = loadPersistedConversationId();
-      if (savedConvId) {
-        try {
-          const conv = await getConversation(savedConvId);
-          if (
-            cancelled ||
-            loadGeneration !== conversationLoadGenerationRef.current
-          ) return;
-          const messages = normalizeServerMessages(conv.messages);
-          setState((s) =>
-            update(s, {
-              conversationId: conv.id,
-              messages,
-              sessionId: conv.sandbox_session_id || null,
-              conversations: mergeConversation(s.conversations, conv),
-            }),
-          );
-          persistConversationId(conv.id);
-          bridge.focusConversation(conv.id);
-          try {
-            await bridge.rehydrateConversation(conv.id);
-          } catch (error) {
-            console.warn('[boot] timeline restore failed:', (error as Error).message);
-            flashError('Conversation loaded, but activity history could not be restored');
-          }
-          if (cancelled || loadGeneration !== conversationLoadGenerationRef.current) return;
-          setState((s) => finishConversationRestore(s, savedConvId));
-          if (
-            cancelled ||
-            loadGeneration !== conversationLoadGenerationRef.current
-          ) return;
-          applyModelForConversation(conv.id);
-          if (conv.sandbox_session_id) {
-            await refreshArtifacts(conv.sandbox_session_id);
-            setStatus(`Session ${conv.sandbox_session_id.slice(-8)}`);
-          }
-          return;
-        } catch {
-          if (!cancelled && loadGeneration === conversationLoadGenerationRef.current) {
-            setState((s) => finishConversationRestore(s, savedConvId));
-            clearPersistedChat();
-          }
-        }
-      }
-    }
-
-    boot().catch((err) => console.warn('[boot]', err));
+    (async () => {
+      const result = await authSession.retryAuth();
+      if (cancelled || result.status !== 'authenticated') return;
+      await restoreLastConversation();
+    })().catch((err) => console.warn('[boot]', err));
     return () => {
       cancelled = true;
     };
-  }, [refreshConversations, refreshArtifacts, refreshModels, refreshAgents, setStatus, flashError, bridge, applyModelForConversation]);
+    // 只在挂载时跑一次；retryAuth 的依赖都是稳定引用（见 useAuthSession）。
+  }, [authSession.retryAuth, restoreLastConversation]);
 
   // Dispose entity SSE managers on unmount (page unload)
   useEffect(() => {
@@ -1354,6 +1350,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     register,
     logout,
     refreshAuthUser,
+    authConfig,
+    retryAuth,
+    logoutWarning: authSession.logoutWarning,
     clearFlash,
     displayMessages,
     canSend,

@@ -20,6 +20,7 @@ export const INITIAL: Readonly<ChatState> = Object.freeze({
   // has been checked after a hard refresh.
   authReady: false,
   authUser: null,
+  authError: null,
 });
 
 /**
@@ -34,6 +35,24 @@ export function createState(initial: Partial<ChatState> | ChatState = INITIAL): 
     attachments: [...(base.attachments || [])],
     messages: [...(base.messages || [])],
   };
+}
+
+/**
+ * 身份边界（登录/注册成功切号、退出、401）后的匿名状态：清掉旧身份的会话、
+ * 消息、附件、产物、认证投影，只保留纯 UI 偏好（侧栏开合）。这是纯函数，
+ * 好让「切号/退出清本机数据」与「失败登录不清数据」有可执行断言。
+ */
+export function anonymousState(previous: ChatState, opts: {
+  statusLabel: string;
+  statusColor?: string;
+}): ChatState {
+  return createState({
+    ...INITIAL,
+    sidebarOpen: previous.sidebarOpen,
+    statusLabel: opts.statusLabel,
+    statusColor: opts.statusColor ?? '#22c55e',
+    authReady: true,
+  });
 }
 
 /**

@@ -567,3 +567,14 @@ npm run build --prefix frontend     # 生产构建（CI 同款）
 region，而流式 token 是在已有文本节点上追加（落在默认 `aria-relevant` 的 `text`
 范畴内），不显式关掉就会让读屏逐 delta 重读整段 transcript。Run 状态变化由
 FlashZone（`role="status"` + `aria-live="assertive"`）统一播报。
+
+### 登录能力与身份边界（SSO 预留 P1）
+
+侧栏先加载 `/api/auth/config`：本地登录/注册按服务端能力显示；SSO 尚未接入，没有可用假按钮。
+加载失败展示错误与重试，不当成空登录方式。`me` 401 进入重新登录；503/网络故障显示认证服务
+不可用并保留草稿与已有身份，重试成功后才恢复账户目录/会话。
+账户页从 profile.login_method/identity_provider 显示来源，editable_fields 仍决定编辑权。
+
+成功切号与退出清空旧身份的流、实体、附件、选中会话和目录，过期响应由身份代次丢弃。
+退出失败仍完成本机清理，持续提示“本机已退出，服务端会话撤销未确认”，不自动拿当前 Cookie 重试。
+退出不取消正在运行的任务。旧无 sid 会话在升级后失效，需重新登录。
