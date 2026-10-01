@@ -328,6 +328,7 @@ export class ConversationService {
               catalog: repos.catalog,
               conversations: repos.conversations,
               sessions: repos.sessions,
+              agentAccess: repos.agentAccess,
             },
             {
               generateId: this.generateId,
@@ -497,6 +498,7 @@ export class ConversationService {
               catalog: repos.catalog,
               conversations: repos.conversations,
               sessions: repos.sessions,
+              agentAccess: repos.agentAccess,
             },
             {
               generateId: this.generateId,

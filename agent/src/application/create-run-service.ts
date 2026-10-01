@@ -407,6 +407,7 @@ export class CreateRunService {
           catalog: repos.catalog,
           conversations: repos.conversations,
           sessions: repos.sessions,
+          agentAccess: repos.agentAccess,
         },
         {
           generateId: this.generateId,

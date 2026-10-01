@@ -82,6 +82,7 @@ import {
 import {
   handleAgentConfigOptions,
   handleAgentConfigValidate,
+  handleAgentAccess,
   handleCreateAgent,
   handleCreateAgentVersion,
   handleListAgentVersions,
@@ -458,6 +459,14 @@ const server = http.createServer(async (rawReq, res) => {
           await handleCreateAgentVersion(id, parsed, res, req);
           return;
         }
+      }
+      const agentAccess = path.match(/^\/api\/agents\/([^/]+)\/access$/);
+      if (agentAccess && (req.method === 'GET' || req.method === 'PUT')) {
+        const parsed = req.method === 'PUT'
+          ? await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES })
+          : null;
+        await handleAgentAccess(req.method, decodeURIComponent(agentAccess[1]!), parsed, res, req);
+        return;
       }
       const agentActive = path.match(/^\/api\/agents\/([^/]+)\/active-version$/);
       if (req.method === 'POST' && agentActive) {

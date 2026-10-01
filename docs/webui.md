@@ -104,6 +104,10 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   留着一个中途可点的控件只会让用户以为能换。
 - **前端只记 `agentId`，不记 `agentVersionId`**。哪个版本活跃由服务端在建会话的
   事务内解析；前端缓存 versionId 会在 admin 切版本的瞬间过期。
+- **可见范围**：选择器只列服务端返回的智能体，受限且未授权的不会出现（判定在服务端，
+  前端不做过滤）。admin 在「管理控制台 → 智能体」的「可见范围」标签设置全员可用 / 指定员工：
+  按工号或姓名搜索成员添加到名单，保存即生效、不生成新版本；默认智能体只能全员可用；
+  列表里受限的智能体带「指定」标记（`pages/settings/AgentAccessPanel.tsx`）。
 - `features/chat/useAgentSelection.ts` 持有目录与选择，`shared/api/agents.ts` 是
   `/api/agents` 的封装。目录拉不到时静默降级为空列表——单智能体的既有流程不能
   因为一个新面板的失败而中断。

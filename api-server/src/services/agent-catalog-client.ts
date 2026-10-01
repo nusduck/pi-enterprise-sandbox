@@ -89,6 +89,26 @@ export async function setAgentDefinitionActiveVersion(
 }
 
 /**
+ * 可见范围（design agent-visibility §5）：GET 读、PUT 整体替换。判定与 admin 闸门在 agent/。
+ */
+export async function getAgentAccess(
+  agentId: string,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
+  return requestAgentCatalog(`/${encodeURIComponent(agentId)}/access`, { auth, traceId });
+}
+
+export async function setAgentAccess(
+  agentId: string,
+  body: any,
+  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
+): Promise<any> {
+  return requestAgentCatalog(`/${encodeURIComponent(agentId)}/access`, {
+    method: 'PUT', body, auth, traceId,
+  });
+}
+
+/**
  * 配置面：`options` 是能力投影，`validate` 只解析不落库。
  * BFF 在这两条上仍然只做限时转发与身份投影——语义权威在 agent/。
  */

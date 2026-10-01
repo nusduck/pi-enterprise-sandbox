@@ -36,6 +36,8 @@ export function mapAgentDefinition(row: Record<string, unknown>) {
     status: String(row.status),
     activeVersionId:
       row.active_version_id == null ? null : String(row.active_version_id),
+    // 可见范围（design agent-visibility §3）：缺列的旧库视同 `org`，即迁移前的行为。
+    visibility: row.visibility === 'restricted' ? 'restricted' : 'org',
     createdBy: String(row.created_by),
     createdAt: formatDateTime(row.created_at),
     updatedAt: formatDateTime(row.updated_at),

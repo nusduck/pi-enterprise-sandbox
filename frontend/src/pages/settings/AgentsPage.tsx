@@ -52,10 +52,11 @@ import { dataSourcesOf } from './dataSourceHelpers';
 import { skillPolicyCount } from './skillPolicyHelpers';
 import { AgentValidationPanel, validationSummary } from './AgentValidationPanel';
 import { IconRefresh } from '../../shared/ui/Icons';
-import { agentTone } from '../../widgets/conversation-sidebar/sidebarModel';
+import { agentTone, isDefaultAgentName } from '../../widgets/conversation-sidebar/sidebarModel';
+import { AgentAccessPanel } from './AgentAccessPanel';
 import s from './agents.module.css';
 
-type AgentTab = EditorSection | 'versions';
+type AgentTab = EditorSection | 'versions' | 'access';
 
 const EMPTY_VALIDATION: AgentConfigValidationState = {
   status: 'idle',
@@ -552,9 +553,10 @@ export function AgentsPage() {
     ['dataSources', '数据源', dataSourceCount],
     ['skills', '技能', skillCount],
     ...(creating ? [] : [['versions', '版本历史'] as [AgentTab, string]]),
+    ...(creating ? [] : [['access', '可见范围'] as [AgentTab, string]]),
     ['json', 'JSON'],
   ];
-  const section: EditorSection = tab === 'versions' ? 'basic' : tab;
+  const section: EditorSection = tab === 'versions' || tab === 'access' ? 'basic' : tab;
   const editorProps = {
     section,
     models: catalogs.models,
@@ -611,7 +613,11 @@ export function AgentsPage() {
             >
               <span className={s.dot} style={{ background: `var(--agent-tone-${agentTone(agent.agent_id)})` }} aria-hidden="true" />
               <span className={s.itemText}>
-                <b>{agent.name}{dirty ? <i className={s.dirty} title="有未保存的修改" /> : null}</b>
+                <b>
+                  {agent.name}
+                  {agent.visibility === 'restricted' ? <span className={s.lockTag} title="仅指定员工可用">指定</span> : null}
+                  {dirty ? <i className={s.dirty} title="有未保存的修改" /> : null}
+                </b>
                 <small>{agent.description || '—'}</small>
               </span>
               <span className={s.ver}>{agent.active_version_no != null ? `v${agent.active_version_no}` : '—'}</span>
@@ -682,7 +688,15 @@ export function AgentsPage() {
           </form>
         ) : selectedAgent ? (
           <div className={s.body}>
-            {tab === 'versions' ? (
+            {tab === 'access' ? (
+              <AgentAccessPanel
+                agentId={selectedAgent.agent_id}
+                isDefault={isDefaultAgentName(selectedAgent.name)}
+                onSaved={(access) => setAgents((list) => list.map((item) => (
+                  item.agent_id === access.agent_id ? { ...item, visibility: access.visibility } : item
+                )))}
+              />
+            ) : tab === 'versions' ? (
               <>
                 <p className={s.hint}>回滚就是启用旧版本：不修复数据，也不影响正在进行的会话。只有新会话会用新启用的版本。</p>
                 {draftChanges.length ? (

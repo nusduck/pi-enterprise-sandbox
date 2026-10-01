@@ -70,6 +70,7 @@ export function createFakeRunWorld(opts = {}) {
   /** @type {Record<string, Record<string, unknown>[]>} */
   const tables = {
     tbl_agsvc_agent_version_skill_refs: [],
+    tbl_agsvc_agent_user_grants: [],
     tbl_agsvc_organizations: [],
     tbl_agsvc_users: [],
     tbl_agsvc_organization_memberships: [],
@@ -545,6 +546,40 @@ export function createFakeRunWorld(opts = {}) {
        * AgentVersion → Skill 引用账本（ADR 0015 D5）。必须存在：版本创建时要在同一个
        * 事务里登记引用，缺了它版本创建会直接失败（生产容器总是提供它）。
        */
+      /**
+       * 智能体可见范围账本（design agent-visibility §3）的内存实现。真实 SQL（含 join
+       * 凭据带出工号）由 Compose 真实链路在 MySQL 上验证；这里只承载判定所需的事实。
+       */
+      agentAccess: {
+        async hasGrant(agentId, userId) {
+          return tables.tbl_agsvc_agent_user_grants.some((g) => g.agent_id === agentId && g.user_id === userId);
+        },
+        async listGrantedAgentIds(orgId, userId) {
+          return new Set(tables.tbl_agsvc_agent_user_grants
+            .filter((g) => g.org_id === orgId && g.user_id === userId)
+            .map((g) => g.agent_id));
+        },
+        async listGrants(agentId) {
+          return tables.tbl_agsvc_agent_user_grants
+            .filter((g) => g.agent_id === agentId)
+            .map((g) => ({ userId: g.user_id, username: null, displayName: null, grantedAt: null }));
+        },
+        async activeMemberIds(orgId, userIds) {
+          return new Set(tables.tbl_agsvc_organization_memberships
+            .filter((m) => m.org_id === orgId && m.status === 'active' && userIds.includes(m.user_id))
+            .map((m) => m.user_id));
+        },
+        async replaceAccess({ agentId, orgId, visibility, userIds, grantedBy }) {
+          const row = tables.tbl_agsvc_agent_definitions.find((d) => d.agent_id === agentId && d.org_id === orgId);
+          if (!row) throw new Error('agent definition not found for access update');
+          row.visibility = visibility;
+          tables.tbl_agsvc_agent_user_grants = tables.tbl_agsvc_agent_user_grants.filter((g) => g.agent_id !== agentId);
+          if (visibility !== 'restricted') return;
+          for (const userId of userIds) {
+            tables.tbl_agsvc_agent_user_grants.push({ agent_id: agentId, user_id: userId, org_id: orgId, granted_by: grantedBy });
+          }
+        },
+      },
       agentVersionSkillRefs: {
         async insertForVersion({ refs }) {
           for (const ref of refs ?? []) {

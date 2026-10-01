@@ -38,7 +38,8 @@
     "20261001000003_exec_artifact_visibility.js",
     "20261001000004_review_ledger.js",
     "20261002000001_browser_auth_sessions.js",
-    "20261002000002_sso_identities.js"
+    "20261002000002_sso_identities.js",
+    "20261002000003_agent_visibility.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -840,6 +841,15 @@
           "charset": null,
           "collation": null,
           "generation": null
+        },
+        "visibility": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "org",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
         }
       },
       "indexes": {
@@ -1234,6 +1244,117 @@
           "onDelete": "RESTRICT"
         },
         "agent_sessions_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_agent_user_grants": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "agent_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "granted_by": {
+          "type": "char(26)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "agent_id",
+            "user_id"
+          ]
+        },
+        "ind_agsvc_aug_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        },
+        "ind_agsvc_aug_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "tbl_agsvc_agent_user_grants_agent_id_foreign": {
+          "columns": [
+            "agent_id"
+          ],
+          "referencedTable": "tbl_agsvc_agent_definitions",
+          "referencedColumns": [
+            "agent_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "tbl_agsvc_agent_user_grants_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "tbl_agsvc_agent_user_grants_user_id_foreign": {
           "columns": [
             "user_id"
           ],

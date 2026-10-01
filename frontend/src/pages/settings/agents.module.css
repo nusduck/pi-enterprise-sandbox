@@ -242,3 +242,24 @@
 .hostArgRow input { flex: 1 1 180px; min-width: 0; }
 .hostArgError { flex-basis: 100%; }
 .linkBtn { border: 0; background: none; padding: 0; color: var(--color-accent-text, var(--color-text)); text-decoration: underline; cursor: pointer; font-size: 12px; }
+
+/* 可见范围（design agent-visibility §6）：与配置版本无关的独立表单。 */
+.accessBox { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
+.accessChoices { display: flex; gap: 12px; flex-wrap: wrap; border: 0; margin: 0; padding: 0; }
+.accessChoices label {
+  display: flex; align-items: flex-start; gap: 8px; flex: 1 1 220px;
+  border: 1px solid var(--color-border-hover); border-radius: 8px; padding: 10px 12px; cursor: pointer;
+}
+.accessChoices label:has(input:checked) { border-color: var(--color-primary); }
+.accessChoices label:has(input:disabled) { opacity: 0.6; cursor: default; }
+.accessChoices span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.accessChoices small { color: var(--color-text-muted); font-size: 12px; }
+.accessMembers { display: flex; flex-direction: column; gap: 10px; }
+.accessCount { font-size: 13px; font-weight: 500; }
+.accessList { list-style: none; margin: 0; padding: 0; border: 1px solid var(--color-border-hover); border-radius: 8px; max-height: 260px; overflow-y: auto; }
+.accessList li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; font-size: 13px; }
+.accessList li + li { border-top: 1px solid var(--color-border-hover); }
+.accessList li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.accessActions { display: flex; gap: 8px; justify-content: flex-end; }
+.visuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lockTag { font-size: 11px; color: var(--color-text-muted); border: 1px solid var(--color-border-hover); border-radius: 4px; padding: 0 4px; margin-left: 6px; font-weight: 400; }
