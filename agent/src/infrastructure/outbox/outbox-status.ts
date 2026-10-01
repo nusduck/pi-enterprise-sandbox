@@ -34,6 +34,27 @@ export const AGGREGATE_TYPE_RUN = 'run';
 export const AGGREGATE_TYPE_RUN_NOTIFICATION = 'run_notification';
 export const EVENT_TYPE_RUN_TERMINAL_NOTIFICATION = 'notification.run_terminal';
 
+/**
+ * 审核流程的**工作队列**（design `agent-output-review.md` §5.3 / §6.2）。
+ *
+ * 放行/撤回、修订版导入工作区、材料快照都是**跨服务调用**（agent → exec 内部面），
+ * 不能放进 agent 的数据库事务里。所以 agent 事务只写一行意图，由 agent-worker 的
+ * 审核循环消费、重试，exec 侧幂等。
+ *
+ * 与 `run_notification` 同样的纪律：**payload 里不能出现 `runId` / `run_id` 键**，
+ * 否则会被 RunEventStream publisher 的 eligibility 抢走（见本文件上一条注释）。
+ * 任务 id 放 `aggregate_id`，run id 由消费者按任务行回查。
+ */
+export const AGGREGATE_TYPE_REVIEW = 'review';
+/** 材料快照：把 review_materials 里的占位行补齐成 exec 里的不可变快照。 */
+export const EVENT_TYPE_REVIEW_SNAPSHOT = 'review.snapshot';
+/** 放行/驳回：一组产物状态变更，以及（有修订时的）导入工作区 `审核版/`。 */
+export const EVENT_TYPE_REVIEW_DECIDED = 'review.decided';
+
+/** 审核结果通知（复用投递账本，`kind` 取 `review_released` / `review_rejected`）。 */
+export const AGGREGATE_TYPE_REVIEW_NOTIFICATION = 'review_notification';
+export const EVENT_TYPE_REVIEW_DECIDED_NOTIFICATION = 'notification.review_decided';
+
 export const DEFAULT_MAX_ATTEMPTS = 10;
 export const DEFAULT_STALE_CLAIM_MS = 60_000;
 export const DEFAULT_BASE_DELAY_MS = 1_000;

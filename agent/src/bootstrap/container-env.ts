@@ -36,6 +36,7 @@ import { AgentVersionSkillRefRepository } from '../infrastructure/mysql/reposito
 import { SkillShareRequestRepository } from '../infrastructure/mysql/repositories/skill-share-request-repository.js';
 import { AuthCredentialRepository } from '../infrastructure/mysql/repositories/auth-credential-repository.js';
 import { MemberRoleRepository } from '../infrastructure/mysql/repositories/member-role-repository.js';
+import { ReviewRepository } from '../infrastructure/mysql/repositories/review-repository.js';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { createStubRunExecutor } from '../application/run-executor.js';
 import * as skillPathsModule from '../skills/paths.js';
@@ -312,6 +313,8 @@ export function createRepositoryBundle(
     authCredentials: new AuthCredentialRepository(db, { now }),
     /** 平台角色账本（admin / reviewer）：授予、撤销与审计（design rbac-roles §2）。 */
     memberRoles: new MemberRoleRepository(db, { now }),
+    /** 审核账本（design agent-output-review §5.1）：任务 / 交付物 / 材料 / 审计。 */
+    reviews: new ReviewRepository(db, { now }),
   };
 }
 

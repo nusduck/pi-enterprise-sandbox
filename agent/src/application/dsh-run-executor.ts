@@ -620,6 +620,9 @@ export class DshRunExecutor {
         now: this.now,
         isLockLost: () => this._lockLost,
         emit: emitAfterCommit,
+        // A1：绑定版本的交付模式随 recorder 走，`artifact.ready` 才能在同一事务里
+        // 带上 `review_status: "pending"`（design §4）。
+        deliveryMode: boundVersion.deliveryPolicy.mode,
       });
 
       /**

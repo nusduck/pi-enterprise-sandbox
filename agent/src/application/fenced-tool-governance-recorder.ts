@@ -80,6 +80,8 @@ export class FencedToolGovernanceRecorder {
   now: Loose;
   emit: Loose;
   isLockLost: Loose;
+  /** 绑定版本的交付模式（`direct` | `review`），只用于 A1 的事件负载。 */
+  deliveryMode: 'direct' | 'review';
   _tail: Loose;
   _inflight: Map<any, any>;
 
@@ -93,9 +95,10 @@ export class FencedToolGovernanceRecorder {
    *   now?: () => Date,
    *   emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null,
    *   isLockLost?: () => boolean,
+   *   deliveryMode?: 'direct' | 'review',
    * }} deps
    */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, context: RunEventContext, executionFenceToken: number, now?: () => Date, emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null, isLockLost?: () => boolean, }) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, context: RunEventContext, executionFenceToken: number, now?: () => Date, emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null, isLockLost?: () => boolean, deliveryMode?: 'direct' | 'review', }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('FencedToolGovernanceRecorder requires transactionManager');
     }
@@ -123,6 +126,11 @@ export class FencedToolGovernanceRecorder {
     this.now = deps.now ?? (() => new Date());
     this.emit = typeof deps.emit === 'function' ? deps.emit : null;
     this.isLockLost = deps.isLockLost ?? (() => false);
+    // 审核模式的交付物在 exec 侧是 `held`（design §3.2），但那个事实在 exec 里，
+    // 而 agent 需要在**同一事务**里就给 `artifact.ready` 打上标记（A1）。权威是
+    // 绑定版本（不是"当前活跃版本"），由 `dsh-run-executor` 从 boundVersion 传入。
+    // 缺省 `direct`：漏传只会更保守（不进审核），不会凭空打开审核。
+    this.deliveryMode = deps.deliveryMode === 'review' ? 'review' : 'direct';
     this._tail = createPromiseTail();
     /**
      * In-process concurrent claim only (same instance). Not restart authority.
@@ -1258,6 +1266,10 @@ export class FencedToolGovernanceRecorder {
                 description: artifact.description,
                 toolCallId,
                 toolExecutionId: toolExecution.toolExecutionId,
+                // A1（design §4）：review 会话里这份交付物在 exec 是 `held`，先给
+                // 前端「已提交审核」卡片；direct 会话不带这个字段（事件形状不变）。
+                // 终态建审核任务也以这个字段为判据（`review-task-create.ts`）。
+                ...(this.deliveryMode === 'review' ? { review_status: 'pending' } : {}),
               },
             });
           }

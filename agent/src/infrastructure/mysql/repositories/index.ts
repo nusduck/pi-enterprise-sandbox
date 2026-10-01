@@ -171,3 +171,12 @@ export {
   resolveMemberListLimit,
   resolveRoleEventLimit,
 } from './member-role-repository.js';
+export {
+  ReviewRepository,
+  REVIEW_STATUS,
+  REVIEW_TERMINAL_STATUSES,
+  REVIEW_EVENT_TYPES,
+  MATERIAL_SNAPSHOT_STATUS,
+  isReviewTerminalStatus,
+  attachmentsOf,
+} from './review-repository.js';
