@@ -14,7 +14,7 @@
  *   条件更新里的 `WHERE status = ...` 就是这条规则的执行点，不是靠调用方自觉。
  */
 
-import { toMysqlDateTime } from '../row-mappers.js';
+import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 
 type Loose = any;
 
@@ -130,7 +130,12 @@ export interface ReviewTaskDraft {
   }[];
 }
 
-function mapTask(row: Loose): ReviewTaskRecord {
+/**
+ * 行映射（读路径）。**时间一律走 `formatDateTime`**（带 `Z` 的 ISO），
+ * 不能用写库用的 `toMysqlDateTime`：后者是没有时区的 UTC 挂钟串，前端会当本地时间解析，
+ * 在 +08:00 的机器上整整慢 8 小时（返工单 R1；#68 修过同一类问题）。
+ */
+export function mapTask(row: Loose): ReviewTaskRecord {
   return {
     reviewTaskId: String(row.review_task_id),
     orgId: String(row.org_id),
@@ -143,15 +148,15 @@ function mapTask(row: Loose): ReviewTaskRecord {
     runStatus: String(row.run_status ?? ''),
     status: String(row.status) as ReviewTaskStatus,
     assigneeUserId: row.assignee_user_id == null ? null : String(row.assignee_user_id),
-    claimedAt: row.claimed_at == null ? null : toMysqlDateTime(row.claimed_at),
+    claimedAt: formatDateTime(row.claimed_at),
     revision: Number(row.revision ?? 0),
     feedback: row.feedback == null ? null : String(row.feedback),
     decidedBy: row.decided_by == null ? null : String(row.decided_by),
-    decidedAt: row.decided_at == null ? null : toMysqlDateTime(row.decided_at),
+    decidedAt: formatDateTime(row.decided_at),
     contextInjectedRunId:
       row.context_injected_run_id == null ? null : String(row.context_injected_run_id),
-    createdAt: row.created_at == null ? null : toMysqlDateTime(row.created_at),
-    updatedAt: row.updated_at == null ? null : toMysqlDateTime(row.updated_at),
+    createdAt: formatDateTime(row.created_at),
+    updatedAt: formatDateTime(row.updated_at),
   };
 }
 
@@ -180,7 +185,7 @@ function mapMaterial(row: Loose): ReviewMaterialRecord {
   };
 }
 
-function mapEvent(row: Loose): ReviewEventRecord {
+export function mapEvent(row: Loose): ReviewEventRecord {
   return {
     eventId: String(row.event_id),
     eventType: String(row.event_type ?? ''),
@@ -189,7 +194,7 @@ function mapEvent(row: Loose): ReviewEventRecord {
     fromArtifactId: row.from_artifact_id == null ? null : String(row.from_artifact_id),
     toArtifactId: row.to_artifact_id == null ? null : String(row.to_artifact_id),
     detail: row.detail == null ? null : String(row.detail),
-    createdAt: row.created_at == null ? null : toMysqlDateTime(row.created_at),
+    createdAt: formatDateTime(row.created_at),
   };
 }
 
@@ -368,7 +373,7 @@ export class ReviewRepository {
         messageId: String(row.message_id),
         sequenceNo: Number(row.sequence_no),
         text: typeof record['text'] === 'string' ? String(record['text']) : '',
-        createdAt: row.created_at == null ? null : toMysqlDateTime(row.created_at),
+        createdAt: formatDateTime(row.created_at),
         attachments: attachmentsOf(row.content_json),
       };
     });

@@ -6,11 +6,12 @@
  * （`shared/api/runs.ts` 的 `streamRunEvents`）也停止订阅。发起人页面因此收不到审核结果，
  * 手动刷新才看得到——刷新走的是 `GET /api/conversations/{id}/events` 的完整时间线重放。
  *
- * **做法**（不改后端）：当前会话里还有 `reviewStatus === 'pending'` 的交付物、并且页面可见
- * 时，定时重新拉一次会话事件，交给已有的重放与去重逻辑（按 `event_id` / `sequence`）。
- * 没有待审交付物就停止，切换会话/离开页面时清理定时器。
+ * **做法**（不改后端）：当前会话里还有 `reviewStatus === 'pending'` 的交付物时定时轮询。
+ * 轮询本身走 `entityBridge.pollReviewDecisions`（只拉会话事件、只归约两类审核结果事件，
+ * 返工单 R3）。
  *
- * 这里只放**纯逻辑**（能不能轮询、轮询周期），计时器由 React 层持有，便于单测。
+ * 这里放**纯逻辑**（能不能轮询、周期、可见性状态迁移），React 层只负责把计时器与
+ * `document` 接上，便于单测。
  */
 import type { EntityStore } from '../../entities/types';
 
@@ -41,4 +42,58 @@ export function shouldPollReviewResults(input: {
   visible: boolean;
 }): boolean {
   return input.pending && input.visible;
+}
+
+export interface ReviewResultPollerDeps {
+  /** 一次轮询（调用方负责吞掉错误）。 */
+  poll: () => void;
+  isVisible: () => boolean;
+  setInterval: (fn: () => void, ms: number) => ReturnType<typeof setInterval>;
+  clearInterval: (handle: ReturnType<typeof setInterval>) => void;
+}
+
+/**
+ * 轮询的可见性状态机（返工单 R2）。
+ *
+ * **关键**：只要还有待审交付物，`visibilitychange` 监听就必须装上——不能因为「此刻不可见」
+ * 就整体不注册。否则「发起任务 → 切到别的标签页 → Run 在后台结束、pending 变真 → 切回来」
+ * 这条最常见的路径永远不会开始轮询（上次就是这个 bug）。
+ *
+ * 状态迁移：
+ * - `start()`：可见才排定时器，并**立即拉一次**（切回前台不用等满一个周期）；不可见时只
+ *   返回，等 `onVisibilityChange` 再调；
+ * - `onVisibilityChange()`：可见 → `start()`；不可见 → `stop()`；
+ * - `dispose()`：停表并禁止再次启动。
+ */
+export function createReviewResultPoller(deps: ReviewResultPollerDeps) {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let stopped = false;
+
+  function stop(): void {
+    if (timer !== null) {
+      deps.clearInterval(timer);
+      timer = null;
+    }
+  }
+
+  function start(): void {
+    if (stopped || timer !== null) return;
+    if (!deps.isVisible()) return;
+    deps.poll();
+    timer = deps.setInterval(() => {
+      if (deps.isVisible()) deps.poll();
+    }, REVIEW_RESULT_POLL_MS);
+  }
+
+  function onVisibilityChange(): void {
+    if (deps.isVisible()) start();
+    else stop();
+  }
+
+  function dispose(): void {
+    stopped = true;
+    stop();
+  }
+
+  return { start, stop, onVisibilityChange, dispose };
 }

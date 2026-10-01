@@ -317,6 +317,11 @@ tooltip 说明是 `SANDBOX_AUTH_ADMIN_USERNAMES` 锁定。**列表加载失败�
 撤销**自己**的 `admin` 要二次确认，成功后重读 `me`，AdminShell 的 `isAdmin` 闸门随即变 false，
 界面退出管理控制台。「变更记录」按钮拉 `/api/admin/users/{userId}/role-events` 并用右侧抽屉展示
 （按时间倒序；授予/撤销、来源中文化、操作者显示名 → 用户名 →「系统」）。角色权威在服务端，页面只是投影。
+**≤900px 换成卡片式行**（表格 `display: none`，不产生重复控件）：768px 下管理控制台侧栏仍占
+约 240px，内容区放不下 5 列，「操作」会被挤出屏幕、按钮竖排撑高整行。表格与卡片共用
+`MemberIdentity` / `MemberLastLogin` / `RoleCell`，不各写一份。关闭态开关用
+`--color-text-muted` 做边界、`--color-text-secondary` 做滑块（浅色下原来的 rgba(0,0,0,0.08) 边界
++ 纯白滑块几乎看不见，非文本对比度不足 3:1）。
 
 **审批**（`/admin/approvals`）：默认显示待审批；每条一张卡片（工具、风险、状态、原因、命令，可展开参数），
 待审批的卡片可直接批准 / 拒绝，效果与对话内审批卡相同。
@@ -425,10 +430,13 @@ AgentVersion 的 `deliveryPolicy.mode = "review"` 时，交付物先进入审核
 `artifact.released` / `review.rejected` 归约（事件挂在**原 Run** 上）。
 
 **Run 终态后审核结果怎么到达**（T1）：Run 一到终态，Run SSE 就关了，而放行/驳回事件是审核员
-之后才追加到这个已结束 Run 上的。所以只要当前会话里还有 `reviewStatus === 'pending'` 的交付物、
-且页面可见，前端每 20 秒重新拉一次 `GET /api/conversations/{id}/events` 走已有的重放与去重
-（`features/chat/reviewResultPolling.ts` 纯判定 + `useReviewResultPolling.ts` 计时器）；没有待审
-交付物、页面隐藏或切换会话时停止并清理定时器。
+之后才追加到这个已结束 Run 上的。所以只要当前会话里还有 `reviewStatus === 'pending'` 的交付物，
+前端每 20 秒调一次 `entityBridge.pollReviewDecisions(conversationId)`——**只拉一次会话事件、
+只归约 `artifact.released` / `review.rejected`**（不碰 `rehydrateRun` / `listRunTools` /
+`loadDurableTrace` / `connect`，20 个 Run 的会话不会每轮发 40 多个请求，也不会重放正在流式的 Run）。
+可见性迁移在 `features/chat/reviewResultPolling.ts` 的 `createReviewResultPoller`：**只要还有待审
+交付物就装 `visibilitychange` 监听**（不能因为此刻不可见就整体不注册，否则「发起任务 → 切走 →
+后台结束 → 切回来」永远不会开始轮询），切回前台立即拉一次，没有待审交付物或组件卸载时停表。
 
 **审核工作台**（`/reviews`，`pages/reviews/`）：列表分待领取 / 我领取的 / 历史（游标分页；
 历史传 `status=APPROVED,REJECTED` 多值，不再列出待领取与审核中的任务）。
@@ -443,6 +451,10 @@ artifact ID 收进悬停提示；非当前版本的大小来自 exec 的元数�
 动作是领取 / 释放 / 上传修订（原始字节 body）/ 通过 / 驳回（反馈必填，与 422 `REVIEW_FEEDBACK_REQUIRED` 对齐）。
 任务状态与交付物状态共用同一套颜色语义（`reviewStatusTone` / `deliveryTone`：通过/已交付同色，
 驳回/未通过同色）；详情面板吸顶并可独立滚动，长列表里点下面的行不必滚回顶部。
+两栏布局是 `minmax(0, 1fr) minmax(420px, 0.95fr)`，**≤1200px 单栏**：详情要放得下版本表的 5 列，
+窄屏下两个 `minmax` 的下限会把面板顶出视口。详情里的表格单元格一律 `white-space: nowrap`
+（否则「下载」会竖排成「下 / 载」）。**审核面的时间一律是带 `Z` 的 ISO**（`formatDateTime`），
+列表/详情/审计时间线与版本表显示同一种本地时间。
 **409 版本冲突刷新任务但保留已选择的待上传文件**；错误码到中文的映射在 `pages/reviews/reviewErrors.ts`。
 
 ### 文件下载（P7 产物唯一交付）

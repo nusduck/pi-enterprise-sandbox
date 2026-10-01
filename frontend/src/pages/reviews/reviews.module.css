@@ -2,14 +2,16 @@
 
 .layout {
   display: grid;
-  /* 列表有 6 列（交付物/智能体/发起人/状态/运行结果/提交时间），比详情更需要横向空间；
-     否则 1367px 下列表会被压到「状态」列看不见。 */
-  grid-template-columns: minmax(460px, 1.35fr) minmax(340px, 1fr);
+  /* 详情面板需要放得下版本表的 5 列（版本/上传者/时间/大小/下载），所以给它一个
+     最小宽度；列表用固定列宽 + 省略号，缩得起（§3.2.1 / 返工单 R5）。 */
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.95fr);
   gap: 16px;
   align-items: start;
 }
 
-@media (max-width: 900px) {
+/* 窄屏单栏：两个 minmax 的下限（列表 460 / 详情 420）加起来放不进 1100px 的可用宽度，
+   会直接把详情面板顶出视口（返工单 R5）。 */
+@media (max-width: 1200px) {
   .layout {
     grid-template-columns: 1fr;
   }
@@ -31,12 +33,19 @@
   overscroll-behavior: contain;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .detailPane {
     position: static;
     max-height: none;
     overflow-y: visible;
   }
+}
+
+/* 详情里的表格短字段不换行（返工单 R5）：不加这条，「下载」会竖排成「下 / 载」、
+   「13 B」也会断行。长 artifact id 交给 `.cellEllipsis` 省略。 */
+.detailPane th,
+.detailPane td {
+  white-space: nowrap;
 }
 
 .rowActive {

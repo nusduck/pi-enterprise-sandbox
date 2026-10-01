@@ -21,6 +21,7 @@
 import { ROLE_ADMIN, ROLE_REVIEWER, hasRole } from '../domain/identity/roles.js';
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 import { assertUlid } from '../domain/shared/ulid.js';
+import { toMysqlDateTime } from '../infrastructure/mysql/row-mappers.js';
 import { ValidationError } from './errors.js';
 import {
   AGGREGATE_TYPE_REVIEW,
@@ -296,7 +297,13 @@ export class ReviewService {
     }
     const task = await this.#repos().reviews.getTask(reviewTaskId, orgId);
     if (!task) throw new ReviewError(422, 'REVIEW_INPUT_INVALID', 'cursor is invalid');
-    return { createdAt: String(task.createdAt), reviewTaskId };
+    // 映射后的时间是带 `Z` 的 ISO，而 SQL 比较的是库里的 DATETIME 列：转回 UTC 字面量
+    // （返工单 R1）。不转的话同一行会在下一页再出现一次（ISO 的 'T' 排在空格之后）。
+    try {
+      return { createdAt: toMysqlDateTime(String(task.createdAt)), reviewTaskId };
+    } catch {
+      throw new ReviewError(422, 'REVIEW_INPUT_INVALID', 'cursor is invalid');
+    }
   }
 
   async #presentTasks(tasks: Loose[]) {

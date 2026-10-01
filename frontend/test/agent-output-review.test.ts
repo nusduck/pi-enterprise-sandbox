@@ -51,9 +51,11 @@ import { hasReviewerRole } from '../src/shared/security/roles.ts';
 import { inspectorWorkspaceTabs } from '../src/widgets/context-inspector/inspectorTabs.ts';
 import {
   REVIEW_RESULT_POLL_MS,
+  createReviewResultPoller,
   hasPendingReviewArtifact,
   shouldPollReviewResults,
 } from '../src/features/chat/reviewResultPolling.ts';
+import { createEntityBridge } from '../src/features/chat/entityBridge.ts';
 
 function platformEvent(partial: {
   eventId: string;
@@ -600,6 +602,22 @@ describe('审核工作台列表与详情的信息设计（§3.2）', () => {
     assert.match(css, /\.detailPane\s*\{[^}]*overflow-y:\s*auto/);
   });
 
+  it('详情里的版本表短字段不换行、两栏布局不会把面板挤出视口（R5）', () => {
+    const css = src('src/pages/reviews/reviews.module.css');
+    // 不加这条，「下载」会竖排成「下 / 载」、「13 B」也会断行。
+    assert.match(css, /\.detailPane\s+th,\s*\n?\s*\.detailPane\s+td\s*\{[^}]*white-space:\s*nowrap/);
+    // 详情给足最小宽度，列表可收缩（列表用固定列宽 + 省略号，缩得起）。
+    assert.match(css, /\.layout\s*\{[^}]*minmax\(420px/);
+    // 窄屏单栏：minmax 的下限在 1100px 会把面板顶出视口。
+    assert.match(
+      css,
+      /@media\s*\(max-width:\s*1200px\)\s*\{[\s\S]*?\.layout\s*\{[^}]*grid-template-columns:\s*1fr/,
+    );
+    const page = src('src/pages/reviews/ReviewsPage.tsx');
+    // 版本表的单元格都带上可省略的类，长 artifact id 不撑破列。
+    assert.match(page, /shortArtifactId/);
+  });
+
   it('DTO 收下列表与版本表要用的字段（契约漂移会抛错，不会静默降级）', () => {
     const api = src('src/shared/api/reviews.ts');
     assert.match(api, /first_item_name/);
@@ -655,11 +673,154 @@ describe('发起人页面的审核结果轮询（T1）', () => {
     assert.match(ctx, /useReviewResultPolling\(bridge, entityStore, state\.conversationId\)/);
     const hook = src('src/features/chat/useReviewResultPolling.ts');
     assert.match(hook, /hasPendingReviewArtifact/);
-    assert.match(hook, /shouldPollReviewResults/);
-    assert.match(hook, /document\.visibilityState/);
-    assert.match(hook, /clearInterval/);
-    assert.match(hook, /rehydrateConversation\(conversationId\)/);
+    assert.match(hook, /createReviewResultPoller/);
+    assert.match(hook, /pollReviewDecisions/);
+    assert.match(hook, /document\.addEventListener\('visibilitychange'/);
     assert.match(hook, /removeEventListener\('visibilitychange'/);
+    // R2 的根因：不能因为「此刻不可见」就整体 return（那样监听永远装不上）。
+    assert.doesNotMatch(hook, /shouldPollReviewResults\(\{[\s\S]*?\}\)\) return;/);
+  });
+
+  it('页面在后台时出现待审交付物：不排定时器，切回前台立即开始（R2）', () => {
+    // 场景：发起任务后切走等结果，Run 在后台结束、pending 变真。
+    let visible = false;
+    const polls: number[] = [];
+    let intervalFn: (() => void) | null = null;
+    const poller = createReviewResultPoller({
+      poll: () => polls.push(1),
+      isVisible: () => visible,
+      setInterval: (fn) => {
+        intervalFn = fn;
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      },
+      clearInterval: () => {
+        intervalFn = null;
+      },
+    });
+
+    poller.start(); // 后台启动：监听已装好，但不该发请求
+    assert.equal(polls.length, 0, '不可见时不发请求');
+    assert.equal(intervalFn, null, '不可见时不排定时器');
+
+    visible = true;
+    poller.onVisibilityChange();
+    assert.equal(polls.length, 1, '切回前台立即拉一次，不必等满 20 秒');
+    assert.ok(intervalFn, '并开始排定时器');
+  });
+
+  it('切到后台停止、再切回来重启；dispose 后不再启动（R2）', () => {
+    let visible = true;
+    const polls: number[] = [];
+    let intervalFn: (() => void) | null = null;
+    let cleared = 0;
+    const poller = createReviewResultPoller({
+      poll: () => polls.push(1),
+      isVisible: () => visible,
+      setInterval: (fn) => {
+        intervalFn = fn;
+        return 7 as unknown as ReturnType<typeof setInterval>;
+      },
+      clearInterval: () => {
+        cleared += 1;
+        intervalFn = null;
+      },
+    });
+
+    poller.start();
+    assert.equal(polls.length, 1);
+    const tick = intervalFn as unknown as () => void;
+    tick();
+    assert.equal(polls.length, 2, '定时器到点会再拉');
+
+    visible = false;
+    poller.onVisibilityChange();
+    assert.equal(intervalFn, null, '隐藏时停表');
+    assert.equal(cleared, 1);
+
+    visible = true;
+    poller.onVisibilityChange();
+    assert.equal(polls.length, 3, '再切回来立刻拉一次');
+
+    poller.dispose();
+    assert.equal(intervalFn, null);
+    poller.start();
+    assert.equal(polls.length, 3, 'dispose 之后不再启动');
+  });
+
+  it('轮询一次只发 1 个请求，只归约审核结果事件、不动其他 Run（R3）', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/api/conversations/conv_r3/events')) {
+        return new Response(
+          JSON.stringify({
+            runs: [
+              { run_id: RUN, conversation_id: 'conv_r3', status: 'succeeded' },
+              { run_id: 'run_live', conversation_id: 'conv_r3', status: 'running' },
+            ],
+            events: [
+              // 非审核事件：轮询不该处理（Run 状态由 SSE / 打开会话时的重放负责）。
+              { run_id: RUN, type: 'message.delta', sequence: 4, event_id: 'evt_msg', payload: { text: 'hi' } },
+              // 审核结果：要处理。
+              {
+                run_id: RUN,
+                type: 'artifact.released',
+                sequence: 3,
+                event_id: 'evt_released',
+                payload: {
+                  reviewTaskId: '01HZTASK000000000000000000',
+                  artifacts: [{ artifactId: 'art_new', originalArtifactId: ARTIFACT, name: '报告.md', size: 123, revised: true }],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const bridge = createEntityBridge();
+      // 造出待审交付物与一个正在流式的 Run。
+      bridge.manager.handleEvent(platformEvent({
+        eventId: 'evt_start',
+        sequence: 1,
+        type: 'run.started',
+        data: { conversation_id: 'conv_r3' },
+      }));
+      bridge.manager.handleEvent(platformEvent({
+        eventId: 'evt_ready',
+        sequence: 2,
+        type: 'artifact.ready',
+        data: { artifactId: ARTIFACT, name: '报告.md', size: 44, review_status: 'pending' },
+      }));
+      const beforeLive = bridge.getStore().runsById[RUN]?.lastSequence;
+
+      const applied = await bridge.pollReviewDecisions('conv_r3');
+
+      assert.equal(requests.length, 1, '一次轮询只发一个请求');
+      assert.match(requests[0], /\/api\/conversations\/conv_r3\/events$/);
+      assert.equal(applied, 1, '只应用了那一条审核结果事件');
+      const artifact = bridge.getStore().artifactsById[ARTIFACT];
+      assert.equal(artifact.reviewStatus, 'released');
+      assert.equal(artifact.reviewRevised, true);
+      assert.equal(artifact.size, 123);
+      assert.equal(artifact.reviewReleasedId, 'art_new');
+      // 非审核事件没有被处理：Run 的游标只推进到审核结果那一条。
+      assert.equal(bridge.getStore().runsById[RUN].lastSequence, 3);
+      assert.ok(beforeLive !== undefined);
+
+      // 再轮询一次：同一条事件被去重，不再应用。
+      requests.length = 0;
+      const again = await bridge.pollReviewDecisions('conv_r3');
+      assert.equal(requests.length, 1);
+      assert.equal(again, 0, '重复事件被 event_id 去重');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

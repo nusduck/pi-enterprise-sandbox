@@ -171,3 +171,156 @@ PASS  没有待审交付物后停止轮询  — count=0
 - 前端在界面调整后单独重建过两次（`docker compose build frontend && docker compose up -d frontend`）。
 - **没有动 K8s `dsh-dev`**（未 scale、未改配置）；没有改 `.env`、`docker-compose.yml` 或 MySQL 数据。
 - 验收产生的账号、智能体与审核任务留在开发库里（与上一轮验收一致，未清理）。
+
+---
+
+# 返工（2026-10-01，返工单 R1–R7）
+
+对象：`fc3c1404` 之后的追加提交（同一分支 `fix/review-ui-polish`，同一 PR）。
+返工单：`docs/deliverables/dsh-task-review-ui-2026-10-01-rework.md`（本地交付物）。每条缺陷都先写会失败的测试。
+
+## R1 审核工作台的时间慢 8 小时（已修）
+
+**根因**：`agent/src/infrastructure/mysql/repositories/review-repository.ts` 的行映射在**读**路径上用了
+`toMysqlDateTime`（写库用的 UTC 字面量 `"2026-10-01 07:16:16.221"`，没有时区）。前端
+`new Date(...)` 把它当本地时间解析，+08:00 下就慢 8 小时；同一页版本表是对的，因为那条时间来自 exec 的 ISO 串。
+
+**做法**：读路径一律改回仓库约定的 `formatDateTime`（带 `Z` 的 ISO），写路径仍用 `toMysqlDateTime`。
+覆盖任务（created/updated/claimed/decided）、审计事件、用户提问；导出 `mapTask` / `mapEvent` 供单测。
+
+真机（重建 `agent agent-worker` 后，`GET /api/reviews` 与详情）：
+
+| 字段 | 修复前 | 修复后 |
+|---|---|---|
+| 列表 `created_at` | `"2026-10-01 07:16:16.221"` | `"2026-10-01T07:16:16.221Z"` |
+| 详情 `created_at` | 同上 | `"2026-10-01T07:16:16.221Z"` |
+| 提问 `created_at` | 无时区串 | `"2026-10-01T07:15:35.891Z"` |
+| 审计事件 `created_at` | 无时区串 | `"2026-10-01T07:16:16.223Z"` |
+| 版本表（对照） | `"2026-10-01T07:16:14.914Z"` | 同左（本来就对） |
+
+浏览器里同一页三处时间一致：详情「提交于 2026/10/1 **15:16:16**」、审计时间线 **15:16:16**、
+提问 **15:15:35 / 15:15:59 / 15:16:09**（截图 `reviews-detail-dark-1367.png`）。
+
+**游标**：`encodeCursor` 用的是映射后的 `createdAt`，而 SQL 比较的是库里的 DATETIME 列，
+所以 `#decodeCursor` 里把 ISO 转回 MySQL 字面量（不转的话同一行会在下一页再出现——ISO 的 `T`
+排在空格之后）。回归测试 `agent/tests/review/review-service.unit.test.ts`
+「审核列表翻页（R1）」：5 行、每页 3 条，两页拿全、不重不漏，并断言交给仓储的游标值是
+`2026-10-01 02:00:00.000`；伪造游标 → 422。
+
+**顺带检查**：审核通知邮件（`review-notification-email.ts`）与放行/驳回的会话消息
+（`content_json` = `{kind, review_task_id, artifacts|feedback}`）**都不含时间字段**，没有同类问题。
+
+## R2 页面隐藏时 pending 变真，轮询永不启动（已修）
+
+**根因**：`useReviewResultPolling` 在 `shouldPollReviewResults({pending, visible})` 为假时直接 `return`，
+连 `visibilitychange` 监听都没装——「发起任务 → 切走 → Run 在后台结束」这条最常见的路径切回来也不会开始。
+
+**做法**：只要 `pending` 为真就装监听；可见性迁移抽成可注入时钟/定时器的纯对象
+`createReviewResultPoller`（`reviewResultPolling.ts`）：不可见时不排定时器，切回可见**立即拉一次**
+（不必等满 20 秒），`dispose` 后不再启动。
+
+单测 2 条（隐藏时启动不发请求 → 切回前台立即拉一次并排定时器；切走停表、切回重启、dispose 生效）。
+浏览器实测（`verify-t1.mjs`，用 `Page.addScriptToEvaluateOnNewDocument` 覆盖 `document.visibilityState`
+后导航，让应用启动时就是「不可见」）：
+
+```
+PASS  R2：页面不可见时不发轮询  — visibility=hidden count=0
+PASS  R2：切回前台立即开始轮询（不必等满一个周期）  — 0.0s
+```
+
+## R3 轮询走完整 `rehydrateConversation`，代价过大（已修）
+
+**做法**：新增 `entityBridge.pollReviewDecisions(conversationId)`——只调一次 `getConversationEvents`，
+只把 `artifact.released` / `review.rejected` 交给归约器（按 `event_id` / `sequence` 去重），
+**不调用** `rehydrateRun` / `listRunTools` / `loadDurableTrace` / `connect`。
+
+单测「轮询一次只发 1 个请求，只归约审核结果事件、不动其他 Run」：断言请求数 = 1、
+只处理审核事件（同一响应里的 `message.delta` 不推进 Run 游标）、放行事件落到实体（`reviewStatus`、
+`reviewRevised`、修订版 `size`、`reviewReleasedId`），再轮询一次返回 0（去重）。
+
+浏览器实测：T1 的自动更新仍然 **18.2s** 到达（见下），轮询期间**没有**重新订阅 Run SSE，
+放行后停止轮询。T1 期间同会话的追问 Run 未出现输出闪烁或回退（本次 T1 会话无追问 Run，
+该点在 `agent-output-review.test.ts` 的「不动其他 Run」用例里断言）。
+
+## R4 成员页 768 宽度「操作」列不可见（已修）
+
+**现象**：`members-{dark,light}-768.png` 里审核员开关贴右边缘被截，「操作」列完全看不见，
+每行还空出约 60px——那是「变更记录」按钮被挤成竖排撑高的行。
+
+**做法**：≤900px 改用卡片式行（表格 `display: none`，不产生重复控件），每张卡片有
+成员身份、最近登录、管理员/审核员两个开关与「变更记录」按钮；表格与卡片共用
+`MemberIdentity` / `MemberLastLogin` / `RoleCell` 三个子组件，不各写一份。900px 是实测的
+可用宽度门槛（768px 下管理控制台侧栏仍占 ~240px，内容区约 490px，放不下 5 列）。
+
+浏览器实测：`members-{dark,light}-768.png` 卡片式行、操作入口可见，布局体检**不再报该页超出视口**。
+
+## R5 版本表逐字换行 / 1100 详情面板溢出（已修）
+
+**做法**：
+- `.detailPane th, .detailPane td { white-space: nowrap }`——「下载」不再竖排成「下 / 载」，「13 B」不断行；
+- 两栏布局改为 `minmax(0, 1fr) minmax(420px, 0.95fr)`（详情给足最小宽度，列表用固定列宽 + 省略号，缩得起），
+  并在 `max-width: 1200px` 单栏——原来两个 `minmax` 的下限（460 + 420 + gap）放不进 1100px 的可用宽度，
+  这正是详情面板被顶出视口的原因。
+
+浏览器实测：`reviews-detail-{dark,light}-{1367,768}.png` 里版本表每格一行，三个宽度都不再报超出视口。
+
+## R6 浅色主题关闭态开关对比度（已修）
+
+关闭态轨道边界改用 `--color-text-muted`、滑块改用 `--color-text-secondary`（都不新增变量、
+不改 `tokens.css` 既有值）。对比度：浅色下边界 #85857d 对白卡片 ≈3.7:1、滑块 #56564f 对轨道 ≈6.2:1；
+深色下 ≈4.5:1 / ≈6.6:1，都过 WCAG 非文本 3:1。开启态仍是 `--color-primary` + 白滑块。
+截图 `members-light-1367.png`。
+
+## R7 报告口径（已改）
+
+- `verify-ui.mjs` 里「元素超出视口」**从 WARN 提升为 FAIL**；豁免名单显式写在脚本里并带原因
+  （窄屏下移出屏幕的侧栏抽屉：`_side_*` / `_brand*` / `_ghost_*` / `_nav_*` 与其内的 `IMG`/`svg`/`rect`）。
+- 报告逐条列出**全部**记录，不再只报失败数。
+
+本次 `verify-ui.mjs` 的**全部 5 条记录**（0 失败 / 4 警告）：
+
+| # | 记录 | 处置 |
+|---|---|---|
+| 1 | `reviews dark 768px` 仅剩豁免项超出视口（侧栏抽屉 8 个元素） | **不修**：≤768px 时 AppShell 侧栏是 `transform` 移出屏幕的抽屉，本来就在视口外（`sidebar.module.css` 既有行为），已进豁免名单 |
+| 2 | `reviews light 768px` 同上 | 同上 |
+| 3 | `reviews-detail dark 768px` 同上 | 同上 |
+| 4 | `reviews-detail light 768px` 同上 | 同上 |
+| 5 | 发起人会话页由 `verify-cards.mjs` 覆盖 | 已补（见下），不再算缺口 |
+
+上一轮报告里的另外 4 条「元素超出视口」（成员页 768 ×2、审核工作台 1100 ×2）已由 R4/R5 修掉，
+本次不再出现。
+
+**交付卡片截图**（新增 `.runtime/review-ui/verify-cards.mjs`，真实模型造三条会话：
+待审 / 审核员上传修订后通过 / 驳回）：6/6 PASS。
+
+| 状态 | 断言 | 截图 |
+|---|---|---|
+| 待审 | 「已提交审核」+「审核通过后可下载」+ 无下载入口，21 B | `card-pending-{dark,light}-1367.png` |
+| 已交付且经修订 | 「已交付 · 经审核员修订」+ 有下载入口 + **78 B**（修订版大小，原件是 21 B） | `card-revised-{dark,light}-1367.png` |
+| 未通过 | 「未通过审核：卡片验收：数据来源不完整」+ 无下载入口 | `card-rejected-{dark,light}-1367.png` |
+
+## 返工后的回归数字
+
+| 套件 | 结果 |
+|---|---|
+| 仓库卫生 `uv run pytest -q` | **223 passed** |
+| 执行面 `npm test --prefix exec` | **475 passed / 3 skipped / 0 fail** |
+| RPC 契约 `npm test --prefix contract` | **159 passed / 0 fail** |
+| Agent（Node 22 容器） | **1880 passed / 0 fail** |
+| BFF `npm test --prefix api-server` | **241 passed / 0 fail** |
+| 前端 `npm test --prefix frontend` | **554 passed / 0 fail** |
+| 前端 build | 成功（`tsc --noEmit` + vite build） |
+| 类型检查 | exec / contract / api-server / agent / frontend 全部通过 |
+
+真实链路：重建 `agent agent-worker frontend` 后（镜像 ID 与新建一致）重跑
+`.runtime/review-acceptance.mjs` → **31/31 PASS**；`verify-t1.mjs`（T1+R2）→ **11/11 PASS**；
+`verify-ui.mjs` → **0 失败**；`verify-cards.mjs` → **6/6 PASS**。
+
+## 返工新增/改动的测试
+
+- `agent/tests/review/review-time-mapping.unit.test.ts`（新，4 条）：读路径必须是带 `Z` 的 ISO、
+  空值仍是 null、仓储不再用 `toMysqlDateTime(row.…)`。
+- `agent/tests/review/review-service.unit.test.ts`：+2 条翻页回归（不重不漏、伪造游标 422）。
+- `frontend/test/agent-output-review.test.ts`：+4 条（后台标签页状态机 2 条、轻量轮询 1 条、
+  版本表/两栏布局 1 条）。
+- `frontend/test/member-roles.test.ts`：+2 条（卡片式行、关闭态开关对比度）。

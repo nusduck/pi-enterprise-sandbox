@@ -98,6 +98,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PR #72 审阅返工（R1–R6）**：
+  - **R1 审核工作台的时间慢 8 小时**：审核账本仓储的行映射在读路径上误用了写库用的
+    `toMysqlDateTime`（无时区的 UTC 字面量），前端按本地时间解析。改为仓库约定的
+    `formatDateTime`（带 `Z` 的 ISO），覆盖任务的 created/updated/claimed/decided、审计事件与
+    用户提问；列表游标解码时把 ISO 转回 MySQL 字面量，并补了「两页拿全、不重不漏」的翻页回归。
+    通知邮件与会话消息不含时间字段，无需改动。
+  - **R2 页面隐藏时待审交付物出现，轮询永不启动**：只要还有待审交付物就注册
+    `visibilitychange` 监听（此前「此刻不可见」直接 return，监听从未装上，切回来也不会开始），
+    可见性迁移抽成可注入时钟的 `createReviewResultPoller`，切回前台立即拉一次。
+  - **R3 轮询走完整会话重放、代价过大**：新增 `entityBridge.pollReviewDecisions`——只拉一次会话事件、
+    只归约 `artifact.released` / `review.rejected`，不再对每个 Run 请求工具台账与 trace，
+    也不再重放正在流式的 Run。
+  - **R4 成员页 768 宽度「操作」列被挤出屏幕**：≤900px 改用卡片式行（表格隐藏），
+    表格与卡片共用同一批子组件，操作入口不再消失，按钮也不再竖排撑高整行。
+  - **R5 审核详情版本表逐字换行 / 1100 宽度详情面板溢出**：详情表格单元格 `white-space: nowrap`；
+    两栏布局改为 `minmax(0, 1fr) minmax(420px, 0.95fr)` 并在 ≤1200px 单栏
+    （原来的下限之和放不进 1100px 的可用宽度）。
+  - **R6 浅色主题关闭态开关对比度不足**：关闭态边界改用 `--color-text-muted`、滑块改用
+    `--color-text-secondary`（两套主题都过 WCAG 非文本 3:1，不新增变量、不改 tokens 既有值）。
+
 - **交付物审核与成员角色的遗留缺陷（T1–T6）与审核/成员界面的信息设计**：
   - **T1 发起人页面收不到审核结果**：Run 一到终态，Run SSE 就结束，而 `artifact.released` /
     `review.rejected` 是审核员之后才追加到这个已结束 Run 上的，页面因此要手动刷新。

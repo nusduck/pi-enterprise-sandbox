@@ -157,6 +157,56 @@ function RoleEventsDrawer({ member, onClose }: { member: AdminMember; onClose: (
 }
 
 /**
+ * 成员身份：显示名为主，用户名/邮箱为辅（§3.1.2）。表格与窄屏卡片共用。
+ */
+function MemberIdentity({ member }: { member: AdminMember }) {
+  const secondary = memberSecondaryName(member);
+  return (
+    <div className={s.memberCell}>
+      <b>{memberDisplayName(member)}</b>
+      {secondary ? <small className={a.mono}>{secondary}</small> : null}
+      {member.email ? <small className={a.muted}>{member.email}</small> : null}
+    </div>
+  );
+}
+
+/** 最近登录：空值是「—」+ tooltip（§3.1.4，名单口径见 `NO_LOGIN_RECORD_TOOLTIP`）。 */
+function MemberLastLogin({ member }: { member: AdminMember }) {
+  if (!member.last_login_at) return <span title={NO_LOGIN_RECORD_TOOLTIP}>—</span>;
+  return <>{formatMemberTimestamp(member.last_login_at)}</>;
+}
+
+/** 一个角色的开关格：开关 + （部署锁定时）说明 pill。表格与窄屏卡片共用。 */
+function RoleCell({
+  member,
+  role,
+  busyKey,
+  onToggle,
+}: {
+  member: AdminMember;
+  role: KnownRole;
+  busyKey: string | null;
+  onToggle: (member: AdminMember, role: KnownRole, next: boolean) => void;
+}) {
+  const pinned = role === 'admin' && isRolePinned(member, 'admin');
+  return (
+    <div className={s.roleCell}>
+      <RoleToggle
+        member={member}
+        role={role}
+        busy={busyKey === `${member.user_id}:${role}`}
+        onToggle={onToggle}
+      />
+      {pinned ? (
+        <span className={`${a.pill} ${a.mute}`} title={ROLE_PINNED_TOOLTIP}>
+          部署锁定
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * 成员与角色（design `docs/design/rbac-roles.md` §6）。
  *
  * 角色判定、org 作用域与两条 409 都在服务端；这个页面只负责投影与把错误码翻译成
@@ -348,61 +398,42 @@ export function MembersPage() {
 
       {listState === 'ready' ? (
         <>
-          <div className={a.tableWrap}>
-            <table className={a.table}>
-              <thead>
-                <tr>
-                  <th>成员</th>
-                  <th>最近登录</th>
-                  <th title="角色代码：admin">{roleLabel('admin')}</th>
-                  <th title="角色代码：reviewer">{roleLabel('reviewer')}</th>
-                  <th className={a.right}>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members?.map((member) => {
-                  const pinned = isRolePinned(member, 'admin');
-                  const secondary = memberSecondaryName(member);
-                  return (
+          <div className={s.tableOnly}>
+            <div className={a.tableWrap}>
+              <table className={a.table}>
+                <thead>
+                  <tr>
+                    <th>成员</th>
+                    <th>最近登录</th>
+                    <th title="角色代码：admin">{roleLabel('admin')}</th>
+                    <th title="角色代码：reviewer">{roleLabel('reviewer')}</th>
+                    <th className={a.right}>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members?.map((member) => (
                     <tr key={member.user_id}>
                       <td>
-                        <div className={s.memberCell}>
-                          <b>{memberDisplayName(member)}</b>
-                          {secondary ? <small className={a.mono}>{secondary}</small> : null}
-                          {member.email ? <small className={a.muted}>{member.email}</small> : null}
-                        </div>
+                        <MemberIdentity member={member} />
                       </td>
                       <td className={`${a.num} ${a.muted}`}>
-                        {member.last_login_at ? (
-                          formatMemberTimestamp(member.last_login_at)
-                        ) : (
-                          <span title={NO_LOGIN_RECORD_TOOLTIP}>—</span>
-                        )}
+                        <MemberLastLogin member={member} />
                       </td>
                       <td>
-                        <div className={s.roleCell}>
-                          <RoleToggle
-                            member={member}
-                            role="admin"
-                            busy={busyKey === `${member.user_id}:admin`}
-                            onToggle={(m, r, next) => void toggleRole(m, r, next)}
-                          />
-                          {pinned ? (
-                            <span className={`${a.pill} ${a.mute}`} title={ROLE_PINNED_TOOLTIP}>
-                              部署锁定
-                            </span>
-                          ) : null}
-                        </div>
+                        <RoleCell
+                          member={member}
+                          role="admin"
+                          busyKey={busyKey}
+                          onToggle={(m, r, next) => void toggleRole(m, r, next)}
+                        />
                       </td>
                       <td>
-                        <div className={s.roleCell}>
-                          <RoleToggle
-                            member={member}
-                            role="reviewer"
-                            busy={busyKey === `${member.user_id}:reviewer`}
-                            onToggle={(m, r, next) => void toggleRole(m, r, next)}
-                          />
-                        </div>
+                        <RoleCell
+                          member={member}
+                          role="reviewer"
+                          busyKey={busyKey}
+                          onToggle={(m, r, next) => void toggleRole(m, r, next)}
+                        />
                       </td>
                       <td className={a.right}>
                         <button type="button" className={a.btn} onClick={() => setEventsMember(member)}>
@@ -410,11 +441,56 @@ export function MembersPage() {
                         </button>
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
+
+          {/* 窄屏（≤900px）用卡片式行：表格在 ~490px 的可用宽度里放不下 5 列，
+              「操作」会被挤到屏幕外、按钮竖排把整行撑高（返工单 R4）。 */}
+          <ul className={s.memberCards}>
+            {members?.map((member) => (
+              <li key={member.user_id} className={s.memberCard}>
+                <MemberIdentity member={member} />
+                <dl className={s.memberCardMeta}>
+                  <div>
+                    <dt>最近登录</dt>
+                    <dd className={a.num}>
+                      <MemberLastLogin member={member} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt title="角色代码：admin">{roleLabel('admin')}</dt>
+                    <dd>
+                      <RoleCell
+                        member={member}
+                        role="admin"
+                        busyKey={busyKey}
+                        onToggle={(m, r, next) => void toggleRole(m, r, next)}
+                      />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt title="角色代码：reviewer">{roleLabel('reviewer')}</dt>
+                    <dd>
+                      <RoleCell
+                        member={member}
+                        role="reviewer"
+                        busyKey={busyKey}
+                        onToggle={(m, r, next) => void toggleRole(m, r, next)}
+                      />
+                    </dd>
+                  </div>
+                </dl>
+                <div className={s.memberCardActions}>
+                  <button type="button" className={a.btn} onClick={() => setEventsMember(member)}>
+                    变更记录
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
 
           {nextCursor ? (
             <div className={s.more}>

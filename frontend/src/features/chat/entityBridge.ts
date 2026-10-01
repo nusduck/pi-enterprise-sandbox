@@ -242,6 +242,11 @@ export type EntityBridge = {
   rehydrateInProgress: (conversationId?: string | null) => Promise<RunEntity[]>;
   /** Restore the complete persisted timeline and reconnect non-terminal runs. */
   rehydrateConversation: (conversationId: string) => Promise<RunEntity[]>;
+  /**
+   * 轻量轮询审核结果（T1 / 返工单 R3）：只拉会话事件、只归约
+   * `artifact.released` / `review.rejected`，返回本轮真正应用的事件数。
+   */
+  pollReviewDecisions: (conversationId: string) => Promise<number>;
   /** Mark an approval decided (optimistic UI after user action). */
   markApproval: (
     approvalId: string,
@@ -452,11 +457,12 @@ export function createEntityBridge(
    * exactly one write path: normalize → reducer → EntityStore. An event that
    * does not normalize is dropped rather than guessed at.
    */
-  function ingestAgentEvent(runId: string, ev: SSEEvent): void {
+  function ingestAgentEvent(runId: string, ev: SSEEvent) {
     const event = normalizeToRuntimeEvent(ev, runId);
-    if (!event) return;
-    manager.handleRuntimeEvent(event);
+    if (!event) return null;
+    const result = manager.handleRuntimeEvent(event);
     store = manager.getStore();
+    return result;
   }
 
   function focusConversation(conversationId: string | null): void {
@@ -969,6 +975,38 @@ export function createEntityBridge(
     return restored;
   }
 
+  /**
+   * 轻量轮询审核结果（T1 / 返工单 R3）。
+   *
+   * 只做两件事：拉一次会话事件、把 `artifact.released` / `review.rejected` 交给归约器
+   * （归约器按 `event_id` / `sequence` 去重）。**刻意不做** `rehydrateConversation`：
+   * 那会对会话里每个 Run 再请求工具台账（`listRunTools`）与 trace（`loadDurableTrace`），
+   * 还会把正在流式的 Run 按持久事件重放一遍——一个 20 个 Run 的会话每 20 秒要发 40 多个
+   * 请求，而且有把追问 Run 的状态按旧快照回退的风险。
+   *
+   * 返回本轮真正应用的事件数（0 表示没有新结果）。
+   */
+  async function pollReviewDecisions(conversationId: string): Promise<number> {
+    if (!conversationId) return 0;
+    const expectedGeneration = storeGeneration;
+    const timeline = await getConversationEvents(conversationId);
+    if (expectedGeneration !== storeGeneration) return 0;
+    let applied = 0;
+    for (const event of timeline.events) {
+      const type = String(event.type || '');
+      if (type !== 'artifact.released' && type !== 'review.rejected') continue;
+      // 归约器按 event_id / sequence 去重：重复轮询同一批事件时 outcome 不是 applied。
+      if (ingestAgentEvent(event.run_id, persistedEventPayload(event))?.outcome === 'applied') {
+        applied += 1;
+      }
+    }
+    if (applied > 0) {
+      store = manager.getStore();
+      onStoreChange?.(store);
+    }
+    return applied;
+  }
+
   function markApproval(
     approvalId: string,
     status: Extract<ApprovalStatus, 'approved' | 'rejected'>,
@@ -1002,6 +1040,7 @@ export function createEntityBridge(
     dispose,
     rehydrateInProgress,
     rehydrateConversation,
+    pollReviewDecisions,
     markApproval,
     recordDataset,
   };

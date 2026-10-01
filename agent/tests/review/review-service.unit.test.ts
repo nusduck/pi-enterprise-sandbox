@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { ReviewService, ReviewError } from '../../src/application/review-service.js';
+import { toMysqlDateTime } from '../../src/infrastructure/mysql/row-mappers.js';
 
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const REQUESTER = '01K0G2PAV8FPMVC9QHJG7JPN50';
@@ -51,7 +52,7 @@ function taskRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function harness(options: { task?: any; items?: any[]; events?: any[]; questions?: any[]; claim?: number; decide?: number; transport?: any } = {}) {
+function harness(options: { task?: any; items?: any[]; events?: any[]; questions?: any[]; rows?: any[]; claim?: number; decide?: number; transport?: any } = {}) {
   const state = {
     task: options.task ?? taskRow(),
     items: options.items ?? [{
@@ -74,6 +75,9 @@ function harness(options: { task?: any; items?: any[]; events?: any[]; questions
 
   const reviews = {
     async getTask(id: string, orgId: string) {
+      if (options.rows) {
+        return options.rows.find((row: any) => row.reviewTaskId === id && row.orgId === orgId) ?? null;
+      }
       return state.task && id === state.task.reviewTaskId && orgId === state.task.orgId ? state.task : null;
     },
     async listItems() { return state.items; },
@@ -81,7 +85,27 @@ function harness(options: { task?: any; items?: any[]; events?: any[]; questions
     async listMaterials() { return []; },
     async getMaterial() { return null; },
     async listUserQuestionsUpToRun() { return options.questions ?? []; },
-    async listTasks(input: any) { state.listQueries.push(input); return [state.task]; },
+    async listTasks(input: any) {
+      state.listQueries.push(input);
+      if (!options.rows) return [state.task];
+      // 模仿仓储：状态过滤 + keyset 游标 + 倒序，游标值按 MySQL DATETIME 字面量比较。
+      let out = options.rows.slice();
+      if (input.statuses) out = out.filter((row: any) => input.statuses.includes(row.status));
+      if (input.cursor) {
+        out = out.filter((row: any) => {
+          const at = toMysqlDateTime(row.createdAt);
+          return (
+            at < input.cursor.createdAt ||
+            (at === input.cursor.createdAt && row.reviewTaskId < input.cursor.reviewTaskId)
+          );
+        });
+      }
+      out.sort((a: any, b: any) =>
+        a.createdAt === b.createdAt
+          ? (a.reviewTaskId < b.reviewTaskId ? 1 : -1)
+          : (a.createdAt < b.createdAt ? 1 : -1));
+      return out.slice(0, input.limit);
+    },
     async claim() { return options.claim ?? 1; },
     async releaseClaim() { return 1; },
     async decide(input: any) {
@@ -189,6 +213,47 @@ describe('审核服务：列表状态筛选（T5）', () => {
     const { service, state } = harness();
     await expectCode(() => service.listTasks(ACTOR, { status: 'APPROVED,PENDINGX' }), 'REVIEW_INPUT_INVALID');
     assert.equal(state.listQueries.length, 0, '非法输入不该打到仓储');
+  });
+});
+
+describe('审核列表翻页（R1：游标格式改动后仍与库里的值可比）', () => {
+  function pagedRows() {
+    return [0, 1, 2, 3, 4].map((index) =>
+      taskRow({
+        reviewTaskId: `01K0G2PAV8FPMVC9QHJG7JPN6${index}`,
+        // 映射后的形状：带 Z 的 ISO（仓储读路径用 formatDateTime）。
+        createdAt: `2026-10-01T0${index}:00:00.000Z`,
+      }),
+    );
+  }
+
+  it('两页拿全、不重不漏；第二页的游标与库里的 DATETIME 可比', async () => {
+    const { service, state } = harness({ rows: pagedRows() });
+    const page1 = (await service.listTasks(ACTOR, { limit: 3 })) as any;
+    assert.equal(page1.tasks.length, 3);
+    assert.ok(page1.next_cursor, '还有下一页');
+
+    // 游标交给仓储的必须是 MySQL 字面量，不是 ISO——否则同一行会再出现一次。
+    const page2 = (await service.listTasks(ACTOR, { limit: 3, cursor: page1.next_cursor })) as any;
+    assert.equal(state.listQueries[1].cursor.createdAt, '2026-10-01 02:00:00.000');
+    assert.equal(page2.tasks.length, 2);
+    assert.equal(page2.next_cursor, null, '最后一页');
+
+    const ids = [...page1.tasks, ...page2.tasks].map((task: any) => task.review_task_id);
+    assert.equal(ids.length, 5);
+    assert.equal(new Set(ids).size, 5, '不重');
+    assert.deepEqual(
+      ids,
+      ['01K0G2PAV8FPMVC9QHJG7JPN64', '01K0G2PAV8FPMVC9QHJG7JPN63', '01K0G2PAV8FPMVC9QHJG7JPN62',
+       '01K0G2PAV8FPMVC9QHJG7JPN61', '01K0G2PAV8FPMVC9QHJG7JPN60'],
+      '按时间倒序、不漏',
+    );
+  });
+
+  it('伪造/失效的游标 → 422，不从头发一页', async () => {
+    const { service } = harness({ rows: pagedRows() });
+    const bad = Buffer.from('nonsense|01K0G2PAV8FPMVC9QHJG7JPN99', 'utf8').toString('base64url');
+    await expectCode(() => service.listTasks(ACTOR, { cursor: bad }), 'REVIEW_INPUT_INVALID');
   });
 });
 
