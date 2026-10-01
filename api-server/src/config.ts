@@ -327,7 +327,8 @@ export function isProtectedApiPath(path: string): boolean {
     path.startsWith('/api/extensions') ||
     path.startsWith('/api/capabilities') ||
     path.startsWith('/api/a2a') ||
-    path.startsWith('/api/processes')
+    path.startsWith('/api/processes') ||
+    path.startsWith('/api/reviews')
   );
 }
 

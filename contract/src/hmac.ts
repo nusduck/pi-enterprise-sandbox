@@ -516,42 +516,79 @@ function assertScope(value: unknown): InternalTokenScope {
  * 词汇沿用 contract 已有的 `sandbox.*`（`sandbox.sessions.ensure` /
  * `sandbox.artifacts.download` 早就在用），不再引入第二套 `internal:*`。
  */
-const HTU_BINDINGS: readonly { readonly prefix: string; readonly scope: string; readonly toolName: string }[] = [
+export interface InternalHtuBinding {
+  readonly prefix: string;
+  readonly scope: string;
+  readonly toolName: string;
+  /**
+   * 这条路线的调用**不属于任何 Run**，因此允许 `run_id` 与
+   * `execution_fence_token` 同时为 null。默认 false = 两者必填（带 fence 的
+   * 模型工具面）。只有两条路线放开：
+   *
+   * - `sessions/ensure`：会话确保发生在第一个 Run 之前；
+   * - `review/`：审核员的领取/修订/决定与 outbox 驱动的放行都发生在 Run 之外，
+   *   那时没有任何活跃 fence（design `agent-output-review.md` §6）。
+   *
+   * **只放宽 null**：非 null 时仍然逐字段校验，不允许伪造一个不存在的 fence。
+   */
+  readonly allowNullRun?: boolean;
+}
+
+const HTU_BINDINGS: readonly InternalHtuBinding[] = [
   { prefix: '/internal/v1/fs/', scope: 'sandbox.fs', toolName: 'fs' },
   { prefix: '/internal/v1/shell/', scope: 'sandbox.shell', toolName: 'shell' },
   { prefix: '/internal/v1/jobs/', scope: 'sandbox.jobs', toolName: 'jobs' },
   { prefix: '/internal/v1/artifacts/submit', scope: 'sandbox.artifacts.submit', toolName: 'artifact.submit' },
   { prefix: '/internal/v1/artifacts/download', scope: 'sandbox.artifacts.download', toolName: 'artifact.download' },
-  { prefix: '/internal/v1/sessions/ensure', scope: 'sandbox.sessions.ensure', toolName: 'session.ensure' },
+  {
+    prefix: '/internal/v1/sessions/ensure',
+    scope: 'sandbox.sessions.ensure',
+    toolName: 'session.ensure',
+    allowNullRun: true,
+  },
+  // 审核面（design `agent-output-review.md` §6.2）：快照 / 按 id 读取 / 修订上传 /
+  // 状态变更。四个动作同一个调用方（agent）、同一种作用域语义（org 作用域、不属于
+  // 任何 Run），因此共用一族。**不与 MCP 窄桥共用**——窄桥走
+  // `/internal/mcp/v1/*` 与独立 token（AGENTS.md §1）。
+  {
+    prefix: '/internal/v1/review/',
+    scope: 'sandbox.review',
+    toolName: 'review',
+    allowNullRun: true,
+  },
 ];
 
 /** 该 htu 要求的 claim 绑定；未登记的路径返回 `null`（调用方自行决定是否放行）。 */
 export function internalBindingForHtu(
   htu: string,
-): { readonly scope: string; readonly toolName: string } | null {
+): InternalHtuBinding | null {
   for (const binding of HTU_BINDINGS) {
     if (htu === binding.prefix || htu.startsWith(binding.prefix)) {
-      return { scope: binding.scope, toolName: binding.toolName };
+      return binding;
     }
   }
   return null;
 }
 
-/** 判断这是不是 `session.ensure` 的特例（此时 run_id / fence 允许为 null）。 */
-function isPreRunSessionEnsureProfile(fields: {
+/**
+ * 判断这是不是「无 Run 路线」：该 htu 的绑定允许空 run_id / fence，且 claim 的
+ * scope / tool_name 确实对得上那条绑定。
+ *
+ * 表驱动而不是逐个 `htu === '...'` 列举：漏加一条绑定只会让新路线**更严**（要求
+ * fence 而被拒），而漏改一处列举会让它**更松**。
+ */
+function isPreRunProfile(fields: {
   readonly toolName: string;
   readonly scope: InternalTokenScope;
   readonly htu: unknown;
   readonly runId: unknown;
   readonly executionFenceToken: unknown;
 }): boolean {
-  return (
-    fields.toolName === 'session.ensure' &&
-    fields.scope[0] === 'sandbox.sessions.ensure' &&
-    fields.htu === '/internal/v1/sessions/ensure' &&
-    fields.runId === null &&
-    fields.executionFenceToken === null
-  );
+  if (fields.runId !== null || fields.executionFenceToken !== null) return false;
+  if (typeof fields.htu !== 'string') return false;
+  const binding = internalBindingForHtu(fields.htu);
+  if (binding === null || binding.allowNullRun !== true) return false;
+  return fields.toolName === binding.toolName && fields.scope[0] === binding.scope;
 }
 
 /** 校验并拷贝出最终 claim 集合，字段按固定顺序排列。 */
@@ -580,7 +617,7 @@ export function validateInternalTokenClaims(input: unknown): InternalTokenClaims
 
   const toolName = assertAsciiIdentifier(claims.tool_name, 'tool_name');
   const scope = assertScope(claims.scope);
-  const preRun = isPreRunSessionEnsureProfile({
+  const preRun = isPreRunProfile({
     toolName,
     scope,
     htu: claims.htu,
@@ -654,7 +691,7 @@ function validateIssueClaims(input: unknown): InternalTokenIssueClaims {
   );
   const toolName = assertAsciiIdentifier(claims.tool_name, 'tool_name');
   const scope = assertScope(claims.scope);
-  const preRun = isPreRunSessionEnsureProfile({
+  const preRun = isPreRunProfile({
     toolName,
     scope,
     htu: claims.htu,

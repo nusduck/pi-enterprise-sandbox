@@ -50,6 +50,7 @@ import { getExtensionDiagnostics as projectExtensionDiagnostics } from '../appli
 import { startTelemetry } from '../infrastructure/telemetry.js';
 import { BrowserAuthService } from '../application/browser-auth-service.js';
 import { createMemberRoleService } from './member-role-wiring.js';
+import { createReviewService } from './review-wiring.js';
 import {
   emailNotificationCapability,
   resolveEmailNotificationConfig,
@@ -620,6 +621,19 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
       })
     : null;
 
+  // 审核员面（design agent-output-review §7）：与成员角色面同一理由放这里。
+  // exec 客户端凭据缺失时仍返回 service（列表/详情可用），需要字节的调用 503。
+  const reviewService = httpServices
+    ? createReviewService({
+        env,
+        db: httpServices.knex,
+        createRepositories: httpServices.createRepositories,
+        transactionManager: httpServices.transactionManager,
+        generateId: container.generateId,
+        now: container.now,
+      })
+    : null;
+
   let browserAuthService = null;
   if (httpServices) {
     const repos = httpServices.createRepositories(httpServices.knex);
@@ -789,6 +803,7 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     adminRunQueryService: httpServices?.adminRunQueryService ?? null,
     ownerIdentityService: httpServices?.ownerIdentityService ?? null,
     memberRoleService,
+    reviewService,
     listRuns,
     listToolExecutions,
     browserAuthService,

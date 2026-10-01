@@ -106,6 +106,24 @@ function guessMime(name: string): string {
   return MIME_BY_EXT[name.slice(dot).toLowerCase()] ?? 'application/octet-stream';
 }
 
+/**
+ * 规范化平台生成的逻辑路径：逐段清洗文件名，丢掉空段与 `.`。
+ *
+ * `..` 不在这里拦——交给 `fs.resolve()` 的 path-policy 围栏统一判（一处判定比
+ * 两处更不容易漂移）。返回 `null` 表示没有任何可用段。
+ */
+function normalizeLogicalPath(raw: string): string | null {
+  const segments = String(raw ?? '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== '' && segment !== '.')
+    .map((segment) => (segment === '..' ? '..' : sanitizeFilename(segment)));
+  if (segments.length === 0) return null;
+  if (segments.some((segment) => segment === '')) return null;
+  return segments.join('/');
+}
+
 export interface ArtifactSubmitRequest {
   readonly workspace: WorkspaceContext;
   readonly sessionId: string;
@@ -414,6 +432,56 @@ export class ArtifactService {
   openSnapshot(record: ExecArtifactRecord): AsyncGenerator<Buffer> {
     const dest = artifactBlobPath(this.#roots, record.orgId, record.artifactId);
     return iterSnapshotChunks(dest, record.identity ?? undefined);
+  }
+
+  /**
+   * 把审核员修订后的版本**导入发起人工作区**（design `agent-output-review.md`
+   * §5.3 第 3 步）。
+   *
+   * 与 `importToWorkspace` 的三点不同，都是审核流程要的语义：
+   *
+   * - 取件用 `getInOrg`（org 作用域、**不看可见性**）：修订版在放行前是 `held`，
+   *   而它必须在放行的那一刻就出现在工作区里，好让模型基于审核员改过的版本继续
+   *   修改（§5.4）。用 `getOwnerVisible` 会在这里 404。
+   * - 目标是**逻辑路径**（`审核版/<name>`），不是文件名：这是平台自己生成的目录，
+   *   不是发起人挑的落点，所以允许建子目录。
+   * - 路径仍然过 `fs.resolve()` 围栏与逐段文件名清洗，越界一样抛错。
+   */
+  async importRevisionToWorkspace(input: {
+    readonly artifactId: string;
+    readonly orgId: string;
+    readonly workspace: WorkspaceContext;
+    readonly targetPath: string;
+  }): Promise<{ record: ExecArtifactRecord; path: string }> {
+    try {
+      const record = await this.store.getInOrg(input.artifactId, input.orgId);
+      if (!record) throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
+
+      const logical = normalizeLogicalPath(input.targetPath);
+      if (!logical) {
+        throw new ArtifactError('target_filename_invalid', 'target path is invalid', 400);
+      }
+
+      const fs = this.fsFactory(input.workspace);
+      // `resolve` 走 path-policy 围栏：绝对路径、`..`、越出工作区根都会在这里被拒。
+      const target = await fs.resolve(logical);
+
+      // 工作区根必须已由控制面建好（与 `importToWorkspace` 同一条纪律），但
+      // `审核版/` 这一层是平台自己的落点，允许补建。
+      const workspaceRoot = input.workspace.workspaceRoot;
+      const rootStat = await stat(workspaceRoot).catch(() => null);
+      if (!rootStat?.isDirectory()) {
+        throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
+      }
+      await mkdir(path.dirname(target.targetKey), { recursive: true });
+
+      const sink = createWriteStream(target.targetKey);
+      await pipeline(this.openSnapshot(record), sink);
+
+      return { record, path: logical };
+    } catch (err) {
+      this.#redact(err, input.workspace);
+    }
   }
 
   /**

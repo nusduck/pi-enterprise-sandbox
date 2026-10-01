@@ -336,6 +336,75 @@ export class ReviewRepository {
   }
 
   /**
+   * 审核员要看的**用户提问**（U5）：本会话截至该 Run 的 `role=user` 消息文字与附件。
+   *
+   * 只给文字与附件，不给智能体的回复——U5 没有要求，一期不给（design §6.1）。
+   */
+  async listUserQuestionsUpToRun(input: {
+    readonly conversationId: string;
+    readonly orgId: string;
+    readonly userId: string;
+    readonly triggeringMessageId: string;
+    readonly limit: number;
+  }): Promise<{
+    messageId: string;
+    sequenceNo: number;
+    text: string;
+    createdAt: string | null;
+    attachments: { attachmentId: string; filename: string; mimeType: string; sizeBytes: number; sourcePath: string }[];
+  }[]> {
+    const bounded = await this.#boundedUserMessages(input);
+    if (bounded === null) return [];
+    const rows = await this.db('tbl_agsvc_messages')
+      .where({ conversation_id: input.conversationId, role: 'user' })
+      .andWhere('sequence_no', '<=', bounded.maxSequence)
+      .orderBy('sequence_no', 'asc')
+      .limit(input.limit)
+      .select('message_id', 'sequence_no', 'content_json', 'created_at');
+    return rows.map((row: Loose) => {
+      const content = typeof row.content_json === 'string' ? safeParse(row.content_json) : row.content_json;
+      const record = (content ?? {}) as Record<string, unknown>;
+      return {
+        messageId: String(row.message_id),
+        sequenceNo: Number(row.sequence_no),
+        text: typeof record['text'] === 'string' ? String(record['text']) : '',
+        createdAt: row.created_at == null ? null : toMysqlDateTime(row.created_at),
+        attachments: attachmentsOf(row.content_json),
+      };
+    });
+  }
+
+  /**
+   * 会话作用域 + 该 Run 触发消息的序号。
+   *
+   * `tbl_agsvc_messages` 没有 org/user 列（归属在会话上），所以作用域通过会话行
+   * 证明：读不到「这个 org+user 名下的这个会话」就返回 null，不去猜消息属于谁。
+   */
+  async #boundedUserMessages(input: {
+    readonly conversationId: string;
+    readonly orgId: string;
+    readonly userId: string;
+    readonly triggeringMessageId: string;
+  }): Promise<{ maxSequence: number } | null> {
+    const conversation = await this.db('tbl_agsvc_conversations')
+      .where({
+        conversation_id: input.conversationId,
+        org_id: input.orgId,
+        user_id: input.userId,
+      })
+      .first('conversation_id');
+    if (!conversation) return null;
+    const trigger = await this.db('tbl_agsvc_messages')
+      .where({
+        message_id: input.triggeringMessageId,
+        conversation_id: input.conversationId,
+      })
+      .first('sequence_no');
+    if (trigger?.sequence_no == null) return null;
+    return { maxSequence: Number(trigger.sequence_no) };
+  }
+
+  /**
    * 本会话截至该 Run 的用户附件（U5 / §6.2）。
    *
    * 取 `role='user'` 且 `sequence_no <= 该 Run 触发消息` 的消息，从中抽
@@ -348,30 +417,14 @@ export class ReviewRepository {
     readonly userId: string;
     readonly triggeringMessageId: string;
   }): Promise<{ attachmentId: string; filename: string; mimeType: string; sizeBytes: number; sourcePath: string }[]> {
-    // `tbl_agsvc_messages` 没有 org/user 列（归属在会话上），所以作用域通过
-    // 会话行证明：读不到「这个 org+user 名下的这个会话」就直接返回空，
-    // 不去猜消息属于谁。
-    const conversation = await this.db('tbl_agsvc_conversations')
-      .where({
-        conversation_id: input.conversationId,
-        org_id: input.orgId,
-        user_id: input.userId,
-      })
-      .first('conversation_id');
-    if (!conversation) return [];
+    const bounded = await this.#boundedUserMessages(input);
+    if (bounded === null) return [];
 
-    const trigger = await this.db('tbl_agsvc_messages')
-      .where({
-        message_id: input.triggeringMessageId,
-        conversation_id: input.conversationId,
-      })
-      .first('sequence_no');
-    const maxSequence = trigger?.sequence_no == null ? null : Number(trigger.sequence_no);
     const query = this.db('tbl_agsvc_messages')
       .where({ conversation_id: input.conversationId, role: 'user' })
+      .andWhere('sequence_no', '<=', bounded.maxSequence)
       .orderBy('sequence_no', 'asc')
       .select('content_json');
-    if (maxSequence !== null) query.andWhere('sequence_no', '<=', maxSequence);
 
     const byPath = new Map<string, { attachmentId: string; filename: string; mimeType: string; sizeBytes: number; sourcePath: string }>();
     for (const row of await query) {

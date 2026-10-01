@@ -1,5 +1,5 @@
 /**
- * 内部审核端点——审核面专用的四个动作（design `agent-output-review.md` §6.2）。
+ * 内部审核端点——审核面专用的五个动作（design `agent-output-review.md` §6.2）。
  *
  * | 端点 | 用途 |
  * |---|---|
@@ -7,6 +7,7 @@
  * | `POST /internal/v1/review/artifacts/get`        | 按 id 读取（含字节），供审核员下载任一版本 |
  * | `POST /internal/v1/review/artifacts/revision`   | 审核员的修订上传：新产物 + `revision_of` 链 |
  * | `POST /internal/v1/review/artifacts/visibility` | 状态变更：`held` → `released` / `withdrawn` |
+ * | `POST /internal/v1/review/artifacts/import`     | 修订版导入发起人工作区的 `审核版/`（§5.3 第 3 步） |
  *
  * **为什么单独一组而不是塞进 `/internal/v1/artifacts/*`**：那一组是**模型工具**的面
  * （`submit_artifact`），按 owner 作用域判定；这一组是**审核流程**的面，按 org 作用域
@@ -99,6 +100,30 @@ function statusFor(err: unknown): number {
   return 500;
 }
 
+/**
+ * 错误 → 线上形状。
+ *
+ * `toWireError` 只认 ContractError / FsError，其余一律 `INTERNAL_ERROR`；而这一族
+ * 端点的稳定错误码（`artifact_not_found` / `artifact_too_large` / `TOO_LARGE`）来自
+ * `ArtifactError` 与 `ControlPlaneError`。调用方（agent 的审核客户端）按码分流，
+ * 全都收成 `INTERNAL_ERROR` 会让「产物不存在」与「exec 挂了」看起来一样。
+ *
+ * 只透出**本来就带 `code` 属性**的错误（那是有意留下的稳定码）；普通 Error 没有这个
+ * 属性，仍然落回 `INTERNAL_ERROR`。消息仍走 `toWireError` 的物理路径脱敏。
+ */
+function wireFor(err: unknown): { code: string; message: string } {
+  const wire = toWireError(err, { physicalRoots: [] });
+  const code = (err as { code?: unknown } | null)?.code;
+  if (
+    wire.code === 'INTERNAL_ERROR' &&
+    typeof code === 'string' &&
+    /^[A-Za-z][A-Za-z0-9_]*$/.test(code)
+  ) {
+    return { code, message: wire.message };
+  }
+  return wire;
+}
+
 function requiredString(payload: Record<string, unknown>, key: string): string {
   const value = typeof payload[key] === 'string' ? String(payload[key]).trim() : '';
   if (!value) throw new ContractError('ENVELOPE_INVALID', `${key} is required`);
@@ -181,7 +206,7 @@ export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps
         },
       });
     } catch (err) {
-      const wire = toWireError(err, { physicalRoots: [] });
+      const wire = wireFor(err);
       return c.json({ ok: false, error: wire }, statusFor(err) as never);
     }
   });
@@ -215,7 +240,7 @@ export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps
         },
       });
     } catch (err) {
-      const wire = toWireError(err, { physicalRoots: [] });
+      const wire = wireFor(err);
       return c.json({ ok: false, error: wire }, statusFor(err) as never);
     }
   });
@@ -249,7 +274,7 @@ export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps
         },
       });
     } catch (err) {
-      const wire = toWireError(err, { physicalRoots: [] });
+      const wire = wireFor(err);
       return c.json({ ok: false, error: wire }, statusFor(err) as never);
     }
   });
@@ -265,7 +290,36 @@ export function registerInternalReviewRoutes(app: Hono, deps: InternalReviewDeps
       const changed = await deps.artifactService.applyVisibilities(env.orgId, updates);
       return c.json({ ok: true, data: { changed } });
     } catch (err) {
-      const wire = toWireError(err, { physicalRoots: [] });
+      const wire = wireFor(err);
+      return c.json({ ok: false, error: wire }, statusFor(err) as never);
+    }
+  });
+
+  /**
+   * 修订版导入工作区（design §5.3 第 3 步）：把审核员改过的版本写到发起人工作区的
+   * `审核版/<name>`，好让模型在追问中基于它继续修改（§5.4）。
+   *
+   * 与 `visibility` 分开而不是塞进同一个请求：放行是**状态**（单事务、幂等），
+   * 导入是**写工作区字节**（可重放、覆盖同名文件）。合成一个端点会让「状态已放行、
+   * 文件没落盘」变成一个说不清的部分成功。
+   */
+  app.post('/internal/v1/review/artifacts/import', async (c) => {
+    try {
+      const { envelope: rawEnv, payload, enabledSkills, systemSkills } = await parseBody(c);
+      parseEnvelope(rawEnv);
+      const env = rawEnv as Envelope;
+      const workspace = buildContext(deps, env, enabledSkills, systemSkills);
+      const artifactId = requiredString(payload, 'artifactId');
+      const targetPath = requiredString(payload, 'targetPath');
+      const result = await deps.artifactService.importRevisionToWorkspace({
+        artifactId,
+        orgId: env.orgId,
+        workspace,
+        targetPath,
+      });
+      return c.json({ ok: true, data: { artifactId, path: result.path } });
+    } catch (err) {
+      const wire = wireFor(err);
       return c.json({ ok: false, error: wire }, statusFor(err) as never);
     }
   });
