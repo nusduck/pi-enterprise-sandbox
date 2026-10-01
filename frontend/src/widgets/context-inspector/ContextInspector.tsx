@@ -209,6 +209,8 @@ export function ContextInspector({
       if (art.runId && runIds.size > 0 && !runIds.has(art.runId)) continue;
       if (seen.has(art.id)) continue;
       seen.add(art.id);
+      // 审核员修订后放行的是另一个 id：卡片已经指向它，列表里的同一件不再补一张。
+      if (art.reviewReleasedId) seen.add(art.reviewReleasedId);
       out.push(art);
     }
 
@@ -245,6 +247,11 @@ export function ContextInspector({
               : null,
         description: null,
         source: 'submit_artifact',
+        // 产物库列出的都是已放行的产物；审核状态由事件流维护（这里是刷新后的补齐）。
+        reviewStatus: null,
+        reviewRevised: false,
+        reviewFeedback: null,
+        reviewReleasedId: null,
         createdAt:
           listed.created_at != null
             ? String(listed.created_at)
@@ -275,9 +282,16 @@ export function ContextInspector({
     [tools, artifacts, listedArtifacts],
   );
 
+  // review 会话里不显示工作区文件面板（design agent-output-review §8）：服务端本来
+  // 就会 404（E5），这里只是不引导用户去点。隐藏时给出原因，不是静默消失。
+  const conversation = (state.conversations || []).find((c) => c.id === state.conversationId);
+  const reviewSession = conversation?.delivery_mode === 'review';
+
   const tabs: TabDef[] = [
     { id: 'artifacts', label: '产物', count: importableArtifacts.length || undefined },
-    { id: 'files', label: '文件', count: referencedFiles.length || undefined },
+    ...(reviewSession
+      ? []
+      : [{ id: 'files' as const, label: '文件', count: referencedFiles.length || undefined }]),
     { id: 'datasets', label: '数据集', count: datasets.length || undefined },
     { id: 'processes', label: '进程', count: processes.length || undefined },
   ];
@@ -349,8 +363,13 @@ export function ContextInspector({
         </div>
 
         <div className="inspector-body" role="tabpanel">
-          {tab === 'files' ? (
+          {tab === 'files' && !reviewSession ? (
             <FilesPanel files={referencedFiles} />
+          ) : null}
+          {tab === 'files' && reviewSession ? (
+            <p className="inspector-empty">
+              这个会话的交付物需要人工审核，工作区文件在审核通过前不对发起人开放。
+            </p>
           ) : null}
 
           {tab === 'processes' ? (

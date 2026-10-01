@@ -16,6 +16,7 @@
     "./skill-manifest.js": "./dist/skill-manifest.js",
     "./skill-policy.js": "./dist/skill-policy.js",
     "./data-sources.js": "./dist/data-sources.js",
+    "./delivery-policy.js": "./dist/delivery-policy.js",
     "./shell-payload.js": "./dist/shell-payload.js",
     "./schema/schema-manifest.json": "./schema/schema-manifest.json",
     "./errors": "./dist/errors.js",

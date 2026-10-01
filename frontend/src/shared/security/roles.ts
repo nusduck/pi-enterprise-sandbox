@@ -74,3 +74,13 @@ export function hasRole(user: RoleUserInput, role: string): boolean {
 export function hasAdminRole(user: RoleUserInput): boolean {
   return hasRole(user, 'admin');
 }
+
+/**
+ * 是否审核员（RBAC 一期 `reviewer`）。
+ *
+ * 只用于**界面可见性**（主导航里的「交付物审核」）：真正的判定在服务端，没有这个
+ * 角色时页面显示的是服务端返回的 403 `REVIEWER_REQUIRED`，而不是自己猜一个空队列。
+ */
+export function hasReviewerRole(user: RoleUserInput): boolean {
+  return hasRole(user, 'reviewer');
+}

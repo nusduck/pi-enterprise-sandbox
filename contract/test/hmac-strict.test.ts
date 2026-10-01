@@ -14,6 +14,7 @@ import {
   INTERNAL_TOKEN_SUBJECT,
   INTERNAL_TOKEN_TYPE,
   InternalHmacError,
+  internalBindingForHtu,
   issueInternalToken,
   signInternalToken,
   validateInternalHmacKeyring,
@@ -278,6 +279,57 @@ describe('strict Agent -> Sandbox HS256 internal token', () => {
     ]) {
       expectCode(
         () => validateInternalTokenClaims(fullClaims({ [field]: value })),
+        'INTERNAL_TOKEN_CLAIM_INVALID',
+      );
+    }
+  });
+
+  it('allows null Run/fence for the review face but keeps the scope binding exact', () => {
+    // design `agent-output-review.md` §6.2：审核动作发生在 Run 之外（审核员的
+    // 决定、outbox 驱动的放行），那时没有活跃 fence。**只有登记了 allowNullRun
+    // 的族**能空；scope / tool_name 仍必须逐字对上 `/internal/v1/review/` 的绑定。
+    const review = {
+      run_id: null,
+      execution_fence_token: null,
+      tool_name: 'review',
+      scope: ['sandbox.review'],
+      htu: '/internal/v1/review/artifacts/revision',
+    };
+    const verified = verifyInternalToken(issue(review), {
+      keyring: KEYRING,
+      clock: () => NOW,
+    });
+    assert.equal(verified.run_id, null);
+    assert.equal(verified.execution_fence_token, null);
+    assert.deepEqual(verified.scope, ['sandbox.review']);
+
+    // 表里查得到这一族（exec 的中间件就是按它放行的），且明确允许空 Run。
+    const binding = internalBindingForHtu('/internal/v1/review/artifacts/visibility');
+    assert.ok(binding);
+    assert.equal(binding!.scope, 'sandbox.review');
+    assert.equal(binding!.toolName, 'review');
+    assert.equal(binding!.allowNullRun, true);
+
+    // 前缀必须是 `review/`：`/internal/v1/reviews` 不是这一族，没有绑定，
+    // exec 侧因此一律 401（新端点不能默认免检）。
+    assert.equal(internalBindingForHtu('/internal/v1/reviews'), null);
+
+    for (const overrides of [
+      // 拿 fs 令牌打审核面：scope / tool_name 对不上绑定，签发就拒。
+      {
+        ...review,
+        tool_name: 'fs',
+        scope: ['sandbox.fs'],
+        htu: '/internal/v1/review/artifacts/get',
+      },
+      // 拿审核令牌打文件面：文件面不允许空 Run，签发就拒。
+      { ...review, htu: '/internal/v1/fs/read' },
+      // 同一族但只填了一半的 Run 身份也必须拒（要空就一起空）。
+      { ...review, run_id: ISSUE_CLAIMS.run_id },
+      { ...review, execution_fence_token: 1 },
+    ]) {
+      expectCode(
+        () => issue(overrides),
         'INTERNAL_TOKEN_CLAIM_INVALID',
       );
     }

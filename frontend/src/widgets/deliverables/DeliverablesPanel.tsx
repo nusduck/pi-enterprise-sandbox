@@ -3,6 +3,8 @@ import { useChat } from '../../features/chat/ChatContext';
 import { getArtifactDownloadUrl } from '../../shared/api';
 import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
+import { artifactDownloadId, deliveryBadge, listedNotShownAsCards } from '../turn-stream/artifactView';
+import type { ArtifactEntity } from '../../entities/types';
 import { IconDownload, IconFile } from '../../shared/ui/Icons';
 
 function formatSize(n?: number | null): string {
@@ -36,6 +38,10 @@ export function DeliverablesPanel() {
       path: string | null;
       size: number | null;
       sessionId: string | null;
+      reviewStatus: ArtifactEntity['reviewStatus'];
+      reviewRevised: boolean;
+      reviewFeedback: string | null;
+      reviewReleasedId: string | null;
     }> = [];
     for (const art of Object.values(entityStore.artifactsById)) {
       if (art.source !== 'submit_artifact') continue;
@@ -48,16 +54,19 @@ export function DeliverablesPanel() {
         path: art.path,
         size: art.size,
         sessionId: art.sessionId,
+        reviewStatus: art.reviewStatus,
+        reviewRevised: art.reviewRevised,
+        reviewFeedback: art.reviewFeedback,
+        reviewReleasedId: art.reviewReleasedId,
       });
     }
     return out;
   }, [entityStore, activeRunId, state.conversationId]);
 
-  const listed = (state.artifacts || []).filter((a) => {
-    const id = a.artifact_id || a.id;
-    if (!id) return false;
-    return !entityArtifacts.some((e) => e.id === id);
-  });
+  const listed = listedNotShownAsCards(
+    state.artifacts || [],
+    entityArtifacts as unknown as ArtifactEntity[],
+  );
 
   const total = entityArtifacts.length + listed.length;
   const hidden = total === 0 || !activeSessionId;
@@ -91,10 +100,28 @@ export function DeliverablesPanel() {
           if (!sid || !a.id || !isDurableArtifactId(a.id, activeRunId || '')) {
             return null;
           }
-          const url = getArtifactDownloadUrl(sid, a.id);
+          // 待审 / 驳回的交付物不是链接（design §8）：显示状态而不是一个必然 404
+          // 的下载入口。`reviewStatus` 为 null 的是 direct 会话，行为不变。
+          if (a.reviewStatus === 'pending' || a.reviewStatus === 'rejected') {
+            const badge = deliveryBadge(a as unknown as ArtifactEntity);
+            return (
+              <span
+                key={a.id}
+                className="artifact-chip artifact-chip-held"
+                title={badge || a.name}
+                data-source="submit_artifact"
+                data-review-status={a.reviewStatus}
+              >
+                <span className="artifact-chip-name">{a.name}</span>
+                {badge ? <span className="chip-size">{badge}</span> : null}
+              </span>
+            );
+          }
+          const url = getArtifactDownloadUrl(sid, artifactDownloadId(a as unknown as ArtifactEntity));
           const safe = safeApiUrl(url);
           if (!safe) return null;
-          const size = formatSize(a.size);
+          // 修订版的大小不在卡片实体上（实体记的是原件）：改为标注「经审核员修订」。
+          const size = a.reviewRevised ? '经审核员修订' : formatSize(a.size);
           return (
             <a
               key={a.id}

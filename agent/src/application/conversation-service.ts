@@ -11,6 +11,7 @@ import {
   ValidationError,
 } from './errors.js';
 import { RunParentProvisioner } from './parent/run-parent-provisioner.js';
+import { bindAgentVersionConfig } from '../infrastructure/dsh/agent-version-bindings.js';
 import { ExternalIdentityResolver,
   type ExternalAuth,
 } from './parent/external-identity-resolver.js';
@@ -105,7 +106,7 @@ export function presentTranscriptMessage(msg) {
  * @param [messages]
  * @param [session]
  */
-export function presentConversation(row: Record<string, any>, messages: Record<string, any>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null } | null = null) {
+export function presentConversation(row: Record<string, any>, messages: Record<string, any>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null, deliveryMode?: string|null } | null = null) {
   const transcript = Array.isArray(messages)
     ? messages.map(presentTranscriptMessage).filter(Boolean)
     : [];
@@ -125,6 +126,9 @@ export function presentConversation(row: Record<string, any>, messages: Record<s
     // 显示当前 Agent，让"换 Agent 要新建会话"这条约束在 UI 上说得通。
     agent_id: row.agentId ?? null,
     sandbox_session_id: sandboxSessionId,
+    // `review` = 这个会话绑定的版本要求交付物人工审核（design §2）。前端据此
+    // 隐藏工作区文件面板并给交付卡片三态；`direct` / 缺失就是既有行为。
+    delivery_mode: session?.deliveryMode === 'review' ? 'review' : 'direct',
     agent_session_id: agentSessionId,
     workspace_id: workspaceId,
     messages: transcript,
@@ -202,9 +206,28 @@ export class ConversationService {
       return null;
     }
     try {
-      return await repos.sessions.getById(agentSessionId, owner);
+      const session = await repos.sessions.getById(agentSessionId, owner);
+      if (!session) return null;
+      // 交付策略随**绑定版本**固定（design agent-output-review §2 / F5）：前端要它
+      // 才能在 review 会话里不引导用户去点必然 404 的工作区文件面板（§8）。读版本
+      // 是唯一权威；读不到按 direct——不隐藏面板是更保守的方向，真正的读由 exec 的
+      // E5 404 挡着。
+      return { ...session, deliveryMode: await this.#deliveryModeFor(repos, session) };
     } catch {
       return null;
+    }
+  }
+
+  /** 绑定版本的交付模式；读不到一律 `direct`（不谎报审核模式）。 */
+  async #deliveryModeFor(repos: Record<string, any>, session: Record<string, any>): Promise<'direct' | 'review'> {
+    const agentVersionId = session?.agentVersionId ?? null;
+    if (!agentVersionId || typeof repos.catalog?.getVersionById !== 'function') return 'direct';
+    try {
+      const version = await repos.catalog.getVersionById(agentVersionId);
+      if (!version) return 'direct';
+      return bindAgentVersionConfig(version).deliveryPolicy.mode;
+    } catch {
+      return 'direct';
     }
   }
 
@@ -519,6 +542,9 @@ export class ConversationService {
       agentSessionId: parents.agentSessionId,
       sandboxSessionId: parents.sandboxSessionId,
       workspaceId: parents.workspaceId,
+      // 交付策略随会话绑定的版本固定（ADR 0016 D3）：只有 review 才发出去，
+      // exec 那边是 `INSERT IGNORE`，所以这条信号只能把工作区置成审核。
+      ...(parents.deliveryMode === 'review' ? { delivery: 'review' } : {}),
       // @ts-expect-error 遗留JS占位类型object未展开，访问traceId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceId' does not exist on type 'object'.
       traceId: input.traceId,
     });

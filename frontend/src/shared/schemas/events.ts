@@ -23,6 +23,10 @@ export const RUNTIME_EVENT_TYPES = [
   'tool.completed',
   'tool.failed',
   'artifact.created',
+  // 交付物人工审核（design agent-output-review §4）：放行与驳回。挂在原 Run 上，
+  // 刷新后靠会话事件重放拿到。
+  'artifact.released',
+  'review.rejected',
   'session.compacted',
 ] as const;
 

@@ -19,12 +19,15 @@ import { parseActingHeaders, requireOwnedSession } from './ownership.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
 import type { JobSnapshot } from '../../shell/job-types.js';
+import type { WorkspacePolicyStore } from '../../db/repositories/workspace-policies.js';
 
 export interface PublicProcessDeps {
   readonly workspaceManager: WorkspaceManager;
   readonly systemSkillRoot: string;
   readonly enabledSkillPackagesFor: (orgId: string, userId: string) => readonly { name: string; sourcePath: string }[];
   readonly jobRegistry: MySqlJobRegistry;
+  /** 工作区交付策略（ADR 0016 D1）；进程日志能 `cat` 出交付物内容，所以要判。 */
+  readonly workspacePolicies?: WorkspacePolicyStore | undefined;
 }
 
 const ALLOWED_SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP']);

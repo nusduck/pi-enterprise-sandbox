@@ -357,6 +357,20 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
       'Per-Run lookup cache for governance approval records; durable approval state remains repository-backed',
     scope: 'instance',
   },
+  {
+    rel: 'application/review-service.ts',
+    match: /const\s+cache\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local user_id -> display_name cache while presenting one review page; the users table stays authoritative',
+    scope: 'local',
+  },
+  {
+    rel: 'infrastructure/review/review-publisher.ts',
+    match: /const\s+byAttachment\s*=\s*new\s+Map\s*</,
+    purpose:
+      'Function-local attachment_id -> source path index while snapshotting one task\'s materials; the messages table stays authoritative and the map is discarded with the tick',
+    scope: 'local',
+  },
 ]);
 
 function walkSource(dir, acc = []) {
@@ -580,9 +594,12 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // `admin-run-read-repository.ts` 的 `mergeSkillUsageTiers()` 里：一次报表归并的
     // (agent_version, scope) → 名字索引与 (名字, 层) → 次数累加器，函数返回即丢。
     // 权威是 `tool_executions` 与 `agent_version_skill_refs` 两张表。
+    // 2026-10-01: 47 → 49（交付物审核：`review-service.ts` 出列表的显示名缓存、
+    // `review-publisher.ts` 一次 tick 内 attachment_id → 源路径索引）。两者都是
+    // 函数局部、返回即丢；权威是 `users` 与 `messages` 两张表。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      47,
+      49,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

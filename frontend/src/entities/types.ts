@@ -197,6 +197,21 @@ export type ArtifactEntity = {
   description: string | null;
   /** Always submit_artifact for platform artifacts. */
   source: 'submit_artifact';
+  /**
+   * 交付物审核状态（design `agent-output-review.md` §4 / §8）。
+   *
+   * - `pending`：review 会话里刚提交、还没审（卡片显示「已提交审核」，**没有下载按钮**）；
+   * - `released`：审核通过（`revised` 为真时标注「经审核员修订」）；
+   * - `rejected`：驳回（卡片显示反馈）；
+   * - `null`：direct 会话的普通交付物（既有行为，不显示任何审核字样）。
+   */
+  reviewStatus: 'pending' | 'released' | 'rejected' | null;
+  /** 通过时这一版是不是审核员的修订版（服务端在 `artifact.released` 里给）。 */
+  reviewRevised: boolean;
+  /** 驳回反馈（`review.rejected` 事件负载）。 */
+  reviewFeedback: string | null;
+  /** 通过时实际放行的 artifact id；有修订时与 `id`（智能体提交的原件）不同，下载走它。 */
+  reviewReleasedId: string | null;
   createdAt: string | null;
 };
 

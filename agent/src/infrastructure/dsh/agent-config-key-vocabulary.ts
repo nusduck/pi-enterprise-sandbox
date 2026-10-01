@@ -50,6 +50,8 @@ export const V1_TOP_LEVEL_KEYS: readonly string[] = Object.freeze([
   'dataSources',
   // ADR 0015：Skill 目录与绑定。v1 增量可选字段，不升 schemaVersion。
   'skillPolicy',
+  // ADR 0016：交付物人工审核。同样是 v1 增量可选字段。
+  'deliveryPolicy',
 ]);
 
 /**

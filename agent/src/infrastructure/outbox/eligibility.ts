@@ -31,6 +31,22 @@ export const RUN_NOTIFICATION_CLAIM_ELIGIBILITY = Object.freeze({
 });
 
 /**
+ * 审核工作队列只认 `review` 聚合（放行/驳回、材料快照）。
+ *
+ * `run_notification` 那条注释同样适用：**只按 aggregate_type 过滤**。所以审核
+ * 结果通知必须用另一个聚合类型（`review_notification`），否则会被终态邮件消费者
+ * 按「Run 结束」的语义处理掉。
+ */
+export const REVIEW_JOB_CLAIM_ELIGIBILITY = Object.freeze({
+  aggregateTypes: Object.freeze(['review']),
+});
+
+/** 审核结果通知消费者只认 `review_notification` 聚合。 */
+export const REVIEW_NOTIFICATION_CLAIM_ELIGIBILITY = Object.freeze({
+  aggregateTypes: Object.freeze(['review_notification']),
+});
+
+/**
  * Normalize and validate an eligibility object.
  * Empty / omitted filters mean "no eligibility restriction" (claim any due row).
  *

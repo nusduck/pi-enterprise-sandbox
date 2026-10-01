@@ -55,6 +55,9 @@ export const ConversationSchema = z
     // Agent 目录当前 active_version 推测旧会话使用的版本。
     agent_version_id: z.string().optional().nullable(),
     agent_version_no: z.number().optional().nullable(),
+    // 交付策略（design agent-output-review §2/§8）：`review` = 这个会话绑定的版本
+    // 要求交付物人工审核。前端据此隐藏工作区文件面板（服务端本来就会 404）。
+    delivery_mode: z.string().optional().nullable(),
     model_policy: z
       .object({ fixed_model_id: z.string().nullable() })
       .optional()

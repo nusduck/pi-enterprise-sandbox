@@ -428,13 +428,18 @@ describe('产物与数据集共用同一个配额账本', () => {
 
   test('createExecApp 只建一个账本，两个服务拿到的是同一个', async () => {
     // 结构性断言：装配入口里 `new WorkspaceQuotaLedger(` 只能出现一次，
-    // 且 artifact / dataset 都是用 `{ quotaLedger }` 装配的。
+    // 且 artifact / dataset 都是用共享的 `quotaLedger` 装配的。
+    // 2026-10-01：产物装配多了 `workspacePolicies`（ADR 0016 D1）——断言跟着
+    // 放宽到"这两个选项都在"，不再钉死选项集合的完整字面量。
     const source = await readFile(
       new URL('../src/http/app.ts', import.meta.url), 'utf8',
     );
     const perApp = source.match(/new WorkspaceQuotaLedger\(/g) ?? [];
     assert.equal(perApp.length, 2, 'createExecApp 与 createExecAppFromEnv 各一个，不该更多');
-    assert.match(source, /new ArtifactService\(makeWorkspaceFs, undefined, \{ quotaLedger \}\)/);
+    assert.match(
+      source,
+      /new ArtifactService\(makeWorkspaceFs, undefined, \{[^}]*quotaLedger[^}]*workspacePolicies[^}]*\}\)/,
+    );
     assert.match(source, /new DatasetService\(makeWorkspaceFs, undefined, \{ quotaLedger \}\)/);
   });
 });

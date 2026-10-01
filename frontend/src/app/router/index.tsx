@@ -13,6 +13,7 @@ import { SkillAdminPage } from '../../pages/settings/SkillAdminPage';
 import { MembersPage } from '../../pages/settings/MembersPage';
 import { SchedulesPage } from '../../pages/schedules/SchedulesPage';
 import { ArtifactsPage } from '../../pages/artifact-library/ArtifactsPage';
+import { ReviewsPage } from '../../pages/reviews/ReviewsPage';
 
 /** /settings/<tab> moved to /admin/<tab>; keep old links and bookmarks working. */
 function LegacySettingsRedirect() {
@@ -31,6 +32,8 @@ export function AppRouter() {
         <Route path="/c/:conversationId" element={<AppShell><WorkbenchPage /></AppShell>} />
         <Route path="/schedules" element={<AppShell><SchedulesPage /></AppShell>} />
         <Route path="/artifacts" element={<AppShell><ArtifactsPage /></AppShell>} />
+        {/* 审核工作台放在 AppShell 里：reviewer 不一定是 admin（design §8）。 */}
+        <Route path="/reviews" element={<AppShell><ReviewsPage /></AppShell>} />
 
         <Route path="/admin" element={<Navigate to="/admin/runs" replace />} />
         <Route path="/admin/runs" element={admin(<RunsPage />)} />

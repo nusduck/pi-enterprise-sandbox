@@ -33,6 +33,7 @@ import {
 import { assertWorkerTopologyDrained } from './worker-drain-gate.js';
 import { resolveDrainTimeout, runWorkerShutdown } from './worker-drain.js';
 import { startNotificationLoop } from './worker-notification.js';
+import { startReviewLoop } from './worker-review.js';
 import { ulid } from '../domain/shared/ulid.js';
 
 /** Foreground durable subagents need a slot while their child Run executes. */
@@ -205,6 +206,7 @@ async function runWorkerMain(
 
   let publisher;
   let notificationLoop: ReturnType<typeof startNotificationLoop>;
+  let reviewLoop: ReturnType<typeof startReviewLoop>;
   try {
     publisher = await container.createOutboxPublisher();
     // Run 终态邮件通知：独立认领 run_notification 行，与 outbox 循环互不阻塞。
@@ -212,6 +214,14 @@ async function runWorkerMain(
     notificationLoop = (hooks.startNotificationLoop || startNotificationLoop)({
       knex: container.knex,
       env,
+      generateId: container.generateId ?? ulid,
+      now: container.now,
+    });
+    // 审核循环：放行/撤回与材料快照走 exec 内部面；与通知循环互不认领。
+    reviewLoop = startReviewLoop({
+      knex: container.knex,
+      env,
+      createRepositories: container.createRepositories,
       generateId: container.generateId ?? ulid,
       now: container.now,
     });
@@ -324,6 +334,7 @@ async function runWorkerMain(
       /* ignore */
     }
     await notificationLoop.stop();
+    await reviewLoop.stop();
     await workerRuntime.shutdown().catch(() => {});
     await container.shutdown().catch(() => {});
     throw err;
@@ -374,6 +385,7 @@ async function runWorkerMain(
             cronScheduler?.shutdown().catch(() => {}),
             outboxLoop.catch(() => {}),
             notificationLoop.stop(),
+            reviewLoop.stop(),
           ]);
         },
         teardown: async () => {

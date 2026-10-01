@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **交付物人工审核（P3–P7：审核账本、审核员 API、放行/驳回、前端工作面）**：把下面
+  那段「review 工作区产物在放行前拿不到」接成完整链路。
+  - **审核账本**（agent MySQL，四张表 `tbl_agsvc_review_{tasks,items,materials,events}`）：
+    Run 进入**任意终态**且本轮有 `held` 产物时，与终态同一事务建任务（`UNIQUE(run_id)`；
+    失败/取消的 Run 也算——它们可能已经提交了正式交付物）；没有产物就不建任务（U4）。
+    材料快照是跨服务调用，所以事务内只落占位行（`snapshot_status='unavailable'`），由
+    outbox 消费者补齐；快照失败是**看得见的状态**，不是静默缺失。
+  - **`artifact.ready` 负载新增 `review_status: "pending"`**（review 会话；direct 会话
+    事件形状不变）。它同时是前端「已提交审核」卡片与终态建任务的判据。
+  - **审核员 API**（BFF `/api/reviews*` → agent `/internal/reviews*`，需 `reviewer` 角色）：
+    列表（待领取 / 我领取的 / 历史，游标分页）、详情（用户提问、附件快照、交付物版本链、
+    审计时间线）、材料与任一版本下载、领取 / 释放 / 上传修订 / 通过 / 驳回。错误码
+    `REVIEWER_REQUIRED`、`REVIEW_SELF_FORBIDDEN`（U8：不能审自己发起的任务）、
+    `REVIEW_NOT_ASSIGNEE`、`REVIEW_ALREADY_CLAIMED`、`REVIEW_VERSION_CONFLICT`
+    （带 `current_revision`）、`REVIEW_ALREADY_DECIDED`、`REVIEW_FEEDBACK_REQUIRED`。
+  - **放行与驳回**：一个事务里改状态、写审计、在原 Run 上追加 `artifact.released` /
+    `review.rejected` 事件、追加会话消息（`assistant/text`、`system/status`）并写 outbox。
+    放行/撤回与「修订版导入工作区 `审核版/`」由 agent-worker 的审核循环投递（跨服务调用
+    不进事务，exec 侧幂等）。有修订时模型后续基于 `审核版/X` 修改。
+  - **审核结果通知**：复用投递账本（`kind` = `review_released` / `review_rejected`，
+    独立聚合类型 `review_notification`，不会被 Run 终态邮件消费者抢走）；尊重用户的邮件
+    通知开关。
+  - **§5.4 上下文注入**：下一个 Run 派生提示词时，对尚未注入的已决任务前置一段平台文本
+    （已通过：说明已交付、哪件经修订、以 `审核版/X` 为准；已驳回：说明没有交付并给出
+    反馈），每个任务只注入一次；文本只进提示词、不进消息行。
+  - **前端**：智能体配置页新增「交付策略」单选；聊天交付卡片三态（已提交审核 / 已交付
+    （经审核员修订）/ 未通过审核，待审与驳回**没有下载按钮**）；review 会话隐藏工作区
+    文件面板并说明原因；新增审核工作台 `/reviews`（主导航项只在持有 `reviewer` 时出现，
+    不放在管理控制台里）。
+  - 内部面新增 `/internal/v1/review/` 的 HMAC 绑定（scope `sandbox.review`），并允许
+    `run_id` / `execution_fence_token` 同时为 null——审核动作发生在 Run 之外。
+  - 设计见 [design/agent-output-review.md](design/agent-output-review.md)（**已实施**），
+    决策见 [ADR 0016](adr/0016-agent-output-human-review.md)（**Accepted**）。
+
+- **交付物人工审核（P1–P2：交付策略 + exec 可见性）**：AgentVersion 新增可选字段
+  `deliveryPolicy.mode`（`direct` 默认 / `review`），随版本固定、会话语义终生不变；
+  `review` 与**委派**互斥（保存即拒绝 `CONFIG_INVALID`，绑定期再判一次
+  `DSH_CONFIG_UNSUPPORTED`），与 **A2A 暴露**双向互斥（保存配置时按活跃 A2A 凭据拒绝，
+  给审核模式 Agent 签新凭据时也拒绝）。会话确保（HMAC 内部面
+  `POST /internal/v1/sessions/ensure`）新增 `delivery: "review"` 字段，exec 用
+  `INSERT IGNORE` 写入新的工作区策略表 `tbl_agsvc_exec_workspace_policies`
+  （**只能设置、不能撤销**）。
+  exec 产物新增 `visibility`（`released`/`held`/`withdrawn`，存量行默认 `released`）、
+  `revision_of`、`created_by_kind`：review 工作区里提交的产物一律 `held`，
+  owner 公共面（会话产物列表、下载、产物库、跨会话导入）只认 `released`；
+  review 工作区的**工作区字节读路径**（文件列表/读取/预览/下载/ls/find/grep、进程日志、
+  数据集读取）一律 404，上传照常；策略查询失败时读操作 503（fail-closed）。
+  新增 exec 内部审核端点（快照 / 按 id 读取 / 修订上传 / 状态变更，仅 HMAC 面）。
+  设计见 [design/agent-output-review.md](design/agent-output-review.md)，
+  决策见 [ADR 0016](adr/0016-agent-output-human-review.md)。
+  **审核员 API、审核账本、放行/驳回与前端工作面（P3–P7）尚未实现**——
+  本期只交付「review 工作区产物在放行前拿不到」这一可独立验收的切片。
+
 - **平台角色管理（RBAC 一期：`admin` / `reviewer`）**：角色权威从「登录时按环境变量用户名名单
   重算的单值 `auth_credentials.role`」改为**挂在组织成员关系上的角色集合**
   （`tbl_agsvc_member_roles`，主键 `(org_id, user_id, role)`，一个人可同时持有两个角色），
@@ -24,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 400 校验失败响应新增可选字段 `reason_code`：把 `ValidationError.details.code` 的
+  具体诊断码（如 `CONFIG_INVALID`、`DELEGATION_AGENT_UNKNOWN`）透出来，
+  解决「只报 `VALIDATION_ERROR`、具体原因没有出口」。`code` 仍是 `VALIDATION_ERROR`。
 - **`SANDBOX_AUTH_ADMIN_USERNAMES` 语义变化：从「每次请求重算、会降级」改为「只授予、不降级、
   名单内锁定」**。名单内账号在登录或 `me` 时若本 org 还没有它的 `admin` 授予就补一条
   （`source=bootstrap`）并记审计；已有授予时不再写库（旧的 `reconcileRole` 每个请求写一次库）。

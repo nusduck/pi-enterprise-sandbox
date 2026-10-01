@@ -48,6 +48,7 @@ import { handleCronRoute } from '../presentation/http/cron-routes.js';
 import { handleAgentCatalogRoute } from '../presentation/http/agents-routes.js';
 import { handleAdminRunRoute } from '../presentation/http/admin-run-routes.js';
 import { handleMemberRoleRoute } from '../presentation/http/member-role-routes.js';
+import { handleReviewRoute } from '../presentation/http/review-routes.js';
 import { handleIdentityRoute } from '../presentation/http/identity-routes.js';
 import { handleSkillRoute } from '../presentation/http/skill-routes.js';
 import { handleAuthRoute } from '../presentation/http/auth-routes.js';
@@ -114,6 +115,8 @@ export interface AgentHttpServerDeps {
   adminRunQueryService?: import('../presentation/http/admin-run-routes.js').AdminRunQueryServiceLike | null;
   ownerIdentityService?: import('../presentation/http/identity-routes.js').OwnerIdentityServiceLike | null;
   memberRoleService?: import('../presentation/http/member-role-routes.js').MemberRoleServiceLike | null;
+  /** 审核员面（design agent-output-review §7）；缺省时该前缀一律 503。 */
+  reviewService?: import('../presentation/http/review-routes.js').ReviewServiceLike | null;
   activeRunHint?: () => number;
   eventPollIntervalMs?: number;
   eventHeartbeatMs?: number;
@@ -237,6 +240,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         return;
       }
       if (await handleMemberRoleRoute({ req, res, parsedUrl, path, memberRoleService: deps.memberRoleService || null })) {
+        return;
+      }
+      if (await handleReviewRoute({ req, res, parsedUrl, path, reviewService: deps.reviewService || null })) {
         return;
       }
 

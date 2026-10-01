@@ -12,6 +12,7 @@ import { isTerminalRunStatus } from '../domain/run/run-status.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid } from '../domain/shared/ulid.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
+import { ensureReviewTaskForTerminalRun } from './review-task-create.js';
 
 /**
  * Apply a state-machine-validated transition inside an open transaction.
@@ -46,6 +47,12 @@ export interface RunTransitionRepos {
   runs: any;
   runEvents: any;
   outbox: any;
+  /**
+   * 审核账本（design `agent-output-review.md` §5.2）。可选：只注入三件套的测试
+   * 替身与历史调用路径不该因为「这一次没带审核仓储」就直接炸掉——没有它就跳过
+   * 建任务（`ensureReviewTaskForTerminalRun` 自己会判空）。
+   */
+  reviews?: any;
 }
 
 export async function applyRunTransitionInTxn(args: { repos: RunTransitionRepos, runId: string, scope: { orgId: string, userId: string }, from: string, to: string, traceId: string, generateId: () => string, eventType?: string, statusReason?: string | null, attempt?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, payloadExtra?: Record<string, unknown>, }) {
@@ -139,6 +146,24 @@ export async function applyRunTransitionInTxn(args: { repos: RunTransitionRepos,
         orgId: scope.orgId,
         userId: scope.userId,
       },
+    });
+
+    // 交付物人工审核（design §5.2）：本轮有 `held` 产物就同事务建一条审核任务。
+    // 放在这里而不是各入口分别写：终态只有这一条收口，九个入口（正常完成、失败、
+    // 取消、恢复扫描、挂起取消……）自动全覆盖，包括「提交产物后被取消的 Run」。
+    await ensureReviewTaskForTerminalRun({
+      repos,
+      run: {
+        runId,
+        orgId: scope.orgId,
+        userId: scope.userId,
+        conversationId: run.conversationId,
+        agentSessionId: run.agentSessionId,
+        agentVersionId: run.agentVersionId,
+        triggeringMessageId: run.triggeringMessageId,
+      },
+      to,
+      generateId,
     });
   }
 

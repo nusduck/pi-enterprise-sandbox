@@ -18,9 +18,9 @@
  * - `delete_by_session` 未移植：目前没有调用方。
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { WorkspaceContext } from '../types.js';
@@ -28,12 +28,19 @@ import { redactPhysicalRoots } from '../fs/redact.js';
 import type { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import { sanitizeFilename } from '../attachment/sanitize.js';
 import type {
+  ArtifactCreatedByKind,
   ArtifactStore,
+  ArtifactVisibility,
+  ArtifactVisibilityUpdate,
   ExecArtifactRecord,
   OwnerListQuery,
   OwnerScope,
 } from '../db/repositories/artifacts.js';
 import { InMemoryArtifactStore } from '../db/repositories/artifacts.js';
+import {
+  InMemoryWorkspacePolicyStore,
+  type WorkspacePolicyStore,
+} from '../db/repositories/workspace-policies.js';
 import { InMemoryQuotaStore } from '../workspace/quota-store.js';
 import { InProcessWorkspaceLock } from '../workspace/lock.js';
 import { WorkspaceQuotaLedger } from '../workspace/quota-ledger.js';
@@ -99,6 +106,24 @@ function guessMime(name: string): string {
   return MIME_BY_EXT[name.slice(dot).toLowerCase()] ?? 'application/octet-stream';
 }
 
+/**
+ * 规范化平台生成的逻辑路径：逐段清洗文件名，丢掉空段与 `.`。
+ *
+ * `..` 不在这里拦——交给 `fs.resolve()` 的 path-policy 围栏统一判（一处判定比
+ * 两处更不容易漂移）。返回 `null` 表示没有任何可用段。
+ */
+function normalizeLogicalPath(raw: string): string | null {
+  const segments = String(raw ?? '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== '' && segment !== '.')
+    .map((segment) => (segment === '..' ? '..' : sanitizeFilename(segment)));
+  if (segments.length === 0) return null;
+  if (segments.some((segment) => segment === '')) return null;
+  return segments.join('/');
+}
+
 export interface ArtifactSubmitRequest {
   readonly workspace: WorkspaceContext;
   readonly sessionId: string;
@@ -117,18 +142,36 @@ export interface ArtifactSubmitRequest {
    * 新 id，两边就对不上了。其余调用方一律不传，由本服务生成。
    */
   readonly externalArtifactId?: string | null;
+  /**
+   * 显式指定可见性。审核面的两个调用方必须用它：
+   * - 材料快照恒为 `withdrawn`（永远不对发起人可见，只供审核员读取）；
+   * - 审核员的修订版恒为 `held`（要等这次审核通过才放行）。
+   *
+   * 省略时按**工作区策略**判定：review 工作区写 `held`，其余写 `released`
+   * （design §3.2「review 工作区里提交的产物一律写为 held」）。
+   */
+  readonly visibility?: ArtifactVisibility | null;
+  /** 修订版指向被替换的那一版；原件永不覆盖。 */
+  readonly revisionOf?: string | null;
+  readonly createdByKind?: ArtifactCreatedByKind | null;
 }
 
 export interface ArtifactServiceOptions {
   readonly roots?: ControlPlaneRoots;
   readonly maxBytes?: number;
   readonly quotaLedger?: WorkspaceQuotaLedger;
+  /**
+   * 工作区交付策略（ADR 0016 D1）。省略 = 没有工作区需要审核（单测/本地装配）；
+   * `createExecApp` 总会给一个（生产是 MySQL 实现）。
+   */
+  readonly workspacePolicies?: WorkspacePolicyStore;
 }
 
 export class ArtifactService {
   readonly #roots: ControlPlaneRoots;
   readonly #maxBytes: number;
   readonly #quotaLedger: WorkspaceQuotaLedger;
+  readonly #workspacePolicies: WorkspacePolicyStore;
 
   constructor(
     private readonly fsFactory: (workspace: WorkspaceContext) => WorkspaceFileSystem,
@@ -142,6 +185,23 @@ export class ArtifactService {
       new WorkspaceQuotaLedger(new InMemoryQuotaStore(), new InProcessWorkspaceLock(), {
         defaultQuotaMb: 1024,
       });
+    this.#workspacePolicies =
+      options.workspacePolicies ?? new InMemoryWorkspacePolicyStore();
+  }
+
+  /**
+   * 这一版产物该有多可见。
+   *
+   * 显式指定优先（快照恒 `withdrawn`、修订恒 `held`）；否则看工作区策略：
+   * review 工作区一律 `held`，其余 `released`（design §3.2）。
+   *
+   * **策略读取失败必须抛**，不能当作 direct：把一次数据库抖动变成「待审产物
+   * 直接交付」正是这个功能最不能出的错（AGENTS.md §2 fail-closed）。
+   */
+  async #resolveVisibility(req: ArtifactSubmitRequest): Promise<ArtifactVisibility> {
+    if (req.visibility) return req.visibility;
+    const delivery = await this.#workspacePolicies.deliveryOf(req.workspace.workspaceId);
+    return delivery === 'review' ? 'held' : 'released';
   }
 
   #redact(err: unknown, workspace: WorkspaceContext): never {
@@ -220,6 +280,9 @@ export class ArtifactService {
       sha256: copied.digest,
       sizeBytes: copied.size,
       identity: copied.identity,
+      visibility: await this.#resolveVisibility(req),
+      revisionOf: req.revisionOf ?? null,
+      createdByKind: req.createdByKind ?? 'agent',
     });
 
     const got = await this.store.getOwned(artifactId, req.owner);
@@ -237,22 +300,129 @@ export class ArtifactService {
    * `session_id` 列不是稳定的列表键：内部面的 `submit_artifact` 写 sandbox
    * session id，MCP facade 写 workspace id。公共面的路径参数解析出来的是
    * workspace，所以按 workspace 查两个写入方都覆盖得到。
+   *
+   * **只列 `released`**（design §3.3 E1）：待审与撤回的产物对发起人一律不存在。
    */
   async listByWorkspace(
     workspaceId: string,
     owner: OwnerScope,
   ): Promise<ExecArtifactRecord[]> {
-    return await this.store.listByWorkspace(workspaceId, owner);
+    return await this.store.listByWorkspace(workspaceId, owner, ['released']);
   }
 
-  /** 同一 owner 跨会话的全部产物（产物库），新的在前。 */
+  /** 同一 owner 跨会话的全部产物（产物库），新的在前。**只列 `released`**（E3）。 */
   async listByOwner(owner: OwnerScope, q: OwnerListQuery): Promise<ExecArtifactRecord[]> {
-    return await this.store.listByOwner(owner, q);
+    return await this.store.listByOwner(owner, q, ['released']);
   }
 
-  /** 取产物元数据；归属不符返回 null（调用方一律翻成 404，不泄漏存在性）。 */
+  /**
+   * 取产物元数据；归属不符返回 null（调用方一律翻成 404，不泄漏存在性）。
+   *
+   * **不看可见性**：内部面（模型工具、MCP facade）需要拿到自己刚提交的
+   * `held` 产物元数据。owner 公共面必须走 `getOwnerVisible`。
+   */
   async get(artifactId: string, owner: OwnerScope): Promise<ExecArtifactRecord | null> {
     return await this.store.getOwned(artifactId, owner);
+  }
+
+  /**
+   * 发起人可见的单件产物：非 `released` 与不存在给同一个 `null`
+   * （design §3.3 E2/E4——存在性本身不能泄漏，所以不能 403）。
+   */
+  async getOwnerVisible(
+    artifactId: string,
+    owner: OwnerScope,
+  ): Promise<ExecArtifactRecord | null> {
+    const record = await this.store.getOwned(artifactId, owner);
+    return record !== null && record.visibility === 'released' ? record : null;
+  }
+
+  /**
+   * 审核面按 id 取产物：**org 作用域，不看可见性**。
+   *
+   * 审核员不是发起人，拿不到 owner 作用域；「这件产物属于本任务、属于本 org」
+   * 由 agent 的审核账本判定，exec 只保证不跨 org。
+   */
+  async getInOrg(artifactId: string, orgId: string): Promise<ExecArtifactRecord | null> {
+    return await this.store.getInOrg(artifactId, orgId);
+  }
+
+  /** 一组产物的状态变更（held → released | withdrawn），单事务、幂等。 */
+  async applyVisibilities(
+    orgId: string,
+    updates: readonly ArtifactVisibilityUpdate[],
+  ): Promise<number> {
+    return await this.store.applyVisibilities(orgId, updates);
+  }
+
+  /**
+   * 审核员的修订上传：**新建**一版产物，`revision_of` 指向被替换的那一版。
+   * 原件永不覆盖（design §5.1）——审核历史就是这条链。
+   *
+   * 字节直接落控制面，不走工作区：审核员不进发起人的工作区（design §6.1），
+   * 而 TT 唯一的围栏是 `validateSegment` + 控制面根，与 `submit` 共用同一处存储。
+   *
+   * 记账的边界（有意为之，不是遗漏）：修订版**不占发起人的工作区配额**。配额是
+   * 「这个工作区里的字节」的账，而修订版在控制面、属于审核流程；把它记到发起人
+   * 头上等于让一次评审消耗被评审者的额度。它仍然受 `maxBytes` 单件上限约束。
+   *
+   * @throws ArtifactError 原件不存在（404）、超限（413）、名字非法（400）
+   */
+  async submitRevision(input: {
+    readonly originalArtifactId: string;
+    readonly orgId: string;
+    readonly name?: string | null;
+    readonly mimeType?: string | null;
+    readonly bytes: Uint8Array;
+  }): Promise<ExecArtifactRecord> {
+    const original = await this.store.getInOrg(input.originalArtifactId, input.orgId);
+    if (original === null) {
+      throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
+    }
+    if (input.bytes.byteLength > this.#maxBytes) {
+      throw new ArtifactError('artifact_too_large', 'artifact exceeds the size limit', 413);
+    }
+    const displayName = (input.name ?? '').trim() || original.name;
+    const safeName = sanitizeFilename(displayName);
+    if (!safeName) throw new ArtifactError('artifact_bad_name', 'artifact name is invalid', 400);
+
+    const artifactId = `art_${randomUUID().replace(/-/g, '')}`;
+    const dest = artifactBlobPath(this.#roots, input.orgId, artifactId);
+    await mkdir(path.dirname(dest), { recursive: true, mode: 0o700 });
+    // 0600：控制面快照只有 exec 进程可读，与 `streamCopyHashToControl` 一致。
+    await writeFile(dest, input.bytes, { mode: 0o600 });
+    const digest = createHash('sha256').update(input.bytes).digest('hex');
+    const st = await stat(dest, { bigint: true });
+
+    await this.store.insert({
+      artifactId,
+      // 修订版继承原件的位置信息：它属于同一个会话/工作区，只是内容由审核员给出。
+      sessionId: original.sessionId,
+      workspaceId: original.workspaceId,
+      orgId: original.orgId,
+      userId: original.userId,
+      name: displayName,
+      sourcePath: original.sourcePath,
+      mimeType: (input.mimeType ?? '').trim() || original.mimeType,
+      sha256: digest,
+      sizeBytes: input.bytes.byteLength,
+      identity: {
+        dev: Number(st.dev),
+        ino: Number(st.ino),
+        size: Number(st.size),
+        mtimeNs: String(st.mtimeNs),
+        nlink: Number(st.nlink),
+        sha256: digest,
+      },
+      // 修订版恒 `held`：它是这次审核的候选版本，要等审核通过才放行。
+      visibility: 'held',
+      revisionOf: original.artifactId,
+      createdByKind: 'reviewer',
+    });
+
+    const got = await this.store.getInOrg(artifactId, input.orgId);
+    if (!got) throw new ArtifactError('artifact_not_found', 'artifact insert not visible', 500);
+    return got;
   }
 
   /**
@@ -265,7 +435,60 @@ export class ArtifactService {
   }
 
   /**
-   * 把一个属于调用者的产物导入目标工作区，作为输入文件。
+   * 把审核员修订后的版本**导入发起人工作区**（design `agent-output-review.md`
+   * §5.3 第 3 步）。
+   *
+   * 与 `importToWorkspace` 的三点不同，都是审核流程要的语义：
+   *
+   * - 取件用 `getInOrg`（org 作用域、**不看可见性**）：修订版在放行前是 `held`，
+   *   而它必须在放行的那一刻就出现在工作区里，好让模型基于审核员改过的版本继续
+   *   修改（§5.4）。用 `getOwnerVisible` 会在这里 404。
+   * - 目标是**逻辑路径**（`审核版/<name>`），不是文件名：这是平台自己生成的目录，
+   *   不是发起人挑的落点，所以允许建子目录。
+   * - 路径仍然过 `fs.resolve()` 围栏与逐段文件名清洗，越界一样抛错。
+   */
+  async importRevisionToWorkspace(input: {
+    readonly artifactId: string;
+    readonly orgId: string;
+    readonly workspace: WorkspaceContext;
+    readonly targetPath: string;
+  }): Promise<{ record: ExecArtifactRecord; path: string }> {
+    try {
+      const record = await this.store.getInOrg(input.artifactId, input.orgId);
+      if (!record) throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
+
+      const logical = normalizeLogicalPath(input.targetPath);
+      if (!logical) {
+        throw new ArtifactError('target_filename_invalid', 'target path is invalid', 400);
+      }
+
+      const fs = this.fsFactory(input.workspace);
+      // `resolve` 走 path-policy 围栏：绝对路径、`..`、越出工作区根都会在这里被拒。
+      const target = await fs.resolve(logical);
+
+      // 工作区根必须已由控制面建好（与 `importToWorkspace` 同一条纪律），但
+      // `审核版/` 这一层是平台自己的落点，允许补建。
+      const workspaceRoot = input.workspace.workspaceRoot;
+      const rootStat = await stat(workspaceRoot).catch(() => null);
+      if (!rootStat?.isDirectory()) {
+        throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
+      }
+      await mkdir(path.dirname(target.targetKey), { recursive: true });
+
+      const sink = createWriteStream(target.targetKey);
+      await pipeline(this.openSnapshot(record), sink);
+
+      return { record, path: logical };
+    } catch (err) {
+      this.#redact(err, input.workspace);
+    }
+  }
+
+  /**
+   * 把一个属于调用者的**已放行**产物导入目标工作区，作为输入文件。
+   *
+   * `getOwnerVisible`：导入也是发起人拿产物的一条路（design §3.3 E4），
+   * 待审/撤回的产物在这里与不存在同一个 404。
    *
    * 与 submit 相反的方向：控制面 → 工作区。落点同样经 `resolve()` 围栏，
    * 目标名经 `sanitizeFilename`。
@@ -277,7 +500,7 @@ export class ArtifactService {
     targetFilename?: string | null;
   }): Promise<{ record: ExecArtifactRecord; path: string }> {
     try {
-      const record = await this.store.getOwned(input.artifactId, input.owner);
+      const record = await this.getOwnerVisible(input.artifactId, input.owner);
       if (!record) {
         throw new ArtifactError('artifact_not_found', 'Artifact not found', 404);
       }

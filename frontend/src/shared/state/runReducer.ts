@@ -108,6 +108,42 @@ function advanceCursor(
 }
 
 /**
+ * 审核决定（通过 / 驳回）落到交付物实体上。
+ *
+ * 事件负载里的 `artifacts[]` 是服务端认定的**当前版本**（`revised` 表示它是审核员
+ * 改过的版本）。只更新已经存在的实体：一个从没见过 `artifact.created` 的 id 不该
+ * 因为审核事件凭空冒出一张卡片（那会是一张下载必然 404 的卡片）。
+ */
+function applyReviewDecision(
+  store: EntityStore,
+  payload: Record<string, unknown>,
+  state: 'released' | 'rejected',
+): EntityStore {
+  const list = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+  const feedback = state === 'rejected' ? str(payload.feedback) || null : null;
+  let next = store;
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const row = entry as Record<string, unknown>;
+    const artifactId = str(row.artifact_id || row.artifactId);
+    // 聊天卡片的 id 是智能体提交的原件；审核员修订过时，当前版本是另一个 id，按原件 id 对上。
+    const originalId = str(row.original_artifact_id || row.originalArtifactId);
+    const existing =
+      (artifactId ? next.artifactsById[artifactId] : undefined) ??
+      (originalId ? next.artifactsById[originalId] : undefined);
+    if (!existing) continue;
+    next = upsertArtifact(next, {
+      ...existing,
+      reviewStatus: state,
+      reviewRevised: state === 'released' ? row.revised === true : false,
+      reviewFeedback: feedback,
+      reviewReleasedId: state === 'released' && artifactId ? artifactId : null,
+    });
+  }
+  return next;
+}
+
+/**
  * Durable submit_artifact id (server-issued). Reject adapter/path synth ids
  * so missing artifact_id never becomes a downloadable Workspace path card.
  */
@@ -608,6 +644,18 @@ export function reduceRuntimeEvent(
       break;
     }
 
+    case 'artifact.released': {
+      // 审核通过：交付物放行。**挂在原 Run 上**（design §5.3），所以刷新后靠会话
+      // 事件重放也能拿到；`revised` 为真表示这一版是审核员改过的。
+      next = applyReviewDecision(next, payload, 'released');
+      break;
+    }
+
+    case 'review.rejected': {
+      next = applyReviewDecision(next, payload, 'rejected');
+      break;
+    }
+
     case 'artifact.created': {
       // Only durable server artifact_id from submit_artifact / artifact.ready.
       // Missing id → still advance event cursor below, but never create a
@@ -652,6 +700,12 @@ export function reduceRuntimeEvent(
               ? str(payload.description)
               : existing?.description ?? null,
           source: 'submit_artifact',
+          // A1：review 会话的交付物带 `review_status: "pending"`。direct 会话没有
+          // 这个键，保持 `null`（不显示任何审核字样）。
+          reviewStatus:
+            payload.review_status === 'pending'
+              ? 'pending'
+              : existing?.reviewStatus ?? null,
           createdAt: existing?.createdAt || ts,
         }),
       );

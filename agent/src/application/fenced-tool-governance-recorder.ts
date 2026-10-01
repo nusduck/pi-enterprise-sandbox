@@ -18,6 +18,7 @@
 
 import { assertUlid } from '../domain/shared/ulid.js';
 import {
+  buildArtifactReadyEventData,
   extractStartedProcessId,
   extractSubmittedArtifact,
 } from './tool-result-projections.js';
@@ -80,6 +81,7 @@ export class FencedToolGovernanceRecorder {
   now: Loose;
   emit: Loose;
   isLockLost: Loose;
+  deliveryMode: 'direct' | 'review';
   _tail: Loose;
   _inflight: Map<any, any>;
 
@@ -93,9 +95,10 @@ export class FencedToolGovernanceRecorder {
    *   now?: () => Date,
    *   emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null,
    *   isLockLost?: () => boolean,
+   *   deliveryMode?: 'direct' | 'review',
    * }} deps
    */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, context: RunEventContext, executionFenceToken: number, now?: () => Date, emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null, isLockLost?: () => boolean, }) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, context: RunEventContext, executionFenceToken: number, now?: () => Date, emit?: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null, isLockLost?: () => boolean, deliveryMode?: 'direct' | 'review', }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('FencedToolGovernanceRecorder requires transactionManager');
     }
@@ -123,6 +126,9 @@ export class FencedToolGovernanceRecorder {
     this.now = deps.now ?? (() => new Date());
     this.emit = typeof deps.emit === 'function' ? deps.emit : null;
     this.isLockLost = deps.isLockLost ?? (() => false);
+    // A1：审核模式的权威是**绑定版本**（不是"当前活跃版本"），由执行器传入；
+    // 缺省 direct —— 漏传只会更保守，不会凭空打开审核。
+    this.deliveryMode = deps.deliveryMode === 'review' ? 'review' : 'direct';
     this._tail = createPromiseTail();
     /**
      * In-process concurrent claim only (same instance). Not restart authority.
@@ -1249,16 +1255,10 @@ export class FencedToolGovernanceRecorder {
             artifactEnvelope = await this.#appendEventInTrx(repos, {
               type: 'artifact.ready',
               timestamp,
-              data: {
-                artifactId: artifact.artifactId,
-                name: artifact.name,
-                mimeType: artifact.mimeType,
-                size: artifact.size,
-                sha256: artifact.sha256,
-                description: artifact.description,
+              data: buildArtifactReadyEventData(artifact, {
                 toolCallId,
                 toolExecutionId: toolExecution.toolExecutionId,
-              },
+              }, this.deliveryMode),
             });
           }
         }

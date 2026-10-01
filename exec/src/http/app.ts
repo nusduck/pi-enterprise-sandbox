@@ -28,6 +28,11 @@ import { InMemoryJobStore } from '../shell/job-store-memory.js';
 import { MySqlJobStore } from '../shell/job-store-mysql.js';
 import { MySqlArtifactStore } from '../db/repositories/artifacts.js';
 import { MySqlDatasetStore } from '../db/repositories/datasets.js';
+import {
+  InMemoryWorkspacePolicyStore,
+  MySqlWorkspacePolicyStore,
+  type WorkspacePolicyStore,
+} from '../db/repositories/workspace-policies.js';
 import { MySqlQuotaStore, InMemoryQuotaStore } from '../workspace/quota-store.js';
 import type { QuotaStore } from '../workspace/quota-store.js';
 import { WorkspaceQuotaLedger } from '../workspace/quota-ledger.js';
@@ -226,6 +231,12 @@ export interface ExecAppDeps {
   readonly childQuota?: ChildQuotaConfig;
   /** 数据源（design `sandbox-data-sources.md`）。不传即未配置：带清单的执行一律拒绝。 */
   readonly dataSources?: DataSourceService;
+  /**
+   * 工作区交付策略（design `agent-output-review.md` §3.1、ADR 0016 D1）。
+   * 生产装配传 `MySqlWorkspacePolicyStore`；省略时用内存实现（单测/本地），
+   * 与产物仓储同一个取舍。
+   */
+  readonly workspacePolicies?: WorkspacePolicyStore;
 }
 
 export function createExecApp(deps: ExecAppDeps): Hono {
@@ -239,8 +250,11 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     new InProcessWorkspaceLock(),
     { defaultQuotaMb: 1024 },
   );
+  // 交付策略仓储：产物提交（held/released）与公共面读路径都要用它。
+  const workspacePolicies = deps.workspacePolicies ?? new InMemoryWorkspacePolicyStore();
   const artifactService =
-    deps.artifactService ?? new ArtifactService(makeWorkspaceFs, undefined, { quotaLedger });
+    deps.artifactService ??
+    new ArtifactService(makeWorkspaceFs, undefined, { quotaLedger, workspacePolicies });
   const datasetService =
     deps.datasetService ?? new DatasetService(makeWorkspaceFs, undefined, { quotaLedger });
 
@@ -262,6 +276,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
     ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
     ...(deps.dataSources !== undefined ? { dataSources: deps.dataSources } : {}),
+    workspacePolicies,
   };
   const pub: PublicRouterDeps = {
     apiToken: deps.publicApiToken,
@@ -271,6 +286,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     jobRegistry: deps.jobRegistry,
     artifactService,
     datasetService,
+    workspacePolicies,
   };
 
   const app = new Hono();
@@ -434,6 +450,7 @@ export function createExecAppFromEnv(
   let artifactService: ArtifactService | undefined;
   let datasetService: DatasetService | undefined;
   let quotaStore: QuotaStore | undefined;
+  let workspacePolicies: WorkspacePolicyStore | undefined;
   try {
     const cfg = readExecDbConfigFromSandboxEnv(env);
     // 口令只来自 DBPM：配置里夹口令或没取到口令都直接失败，不回退内存仓储。
@@ -449,8 +466,13 @@ export function createExecAppFromEnv(
     const quotaLedger = new WorkspaceQuotaLedger(quotaStore, new InProcessWorkspaceLock(), {
       defaultQuotaMb: ledgerConfig.defaultQuotaMb,
     });
+    // 交付策略与产物/数据集同一个池、同一次 fail-closed 判定：三者要么一起落库，
+    // 要么一起留在内存。只接一半会让「产物是 held、策略却没人记得」——
+    // 公共面读路径查不到策略就按 direct 放行，审核静默失效。
+    workspacePolicies = new MySqlWorkspacePolicyStore(pool);
     artifactService = new ArtifactService(makeWorkspaceFs, new MySqlArtifactStore(pool), {
       quotaLedger,
+      workspacePolicies,
     });
     datasetService = new DatasetService(makeWorkspaceFs, new MySqlDatasetStore(pool), {
       quotaLedger,
@@ -509,6 +531,7 @@ export function createExecAppFromEnv(
     ...(datasetService !== undefined ? { datasetService } : {}),
     ...(quotaStore !== undefined ? { quotaStore } : {}),
     ...(dataSources.configured ? { dataSources } : {}),
+    ...(workspacePolicies !== undefined ? { workspacePolicies } : {}),
   });
 
   return {

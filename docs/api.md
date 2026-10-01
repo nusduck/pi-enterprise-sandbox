@@ -242,6 +242,49 @@ admin 检查，而且这个参数由 BFF 写死（浏览器不能拿它换到别
 
 内部面对应 `/internal/admin/members*`（`members` 与 `users` 是同一个东西：对内叫成员，对外叫用户）。
 
+### 交付物人工审核（ADR 0016，design §5–§8）
+
+AgentVersion 的 `deliveryPolicy.mode = "review"` 时，这一轮 Run 提交的交付物先落在 exec 的
+`held` 状态：**发起人**在会话产物列表、产物库、下载、跨会话导入里都看不到它（404，与不存在同码），
+review 工作区的**工作区字节读路径**（文件列表/读取/下载、进程日志）也一律 404——否则「待审」
+只是聊天里的一句话。Run 进入任意终态且本轮有 `held` 产物时建审核任务（`UNIQUE(run_id)`）。
+
+审核面需要 **`reviewer`** 角色（不是 `admin`）：非 reviewer → 403 `REVIEWER_REQUIRED`；
+**不能审核自己发起的任务** → 403 `REVIEW_SELF_FORBIDDEN`（U8）；作用域是本 org，
+跨 org 的任务与不存在的任务返回**同一个 404**。
+
+| 错误码 | 状态 | 触发 |
+|---|---|---|
+| `REVIEWER_REQUIRED` | 403 | 调用者没有 `reviewer` 角色 |
+| `REVIEW_SELF_FORBIDDEN` | 403 | 领取/决定自己发起的任务 |
+| `REVIEW_NOT_ASSIGNEE` | 403 | 释放/决定一个别人领取的任务 |
+| `REVIEW_ALREADY_CLAIMED` | 409 | 领取一个已被别人领取的任务 |
+| `REVIEW_VERSION_CONFLICT` | 409 | `base_revision` 不是当前值（响应带 `current_revision`，前端刷新后保留已选文件） |
+| `REVIEW_ALREADY_DECIDED` | 409 | 任务已经通过或驳回 |
+| `REVIEW_FEEDBACK_REQUIRED` | 422 | 驳回没有给 `feedback` |
+| `REVIEW_FILE_INVALID` | 413 / 422 | 修订版文件为空、名称非法，或超过审核传输上限 100 MiB（BFF/agent 按请求体大小给 413） |
+| `REVIEW_FILE_TOO_LARGE` | 413 | 下载的交付物或附件快照超过审核传输上限 100 MiB（内部面以 base64 整件传输，见 contract `REVIEW_TRANSFER_MAX_BYTES`） |
+
+关键语义（写错了会静默出错，所以写在这里）：
+
+- **通过/驳回只记账**：一个事务里改任务状态、写审计事件、在**原 Run** 上追加
+  `artifact.released` / `review.rejected` 事件、追加一条会话消息（`assistant/text` +
+  `system/status`），并写 outbox。产物**真正放行**要等 agent-worker 的审核循环消费
+  `review.decided`：先改可见性（当前版本 → `released`，同一交付物集合里的其它版本 →
+  `withdrawn`），再把修订版导入工作区 `审核版/X`。所以「点了通过」到「发起人能下载」之间
+  有一个可观测的中间态（界面显示「已通过，正在发布」）。
+- **`revision` 是乐观并发令牌**，领取、上传修订、通过、驳回都会推进它；客户端拿旧值提交
+  得到 409 而不是覆盖别人的决定。
+- **修订上传的顺序是刻意的**：先调 exec 落一个新产物（`held` + `revision_of` 链），再写 agent
+  账本。孤儿 `held` 产物可以接受，悬空指针不行。
+- **材料快照是独立副本**：审核员下载的材料与发起人上传时的字节一致，发起人后来删掉工作区
+  文件也不影响；快照失败是**看得见的状态**（`snapshot_status = unavailable`），不是静默缺失。
+- **审核结果会进下一次 Run 的提示词**（design §5.4）：已通过说明已交付、哪一件经修订、
+  以 `审核版/X` 为准；已驳回给出反馈。每个任务**只注入一次**，文本由服务端生成，不进任何消息行。
+- 通知复用投递账本（`kind` = `review_released` / `review_rejected`），但聚合类型是独立的
+  `review_notification`——Run 终态邮件消费者按 `aggregate_type` 过滤，共用会被它按「Run 结束了」
+  的语义处理掉。
+
 ### 能力页里的 org 层
 
 `GET /api/capabilities/skills` 按层投影，本 org 的 org 层项 `source` 为 `org-skill-root`
@@ -308,6 +351,13 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/approvals/{id}` | 审批详情 |
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
 | `GET` | `/api/artifacts` | 带 `session_id`：该会话的产物；不带：产物库（本人所有会话，`q` / `kind` / `cursor` / `limit`） |
+| `GET` | `/api/reviews` | 审核任务列表（**reviewer**）；`status` = `PENDING`（待领取，含未领取）/ `MINE`（我领取的）/ `HISTORY`（已决定）/ `ALL`，`cursor` / `limit` |
+| `GET` | `/api/reviews/{id}` | 任务详情：提问、附件快照、交付物版本链、审计时间线、`revision`（乐观并发用）（**reviewer**） |
+| `POST` | `/api/reviews/{id}/claim` `release` | 领取 / 释放（幂等语义见下）（**reviewer**） |
+| `POST` | `/api/reviews/{id}/items/{no}/revisions?base_revision=` | 上传修订版（**原始字节 body**，文件名走 `X-Filename`，不是 multipart）（**reviewer**） |
+| `POST` | `/api/reviews/{id}/approve` `reject` | 通过 / 驳回；body `{ base_revision, note?, feedback? }`，驳回必须给 `feedback`（**reviewer**） |
+| `GET` | `/api/reviews/{id}/materials/{mid}/download` | 下载材料快照（**reviewer**） |
+| `GET` | `/api/reviews/{id}/items/{no}/download` | 下载该交付物的当前版本（任一版本都可下载，含已撤回的）（**reviewer**） |
 | `GET` | `/api/datasets` | Dataset 列表 |
 | `GET` | `/api/processes` | 长进程列表；必传 `session_id`，可按 `run_id` / `status` 筛选 |
 | `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
@@ -393,6 +443,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `delegation.agents` | ✅ | `delegate_to_agent` 的白名单：同 org 的 Agent `name` 数组（≤20，去重）。保存时要求每个名字在本 org 存在（否则 `DELEGATION_AGENT_UNKNOWN`，别的 org 的同名 Agent 视为不存在）；运行时再判目标是否 active。省略或 `[]` = 不可委派。见 [design/agent-delegation.md](design/agent-delegation.md) |
 | `dataSources` | ✅ | 本 Agent 的 Run 可在沙箱里连接的业务库：`[{ "id": "<数据源 id>" }]`（≤16，不允许重复）。条目只接收 `id`，地址、账号、口令属于 `SANDBOX_DATA_SOURCES_JSON` 目录，写进来即 `CONFIG_UNKNOWN_FIELD`；保存时要求 id 在目录里（否则 `DATA_SOURCE_UNKNOWN`）。`platformConstraints.dataSources` 只返回 `id`/`label`/`description`/`engine`。见 [design/sandbox-data-sources.md](design/sandbox-data-sources.md) |
 | `skillPolicy` | ✅ | 这个 Agent 的 Run 带哪些 Skill（ADR 0015 D2，[design/skill-catalog-and-agent-binding.md](design/skill-catalog-and-agent-binding.md)）。`system`（`all`\|`allowlist`\|`none`，`names` 仅 `allowlist` 时允许且必填）、`org[]`（`{ name, contentDigest }`，钉摘要不跟随最新）、`user`（`allow`\|`deny`）。**省略 = 当前行为**（全部系统 + 用户启用），既有版本不迁移、`config_hash` 不变。保存时校验名字在当前 release（`SKILL_SYSTEM_UNKNOWN`）与 org 账本（`SKILL_ORG_VERSION_UNKNOWN` / `SKILL_ORG_VERSION_DEPRECATED`）；有效清单总量超 `ENABLED_SKILLS_MAX` → `SKILL_POLICY_TOO_LARGE` |
+| `deliveryPolicy` | ✅ | 交付物是否需人工审核（[ADR 0016](adr/0016-agent-output-human-review.md) D3）：`{ "mode": "direct" \| "review" }`。**省略 = `direct`**，既有版本行为与 `config_hash` 完全不变；写回时 `direct` 也被省略。未知取值 → 诊断码 `CONFIG_INVALID`。`review` 与 `delegation`（`agents`/`remoteAgents` 任一非空）互斥（`CONFIG_INVALID`），与 **A2A 暴露**双向互斥（本 Agent 有 `active` 的 A2A 凭据时保存 `review` → `CONFIG_INVALID`；给 `review` 模式的 Agent 签新 A2A 凭据也拒绝）。绑定（起 Run / 建会话）时再判一次，形状非法一律 `DSH_CONFIG_UNSUPPORTED`，**不回落成 `direct`**。策略随 AgentVersion 固定：会话绑定版本后不会漂移到新版本，所以**同一会话的策略终生不变** |
 | `modelPolicy.temperature` | ❌ | 当前 DSH loop 没有 temperature call-config seam；写进去保存时 400，不静默接受 |
 | `skills` | ❌ | 已移除，写入即 `CONFIG_UNKNOWN_FIELD`。运行时的 skill 绑定改用 `skillPolicy`（旧 `skills` 是展示用的描述，不能推断绑定意图，故不复用同名键） |
 | `extensions` | ❌ | 已移除（同上）。旧引擎的 Extension 机制已随 ADR 0009 H7 退役 |
@@ -421,6 +472,13 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
   合法请求的正常结果，返回 200 + `valid:false`**，`errors` 每条形如
   `{ path, code, message }`，`path` 精确到 `modelPolicy.thinkingLevel`、
   `mcpServers[0].enabledTools[1]`，UI 据此把错误标到具体控件上。
+- **预览与保存给同一个答案**：`deliveryPolicy` 与 A2A 暴露的互斥要读凭据账本，所以在
+  这个带 `agent_id` 的预览端点里也判一次——预览说 `valid:true`、保存却 400 是
+  AGENTS.md §3 禁止的「保存、预览、执行各自猜语义」。
+- **保存失败的诊断码出口**：创建/发布版本时字段级错误返回 400
+  `{ error, code: "VALIDATION_ERROR", reason_code }`。`code` 是稳定的通用码，
+  `reason_code` 是具体诊断码（如 `CONFIG_INVALID`、`DELEGATION_AGENT_UNKNOWN`），
+  **只在存在且与 `code` 不同时出现**。UI 优先展示 `reason_code`。
 - `valid:true` 必然带 `normalizedConfig`，`valid:false` 必然不带。创建/发布版本时服务端
   **重新校验**，不信任浏览器回传的 `normalizedConfig` / `valid` / `capabilityRevision`。
 - `mcpReadiness.status` 区分三种事实：`ready`（清单已知）、`not_configured`（部署没有声明
@@ -643,7 +701,21 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/internal/v1/jobs/status\|read\|kill\|signal\|stdin` | exec 作业查询与控制 |
 | `POST` | `/internal/v1/artifacts/submit` | `submit_artifact` |
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
+| `POST` | `/internal/v1/review/artifacts/snapshot` | 审核材料快照（恒 `withdrawn`，只供审核员读） |
+| `POST` | `/internal/v1/review/artifacts/get` | 审核员按 id 读取任一版本（含字节，org 作用域） |
+| `POST` | `/internal/v1/review/artifacts/revision` | 审核员修订上传（新产物 + `revision_of` 链，恒 `held`） |
+| `POST` | `/internal/v1/review/artifacts/visibility` | 放行 / 撤回状态变更（单事务、幂等，只接受 `held → released\|withdrawn`） |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
+
+`/internal/v1/review/*` 是**审核流程**的面，与上面那组**模型工具**的面刻意分开：它的作用域是
+**org**（审核员不是发起人），其中放行/撤回只由 agent 的 outbox 投递驱动，`held` 不是可以被外部
+设置的目标值（允许改回待审等于给了撤销放行的口子）。完整流程见
+[design/agent-output-review.md](design/agent-output-review.md) §5–§6。
+
+这四个端点**发生在 Run 之外**（领取、上传修订、通过/驳回都可能在原 Run 终态之后很久），所以
+它们签发的内部令牌允许 `run_id` 与 `execution_fence_token` **同时为 null**——这是绑定表里唯一
+允许这种形状的路径族（`allowNullRun`），其余路径仍然要求 Run 信封与 fence。exec 侧按同一口径
+校验，**不是**把 fence 校验整体关掉。
 
 令牌的 `htm` / `htu` / `scope` / `tool_name` 四项都**逐字绑定**这张表（2026-09-04 起）：
 
@@ -656,7 +728,8 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   `shell/*` → `sandbox.shell` / `shell`，`jobs/*` → `sandbox.jobs` / `jobs`，
   `artifacts/submit` → `sandbox.artifacts.submit` / `artifact.submit`，
   `artifacts/download` → `sandbox.artifacts.download` / `artifact.download`，
-  `sessions/ensure` → `sandbox.sessions.ensure` / `session.ensure`。
+  `sessions/ensure` → `sandbox.sessions.ensure` / `session.ensure`，
+  `review/*` → `sandbox.review` / `review`（唯一允许 `run_id` 为 null 的一族）。
   以前这两项谁都不看，`ExecRpcClient` 对所有 RPC 都写死 `fs` / `internal:fs`——
   一枚「文件」令牌可以拿去起进程。**未登记的内部路径一律拒**，新端点不会默认免检。
 

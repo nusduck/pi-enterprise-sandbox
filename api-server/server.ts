@@ -90,6 +90,7 @@ import {
 import { handleAdminRunsRoute } from './src/routes/admin-runs.js';
 import { handleAdminSkillsRoute } from './src/routes/admin-skills.js';
 import { handleAdminMembersRoute } from './src/routes/admin-members.js';
+import { handleReviewsRoute } from './src/routes/reviews.js';
 import { authFromRequest, checkSandboxReady } from './src/services/sandbox-client.js';
 import { checkAgentReady } from './src/services/agent-client.js';
 import { readJsonBody } from './src/http/body.js';
@@ -396,6 +397,9 @@ const server = http.createServer(async (rawReq, res) => {
 
     // ── 管理端成员与角色（RBAC 一期；判定同样在 agent/） ──
     if (await handleAdminMembersRoute(req.method || 'GET', path, parsedUrl, res, req)) return;
+
+    // ── 交付物人工审核（design agent-output-review §7；reviewer 判定同样在 agent/） ──
+    if (await handleReviewsRoute(req.method || 'GET', path, parsedUrl, res, req)) return;
 
     // ── Agent catalog（目录事实归 agent/，这里只转发 + 身份投影） ──
     if (req.method === 'GET' && path === '/api/agents') {

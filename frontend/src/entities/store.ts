@@ -199,6 +199,10 @@ export function createArtifact(
     sha256: null,
     description: null,
     source: 'submit_artifact',
+    reviewStatus: null,
+    reviewRevised: false,
+    reviewFeedback: null,
+    reviewReleasedId: null,
     createdAt: null,
     ...partial,
   };

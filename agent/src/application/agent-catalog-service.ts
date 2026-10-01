@@ -25,6 +25,7 @@ import {
 } from './errors.js';
 import {
   AgentConfigValidator,
+  type AgentConfigDiagnostic,
   type AgentConfigOptions,
   type AgentConfigValidation,
 } from './agent-config-validator.js';
@@ -36,6 +37,7 @@ import {
   type ExternalAuth,
 } from './parent/external-identity-resolver.js';
 import { bindAgentVersionConfig } from '../infrastructure/dsh/agent-version-bindings.js';
+import { parseDeliveryPolicy } from '@dsh/contract/delivery-policy.js';
 import {
   defaultAgentConfigJson,
   hashAgentConfig,
@@ -349,6 +351,59 @@ export class AgentCatalogService {
   }
 
   /**
+   * `deliveryPolicy.mode === "review"` 与「A2A 暴露」互斥（ADR 0016 D3、design §2）。
+   *
+   * 外部 A2A 调用方期望**直接拿到产物**，而审核工作区里的产物在放行前对 owner
+   * 一律不可见。两者叠在一起只有两种结局：外部调用方永远 404，或者有人把审核
+   * 关掉。所以保存时就拒绝，不让它在第一次外部调用时才暴露。
+   *
+   * 判定依据是**当前有效**的 A2A 凭据。已撤销/过期的凭据不再暴露这个 Agent，
+   * 不该阻止它改成审核模式。
+   *
+   * 反方向（给审核模式的 Agent 签新凭据）由
+   * `a2a/credential-service.ts#assertAgentNotUnderArtifactReview` 拦——两边都判，
+   * 因为「互斥」是双边的，只判一边等于留了一条后门。
+   *
+   * 返回诊断而不是直接抛：**预览与保存必须给同一个答案**。预览
+   * （`validateConfig`）说 valid、保存却 400，正是 AGENTS.md §3 说的
+   * 「保存、预览、执行各自猜语义」。
+   */
+  async #reviewVsA2aDiagnostic(
+    repos: Loose,
+    orgId: string,
+    agentId: string,
+    configJson: Record<string, unknown>,
+  ): Promise<AgentConfigDiagnostic | null> {
+    if (parseDeliveryPolicy(configJson.deliveryPolicy).policy?.mode !== 'review') return null;
+    const credentials = await repos.a2aCredentials.listByOrg(orgId, { agentId });
+    const active = (credentials as Loose[]).filter(
+      (credential) => String(credential?.status ?? '').toLowerCase() === 'active',
+    );
+    if (active.length === 0) return null;
+    return {
+      path: 'deliveryPolicy',
+      code: 'CONFIG_INVALID',
+      message:
+        'deliveryPolicy.mode "review" cannot be combined with A2A exposure: ' +
+        'revoke this agent\'s active A2A credentials first, or use a separate agent for review delivery',
+    };
+  }
+
+  async #assertNoA2aExposureForReview(
+    repos: Loose,
+    orgId: string,
+    agentId: string,
+    configJson: Record<string, unknown>,
+  ) {
+    const diagnostic = await this.#reviewVsA2aDiagnostic(repos, orgId, agentId, configJson);
+    if (diagnostic) {
+      throw new ValidationError(`${diagnostic.path}: ${diagnostic.message}`, {
+        code: diagnostic.code,
+      });
+    }
+  }
+
+  /**
    * 配置面的能力投影（admin）。只描述「这个部署支持什么、上限在哪」，
    * 不返回连接地址、密钥引用、宿主物理路径或别的用户的技能。
    */
@@ -405,10 +460,25 @@ export class AgentCatalogService {
       owner.orgId,
       result.normalizedConfig ?? {},
     );
-    if (unknown.length === 0) return result;
+    // A2A 互斥要读凭据账本，所以只能在有 repos 的这一层判（纯校验器没有 I/O）。
+    // 判出来就与保存路径给同一个 valid:false，避免「预览通过、保存 400」。
+    const a2aConflict =
+      input.agentId != null && input.agentId !== ''
+        ? await this.#reviewVsA2aDiagnostic(
+            repos,
+            owner.orgId,
+            assertUlid(String(input.agentId), 'agentId'),
+            result.normalizedConfig ?? {},
+          )
+        : null;
+    if (unknown.length === 0 && a2aConflict === null) return result;
     // valid:false 必然不带 normalizedConfig（api.md 配置契约）。
     const { normalizedConfig: _dropped, ...rest } = result;
-    return { ...rest, valid: false, errors: [...result.errors, ...unknown] };
+    return {
+      ...rest,
+      valid: false,
+      errors: [...result.errors, ...unknown, ...(a2aConflict ? [a2aConflict] : [])],
+    };
   }
 
   /**
@@ -559,6 +629,12 @@ export class AgentCatalogService {
           const owner = await this.#resolveOwner(auth, repos);
           let definition = await this.#requireOwnedAgent(repos, owner, agentId);
           await this.#assertDelegationTargets(repos, owner.orgId, configJson);
+          await this.#assertNoA2aExposureForReview(
+            repos,
+            owner.orgId,
+            definition.agentId,
+            configJson,
+          );
           // 只有会改活跃指针的保存才做这项检查：保存一个不激活的版本不与
           // 别人的激活结果竞争，不该因为指针变了就失败。
           if (activate) {
