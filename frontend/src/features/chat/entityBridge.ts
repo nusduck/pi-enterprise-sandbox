@@ -20,6 +20,7 @@ import {
   upsertProcess,
   upsertRun,
   upsertTraceSpan,
+  setProcessListState,
   type ApprovalStatus,
   type DatasetEntity,
   type EntityStore,
@@ -367,12 +368,20 @@ export function createEntityBridge(
    * Refresh managed processes for a sandbox session. Processes outlive the run
    * that started them, so the session is the list scope; the run link comes
    * from each row's own run_id.
+   *
+   * The **fetch outcome** is recorded per session (`processListStateById`): a
+   * 404/5xx must never render as "this session has no background processes"
+   * (AGENTS.md §3, T3). Unlike before, a failure is therefore not silently
+   * swallowed — it is still non-blocking for run reconciliation, but the
+   * process panel can tell "failed" from "empty".
    */
   async function refreshSessionProcesses(
     sessionId: string | null | undefined,
     expectedGeneration = storeGeneration,
   ): Promise<void> {
     if (!sessionId) return;
+    store = setProcessListState(manager.getStore(), sessionId, 'loading');
+    manager.setStore(store);
     try {
       const rows = await listProcesses({ sessionId });
       if (expectedGeneration !== storeGeneration) return;
@@ -381,10 +390,14 @@ export function createEntityBridge(
         const entity = processRowToEntity(row, { sessionId });
         if (entity) next = upsertProcess(next, entity);
       }
+      next = setProcessListState(next, sessionId, 'ready');
       store = next;
       manager.setStore(store);
     } catch {
-      /* Process list is best-effort: never block run reconciliation on it. */
+      /* Process list stays non-blocking, but the panel gets an honest error state. */
+      if (expectedGeneration !== storeGeneration) return;
+      store = setProcessListState(manager.getStore(), sessionId, 'error');
+      manager.setStore(store);
     }
   }
 

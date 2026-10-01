@@ -512,7 +512,7 @@ export function ArtifactCard({
   /** Opens the preview drawer; without it the card only offers a download. */
   onOpen?: (artifactId: string) => void;
 }) {
-  const { url, name, label, downloadName, badge, isImage } = artifactView(artifact, sessionId);
+  const { url, name, label, downloadName, badge, hint, isImage } = artifactView(artifact, sessionId);
   const open = onOpen && url ? () => onOpen(artifact.id) : undefined;
   return (
     <div className={s.artWrap}>
@@ -527,11 +527,13 @@ export function ArtifactCard({
           <button type="button" className={`${s.artName} ${s.artOpen}`} onClick={open}>
             {name}
             <small>{[artifact.mimeType, formatSize(artifact.size)].filter(Boolean).join(' · ') || '交付物'} · 点击预览</small>
+            {hint ? <small className={s.artHint}>{hint}</small> : null}
           </button>
         ) : (
           <span className={s.artName}>
             {name}
             <small>{[artifact.mimeType, formatSize(artifact.size)].filter(Boolean).join(' · ') || '交付物'}</small>
+            {hint ? <small className={s.artHint}>{hint}</small> : null}
           </span>
         )}
         {url ? (

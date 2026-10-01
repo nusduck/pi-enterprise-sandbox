@@ -11,6 +11,7 @@ import type {
   EntityStore,
   MessageEntity,
   ProcessEntity,
+  ProcessListState,
   RunEntity,
   ToolExecutionEntity,
   TraceSpanEntity,
@@ -25,6 +26,7 @@ export function createEntityStore(
     messagesById: { ...(initial.messagesById || {}) },
     toolExecutionsById: { ...(initial.toolExecutionsById || {}) },
     processesById: { ...(initial.processesById || {}) },
+    processListStateById: { ...(initial.processListStateById || {}) },
     approvalsById: { ...(initial.approvalsById || {}) },
     artifactsById: { ...(initial.artifactsById || {}) },
     datasetsById: { ...(initial.datasetsById || {}) },
@@ -45,6 +47,7 @@ export function cloneEntityStore(store: EntityStore): EntityStore {
     messagesById: { ...store.messagesById },
     toolExecutionsById: { ...store.toolExecutionsById },
     processesById: { ...store.processesById },
+    processListStateById: { ...store.processListStateById },
     approvalsById: { ...store.approvalsById },
     artifactsById: { ...store.artifactsById },
     datasetsById: { ...store.datasetsById },
@@ -503,6 +506,47 @@ export function listProcessesForSession(
   return Object.values(store.processesById).filter(
     (p) => p.sessionId === sessionId,
   );
+}
+
+/** 记录某个 session 的进程列表拉取状态（纯函数，返回新 store）。 */
+export function setProcessListState(
+  store: EntityStore,
+  sessionId: string,
+  state: ProcessListState,
+): EntityStore {
+  if (!sessionId) return store;
+  return {
+    ...store,
+    processListStateById: { ...store.processListStateById, [sessionId]: state },
+  };
+}
+
+export function processListStateFor(
+  store: EntityStore,
+  sessionId: string | null | undefined,
+): ProcessListState | null {
+  if (!sessionId) return null;
+  return store.processListStateById[sessionId] ?? null;
+}
+
+export type ProcessPanelState = 'loading' | 'error' | 'empty' | 'ready';
+
+/**
+ * 进程面板的四态（T3）。**拉取失败不能显示成「还没有后台进程」**——那正是
+ * 2026-10-01 浏览器实测里 review 会话的 404 被渲染成的样子。
+ *
+ * 只有一个例外：**已经有进程可显示时，一次刷新失败不清空列表**（错误态会让位于
+ * 已有数据），否则一次网络抖动会抹掉用户正在看的进程。
+ */
+export function processPanelState(input: {
+  state?: ProcessListState | null;
+  count: number;
+}): ProcessPanelState {
+  const hasRows = Number.isFinite(input.count) && input.count > 0;
+  if (hasRows) return 'ready';
+  if (input.state === 'loading') return 'loading';
+  if (input.state === 'error') return 'error';
+  return 'empty';
 }
 
 export function listDatasetsForConversation(

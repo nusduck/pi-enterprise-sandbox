@@ -346,6 +346,8 @@ details[open] > summary > .chev { transform: rotate(90deg); }
 }
 .artName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
 .artName small { display: block; color: var(--color-text-muted); font-size: 11.5px; }
+/* 「已提交审核」卡片的一句说明：审核通过后可下载（§3.3.2）。 */
+.artName .artHint { color: var(--color-warning-text); }
 /* 交付物审核状态（design §8）：待审 / 已交付 / 未通过。 */
 .artBadge {
   flex: none;

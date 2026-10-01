@@ -10,6 +10,7 @@ import {
 } from '../../shared/api/adminMembers';
 import { hasRole } from '../../shared/security/roles';
 import {
+  NO_LOGIN_RECORD_TOOLTIP,
   ROLE_PINNED_TOOLTIP,
   formatMemberTimestamp,
   isRolePinned,
@@ -21,16 +22,18 @@ import {
   roleEventActionLabel,
   roleEventActorLabel,
   roleEventSourceLabel,
+  roleLabel,
+  sortRoleEventsDesc,
   withRole,
 } from './memberRoles';
 import a from './adminPage.module.css';
 import s from './membersAdmin.module.css';
 
-/** 列表筛选；`role` 只发服务端白名单值（未知值会得到 422 ROLE_UNKNOWN）。 */
+/** 列表筛选；`role` 只发服务端白名单值（未知值会得到 422 ROLE_UNKNOWN）。标签用中文。 */
 const ROLE_FILTERS = [
   { id: 'all', label: '全部' },
-  { id: 'admin', label: 'admin' },
-  { id: 'reviewer', label: 'reviewer' },
+  { id: 'admin', label: roleLabel('admin') },
+  { id: 'reviewer', label: roleLabel('reviewer') },
 ] as const;
 type RoleFilter = (typeof ROLE_FILTERS)[number]['id'];
 
@@ -57,12 +60,12 @@ function RoleToggle({
 }) {
   const pinned = role === 'admin' && isRolePinned(member, 'admin');
   return (
-    <label className={s.switch} title={pinned ? ROLE_PINNED_TOOLTIP : undefined}>
+    <label className={s.switch} title={pinned ? ROLE_PINNED_TOOLTIP : `角色代码：${role}`}>
       <input
         type="checkbox"
         checked={hasRole(member, role)}
         disabled={pinned || busy}
-        aria-label={`${memberDisplayName(member)} 的 ${role} 角色`}
+        aria-label={`${memberDisplayName(member)} 的「${roleLabel(role)}」角色`}
         onChange={(e) => onToggle(member, role, e.target.checked)}
       />
       <span className={s.slider} aria-hidden="true" />
@@ -86,7 +89,7 @@ function RoleEventsDrawer({ member, onClose }: { member: AdminMember; onClose: (
     setError(null);
     listAdminMemberRoleEvents(member.user_id)
       .then((rows) => {
-        if (generation === generationRef.current) setEvents(rows);
+        if (generation === generationRef.current) setEvents(sortRoleEventsDesc(rows));
       })
       .catch((err: unknown) => {
         if (generation === generationRef.current) setError(memberRoleErrorMessage(err));
@@ -138,7 +141,7 @@ function RoleEventsDrawer({ member, onClose }: { member: AdminMember; onClose: (
                 <span className={`${a.pill} ${event.action === 'grant' ? a.ok : a.warn}`}>
                   {roleEventActionLabel(event.action)}
                 </span>
-                <span className={a.mono}>{event.role}</span>
+                <span className={a.mono} title={`角色代码：${event.role}`}>{roleLabel(event.role)}</span>
                 <span className={a.sp} />
                 <span className={`${a.muted} ${a.num}`}>{formatMemberTimestamp(event.created_at)}</span>
               </div>
@@ -275,8 +278,10 @@ export function MembersPage() {
         <div>
           <h1>成员与角色</h1>
           <p>
-            角色挂在本组织的成员关系上，授予与撤销在下一个请求即生效。名单里只包含至少登录过一次的成员；
-            由部署环境变量名单锁定的管理员不能在界面撤销。
+            角色挂在本组织的成员关系上，授予与撤销在下一个请求即生效。名单包含本组织
+            全部已开通的成员账号（平台创建或在本平台首次登录时自动开通）；「最近登录」
+            显示「—」表示这个账号还没有平台登录记录，通常是脚本或部署引导创建的，不代表
+            它不是成员。由部署环境变量名单锁定的管理员不能在界面撤销。
           </p>
         </div>
         <span className={a.sp} />
@@ -349,8 +354,8 @@ export function MembersPage() {
                 <tr>
                   <th>成员</th>
                   <th>最近登录</th>
-                  <th>admin</th>
-                  <th>reviewer</th>
+                  <th title="角色代码：admin">{roleLabel('admin')}</th>
+                  <th title="角色代码：reviewer">{roleLabel('reviewer')}</th>
                   <th className={a.right}>操作</th>
                 </tr>
               </thead>
@@ -367,7 +372,13 @@ export function MembersPage() {
                           {member.email ? <small className={a.muted}>{member.email}</small> : null}
                         </div>
                       </td>
-                      <td className={`${a.num} ${a.muted}`}>{formatMemberTimestamp(member.last_login_at)}</td>
+                      <td className={`${a.num} ${a.muted}`}>
+                        {member.last_login_at ? (
+                          formatMemberTimestamp(member.last_login_at)
+                        ) : (
+                          <span title={NO_LOGIN_RECORD_TOOLTIP}>—</span>
+                        )}
+                      </td>
                       <td>
                         <div className={s.roleCell}>
                           <RoleToggle
@@ -384,12 +395,14 @@ export function MembersPage() {
                         </div>
                       </td>
                       <td>
-                        <RoleToggle
-                          member={member}
-                          role="reviewer"
-                          busy={busyKey === `${member.user_id}:reviewer`}
-                          onToggle={(m, r, next) => void toggleRole(m, r, next)}
-                        />
+                        <div className={s.roleCell}>
+                          <RoleToggle
+                            member={member}
+                            role="reviewer"
+                            busy={busyKey === `${member.user_id}:reviewer`}
+                            onToggle={(m, r, next) => void toggleRole(m, r, next)}
+                          />
+                        </div>
                       </td>
                       <td className={a.right}>
                         <button type="button" className={a.btn} onClick={() => setEventsMember(member)}>

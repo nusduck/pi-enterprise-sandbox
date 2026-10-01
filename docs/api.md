@@ -285,6 +285,28 @@ review 工作区的**工作区字节读路径**（文件列表/读取/下载、�
   `review_notification`——Run 终态邮件消费者按 `aggregate_type` 过滤，共用会被它按「Run 结束了」
   的语义处理掉。
 
+### 会话时间线：`GET /api/conversations/{id}/events`（一次性 JSON，**不是 SSE**）
+
+返回该 Conversation 下**已持久化的完整 Run 时间线**：一次响应、`application/json`，没有
+`text/event-stream`、没有增量推送。它**不是**「Conversation 维度 SSE」——实时事件只有
+`GET /api/runs/{run_id}/events` 的 SSE。
+
+| 字段 | 说明 |
+|---|---|
+| `runs` | 该会话的全部 Run（`RunDetail`，按创建时间升序） |
+| `events` | 全部 Run 的持久化事件，供前端重放（每条带 `run_id` / `sequence` / `event_id` / `type` / `payload`） |
+| `last_run` | 最近一个 Run，没有 Run 时为 `null` |
+
+查询参数：`limit` = **每个 Run 最多拉取的事件条数**（默认与上限均为 500，分页补齐）。会话
+不存在、已删除或**不属于本租户**一律 404；存在但没有 Run 返回 200 + 空时间线——两者必须
+区分，前者不能被当成「空会话」。
+
+前端在两个时机调用它：进入会话时的重放（`entityBridge.rehydrateConversation`），以及 review
+会话里还有 `reviewStatus === 'pending'` 交付物时的**定时轮询**。后者是必要的：Run 终态后
+Run SSE 就关闭了，而 `artifact.released` / `review.rejected` 是审核员之后才追加到这个已结束
+Run 上的，只有重新拉完整时间线才能拿到；重放按 `event_id` / `sequence` 去重，没有待审交付物
+时停止轮询。该接口**没有** `after_sequence` 增量参数，每次返回完整时间线。
+
 ### 能力页里的 org 层
 
 `GET /api/capabilities/skills` 按层投影，本 org 的 org 层项 `source` 为 `org-skill-root`
@@ -333,7 +355,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称、邮箱与长任务完成邮件开关 |
 | `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation |
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
-| `GET` | `/api/conversations/{id}/events` | Conversation 维度 SSE |
+| `GET` | `/api/conversations/{id}/events` | 会话完整时间线（**一次性 JSON，不是 SSE**，见下） |
 | `POST` | `/api/conversations/{id}/runs` | 在指定 Conversation 下创建 Run |
 | `POST` | `/api/conversations/{id}/follow-ups` | 追问；当前 Run 未结束时新 Run 保持 `QUEUED`，结束后按提交顺序自动执行 |
 | `GET` `POST` | `/api/conversations/{id}/datasets` | 列出 / 上传 Dataset |
@@ -351,7 +373,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/approvals/{id}` | 审批详情 |
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
 | `GET` | `/api/artifacts` | 带 `session_id`：该会话的产物；不带：产物库（本人所有会话，`q` / `kind` / `cursor` / `limit`） |
-| `GET` | `/api/reviews` | 审核任务列表（**reviewer**）；`status` = `PENDING`（待领取，含未领取）/ `MINE`（我领取的）/ `HISTORY`（已决定）/ `ALL`，`cursor` / `limit` |
+| `GET` | `/api/reviews` | 审核任务列表（**reviewer**）；`status` = 逗号分隔的状态子集（`PENDING` / `IN_REVIEW` / `APPROVED` / `REJECTED`，未知值 422 `REVIEW_INPUT_INVALID`；历史页签传 `APPROVED,REJECTED`），`mine=true` 只看自己领取的，另有 `cursor` / `limit` |
 | `GET` | `/api/reviews/{id}` | 任务详情：提问、附件快照、交付物版本链、审计时间线、`revision`（乐观并发用）（**reviewer**） |
 | `POST` | `/api/reviews/{id}/claim` `release` | 领取 / 释放（幂等语义见下）（**reviewer**） |
 | `POST` | `/api/reviews/{id}/items/{no}/revisions?base_revision=` | 上传修订版（**原始字节 body**，文件名走 `X-Filename`，不是 multipart）（**reviewer**） |
@@ -703,6 +725,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
 | `POST` | `/internal/v1/review/artifacts/snapshot` | 审核材料快照（恒 `withdrawn`，只供审核员读） |
 | `POST` | `/internal/v1/review/artifacts/get` | 审核员按 id 读取任一版本（含字节，org 作用域） |
+| `POST` | `/internal/v1/review/artifacts/meta` | 按 id **批量**取元数据（名称 / 大小 / `createdByKind` / 时间，**不含字节**，跨 org 与不存在的 id 跳过） |
 | `POST` | `/internal/v1/review/artifacts/revision` | 审核员修订上传（新产物 + `revision_of` 链，恒 `held`） |
 | `POST` | `/internal/v1/review/artifacts/visibility` | 放行 / 撤回状态变更（单事务、幂等，只接受 `held → released\|withdrawn`） |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
@@ -712,7 +735,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 设置的目标值（允许改回待审等于给了撤销放行的口子）。完整流程见
 [design/agent-output-review.md](design/agent-output-review.md) §5–§6。
 
-这四个端点**发生在 Run 之外**（领取、上传修订、通过/驳回都可能在原 Run 终态之后很久），所以
+这五个端点**发生在 Run 之外**（领取、上传修订、通过/驳回都可能在原 Run 终态之后很久），所以
 它们签发的内部令牌允许 `run_id` 与 `execution_fence_token` **同时为 null**——这是绑定表里唯一
 允许这种形状的路径族（`allowNullRun`），其余路径仍然要求 Run 信封与 fence。exec 侧按同一口径
 校验，**不是**把 fence 校验整体关掉。

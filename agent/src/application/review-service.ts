@@ -29,9 +29,14 @@ import {
   EVENT_TYPE_REVIEW_DECIDED,
   EVENT_TYPE_REVIEW_DECIDED_NOTIFICATION,
 } from '../infrastructure/outbox/outbox-status.js';
-import { isReviewTerminalStatus, MATERIAL_SNAPSHOT_STATUS } from '../infrastructure/mysql/repositories/review-repository.js';
+import { isReviewTerminalStatus, MATERIAL_SNAPSHOT_STATUS, REVIEW_STATUS } from '../infrastructure/mysql/repositories/review-repository.js';
 import type { InternalReviewTransport, ReviewIdentity } from '../infrastructure/sandbox/internal-review-http.js';
 import { InternalReviewError } from '../infrastructure/sandbox/internal-review-http.js';
+import {
+  applyArtifactMeta,
+  buildVersionChains,
+  collectArtifactIds,
+} from './review-version-chain.js';
 import { REVIEW_TRANSFER_MAX_BYTES } from '@dsh/contract/delivery-policy.js';
 
 type Loose = any;
@@ -71,6 +76,32 @@ const MAX_LIST_LIMIT = 100;const DEFAULT_LIST_LIMIT = 20;
 const MAX_FEEDBACK_LEN = 4_000;
 const MAX_NOTE_LEN = 1_000;
 const MAX_QUESTIONS = 200;
+
+/**
+ * `status` 接受**逗号分隔的多值**（T5：历史页签 = `APPROVED,REJECTED`）。
+ *
+ * 空值/空白 = 不筛选；大小写、首尾空白与重复值都规范化。**任何一个未知值都 422**，
+ * 不静默忽略——静默忽略会让人以为「筛过了」，看到的却是全部。单值调用与以前完全等价。
+ */
+function parseTaskStatuses(raw: unknown): string[] | null {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text) return null;
+  const allowed = new Set<string>(Object.values(REVIEW_STATUS));
+  const out: string[] = [];
+  for (const part of text.split(',')) {
+    const value = part.trim().toUpperCase();
+    if (!value) continue;
+    if (!allowed.has(value)) {
+      throw new ReviewError(
+        422,
+        'REVIEW_INPUT_INVALID',
+        'status must be a comma-separated subset of PENDING|IN_REVIEW|APPROVED|REJECTED',
+      );
+    }
+    if (!out.includes(value)) out.push(value);
+  }
+  return out.length > 0 ? out : null;
+}
 const MAX_REVISION_BYTES = REVIEW_TRANSFER_MAX_BYTES;
 
 /**
@@ -231,16 +262,11 @@ export class ReviewService {
   async listTasks(actor: Loose, query: { status?: string | null; mine?: boolean; cursor?: string | null; limit?: unknown }) {
     const { orgId, userId } = await this.#reviewer(actor);
     const limit = resolveListLimit(query?.limit);
-    const status = query?.status == null || String(query.status).trim() === ''
-      ? null
-      : String(query.status).trim().toUpperCase();
-    if (status && !['PENDING', 'IN_REVIEW', 'APPROVED', 'REJECTED'].includes(status)) {
-      throw new ReviewError(422, 'REVIEW_INPUT_INVALID', 'status must be PENDING|IN_REVIEW|APPROVED|REJECTED');
-    }
+    const statuses = parseTaskStatuses(query?.status);
     const cursor = await this.#decodeCursor(query?.cursor, orgId);
     const rows = await this.#repos().reviews.listTasks({
       orgId,
-      status,
+      statuses,
       assigneeUserId: query?.mine === true ? userId : null,
       cursor,
       limit: limit + 1,
@@ -279,6 +305,7 @@ export class ReviewService {
     const nameOf = await this.#displayNames(repos, tasks.flatMap((task: Loose) =>
       [task.requesterUserId, task.assigneeUserId].filter(Boolean)));
     const items = await Promise.all(tasks.map((task) => repos.reviews.listItems(task.reviewTaskId)));
+    const agentNames = await this.#agentNames(repos, tasks.map((task: Loose) => task.agentId));
     return tasks.map((task, index) => ({
       review_task_id: task.reviewTaskId,
       status: task.status,
@@ -289,11 +316,28 @@ export class ReviewService {
         ? { user_id: task.assigneeUserId, display_name: nameOf(task.assigneeUserId) }
         : null,
       item_count: items[index].length,
+      // §3.2.1：同一发起人的十几行要能区分开——给出首件交付物名与智能体名，
+      // 前端不必逐条请求详情。
+      first_item_name: items[index].length > 0 ? String(items[index][0].name || '') || null : null,
+      agent_name: agentNames(task.agentId),
       created_at: task.createdAt,
       claimed_at: task.claimedAt,
       decided_at: task.decidedAt,
       feedback: task.feedback,
     }));
+  }
+
+  /** 智能体名称：按需取并缓存（列表投影要用，不能每条任务一次查询）。 */
+  async #agentNames(repos: Loose, agentIds: readonly string[]) {
+    const cache = new Map<string, string | null>();
+    const lookup = typeof repos?.catalog?.getDefinitionById === 'function'
+      ? repos.catalog.getDefinitionById.bind(repos.catalog)
+      : null;
+    for (const agentId of new Set(agentIds.map((id) => String(id)).filter(Boolean))) {
+      const definition = lookup ? await lookup(agentId).catch(() => null) : null;
+      cache.set(agentId, definition?.name == null ? null : String(definition.name));
+    }
+    return (agentId: string) => cache.get(String(agentId)) ?? null;
   }
 
   /** 显示名：按需取并缓存（组织里没有批量按 id 取用户的仓储方法）。 */
@@ -328,13 +372,20 @@ export class ReviewService {
           })
         : Promise.resolve([]),
     ]);
-    const versionChains = await this.#versionChains(repos, items, events);
+    const versionChains = await this.#versionChains(repos, items, events, task);
+    const versionActorIds = [...versionChains.values()]
+      .flatMap((chain) => chain.map((entry) => entry.uploaded_by_user_id))
+      .filter(Boolean) as string[];
     const nameOf = await this.#displayNames(repos, [
       task.requesterUserId,
       task.assigneeUserId,
       task.decidedBy,
+      ...versionActorIds,
     ].filter(Boolean) as string[]);
     const agentVersion = await repos.catalog.getVersionById(task.agentVersionId);
+    const agentDefinition = typeof repos.catalog?.getDefinitionById === 'function'
+      ? await repos.catalog.getDefinitionById(task.agentId).catch(() => null)
+      : null;
 
     return {
       review_task_id: task.reviewTaskId,
@@ -349,6 +400,8 @@ export class ReviewService {
         : null,
       agent: {
         agent_id: task.agentId,
+        // §3.2.3：元信息里要显示智能体名称，而不只是「智能体版本：1」。
+        name: agentDefinition?.name == null ? null : String(agentDefinition.name),
         version_no: agentVersion?.versionNo ?? null,
       },
       created_at: task.createdAt,
@@ -363,6 +416,8 @@ export class ReviewService {
         sequence_no: question.sequenceNo,
         text: question.text,
         created_at: question.createdAt,
+        // §3.2.7：标出触发本次任务的那一条提问，其余是上文（前端可折叠）。
+        triggering: run != null && question.messageId === run.triggeringMessageId,
         attachments: question.attachments.map((attachment: Loose) => ({
           attachment_id: attachment.attachmentId,
           filename: attachment.filename,
@@ -387,7 +442,19 @@ export class ReviewService {
         original_artifact_id: item.originalArtifactId,
         current_artifact_id: item.currentArtifactId,
         revised: item.currentArtifactId !== item.originalArtifactId,
-        versions: versionChains.get(item.itemNo) ?? [],
+        versions: (versionChains.get(item.itemNo) ?? []).map((version: Loose) => ({
+          artifact_id: version.artifact_id,
+          current: version.current,
+          revision: version.revision,
+          uploaded_by_kind: version.uploaded_by_kind,
+          uploaded_by_user_id: version.uploaded_by_user_id,
+          // 修订版的上传者是审核员：给出显示名；原件是智能体，没有用户 id。
+          uploaded_by_display_name: version.uploaded_by_user_id
+            ? nameOf(version.uploaded_by_user_id)
+            : null,
+          created_at: version.created_at,
+          size: version.size,
+        })),
       })),
       events: events.map((event: Loose) => ({
         event_id: event.eventId,
@@ -403,33 +470,25 @@ export class ReviewService {
   }
 
   /**
-   * 每件交付物的版本链：原件 → … → 当前版本。
+   * 每件交付物的版本链（形状与来源见 `review-version-chain.ts`）。
    *
-   * 修订历史在 exec 的 `revision_of` 链上，而 agent 侧的权威副本是审核事件里的
-   * `revised`（from → to）。两处都不覆盖原件，所以这条链只用于展示与「放行时把
-   * 其余版本撤回」。
+   * 这里只负责把 exec 的元数据接上：大小与时间以 exec 的产物记录为权威，取不到就留
+   * `null`。**失败降级**——审核面暂时不可用时详情仍要能打开（只有这几列显示「—」）。
    */
-  async #versionChains(repos: Loose, items: Loose[], events: Loose[]) {
-    const byItem = new Map<number, { artifactId: string; from: string | null }[]>();
-    for (const event of events) {
-      if (event.eventType !== 'revised' || event.itemNo == null) continue;
-      const list = byItem.get(Number(event.itemNo)) ?? [];
-      list.push({ artifactId: String(event.toArtifactId), from: event.fromArtifactId == null ? null : String(event.fromArtifactId) });
-      byItem.set(Number(event.itemNo), list);
-    }
-    const chains = new Map<number, { artifact_id: string; current: boolean; revision: number }[]>();
-    for (const item of items) {
-      const chain: { artifact_id: string; current: boolean; revision: number }[] = [
-        { artifact_id: item.originalArtifactId, current: item.originalArtifactId === item.currentArtifactId, revision: 0 },
-      ];
-      let revision = 1;
-      for (const entry of byItem.get(item.itemNo) ?? []) {
-        chain.push({ artifact_id: entry.artifactId, current: entry.artifactId === item.currentArtifactId, revision: revision++ });
-      }
-      if (!chain.some((entry) => entry.current)) {
-        chain.push({ artifact_id: item.currentArtifactId, current: true, revision: revision++ });
-      }
-      chains.set(item.itemNo, chain);
+  async #versionChains(repos: Loose, items: Loose[], events: Loose[], task: Loose) {
+    const chains = buildVersionChains({
+      items,
+      events,
+      taskCreatedAt: task.createdAt == null ? null : String(task.createdAt),
+    });
+    const transport = this.#transport;
+    const ids = collectArtifactIds(chains);
+    if (!transport || ids.length === 0) return chains;
+    try {
+      const identity = await this.#identityFor(task);
+      applyArtifactMeta(chains, await transport.readArtifactMeta({ artifactIds: ids }, identity));
+    } catch {
+      /* 增强项：exec 元数据取不到不影响详情与决定。 */
     }
     return chains;
   }

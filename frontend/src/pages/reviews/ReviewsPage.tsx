@@ -25,30 +25,38 @@ import {
   type ReviewTask,
 } from '../../shared/api/reviews';
 import {
+  REVIEW_LIST_FILTERS,
   deliveryStateForTask,
   deliveryStateLabel,
+  deliveryTone,
   formatReviewSize,
   formatReviewTimestamp,
   reportActionFailure,
   itemRevised,
+  reviewDetailTitle,
   reviewErrorMessage,
+  reviewEventDetail,
   reviewEventLabel,
   reviewListState,
   reviewRequesterLabel,
   reviewStatusLabel,
+  reviewStatusTone,
+  reviewTaskAgentLabel,
+  reviewTaskItemLabel,
+  reviewVersionUploader,
   runStatusLabel,
+  shortArtifactId,
+  type ReviewFilterId,
+  type StatusTone,
 } from './reviewErrors';
 import a from '../settings/adminPage.module.css';
 import s from './reviews.module.css';
 
 const PAGE_SIZE = 20;
 
-const FILTERS = [
-  { id: 'pending', label: '待领取', status: 'PENDING', mine: false },
-  { id: 'mine', label: '我领取的', status: 'IN_REVIEW', mine: true },
-  { id: 'history', label: '历史', status: null, mine: false },
-] as const;
-type FilterId = (typeof FILTERS)[number]['id'];
+/** 页签定义在 `reviewErrors.ts`（纯逻辑，可直接单测；T5 的 history 多值筛选在那里钉住）。 */
+const FILTERS = REVIEW_LIST_FILTERS;
+type FilterId = ReviewFilterId;
 
 export function ReviewsPage() {
   const { state } = useChat();
@@ -220,51 +228,82 @@ export function ReviewsPage() {
       <div className={s.layout}>
         <div className={s.listPane}>
           {listState === 'error' ? (
-            <div className={a.error} role="alert">
-              <b>读取审核队列失败</b>
-              <p style={{ margin: 0 }}>{loadError}</p>
-              <div className={a.cardActions}>
-                <button type="button" className={a.btn} onClick={() => void load({ cursor: null })}>
-                  重试
-                </button>
-              </div>
+            // 读取失败不是空队列（AGENTS.md §3）；视觉与 RunsPage 的空态同款（a.empty）。
+            <div className={a.empty} role="alert">
+              <p className={a.error} style={{ margin: '0 0 8px' }}>读取审核队列失败：{loadError}</p>
+              <button type="button" className={a.btn} onClick={() => void load({ cursor: null })}>
+                重试
+              </button>
             </div>
           ) : null}
-          {listState === 'loading' ? <p className={a.muted}>正在读取…</p> : null}
+          {listState === 'loading' ? <div className={a.empty}>正在读取…</div> : null}
           {listState === 'empty' ? (
-            <p className={a.empty}>
+            <div className={a.empty}>
               {filter === 'pending' ? '没有待领取的审核任务。' : filter === 'mine' ? '你没有正在审核的任务。' : '还没有历史任务。'}
-            </p>
+            </div>
           ) : null}
           {listState === 'ready' ? (
-            <table className={a.table}>
-              <thead>
-                <tr>
-                  <th>发起人</th>
-                  <th>交付物</th>
-                  <th>状态</th>
-                  <th>Run</th>
-                  <th>提交时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tasks!.map((task) => (
-                  <tr
-                    key={task.review_task_id}
-                    className={task.review_task_id === selectedId ? s.rowActive : undefined}
-                    onClick={() => void openDetail(task.review_task_id)}
-                  >
-                    <td>{reviewRequesterLabel(task)}</td>
-                    <td>{task.item_count ?? 0} 件</td>
-                    <td>
-                      <span className={`${a.pill} ${statusClass(task.status, a)}`}>{reviewStatusLabel(task.status)}</span>
-                    </td>
-                    <td>{runStatusLabel(task.run_status)}</td>
-                    <td className={a.muted}>{formatReviewTimestamp(task.created_at)}</td>
+            <div className={a.tableWrap}>
+              <table className={`${a.table} ${s.listTable}`}>
+                <colgroup>
+                  <col className={s.colItem} />
+                  <col className={s.colAgent} />
+                  <col className={s.colRequester} />
+                  <col className={s.colStatus} />
+                  <col className={s.colRun} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>交付物</th>
+                    <th>智能体</th>
+                    <th>发起人</th>
+                    <th>状态</th>
+                    <th>运行结果</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {tasks!.map((task) => (
+                    <tr
+                      key={task.review_task_id}
+                      className={task.review_task_id === selectedId ? s.rowActive : undefined}
+                      tabIndex={0}
+                      aria-label={`查看任务 ${reviewTaskItemLabel(task)}`}
+                      onClick={() => void openDetail(task.review_task_id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          void openDetail(task.review_task_id);
+                        }
+                      }}
+                    >
+                      <td>
+                        <div className={s.cellTitle} title={reviewTaskItemLabel(task)}>
+                          {reviewTaskItemLabel(task)}
+                        </div>
+                        <small className={a.muted}>
+                          {task.item_count && task.item_count > 1 && task.first_item_name
+                            ? `${task.item_count} 件 · `
+                            : ''}
+                          {formatReviewTimestamp(task.created_at)}
+                        </small>
+                      </td>
+                      <td className={s.cellEllipsis} title={reviewTaskAgentLabel(task)}>
+                        {reviewTaskAgentLabel(task)}
+                      </td>
+                      <td className={s.cellEllipsis} title={reviewRequesterLabel(task)}>
+                        {reviewRequesterLabel(task)}
+                      </td>
+                      <td>
+                        <span className={`${a.pill} ${toneClass(reviewStatusTone(task.status), a)}`}>
+                          {reviewStatusLabel(task.status)}
+                        </span>
+                      </td>
+                      <td>{runStatusLabel(task.run_status)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : null}
           {nextCursor && listState === 'ready' ? (
             <div className={a.cardActions}>
@@ -281,17 +320,14 @@ export function ReviewsPage() {
         </div>
 
         <div className={s.detailPane}>
-          {!selectedId ? <p className={a.muted}>从左侧选择一个任务查看详情。</p> : null}
-          {selectedId && detailLoading ? <p className={a.muted}>正在读取详情…</p> : null}
+          {!selectedId ? <div className={a.empty}>从左侧选择一个任务查看详情。</div> : null}
+          {selectedId && detailLoading ? <div className={a.empty}>正在读取详情…</div> : null}
           {selectedId && detailError ? (
-            <div className={a.error} role="alert">
-              <b>读取任务详情失败</b>
-              <p style={{ margin: 0 }}>{detailError}</p>
-              <div className={a.cardActions}>
-                <button type="button" className={a.btn} onClick={() => void refreshDetail()}>
-                  重试
-                </button>
-              </div>
+            <div className={a.empty} role="alert">
+              <p className={a.error} style={{ margin: '0 0 8px' }}>读取任务详情失败：{detailError}</p>
+              <button type="button" className={a.btn} onClick={() => void refreshDetail()}>
+                重试
+              </button>
             </div>
           ) : null}
           {detail && !detailLoading ? (
@@ -349,11 +385,15 @@ export function ReviewsPage() {
   );
 }
 
-function statusClass(status: string, styles: Record<string, string>): string {
-  if (status === 'APPROVED') return styles.ok ?? '';
-  if (status === 'REJECTED') return styles.err ?? '';
-  if (status === 'IN_REVIEW') return styles.warn ?? '';
-  return styles.mute ?? '';
+/** 状态 tone → admin 页的 pill 颜色（任务状态与交付物状态共用一套语义，§3.2.5）。 */
+function toneClass(tone: StatusTone, styles: Record<string, string>): string {
+  return styles[tone] ?? '';
+}
+
+/** 交付物某一版本的列表；没有版本链时至少给出当前版本。 */
+function versionsFor(item: ReviewItem): ReviewItem['versions'] {
+  if (item.versions.length > 0) return item.versions;
+  return [{ artifact_id: item.current_artifact_id, current: true, revision: 0 }];
 }
 
 function ReviewDetailPane(props: {
@@ -381,13 +421,18 @@ function ReviewDetailPane(props: {
     <div>
       <div className={a.card}>
         <div className={a.cardHead}>
-          <b>任务 {detail.review_task_id}</b>
+          <b>{reviewDetailTitle(detail)}</b>
           <span className={a.sp} />
-          <span className={`${a.pill} ${statusClass(detail.status, a)}`}>{reviewStatusLabel(detail.status)}</span>
+          <span className={`${a.pill} ${toneClass(reviewStatusTone(detail.status), a)}`}>
+            {reviewStatusLabel(detail.status)}
+          </span>
         </div>
         <p className={a.muted}>
-          发起人：{reviewRequesterLabel(detail)} · 智能体版本：{detail.agent?.version_no ?? '—'} · Run 状态：
-          {runStatusLabel(detail.run_status)} · 提交于 {formatReviewTimestamp(detail.created_at)}
+          任务 <span className={a.mono} title="任务 ID（可复制）">{detail.review_task_id}</span> · 智能体：
+          {detail.agent?.name || '—'}
+          {detail.agent?.version_no != null ? ` v${detail.agent.version_no}` : ''} · 发起人：
+          {reviewRequesterLabel(detail)} · Run 状态：{runStatusLabel(detail.run_status)} · 提交于{' '}
+          {formatReviewTimestamp(detail.created_at)}
           {detail.assignee ? ` · 领取人：${detail.assignee.display_name || detail.assignee.user_id}` : ''}
         </p>
         {detail.feedback ? <p className={a.note}>审核意见：{detail.feedback}</p> : null}
@@ -413,22 +458,40 @@ function ReviewDetailPane(props: {
           <p className={a.muted}>这次 Run 之前没有用户消息。</p>
         ) : (
           <ol className={s.questions}>
-            {detail.questions.map((question) => (
-              <li key={question.message_id}>
-                <div className={a.muted}>{formatReviewTimestamp(question.created_at)}</div>
-                <div className={s.questionText}>{question.text || '（无文字）'}</div>
-                {question.attachments.length > 0 ? (
-                  <ul className={s.attachList}>
-                    {question.attachments.map((attachment) => (
-                      <li key={attachment.attachment_id}>
-                        {attachment.filename}
-                        <span className={a.muted}> · {formatReviewSize(attachment.size)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </li>
-            ))}
+            {detail.questions.map((question) => {
+              const body = (
+                <>
+                  <div className={a.muted}>
+                    {formatReviewTimestamp(question.created_at)}
+                    {question.triggering ? (
+                      <span className={`${a.pill} ${a.info} ${s.triggerPill}`}>本次</span>
+                    ) : null}
+                  </div>
+                  <div className={s.questionText}>{question.text || '（无文字）'}</div>
+                  {question.attachments.length > 0 ? (
+                    <ul className={s.attachList}>
+                      {question.attachments.map((attachment) => (
+                        <li key={attachment.attachment_id}>
+                          {attachment.filename}
+                          <span className={a.muted}> · {formatReviewSize(attachment.size)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </>
+              );
+              // 触发本次任务的那条一直展开；更早的提问是上文，可折叠。
+              return question.triggering ? (
+                <li key={question.message_id}>{body}</li>
+              ) : (
+                <li key={question.message_id}>
+                  <details className={s.questionHistory}>
+                    <summary>上文 · {formatReviewTimestamp(question.created_at)}</summary>
+                    {body}
+                  </details>
+                </li>
+              );
+            })}
           </ol>
         )}
       </div>
@@ -583,7 +646,9 @@ function ReviewDetailPane(props: {
                 <span className={a.mono}>{formatReviewTimestamp(event.created_at)}</span>{' '}
                 <b>{reviewEventLabel(event.event_type)}</b>
                 {event.item_no != null ? <span className={a.muted}> · 第 {event.item_no} 件</span> : null}
-                {event.detail ? <span className={a.muted}> · {event.detail}</span> : null}
+                {reviewEventDetail(event) ? (
+                  <span className={a.muted}> · {reviewEventDetail(event)}</span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -610,34 +675,44 @@ function ItemBlock(props: {
       <div className={a.cardHead}>
         <b>{item.name}</b>
         <span className={a.sp} />
-        <span className={`${a.pill} ${revised ? a.info : a.mute}`}>
+        <span className={`${a.pill} ${toneClass(deliveryTone(deliveryStateForTask(props.taskStatus)), a)}`}>
           {deliveryStateLabel(deliveryStateForTask(props.taskStatus), revised)}
         </span>
       </div>
       <p className={a.muted}>
         {[item.mime_type, formatReviewSize(item.size)].filter(Boolean).join(' · ') || '交付物'}
       </p>
-      <table className={a.table}>
+      <div className={a.tableWrap}>
+        <table className={a.table}>
         <thead>
           <tr>
             <th>版本</th>
-            <th>artifact</th>
+            <th>上传者</th>
+            <th>时间</th>
+            <th>大小</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {(item.versions.length > 0
-            ? item.versions
-            : [{ artifact_id: item.current_artifact_id, current: true, revision: 0 }]
-          ).map((version) => (
+          {versionsFor(item).map((version) => (
             <tr key={version.artifact_id}>
-              <td>{version.revision === 0 ? '原件' : `修订 ${version.revision}`}{version.current ? '（当前）' : ''}</td>
-              <td className={a.mono}>{version.artifact_id}</td>
+              <td>
+                {version.revision === 0 ? '原件' : `修订 ${version.revision}`}
+                {version.current ? '（当前）' : ''}
+                {/* artifact ID 不再是主列：收进悬停提示，仍可复制核对。 */}
+                <div className={a.mono} title={version.artifact_id}>
+                  {shortArtifactId(version.artifact_id)}
+                </div>
+              </td>
+              <td>{reviewVersionUploader(version)}</td>
+              <td className={a.muted}>{formatReviewTimestamp(version.created_at)}</td>
+              <td className={a.muted}>{formatReviewSize(version.size) || '—'}</td>
               <td>
                 <a
                   className={a.btn}
                   href={reviewArtifactUrl(props.reviewTaskId, version.artifact_id)}
                   download={item.name}
+                  title={`artifact ${version.artifact_id}`}
                 >
                   下载
                 </a>
@@ -645,7 +720,8 @@ function ItemBlock(props: {
             </tr>
           ))}
         </tbody>
-      </table>
+        </table>
+      </div>
       {props.canAct ? (
         <div className={a.cardActions}>
           <input

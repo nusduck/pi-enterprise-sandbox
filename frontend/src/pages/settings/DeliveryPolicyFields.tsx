@@ -44,7 +44,7 @@ export function DeliveryPolicyFields(props: {
           <b>交付策略</b>
         </div>
         {DELIVERY_POLICY_OPTIONS.map((option) => (
-          <label key={option.mode} className={s.delegRow}>
+          <label key={option.mode} className={s.deliveryOption}>
             <input
               type="radio"
               name="delivery-policy-mode"
@@ -53,7 +53,7 @@ export function DeliveryPolicyFields(props: {
               disabled={disabled}
               onChange={() => onChange(option.mode)}
             />
-            <span>
+            <span className={s.deliveryOptionText}>
               <b>{option.label}</b>
               <small className={s.hint}>{option.hint}</small>
             </span>

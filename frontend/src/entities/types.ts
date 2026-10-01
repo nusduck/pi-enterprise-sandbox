@@ -277,12 +277,23 @@ export type TraceSpanEntity = {
 
 export type EntityMap<T> = Record<string, T>;
 
+/**
+ * 后台进程列表的拉取状态，按 sandbox session 记。
+ *
+ * 服务端在 review 工作区对进程接口返回 404（design agent-output-review E6）；
+ * **拉取失败不能渲染成空状态**（AGENTS.md §3），所以列表之外还要记住「这次是失败了
+ * 还是真的没有」。
+ */
+export type ProcessListState = 'loading' | 'ready' | 'error';
+
 export type EntityStore = {
   conversationsById: EntityMap<ConversationEntity>;
   runsById: EntityMap<RunEntity>;
   messagesById: EntityMap<MessageEntity>;
   toolExecutionsById: EntityMap<ToolExecutionEntity>;
   processesById: EntityMap<ProcessEntity>;
+  /** 每个 session 的进程列表拉取状态（T3）。 */
+  processListStateById: Record<string, ProcessListState>;
   approvalsById: EntityMap<ApprovalEntity>;
   artifactsById: EntityMap<ArtifactEntity>;
   datasetsById: EntityMap<DatasetEntity>;

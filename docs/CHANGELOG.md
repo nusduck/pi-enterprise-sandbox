@@ -98,6 +98,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **交付物审核与成员角色的遗留缺陷（T1–T6）与审核/成员界面的信息设计**：
+  - **T1 发起人页面收不到审核结果**：Run 一到终态，Run SSE 就结束，而 `artifact.released` /
+    `review.rejected` 是审核员之后才追加到这个已结束 Run 上的，页面因此要手动刷新。
+    改为**纯前端轮询**：当前会话里还有 `reviewStatus === 'pending'` 的交付物且页面可见时，
+    每 20 秒重新拉一次 `GET /api/conversations/{id}/events`（走已有的重放与 `event_id`/`sequence`
+    去重）；没有待审交付物、页面隐藏或切换会话时停止并清理定时器。后端与接口未改。
+  - **T2 智能体配置页「交付物需人工审核」的单选框换行**：两个选项改用同一套 `deliveryOption`
+    行样式（`align-items: flex-start` + 文本列 `min-width: 0`），长说明换行时圆圈仍与标题同一行。
+  - **T3 审核会话的进程页签把 404 当成「还没有后台进程」**：review 会话同时隐藏「文件」与
+    「进程」两个页签（服务端 E5/E6 都 404）；其他会话的进程列表拉取失败时显示**错误态**
+    （`processListStateById` 按会话记录拉取结果，四态判定 `processPanelState`），不再渲染成空状态。
+  - **T4 审计时间线显示原始 JSON**：新增 `reviewEventDetail` 按事件类型格式化
+    （「提交审核 · 1 件交付物，0 个附件」），未知结构一律不显示详情。
+  - **T5「历史」页签列出了全部任务**：后端 `GET /api/reviews` 的 `status` 改为接受**逗号分隔的
+    状态子集**（未知值仍 422 `REVIEW_INPUT_INVALID`，单值行为不变），前端历史页签传
+    `APPROVED,REJECTED`。
+  - **T6 接口文档漂移**：`docs/api.md` 把 `GET /api/conversations/{id}/events` 从
+    「Conversation 维度 SSE」改正为「一次性返回完整时间线的 JSON」，并补上响应字段与调用时机。
+  - **审核工作台**：列表行增加交付物名（多件时「首件名 等 N 件」）与智能体名（列表投影新增
+    `first_item_name` / `agent_name`），列头「Run」改为「运行结果」；详情标题不再用 ULID
+    （交付物名或「智能体名 · 发起人」，任务 ID 降级为可复制小字）；版本表改为
+    「版本 / 上传者 / 时间 / 大小 / 下载」（artifact ID 收进悬停提示，非当前版本的大小来自新增的
+    exec 内部端点 `POST /internal/v1/review/artifacts/meta`）；任务状态与交付物状态共用同一套
+    颜色语义；详情面板吸顶并可独立滚动；触发本次任务的提问标「本次」、更早的收进可折叠「上文」；
+    列表/详情的加载、失败、空三态与 `RunsPage` 对齐。
+  - **成员与角色页**：列头、筛选、变更记录显示中文角色名（代码进悬停提示）；开关与同行文字垂直
+    居中；「操作」列头与按钮对齐一致（`.table .right` 修掉被 `.table th` 覆盖的问题）；页面说明与
+    「最近登录」的空值口径统一（名单是**已开通成员**，不是「登录过的人」，空值带 tooltip 说明）；
+    变更记录按时间倒序。
+  - **发起人交付卡片**：修订后放行的卡片显示修订版大小（`artifact.released` 的 `size` 写回实体）；
+    「已提交审核」时补一句「审核通过后可下载」。
+
 - **ADR 0015 组织共享 Skill 吊销影响面展示与管理页 UI 重构与缺陷修复**：
   - 吊销版本后通过弹窗明确列出受影响的 `affectedAgentVersionIds` 列表（ADR 0015 D8 验收要求）；版本清单详情中也补充列出当前引用该版本的智能体版本。
   - 修复吊销失败原因被弹窗遮盖的问题：弹窗内直接显示错误提示，并妥善保留吊销原因草稿不被清空。

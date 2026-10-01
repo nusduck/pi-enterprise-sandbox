@@ -459,18 +459,21 @@ export class ReviewRepository {
   /**
    * 审核池与历史。
    *
-   * `status` / `assigneeUserId` 都是可选的收窄条件；游标是 keyset 式
+   * `statuses` / `assigneeUserId` 都是可选的收窄条件；游标是 keyset 式
    * （`created_at` + `review_task_id` 双键，避免同毫秒行被跳过）。
+   *
+   * `statuses` 是**列表**（T5）：历史页签要一次拿 APPROVED + REJECTED。空数组与
+   * null 语义相同（不筛选）；调用方已把未知值挡在 422，这里不再校验。
    */
   async listTasks(input: {
     readonly orgId: string;
-    readonly status?: string | null;
+    readonly statuses?: readonly string[] | null;
     readonly assigneeUserId?: string | null;
     readonly cursor?: { createdAt: string; reviewTaskId: string } | null;
     readonly limit: number;
   }): Promise<ReviewTaskRecord[]> {
     const q = this.db('tbl_agsvc_review_tasks').where({ org_id: input.orgId });
-    if (input.status) q.andWhere({ status: input.status });
+    if (input.statuses && input.statuses.length > 0) q.whereIn('status', [...input.statuses]);
     if (input.assigneeUserId) q.andWhere({ assignee_user_id: input.assigneeUserId });
     if (input.cursor) {
       q.andWhere((qb: Loose) => {

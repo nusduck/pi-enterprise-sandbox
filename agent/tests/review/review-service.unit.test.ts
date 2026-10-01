@@ -51,7 +51,7 @@ function taskRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: number; decide?: number; transport?: any } = {}) {
+function harness(options: { task?: any; items?: any[]; events?: any[]; questions?: any[]; claim?: number; decide?: number; transport?: any } = {}) {
   const state = {
     task: options.task ?? taskRow(),
     items: options.items ?? [{
@@ -69,6 +69,7 @@ function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: n
     appendedMessages: [] as any[],
     appendedRunEvents: [] as any[],
     decided: [] as any[],
+    listQueries: [] as any[],
   };
 
   const reviews = {
@@ -79,8 +80,8 @@ function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: n
     async listEvents() { return state.events; },
     async listMaterials() { return []; },
     async getMaterial() { return null; },
-    async listUserQuestionsUpToRun() { return []; },
-    async listTasks() { return [state.task]; },
+    async listUserQuestionsUpToRun() { return options.questions ?? []; },
+    async listTasks(input: any) { state.listQueries.push(input); return [state.task]; },
     async claim() { return options.claim ?? 1; },
     async releaseClaim() { return 1; },
     async decide(input: any) {
@@ -97,7 +98,10 @@ function harness(options: { task?: any; items?: any[]; events?: any[]; claim?: n
     organizations: { async getUser() { return { userId: REQUESTER, displayName: '发起人' }; } },
     sessions: { async getById() { return { workspaceId: '01K0G2PAV8FPMVC9QHJG7JPN5G', sandboxSessionId: '01K0G2PAV8FPMVC9QHJG7JPN5F' }; } },
     runs: { async getById() { return { runId: RUN, orgId: ORG, userId: REQUESTER, conversationId: CONV, agentSessionId: SESSION, agentVersionId: '01K0G2PAV8FPMVC9QHJG7JPN5E', triggeringMessageId: '01K0G2PAV8FPMVC9QHJG7JPN5J', traceId: 'b'.repeat(32) }; } },
-    catalog: { async getVersionById() { return { versionNo: 2 }; } },
+    catalog: {
+      async getVersionById() { return { versionNo: 2 }; },
+      async getDefinitionById() { return { agentId: '01K0G2PAV8FPMVC9QHJG7JPN5A', name: '分析智能体' }; },
+    },
     messages: { async append(input: any) { state.appendedMessages.push(input); return input; } },
     runEvents: { async append(input: any) { state.appendedRunEvents.push(input); return { eventId: input.eventId, sequenceNo: 11 }; } },
     outbox: { async insert(row: any) { state.insertedOutbox.push(row); return row; } },
@@ -153,6 +157,150 @@ describe('审核服务：角色与作用域', () => {
   it('跨 org / 不存在的任务 → 404（与「存在但属于别人」同码）', async () => {
     const { service } = harness();
     await expectCode(() => service.getTaskDetail(ACTOR, '01K0G2PAV8FPMVC9QHJG7JPN99'), 'NOT_FOUND');
+  });
+});
+
+describe('审核服务：列表状态筛选（T5）', () => {
+  it('逗号分隔的多状态：白名单内的值全部下推到仓储（历史页签只列已通过/已驳回）', async () => {
+    const { service, state } = harness();
+    await service.listTasks(ACTOR, { status: 'APPROVED,REJECTED' });
+    assert.deepEqual(state.listQueries[0].statuses, ['APPROVED', 'REJECTED']);
+  });
+
+  it('大小写、空白与重复值都被规范化，顺序按输入', async () => {
+    const { service, state } = harness();
+    await service.listTasks(ACTOR, { status: ' approved , REJECTED ,approved,' });
+    assert.deepEqual(state.listQueries[0].statuses, ['APPROVED', 'REJECTED']);
+  });
+
+  it('单值筛选行为不变（待领取页签）', async () => {
+    const { service, state } = harness();
+    await service.listTasks(ACTOR, { status: 'PENDING' });
+    assert.deepEqual(state.listQueries[0].statuses, ['PENDING']);
+  });
+
+  it('空值 = 不筛选', async () => {
+    const { service, state } = harness();
+    await service.listTasks(ACTOR, { status: '  ' });
+    assert.equal(state.listQueries[0].statuses, null);
+  });
+
+  it('列表里只要有一个未知状态值 → 422 REVIEW_INPUT_INVALID，不静默忽略', async () => {
+    const { service, state } = harness();
+    await expectCode(() => service.listTasks(ACTOR, { status: 'APPROVED,PENDINGX' }), 'REVIEW_INPUT_INVALID');
+    assert.equal(state.listQueries.length, 0, '非法输入不该打到仓储');
+  });
+});
+
+describe('审核工作台的信息投影（§3.2）', () => {
+  it('列表带首件交付物名与智能体名（同一发起人的十几行才分得清）', async () => {
+    const { service } = harness();
+    const list = await service.listTasks(ACTOR, {}) as any;
+    assert.equal(list.tasks[0].first_item_name, '报告.md');
+    assert.equal(list.tasks[0].agent_name, '分析智能体');
+    assert.equal(list.tasks[0].item_count, 1);
+  });
+
+  it('没有交付物的任务 first_item_name 是 null，不是空串', async () => {
+    const { service } = harness({ items: [] });
+    const list = await service.listTasks(ACTOR, {}) as any;
+    assert.equal(list.tasks[0].first_item_name, null);
+    assert.equal(list.tasks[0].item_count, 0);
+  });
+
+  it('详情元信息带智能体名称，提问标出触发本次任务的那一条', async () => {
+    const { service } = harness({
+      questions: [
+        { messageId: '01K0G2PAV8FPMVC9QHJG7JPN5K', sequenceNo: 1, text: '上一轮的提问', createdAt: null, attachments: [] },
+        { messageId: '01K0G2PAV8FPMVC9QHJG7JPN5J', sequenceNo: 2, text: '本次的提问', createdAt: null, attachments: [] },
+      ],
+    });
+    const detail = await service.getTaskDetail(ACTOR, TASK) as any;
+    assert.equal(detail.agent.name, '分析智能体');
+    assert.equal(detail.agent.version_no, 2);
+    assert.equal(detail.questions[0].triggering, false);
+    assert.equal(detail.questions[1].triggering, true);
+  });
+
+  it('版本链：原件是智能体、修订是审核员显示名，时间来自审计事件', async () => {
+    const { service } = harness({
+      items: [{
+        itemNo: 1,
+        originalArtifactId: ARTIFACT,
+        currentArtifactId: REVISED,
+        name: '报告.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 20,
+        sha256: 'a'.repeat(64),
+      }],
+      events: [{
+        eventId: '01K0G2PAV8FPMVC9QHJG7JPN80',
+        eventType: 'revised',
+        actorUserId: REVIEWER,
+        itemNo: 1,
+        fromArtifactId: ARTIFACT,
+        toArtifactId: REVISED,
+        detail: null,
+        createdAt: '2026-10-01 11:00:00.000',
+      }],
+    });
+    const detail = await service.getTaskDetail(ACTOR, TASK) as any;
+    const versions = detail.items[0].versions;
+    assert.equal(versions.length, 2);
+    assert.equal(versions[0].uploaded_by_kind, 'agent');
+    assert.equal(versions[0].current, false);
+    assert.equal(versions[1].uploaded_by_kind, 'reviewer');
+    assert.equal(versions[1].uploaded_by_user_id, REVIEWER);
+    assert.equal(versions[1].uploaded_by_display_name, '发起人');
+    assert.equal(versions[1].created_at, '2026-10-01 11:00:00.000');
+    assert.equal(versions[1].size, 20, '当前版本的大小是账本里跟着 current 的那个');
+  });
+
+  it('非当前版本的大小从 exec 元数据补；补不上就留 null（界面显示「—」）', async () => {
+    const transport = {
+      async readArtifactMeta({ artifactIds }: any) {
+        return artifactIds.map((id: string) => ({
+          artifactId: id,
+          name: '报告.md',
+          mimeType: 'text/markdown',
+          size: id === ARTIFACT ? 44 : 20,
+          sha256: '',
+          visibility: 'held',
+          revisionOf: null,
+          createdByKind: id === ARTIFACT ? 'agent' : 'reviewer',
+          createdAt: '2026-10-01T10:00:00.000Z',
+        }));
+      },
+    };
+    const items = [{
+      itemNo: 1,
+      originalArtifactId: ARTIFACT,
+      currentArtifactId: REVISED,
+      name: '报告.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 20,
+      sha256: 'a'.repeat(64),
+    }];
+    const events = [{
+      eventId: '01K0G2PAV8FPMVC9QHJG7JPN80',
+      eventType: 'revised',
+      actorUserId: REVIEWER,
+      itemNo: 1,
+      fromArtifactId: ARTIFACT,
+      toArtifactId: REVISED,
+      detail: null,
+      createdAt: '2026-10-01 11:00:00.000',
+    }];
+
+    const enriched = await harness({ transport, items, events }).service.getTaskDetail(ACTOR, TASK) as any;
+    assert.equal(enriched.items[0].versions[0].size, 44, '被替换的原件大小来自 exec');
+
+    const failing = {
+      async readArtifactMeta() { throw new Error('review plane down'); },
+    };
+    const degraded = await harness({ transport: failing, items, events }).service.getTaskDetail(ACTOR, TASK) as any;
+    assert.equal(degraded.items[0].versions[0].size, null, '取不到就是 null，不猜');
+    assert.equal(degraded.items[0].versions[1].size, 20);
   });
 });
 

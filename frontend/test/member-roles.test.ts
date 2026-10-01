@@ -17,6 +17,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import { hasAdminRole, hasRole, rolesOf } from '../src/shared/security/roles.ts';
 import {
   MEMBER_ROLE_ERROR_ZH,
+  NO_LOGIN_RECORD_TOOLTIP,
+  ROLE_LABEL_ZH,
   ROLE_PINNED_TOOLTIP,
   formatMemberTimestamp,
   isRolePinned,
@@ -28,6 +30,8 @@ import {
   roleEventActionLabel,
   roleEventActorLabel,
   roleEventSourceLabel,
+  roleLabel,
+  sortRoleEventsDesc,
   withRole,
 } from '../src/pages/settings/memberRoles.ts';
 import {
@@ -176,6 +180,71 @@ describe('成员与角色页的错误提示映射', () => {
     assert.equal(isSelfMember({ username: 'alice' }, { username: 'alice' }), true);
     assert.equal(isSelfMember({ username: 'bob' }, { username: 'alice' }), false);
     assert.equal(isSelfMember({ user_id: 'u1' }, null), false);
+  });
+});
+
+describe('成员与角色的界面信息设计（§3.1）', () => {
+  it('角色代码在界面上显示成中文，代码只留在悬停提示里', () => {
+    assert.equal(roleLabel('admin'), '管理员');
+    assert.equal(roleLabel('reviewer'), '审核员');
+    assert.equal(roleLabel('ADMIN'), '管理员');
+    assert.equal(roleLabel('unknown_role'), 'unknown_role', '未知角色原样显示，不猜');
+    assert.equal(ROLE_LABEL_ZH.admin, '管理员');
+    assert.equal(ROLE_LABEL_ZH.reviewer, '审核员');
+  });
+
+  it('列头、筛选、变更记录都不直接显示 admin / reviewer 代码', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.doesNotMatch(page, /<th>admin<\/th>/);
+    assert.doesNotMatch(page, /<th>reviewer<\/th>/);
+    assert.doesNotMatch(page, /label: 'admin'/);
+    assert.doesNotMatch(page, /label: 'reviewer'/);
+    assert.match(page, /roleLabel\('admin'\)/);
+    assert.match(page, /roleLabel\('reviewer'\)/);
+    // 需要时在悬停提示里给出代码。
+    assert.match(page, /角色代码：admin/);
+    assert.match(page, /角色代码：reviewer/);
+  });
+
+  it('开关与同一行的文字垂直居中：两个角色都用同一个行容器', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.equal(
+      (page.match(/className=\{s\.roleCell\}/g) || []).length,
+      2,
+      '管理员与审核员开关必须共用同一个居中的行容器',
+    );
+    const css = src('src/pages/settings/membersAdmin.module.css');
+    assert.match(css, /\.roleCell\s*\{[^}]*align-items:\s*center/);
+  });
+
+  it('表格的右对齐在「操作」列头与按钮上一致（.table th 的 text-align 不能盖住它）', () => {
+    const css = src('src/pages/settings/adminPage.module.css');
+    assert.match(css, /\.table\s+\.right\s*\{[^}]*text-align:\s*right/);
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.match(page, /<th className=\{a\.right\}>操作<\/th>/);
+  });
+
+  it('页面说明与「最近登录」的空值口径一致', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.doesNotMatch(page, /只包含至少登录过一次的成员/);
+    assert.match(page, /还没有平台登录记录/);
+    assert.match(page, /NO_LOGIN_RECORD_TOOLTIP/);
+  });
+
+  it('变更记录按时间倒序（服务端顺序之外界面再兜一次）', () => {
+    const rows = [
+      { event_id: 'a', created_at: '2026-09-30T10:00:00.000Z' },
+      { event_id: 'b', created_at: '2026-10-01T10:00:00.000Z' },
+      { event_id: 'c', created_at: '2026-09-30T10:00:00.000Z' },
+    ];
+    assert.deepEqual(sortRoleEventsDesc(rows).map((r) => r.event_id), ['b', 'c', 'a']);
+    assert.deepEqual(sortRoleEventsDesc([]), []);
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.match(page, /sortRoleEventsDesc\(/);
+  });
+
+  it('「最近登录」为空时的提示文案说明了数据来源', () => {
+    assert.match(NO_LOGIN_RECORD_TOOLTIP, /登录记录/);
   });
 });
 

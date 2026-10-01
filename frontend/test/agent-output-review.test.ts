@@ -18,22 +18,29 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const src = (relative: string) => readFileSync(join(__dirname, '..', relative), 'utf8');
 
-import { createEntityStore } from '../src/entities/index.ts';
-import { createArtifact } from '../src/entities/store.ts';
+import { createEntityStore, processPanelState, setProcessListState } from '../src/entities/index.ts';
+import { createArtifact, createRun } from '../src/entities/store.ts';
 import { reducePlatformEvent } from '../src/shared/state/runReducer.ts';
 import { normalizeToRuntimeEvent } from '../src/shared/state/platformEventNormalize.ts';
-import { deliveryBadge, artifactView, artifactDownloadId, listedNotShownAsCards } from '../src/widgets/turn-stream/artifactView.ts';
+import { deliveryBadge, deliveryHint, artifactView, artifactDownloadId, listedNotShownAsCards } from '../src/widgets/turn-stream/artifactView.ts';
 import {
   REVIEW_ERROR_ZH,
+  REVIEW_LIST_FILTERS,
   deliveryStateLabel,
   deliveryStateForTask,
+  deliveryTone,
   isVersionConflict,
   reportActionFailure,
   keepDraftOnError,
+  reviewDetailTitle,
   reviewErrorMessage,
+  reviewEventDetail,
   reviewEventLabel,
   reviewListState,
   reviewStatusLabel,
+  reviewStatusTone,
+  reviewTaskItemLabel,
+  reviewVersionUploader,
 } from '../src/pages/reviews/reviewErrors.ts';
 import {
   deliveryPolicyOf,
@@ -41,6 +48,12 @@ import {
   setDeliveryPolicyMode,
 } from '../src/pages/settings/deliveryPolicyHelpers.ts';
 import { hasReviewerRole } from '../src/shared/security/roles.ts';
+import { inspectorWorkspaceTabs } from '../src/widgets/context-inspector/inspectorTabs.ts';
+import {
+  REVIEW_RESULT_POLL_MS,
+  hasPendingReviewArtifact,
+  shouldPollReviewResults,
+} from '../src/features/chat/reviewResultPolling.ts';
 
 function platformEvent(partial: {
   eventId: string;
@@ -184,6 +197,45 @@ describe('交付卡片三态（design §8）', () => {
     assert.ok(view.url);
     assert.equal(view.badge, null);
     assert.equal(deliveryBadge(artifact), null);
+  });
+
+  it('已提交审核：卡片上有一句话说明「审核通过后可下载」（§3.3.2）', () => {
+    const pending = storeWithArtifact('pending').artifactsById[ARTIFACT];
+    assert.equal(deliveryHint(pending), '审核通过后可下载');
+    assert.equal(artifactView(pending, '01HZSESS000000000000000000').hint, '审核通过后可下载');
+    // 其余状态不需要这句（已交付/未通过各自有明确文案）。
+    assert.equal(deliveryHint(storeWithArtifact('released').artifactsById[ARTIFACT]), null);
+    assert.equal(deliveryHint(storeWithArtifact('rejected').artifactsById[ARTIFACT]), null);
+    assert.equal(deliveryHint(storeWithArtifact(null).artifactsById[ARTIFACT]), null);
+  });
+
+  it('修订放行后卡片显示修订版大小，而不是原件大小（§3.3.1）', () => {
+    // 2026-10-01 浏览器实测：审核员修订后放行，聊天卡片仍显示原件的 44 B。
+    const REVISED_ID = 'art_fedcba9876543210';
+    let store = apply(createEntityStore(), platformEvent({
+      eventId: 'evt-ready-size',
+      sequence: 1,
+      type: 'artifact.ready',
+      data: { artifactId: ARTIFACT, name: '报告.md', size: 44, review_status: 'pending' },
+    }));
+    assert.equal(store.artifactsById[ARTIFACT].size, 44);
+    store = apply(store, platformEvent({
+      eventId: 'evt-released-size',
+      sequence: 2,
+      type: 'artifact.released',
+      data: {
+        reviewTaskId: '01HZTASK000000000000000000',
+        artifacts: [{
+          artifactId: REVISED_ID,
+          originalArtifactId: ARTIFACT,
+          name: '报告.md',
+          size: 12345,
+          revised: true,
+        }],
+      },
+    }));
+    assert.equal(store.artifactsById[ARTIFACT].size, 12345);
+    assert.equal(store.artifactsById[ARTIFACT].reviewRevised, true);
   });
 
   it('三态标签文案与「已通过，正在发布」的中间态区分开', () => {
@@ -381,6 +433,13 @@ describe('页面契约（源码文本断言：没有组件渲染测试）', () =
     assert.match(inspector, /工作区文件在审核通过前不对发起人开放/);
   });
 
+  it('review 会话同时隐藏进程页签；进程面板有独立的错误态（T3）', () => {
+    const inspector = src('src/widgets/context-inspector/ContextInspector.tsx');
+    assert.match(inspector, /inspectorWorkspaceTabs\(reviewSession\)/);
+    assert.match(inspector, /读取后台进程失败/);
+    assert.match(inspector, /这不代表「这个会话没有后台进程」/);
+  });
+
   it('智能体配置页有「交付策略」分类与两个单选', () => {
     const editor = src('src/pages/settings/AgentConfigEditor.tsx');
     assert.match(editor, /DeliveryPolicyFields/);
@@ -405,6 +464,232 @@ describe('页面契约（源码文本断言：没有组件渲染测试）', () =
     assert.match(src('src/widgets/turn-stream/artifactView.ts'), /reviewStatus == null \|\| artifact\.reviewStatus === 'released'/);
     assert.match(src('src/widgets/deliverables/DeliverablesPanel.tsx'), /artifact-chip-held/);
     assert.match(src('src/widgets/artifact-panel/ArtifactPanel.tsx'), /a\.reviewStatus == null \|\| a\.reviewStatus === 'released'/);
+  });
+});
+
+describe('审计时间线的事件详情（T4）', () => {
+  it('提交审核：把 {"items":N,"materials":M} 格式化成中文，而不是原样显示 JSON', () => {
+    assert.equal(
+      reviewEventDetail({ event_type: 'created', detail: '{"items":1,"materials":0}', item_no: null }),
+      '1 件交付物，0 个附件',
+    );
+    assert.equal(
+      reviewEventDetail({ event_type: 'created', detail: '{"items":3,"materials":2}', item_no: null }),
+      '3 件交付物，2 个附件',
+    );
+  });
+
+  it('上传修订：件数由列表的「第 N 件」渲染，详情不重复', () => {
+    assert.equal(reviewEventDetail({ event_type: 'revised', detail: null, item_no: 1 }), null);
+  });
+
+  it('未知结构时宁可不显示详情，也绝不显示 JSON', () => {
+    assert.equal(reviewEventDetail({ event_type: 'created', detail: '{"foo":1}', item_no: null }), null);
+    assert.equal(reviewEventDetail({ event_type: 'mystery', detail: '{"a":[1,2]}', item_no: null }), null);
+    assert.equal(reviewEventDetail({ event_type: 'created', detail: 'not json', item_no: null }), null);
+    assert.equal(reviewEventDetail({ event_type: 'created', detail: '[1,2]', item_no: null }), null);
+    assert.equal(reviewEventDetail(null), null);
+  });
+
+  it('管理员释放领取的英文 detail 翻成中文；普通释放没有详情', () => {
+    assert.equal(
+      reviewEventDetail({ event_type: 'released_claim', detail: 'admin released the claim', item_no: null }),
+      '管理员释放了领取',
+    );
+    assert.equal(reviewEventDetail({ event_type: 'released_claim', detail: null, item_no: null }), null);
+  });
+
+  it('通过备注 / 驳回反馈作为纯文本显示（带标签），空白不显示', () => {
+    assert.equal(reviewEventDetail({ event_type: 'approved', detail: '可以交付', item_no: null }), '备注：可以交付');
+    assert.equal(reviewEventDetail({ event_type: 'rejected', detail: '数据不全', item_no: null }), '反馈：数据不全');
+    assert.equal(reviewEventDetail({ event_type: 'approved', detail: '   ', item_no: null }), null);
+    assert.equal(reviewEventDetail({ event_type: 'rejected', detail: null, item_no: null }), null);
+  });
+});
+
+describe('会话资料面板的进程页签（T3）', () => {
+  it('review 会话隐藏「文件」与「进程」两个页签（服务端两个通道都 404）', () => {
+    // 2026-10-01 浏览器实测：review 会话的进程接口按设计 404，面板却显示「还没有后台进程」。
+    assert.deepEqual(inspectorWorkspaceTabs(true), { files: false, processes: false });
+    assert.deepEqual(inspectorWorkspaceTabs(false), { files: true, processes: true });
+  });
+
+  it('进程列表拉取失败 → 错误态，不是「还没有后台进程」；空列表才是空状态', () => {
+    assert.equal(processPanelState({ state: 'error', count: 0 }), 'error');
+    assert.equal(processPanelState({ state: 'loading', count: 0 }), 'loading');
+    assert.equal(processPanelState({ state: 'ready', count: 0 }), 'empty');
+    assert.equal(processPanelState({ state: 'ready', count: 2 }), 'ready');
+    // 还没拉取过：沿用既有空状态，不假装在加载。
+    assert.equal(processPanelState({ state: null, count: 0 }), 'empty');
+    // 已经有数据时，一次刷新失败不能让已经看到的进程消失。
+    assert.equal(processPanelState({ state: 'error', count: 2 }), 'ready');
+  });
+
+  it('setProcessListState 是纯函数，按会话记录状态', () => {
+    const before = createEntityStore();
+    assert.equal(before.processListStateById['sess_1'], undefined);
+    const after = setProcessListState(before, 'sess_1', 'error');
+    assert.equal(after.processListStateById['sess_1'], 'error');
+    assert.equal(before.processListStateById['sess_1'], undefined, '不就地改原 store');
+  });
+});
+
+describe('审核工作台列表与详情的信息设计（§3.2）', () => {
+  it('列表的交付物列：首件名（多件时带件数）；没有名字时只给件数', () => {
+    assert.equal(reviewTaskItemLabel({ first_item_name: '报告.md', item_count: 1 }), '报告.md');
+    assert.equal(reviewTaskItemLabel({ first_item_name: '报告.md', item_count: 3 }), '报告.md 等 3 件');
+    assert.equal(reviewTaskItemLabel({ first_item_name: null, item_count: 2 }), '2 件');
+    assert.equal(reviewTaskItemLabel({ item_count: 0 }), '—');
+    assert.equal(reviewTaskItemLabel(null), '—');
+  });
+
+  it('详情标题不用 ULID：交付物名优先，其次「智能体名 · 发起人」', () => {
+    assert.equal(
+      reviewDetailTitle({ items: [{ name: '报告.md' }], agent: { name: '分析智能体' }, requester: { display_name: '发起人' } }),
+      '报告.md',
+    );
+    assert.equal(
+      reviewDetailTitle({ items: [{ name: 'a.md' }, { name: 'b.md' }], agent: { name: '分析智能体' }, requester: { display_name: '发起人' } }),
+      'a.md 等 2 件',
+    );
+    assert.equal(
+      reviewDetailTitle({ items: [], agent: { name: '分析智能体' }, requester: { display_name: '发起人' } }),
+      '分析智能体 · 发起人',
+    );
+    assert.equal(reviewDetailTitle({ items: [], agent: null, requester: null }), '智能体');
+    assert.equal(reviewDetailTitle(null), '审核任务');
+  });
+
+  it('版本表的上传者：修订显示审核员显示名，原件显示智能体', () => {
+    assert.equal(reviewVersionUploader({ uploaded_by_kind: 'agent' }), '智能体');
+    assert.equal(reviewVersionUploader({ uploaded_by_kind: 'reviewer', uploaded_by_display_name: '审核员甲' }), '审核员甲');
+    assert.equal(reviewVersionUploader({ uploaded_by_kind: 'reviewer', uploaded_by_display_name: null }), '审核员');
+    assert.equal(reviewVersionUploader({}), '智能体');
+  });
+
+  it('任务状态与交付物状态共用同一套颜色语义（驳回/未通过同色，通过/已交付同色）', () => {
+    // 2026-10-01 浏览器实测：任务是红色「已驳回」，交付物却是蓝色「未通过审核」。
+    assert.equal(reviewStatusTone('REJECTED'), 'err');
+    assert.equal(deliveryTone(deliveryStateForTask('REJECTED')), 'err');
+    assert.equal(reviewStatusTone('APPROVED'), 'ok');
+    assert.equal(deliveryTone(deliveryStateForTask('APPROVED')), 'ok');
+    assert.equal(deliveryTone(deliveryStateForTask('PENDING')), 'warn');
+    assert.equal(reviewStatusTone('IN_REVIEW'), 'warn');
+    assert.equal(reviewStatusTone('WHATEVER'), 'mute');
+  });
+
+  it('列表/详情/版本表都用了新投影；「Run」列头改成中文；提问标出触发的一条', () => {
+    const page = src('src/pages/reviews/ReviewsPage.tsx');
+    assert.match(page, /reviewTaskItemLabel/);
+    assert.match(page, /reviewDetailTitle/);
+    assert.match(page, /reviewVersionUploader/);
+    assert.match(page, /运行结果/);
+    assert.doesNotMatch(page, /<th>Run<\/th>/);
+    assert.match(page, /本次/);
+    // 读取失败不能渲染成空队列；三态与 RunsPage 同款 class。
+    assert.match(page, /读取审核队列失败/);
+    assert.match(page, /重试/);
+    // artifact id 降级为悬停提示，不再是版本表的主列。
+    assert.match(page, /artifact_id/);
+    assert.match(page, /title=\{.*artifact_id/s);
+  });
+
+  it('详情面板吸顶并可独立滚动（列表很长时点下面的行也看得到详情）', () => {
+    const css = src('src/pages/reviews/reviews.module.css');
+    assert.match(css, /\.detailPane\s*\{[^}]*position:\s*sticky/);
+    assert.match(css, /\.detailPane\s*\{[^}]*overflow-y:\s*auto/);
+  });
+
+  it('DTO 收下列表与版本表要用的字段（契约漂移会抛错，不会静默降级）', () => {
+    const api = src('src/shared/api/reviews.ts');
+    assert.match(api, /first_item_name/);
+    assert.match(api, /agent_name/);
+    assert.match(api, /uploaded_by_kind/);
+    assert.match(api, /uploaded_by_display_name/);
+    assert.match(api, /triggering/);
+    assert.match(api, /name:\s*nullableString/);
+  });
+});
+
+describe('发起人页面的审核结果轮询（T1）', () => {
+  function storeWithReviewArtifact(reviewStatus: 'pending' | 'released' | 'rejected' | null, conversationId = 'conv_1') {
+    const store = createEntityStore();
+    store.runsById[RUN] = createRun({ id: RUN, conversationId });
+    store.artifactsById[ARTIFACT] = createArtifact({
+      id: ARTIFACT,
+      runId: RUN,
+      sessionId: '01HZSESS000000000000000000',
+      name: '报告.md',
+      mimeType: 'text/markdown',
+      size: 12,
+      reviewStatus,
+    });
+    return store;
+  }
+
+  it('只有当前会话里还有待审交付物时才轮询', () => {
+    // 2026-10-01：Run 终态后 SSE 关闭，审核结果之后才追加到已结束的 Run 上。
+    assert.equal(hasPendingReviewArtifact(storeWithReviewArtifact('pending'), 'conv_1'), true);
+    assert.equal(hasPendingReviewArtifact(storeWithReviewArtifact('released'), 'conv_1'), false);
+    assert.equal(hasPendingReviewArtifact(storeWithReviewArtifact('rejected'), 'conv_1'), false);
+    assert.equal(hasPendingReviewArtifact(storeWithReviewArtifact(null), 'conv_1'), false);
+    // 别的会话的待审交付物不该让这个页面发请求。
+    assert.equal(hasPendingReviewArtifact(storeWithReviewArtifact('pending', 'conv_2'), 'conv_1'), false);
+    assert.equal(hasPendingReviewArtifact(createEntityStore(), 'conv_1'), false);
+    assert.equal(hasPendingReviewArtifact(storeWithReviewArtifact('pending'), null), false);
+  });
+
+  it('页面不可见时不轮询；没有待审交付物就停', () => {
+    assert.equal(shouldPollReviewResults({ pending: true, visible: true }), true);
+    assert.equal(shouldPollReviewResults({ pending: true, visible: false }), false);
+    assert.equal(shouldPollReviewResults({ pending: false, visible: true }), false);
+    assert.equal(shouldPollReviewResults({ pending: false, visible: false }), false);
+  });
+
+  it('轮询间隔在任务单要求的 15–30 秒之间', () => {
+    assert.ok(REVIEW_RESULT_POLL_MS >= 15_000 && REVIEW_RESULT_POLL_MS <= 30_000, `间隔是 ${REVIEW_RESULT_POLL_MS}`);
+  });
+
+  it('轮询接在 ChatContext 上：重放会话事件、跟随页面可见性、离开时清理定时器', () => {
+    const ctx = src('src/features/chat/ChatContext.tsx');
+    assert.match(ctx, /useReviewResultPolling\(bridge, entityStore, state\.conversationId\)/);
+    const hook = src('src/features/chat/useReviewResultPolling.ts');
+    assert.match(hook, /hasPendingReviewArtifact/);
+    assert.match(hook, /shouldPollReviewResults/);
+    assert.match(hook, /document\.visibilityState/);
+    assert.match(hook, /clearInterval/);
+    assert.match(hook, /rehydrateConversation\(conversationId\)/);
+    assert.match(hook, /removeEventListener\('visibilitychange'/);
+  });
+});
+
+describe('交付策略单选排版（T2）', () => {
+  it('两个选项共用同一套单选行：圆圈与标题同列、说明是独立文本列（长说明不挤开圆圈）', () => {
+    // 2026-10-01 浏览器实测：第二个选项的说明换行时，单选框被挤到单独一行。
+    const fields = src('src/pages/settings/DeliveryPolicyFields.tsx');
+    // 两个选项来自同一个列表、共用同一行样式，排版不会各自漂移。
+    assert.match(fields, /DELIVERY_POLICY_OPTIONS\.map/);
+    assert.match(fields, /className=\{s\.deliveryOption\}/);
+    assert.match(fields, /s\.deliveryOptionText/);
+    const css = src('src/pages/settings/agents.module.css');
+    assert.match(css, /\.deliveryOption\s*\{[^}]*align-items:\s*flex-start/);
+    assert.match(css, /\.deliveryOptionText\s*\{[^}]*min-width:\s*0/);
+  });
+});
+
+describe('审核列表页签（T5）', () => {
+  it('历史页签传「已通过,已驳回」多值，而不是空值（等于不筛选）', () => {
+    // 2026-10-01 浏览器实测：「历史」页签列出了待领取/审核中的任务，因为它传 status=null。
+    const history = REVIEW_LIST_FILTERS.find((f) => f.id === 'history');
+    assert.equal(history?.status, 'APPROVED,REJECTED');
+  });
+
+  it('待领取/我领取的仍是单值（单值筛选行为不变）', () => {
+    const pending = REVIEW_LIST_FILTERS.find((f) => f.id === 'pending');
+    const mine = REVIEW_LIST_FILTERS.find((f) => f.id === 'mine');
+    assert.equal(pending?.status, 'PENDING');
+    assert.equal(mine?.status, 'IN_REVIEW');
+    assert.equal(mine?.mine, true);
   });
 });
 

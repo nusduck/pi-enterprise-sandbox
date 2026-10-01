@@ -35,6 +35,49 @@ export const ROLE_EVENT_ACTION_ZH: Record<string, string> = {
 };
 
 /**
+ * 角色代码 → 界面上的中文名（§3.1）。
+ *
+ * 列头、筛选页签、变更记录都显示它；需要时把原始代码放进 `title`，别让人对着
+ * `admin` / `reviewer` 猜这是什么。未知代码原样显示，不猜。
+ */
+export const ROLE_LABEL_ZH: Record<string, string> = {
+  admin: '管理员',
+  reviewer: '审核员',
+};
+
+export function roleLabel(role: unknown): string {
+  const key = typeof role === 'string' ? role.trim().toLowerCase() : '';
+  return ROLE_LABEL_ZH[key] || key || '—';
+}
+
+/**
+ * 「最近登录」为空的说明。
+ *
+ * 成员名单来自**已开通的成员账号**（`memberships`），不是「登录过的人」：脚本或部署
+ * 引导创建、还没有走平台登录的账号 `last_login_at` 就是 NULL。页面的说明文字必须与
+ * 这个口径一致（§3.1.4），所以空值给它一个 tooltip，而不是让人以为是数据没加载出来。
+ */
+export const NO_LOGIN_RECORD_TOOLTIP = '这个账号还没有平台登录记录（可能是脚本或部署引导创建的）';
+
+/**
+ * 角色变更记录按时间倒序（§3.1.5）。
+ *
+ * 服务端的 `listEvents` 已经是 `created_at desc, event_id desc`；这里再兜一次，界面
+ * 顺序不依赖单点实现（同一毫秒的行用 `event_id` 倒序做稳定的第二键）。
+ */
+export function sortRoleEventsDesc<T extends { created_at?: unknown; event_id?: unknown }>(
+  events: readonly T[],
+): T[] {
+  const time = (row: T) => (typeof row.created_at === 'string' ? row.created_at : '');
+  const id = (row: T) => (typeof row.event_id === 'string' ? row.event_id : '');
+  return [...events].sort((a, b) => {
+    if (time(a) !== time(b)) return time(a) < time(b) ? 1 : -1;
+    if (id(a) === id(b)) return 0;
+    return id(a) < id(b) ? 1 : -1;
+  });
+}
+
+/**
  * 把一个失败翻译成给管理员看的一句话。
  * 先认 `code`（`LAST_ADMIN` 这类），认不出来再用服务端的 `error`，最后才用兜底文案。
  */
