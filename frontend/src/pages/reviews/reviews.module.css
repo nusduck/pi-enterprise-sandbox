@@ -1,0 +1,59 @@
+/* 审核工作台自己的布局；通用样式复用 pages/settings/adminPage.module.css。 */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.2fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.listPane,
+.detailPane {
+  min-width: 0;
+}
+
+.rowActive {
+  background: rgba(64, 128, 255, 0.08);
+}
+
+.questions {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.questionText {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.attachList {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.timeline {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.item {
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.item:first-of-type {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}

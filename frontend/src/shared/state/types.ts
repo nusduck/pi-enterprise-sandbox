@@ -68,6 +68,11 @@ export type ConversationSummary = {
   agent_id?: string | null;
   agent_version_id?: string | null;
   agent_version_no?: number | null;
+  /**
+   * 交付策略（design agent-output-review §2/§8）。`review` = 这个会话绑定的版本要求
+   * 交付物人工审核：工作区文件面板不引导用户去点（服务端本来就会 404）。
+   */
+  delivery_mode?: string | null;
   model_policy?: { fixed_model_id: string | null } | null;
   sandbox_session_id?: string | null;
   messages?: Array<{

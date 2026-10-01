@@ -5,6 +5,7 @@ import { conversationTitle } from '../../shared/state';
 import { useTheme } from '../../shared/ui/theme';
 import { conversationRunMarkers, listPendingApprovals } from '../runtime-timeline/buildTimeline';
 import {
+  IconCheck,
   IconChevronDown,
   IconCompose,
   IconFilter,
@@ -24,7 +25,7 @@ import { SettingsDialog } from '../settings/SettingsDialog';
 import { CommandPalette, type PaletteAction } from '../command-palette/CommandPalette';
 import { listCronJobs } from '../../shared/api/cron-jobs';
 import { hasUnseenRuns, readSchedulesSeenAt } from '../../pages/schedules/scheduleModel';
-import { hasAdminRole } from '../../shared/security/roles';
+import { hasAdminRole, hasReviewerRole } from '../../shared/security/roles';
 import s from './sidebar.module.css';
 
 /**
@@ -69,6 +70,8 @@ export function ConversationSidebar() {
     typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
   const signedIn = Boolean(state.authUser?.username);
   const isAdmin = hasAdminRole(state.authUser);
+  // 审核工作台只对 reviewer 显示（真正判定在服务端：非 reviewer 会拿到 403）。
+  const isReviewer = hasReviewerRole(state.authUser);
 
   const markers = useMemo(() => conversationRunMarkers(entityStore), [entityStore]);
   const pendingApprovals = useMemo(() => listPendingApprovals(entityStore), [entityStore]);
@@ -226,6 +229,16 @@ export function ConversationSidebar() {
             <IconLayers size={18} />
             产物库
           </button>
+          {isReviewer ? (
+            <button
+              type="button"
+              onClick={() => go('/reviews')}
+              aria-current={location.pathname.startsWith('/reviews') ? 'page' : undefined}
+            >
+              <IconCheck size={18} />
+              交付物审核
+            </button>
+          ) : null}
         </nav>
 
         <label className={s.search}>

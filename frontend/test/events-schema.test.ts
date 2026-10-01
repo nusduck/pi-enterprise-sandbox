@@ -53,6 +53,8 @@ describe('RuntimeEventSchema', () => {
     assert.ok(RUNTIME_EVENT_TYPES.includes('run.created'));
     assert.ok(RUNTIME_EVENT_TYPES.includes('tool.completed'));
     assert.ok(RUNTIME_EVENT_TYPES.includes('artifact.created'));
+    assert.ok(RUNTIME_EVENT_TYPES.includes('artifact.released'));
+    assert.ok(RUNTIME_EVENT_TYPES.includes('review.rejected'));
     assert.equal(RUNTIME_EVENT_TYPES.includes('process.stdout' as never), false);
   });
 

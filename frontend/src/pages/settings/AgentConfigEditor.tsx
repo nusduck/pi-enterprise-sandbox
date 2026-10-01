@@ -50,6 +50,12 @@ import {
   remoteDelegationCandidates,
   setDelegationList,
 } from './delegationHelpers';
+import { DeliveryPolicyFields } from './DeliveryPolicyFields';
+import {
+  deliveryPolicyOf,
+  deliveryPolicyStructureIssues,
+  setDeliveryPolicyMode,
+} from './deliveryPolicyHelpers';
 import s from './agents.module.css';
 
 export type { CatalogState };
@@ -61,6 +67,7 @@ export type EditorSection =
   | 'tools'
   | 'mcp'
   | 'delegation'
+  | 'deliveryPolicy'
   | 'dataSources'
   | 'skills'
   | 'json';
@@ -423,6 +430,7 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
     ? [
       ...structuredEditorIssues(config),
       ...delegationStructureIssues(config),
+      ...deliveryPolicyStructureIssues(config),
       ...dataSourceStructureIssues(config),
       ...skillPolicyStructureIssues(config),
     ]
@@ -467,6 +475,17 @@ export function AgentConfigEditor({ section, value, onChange, models, tools, mcp
       {section === 'model' ? <ModelFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('modelPolicy')} models={models} /> : null}
       {section === 'tools' ? <ToolPolicyFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('toolPolicy')} tools={tools} /> : null}
       {section === 'mcp' ? <McpFields config={config} value={value} onChange={onChange} errors={errors} disabled={paused('mcpServers')} mcpServers={mcpServers} platformConstraints={options?.platformConstraints} /> : null}
+      {section === 'deliveryPolicy' ? (
+        <DeliveryPolicyFields
+          mode={deliveryPolicyOf(config)}
+          errors={errors}
+          disabled={paused('deliveryPolicy')}
+          delegationConfigured={
+            delegationOf(config).agents.length > 0 || delegationOf(config).remoteAgents.length > 0
+          }
+          onChange={(mode) => onChange(formatAgentConfig(setDeliveryPolicyMode(config, mode)))}
+        />
+      ) : null}
       {section === 'delegation' ? (
         <DelegationFields
           {...delegationOf(config)}

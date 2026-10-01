@@ -3,6 +3,8 @@ import { useChat } from '../../features/chat/ChatContext';
 import { getArtifactDownloadUrl } from '../../shared/api';
 import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
+import { deliveryBadge } from '../turn-stream/artifactView';
+import type { ArtifactEntity } from '../../entities/types';
 import { IconDownload, IconFile } from '../../shared/ui/Icons';
 
 function formatSize(n?: number | null): string {
@@ -36,6 +38,9 @@ export function DeliverablesPanel() {
       path: string | null;
       size: number | null;
       sessionId: string | null;
+      reviewStatus: ArtifactEntity['reviewStatus'];
+      reviewRevised: boolean;
+      reviewFeedback: string | null;
     }> = [];
     for (const art of Object.values(entityStore.artifactsById)) {
       if (art.source !== 'submit_artifact') continue;
@@ -48,6 +53,9 @@ export function DeliverablesPanel() {
         path: art.path,
         size: art.size,
         sessionId: art.sessionId,
+        reviewStatus: art.reviewStatus,
+        reviewRevised: art.reviewRevised,
+        reviewFeedback: art.reviewFeedback,
       });
     }
     return out;
@@ -90,6 +98,23 @@ export function DeliverablesPanel() {
           const sid = a.sessionId || activeSessionId;
           if (!sid || !a.id || !isDurableArtifactId(a.id, activeRunId || '')) {
             return null;
+          }
+          // 待审 / 驳回的交付物不是链接（design §8）：显示状态而不是一个必然 404
+          // 的下载入口。`reviewStatus` 为 null 的是 direct 会话，行为不变。
+          if (a.reviewStatus === 'pending' || a.reviewStatus === 'rejected') {
+            const badge = deliveryBadge(a as unknown as ArtifactEntity);
+            return (
+              <span
+                key={a.id}
+                className="artifact-chip artifact-chip-held"
+                title={badge || a.name}
+                data-source="submit_artifact"
+                data-review-status={a.reviewStatus}
+              >
+                <span className="artifact-chip-name">{a.name}</span>
+                {badge ? <span className="chip-size">{badge}</span> : null}
+              </span>
+            );
           }
           const url = getArtifactDownloadUrl(sid, a.id);
           const safe = safeApiUrl(url);

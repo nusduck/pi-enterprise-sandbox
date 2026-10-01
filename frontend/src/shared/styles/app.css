@@ -658,6 +658,16 @@ body {
   border-color: var(--color-primary-border);
 }
 .artifact-chip .chip-size { font-size: 10.5px; color: var(--color-text-dim); }
+/* 待审 / 驳回的交付物：不是链接，只是状态（design agent-output-review §8）。 */
+.artifact-chip-held {
+  cursor: default;
+  border-style: dashed;
+  color: var(--color-text-secondary);
+}
+.artifact-chip-held:hover {
+  background: var(--color-bg-card);
+  border-color: var(--color-border);
+}
 
 /* ── Dropzone (Drag-and-Drop File Overlay) ────────────────────── */
 .dropzone {

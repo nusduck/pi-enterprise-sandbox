@@ -85,8 +85,11 @@ export function ArtifactPanel({
       {rows.map((a) => {
         const sid = sessionId || a.sessionId;
         // Strict: only durable artifact_id download — no path fallback.
+        // 待审 / 驳回的交付物不给 URL（design §3.3 E2：服务端本来就会 404，
+        // 留一个必然失败的按钮只是引导用户去点）。direct 会话 `reviewStatus` 为 null。
+        const released = a.reviewStatus == null || a.reviewStatus === 'released';
         const url =
-          sid && a.id ? getArtifactDownloadUrl(sid, a.id) : null;
+          sid && a.id && released ? getArtifactDownloadUrl(sid, a.id) : null;
         const safe = safeApiUrl(url);
         const size = formatSize(a.size);
         const created = formatDate(a.createdAt);

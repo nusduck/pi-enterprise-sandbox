@@ -548,6 +548,7 @@ export function AgentsPage() {
     ['tools', '工具权限', overrideCount],
     ['mcp', 'MCP', mcpCount],
     ['delegation', '协作', delegationCount],
+    ['deliveryPolicy', '交付策略'],
     ['dataSources', '数据源', dataSourceCount],
     ['skills', '技能', skillCount],
     ...(creating ? [] : [['versions', '版本历史'] as [AgentTab, string]]),

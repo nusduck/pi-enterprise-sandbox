@@ -13,6 +13,10 @@ import type {
 import { getArtifactDownloadUrl } from '../../shared/api/client';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
 import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
+// 视图投影拆到 .ts：那里能被单测直接加载（.tsx 带 CSS module，测试运行器加载不了）。
+import { artifactView } from './artifactView';
+
+export { artifactView, deliveryBadge } from './artifactView';
 import { summarizeToolInput } from '../runtime-timeline/buildTimeline';
 import { formatToolInputDisplay, formatToolResultDisplay } from '../message-list/formatToolDisplay';
 import { MarkdownBody } from '../markdown/Markdown';
@@ -498,27 +502,6 @@ function formatSize(n: number | null): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function extLabel(name: string, mime: string | null): string {
-  const ext = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1];
-  if (ext) return ext.toUpperCase();
-  return mime?.split('/')[1]?.slice(0, 4).toUpperCase() || 'FILE';
-}
-
-/** Download URL and labels of an artifact card; shared with the preview drawer. */
-export function artifactView(artifact: ArtifactEntity, sessionId: string | null) {
-  const sid = sessionId || artifact.sessionId;
-  const durable = isDurableArtifactId(artifact.id, artifact.runId || '');
-  const url = safeApiUrl(sid && durable ? getArtifactDownloadUrl(sid, artifact.id) : null);
-  const name = artifact.name || artifact.path || '产物';
-  return {
-    url,
-    name,
-    label: extLabel(name, artifact.mimeType),
-    downloadName: downloadAttrName(artifact.name, artifact.path),
-    isImage: Boolean(url && artifact.mimeType?.startsWith('image/') && artifact.mimeType !== 'image/svg+xml'),
-  };
-}
-
 export function ArtifactCard({
   artifact,
   sessionId,
@@ -529,8 +512,8 @@ export function ArtifactCard({
   /** Opens the preview drawer; without it the card only offers a download. */
   onOpen?: (artifactId: string) => void;
 }) {
-  const { url, name, label, downloadName, isImage } = artifactView(artifact, sessionId);
-  const open = onOpen ? () => onOpen(artifact.id) : undefined;
+  const { url, name, label, downloadName, badge, isImage } = artifactView(artifact, sessionId);
+  const open = onOpen && url ? () => onOpen(artifact.id) : undefined;
   return (
     <div className={s.artWrap}>
       {isImage && url ? (
@@ -556,6 +539,7 @@ export function ArtifactCard({
             下载
           </a>
         ) : null}
+        {badge ? <span className={s.artBadge}>{badge}</span> : null}
       </div>
     </div>
   );
