@@ -39,7 +39,14 @@ export type ReviewJobOutcome =
 
 export interface ReviewPublisherDeps {
   readonly outbox: Loose;
-  readonly createRepositories: (db?: Loose) => Loose;
+  /**
+   * 仓储工厂。**必须同时给 `db`**：`ServiceContainer.createRepositories(db?)` 在
+   * `db` 为 undefined 时回落到容器自己的 knex，而 worker 进程里那条路径会抛
+   * `ServiceContainer MySQL not started`（2026-10-01 真机验收踩到过：放行行被认领后
+   * 卡在 PUBLISHING，产物永远不放行）。显式传执行器让这条依赖看得见。
+   */
+  readonly createRepositories: (db: Loose) => Loose;
+  readonly db: Loose;
   readonly transport: InternalReviewTransport;
   readonly log?: (message: string) => void;
   readonly batchSize?: number;
@@ -47,7 +54,8 @@ export interface ReviewPublisherDeps {
 
 export class ReviewPublisher {
   readonly #outbox: Loose;
-  readonly #createRepositories: (db?: Loose) => Loose;
+  readonly #createRepositories: (db: Loose) => Loose;
+  readonly #db: Loose;
   readonly #transport: InternalReviewTransport;
   readonly #log: (message: string) => void;
   readonly #batchSize: number;
@@ -56,8 +64,10 @@ export class ReviewPublisher {
     if (!deps?.outbox || typeof deps.createRepositories !== 'function' || !deps.transport) {
       throw new Error('ReviewPublisher requires outbox, createRepositories and transport');
     }
+    if (!deps.db) throw new Error('ReviewPublisher requires the knex executor');
     this.#outbox = deps.outbox;
     this.#createRepositories = deps.createRepositories;
+    this.#db = deps.db;
     this.#transport = deps.transport;
     this.#log = deps.log ?? (() => {});
     this.#batchSize = deps.batchSize ?? 10;
@@ -77,7 +87,7 @@ export class ReviewPublisher {
   }
 
   async #handle(row: Loose): Promise<ReviewJobOutcome> {
-    const repos = this.#createRepositories();
+    const repos = this.#createRepositories(this.#db);
     const payload = (row.payloadJson ?? {}) as Record<string, unknown>;
     const reviewTaskId = typeof payload['reviewTaskId'] === 'string' ? payload['reviewTaskId'] : row.aggregateId;
     const task = await repos.reviews.getTaskById(reviewTaskId);

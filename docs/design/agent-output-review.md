@@ -1,7 +1,8 @@
 # 智能体交付物人工审核（审核后交付）
 
-日期：2026-10-01。状态：**设计已确认，待实施**。锁定决策见
-[ADR 0016](../adr/0016-agent-output-human-review.md)。依赖
+日期：2026-10-01。状态：**已实施**（P1–P7 全部落地，真实链路验收见
+[evidence/2026-10-01-agent-output-review-live-chain.md](../evidence/2026-10-01-agent-output-review-live-chain.md)）。
+锁定决策见 [ADR 0016](../adr/0016-agent-output-human-review.md)（**Accepted**）。依赖
 [RBAC 一期](rbac-roles.md)（`reviewer` 角色，已实施）。
 
 需求来源（2026-09-30）：案例分析智能体的**交付物**不能直接给发起人，要先交第三方审核员审阅、
@@ -281,6 +282,12 @@ exec 侧幂等，所以不会出现「任务已通过、产物却永远不放行
 7. **P7 验收**：六套测试、类型检查、前端 build；重建 `agent agent-worker api-server sandbox sandbox-mcp frontend`，
    跑 §10 的真实链路；同步 `api.md`、`architecture.md`、`webui.md`、`artifact-module.md`、CHANGELOG；
    把本文状态改为已实施，并附上证据链接。
+
+**实施记录（2026-10-01）**：P1–P2 = `048eac18`，P3 = `0e30077f` + `717f1d24`，P4 = `01cdd134`，
+P5 = `68a27731`，P6 = `80341922`，P7 = 本次提交。§10 逐条结果与三处**验收期才发现**的问题
+（exec 明文 baseUrl 漏传 `allowInsecureHttp` 导致 agent 进程起不来；审核 outbox 消费者拿到
+未绑定的 `createRepositories` 卡在 PUBLISHING；另一个运行栈的旧镜像 worker 抢走队列任务）
+记在证据文档里——前两个是代码缺陷，第三个是环境陷阱。
 
 ## 10. 验收清单（真实链路、真实模型）
 

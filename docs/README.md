@@ -7,7 +7,7 @@ This directory is the **active** documentation set for DSH Enterprise Sandbox.
 - [`design/updrdb-dbpm-deployment.md`](./design/updrdb-dbpm-deployment.md) — UPDRDB / DBPM 与双集群 + VM 的统一迁移设计（未实施；共享 Skill 存储、HTTPS 入口及验收门槛）
 - [`design/skill-catalog-and-agent-binding.md`](./design/skill-catalog-and-agent-binding.md) — Skill 目录与 Agent 绑定、组织共享层（**已实施**；ADR 0015）
 - [`design/rbac-roles.md`](./design/rbac-roles.md) — 平台角色管理（RBAC 一期：`admin` / `reviewer`）（**已实施**；角色权威为 `tbl_agsvc_member_roles`）
-- [`design/agent-output-review.md`](./design/agent-output-review.md) — 智能体交付物（artifact）人工审核后交付（未实施；ADR 0016，依赖 RBAC `reviewer`）
+- [`design/agent-output-review.md`](./design/agent-output-review.md) — 智能体交付物（artifact）人工审核后交付（**已实施**；ADR 0016，依赖 RBAC `reviewer`）
 - [`design/waves/HANDOFF.md`](./design/waves/HANDOFF.md) — `refactor/dsh-rebuild` 当前进度与剩余项
 - [`artifact-module.md`](./artifact-module.md) — Artifact domain boundary, frozen contracts, and cross-conversation Import MVP
 - [`sandbox-mcp.md`](./sandbox-mcp.md) — independently deployed Sandbox Streamable HTTP MCP facade

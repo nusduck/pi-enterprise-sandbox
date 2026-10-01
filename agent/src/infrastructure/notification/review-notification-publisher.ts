@@ -38,7 +38,9 @@ export type ReviewNotificationOutcome =
 export interface ReviewNotificationPublisherDeps {
   readonly outbox: Loose;
   readonly store: NotificationStore;
-  readonly createRepositories: (db?: Loose) => Loose;
+  /** 仓储工厂；与 `ReviewPublisher` 同理，**必须同时给 `db`**。 */
+  readonly createRepositories: (db: Loose) => Loose;
+  readonly db: Loose;
   readonly mailer: Mailer | null;
   readonly config: EmailNotificationConfig;
   readonly generateId: () => string;
@@ -49,7 +51,8 @@ export interface ReviewNotificationPublisherDeps {
 export class ReviewNotificationPublisher {
   readonly #outbox: Loose;
   readonly #store: NotificationStore;
-  readonly #createRepositories: (db?: Loose) => Loose;
+  readonly #createRepositories: (db: Loose) => Loose;
+  readonly #db: Loose;
   readonly #mailer: Mailer | null;
   readonly #config: EmailNotificationConfig;
   readonly #generateId: () => string;
@@ -63,9 +66,11 @@ export class ReviewNotificationPublisher {
     if (deps.config.enabled && !deps.mailer) {
       throw new Error('ReviewNotificationPublisher requires a mailer when email notification is enabled');
     }
+    if (!deps.db) throw new Error('ReviewNotificationPublisher requires the knex executor');
     this.#outbox = deps.outbox;
     this.#store = deps.store;
     this.#createRepositories = deps.createRepositories;
+    this.#db = deps.db;
     this.#mailer = deps.mailer;
     this.#config = deps.config;
     this.#generateId = deps.generateId;
@@ -97,7 +102,7 @@ export class ReviewNotificationPublisher {
     const payload = (row.payloadJson ?? {}) as Record<string, unknown>;
     const orgId = typeof payload['orgId'] === 'string' ? payload['orgId'] : '';
     const requesterUserId = typeof payload['requesterUserId'] === 'string' ? payload['requesterUserId'] : '';
-    const repos = this.#createRepositories();
+    const repos = this.#createRepositories(this.#db);
     const task = await repos.reviews.getTaskById(row.aggregateId);
     if (!task) {
       await this.#outbox.markFailed(row.outboxId, row.claimToken, new Error('review task not found'));

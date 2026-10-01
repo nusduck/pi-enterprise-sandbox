@@ -78,6 +78,16 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 - **三层卡片同构**：Drafts / My Skills / System Skills 共用 `SkillCards`，同一张 meta 表（Source / Enabled / Dynamic），操作按钮统一收在卡片底部的 `.mgmt-card-actions` 行里靠右对齐。卡片是 flex-column，直接把 `<button>` 放进去会被拉伸成整行宽的大色块，草稿卡因此和系统卡不是一个形状。
 - **Composer 拼图按钮移除**：取消了聊天输入框原本的拼图安装按钮，Skill 安装全面收敛至 Capabilities 页面。
 
+### 交付策略（智能体配置页）
+
+智能体配置页新增「交付策略」分类（`pages/settings/DeliveryPolicyFields.tsx`，纯函数在
+`deliveryPolicyHelpers.ts`）：两个单选——直接交付 / 交付物需人工审核。两条容易写错的规则：
+
+- 选 `direct` 时**删掉整个 `deliveryPolicy` 键**：contract 的「省略即 direct」是既有版本
+  `config_hash` 不变的保证，写回 `{ "mode": "direct" }` 会平白改掉哈希；
+- 结构不对（`deliveryPolicy` 不是对象、`mode` 不是字符串）时**暂停这个分类**，让用户去 JSON 修，
+  而不是覆盖掉原值；选 review 且草稿里配了委派时给出「服务端会拒绝」的联动提示。
+
 ### 多 Agent 选择
 
 一个 org 下可以并列存在多个智能体，用户在**建会话**时选一个。
@@ -177,7 +187,7 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 
 设计与分期见 [design/frontend-redesign.md](design/frontend-redesign.md)。
 
-- **侧栏**（`widgets/conversation-sidebar/`）：品牌行 → 图标导航（新建会话 ⌘L、定时任务、产物库；
+- **侧栏**（`widgets/conversation-sidebar/`）：品牌行 → 图标导航（新建会话 ⌘L、定时任务、产物库、交付物审核——最后一项只在 `me.roles` 含 `reviewer` 时出现；判定在服务端，前端只是不引导)；
   定时任务在有新运行结果时显示小圆点：任意任务的 `last_run_at` 晚于本机上次打开定时任务页的时间，
   打开该页即清除，每 5 分钟检查一次；`last_run_at` 只在按计划触发时更新，「立即运行」不算新结果）→ 搜索框（输入即过滤会话）→ 可折叠的「会话」分组，按今天 / 昨天 / 近 7 天 / 更早分组。会话行标注
   所属智能体（组织默认智能体不打标签，颜色按 `agentTone` 固定），运行中蓝点、等待审批黄点，
@@ -189,7 +199,9 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   会话数据带版本号时一并显示；运行中或等待审批时
   显示状态与耗时，中断时给「继续运行」；右侧「资料」按钮开关资料抽屉。
 - **资料抽屉**（`widgets/context-inspector/`）：右侧滑出，默认关闭，四个 tab：产物、文件、数据集、
-  进程。会话内不再显示 Trace 与工具明细（工具已在对话流内联）。
+  进程。会话内不再显示 Trace 与工具明细（工具已在对话流内联）。**审核会话（`delivery_mode: "review"`）
+  不显示「文件」页签**，并写明原因（工作区文件在审核通过前不对发起人开放，服务端本来也 404 E5）——
+  隐藏而不解释会让人以为文件丢了。
 - **输入框**（`widgets/composer/`）：见下文「键盘快捷键」；「＋」菜单可上传文件或图片，或引用其他
   会话的产物（对话框基于产物库：默认列出全部会话的产物并可按文件名搜索，左侧选会话只是缩小范围；
   `POST /api/conversations/{id}/artifact-imports`，会话开始后可用）；
@@ -236,6 +248,7 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 | `/`、`/c/:conversationId` | 会话工作台；`/c/<id>` 可直接打开某个会话，新会话发出首条消息后地址自动变为 `/c/<id>` |
 | `/schedules` | 定时任务 |
 | `/artifacts` | 产物库 |
+| `/reviews` | 审核工作台（持有 `reviewer` 角色时主导航出现入口；非 reviewer 打开会拿到 403 `REVIEWER_REQUIRED`） |
 | `/admin/runs`、`/admin/approvals`、`/admin/agents`、`/admin/capabilities`、`/admin/skills`、`/admin/a2a`、`/admin/members` | 管理控制台（admin） |
 | `/settings/*`、`/runs`、`/approvals` | 旧地址，重定向到对应的 `/admin/*` |
 
@@ -346,6 +359,7 @@ sendMessage(text)
   │       run.accepted/started/…       → Run 生命周期与身份（agentSessionId / conversationId）
   │       message.delta/completed      → MessageEntity
   │       tool.execution.* / approval.* / artifact.ready → 对应规范化实体
+  │       artifact.released / review.rejected → 交付物审核结论（挂在原 Run 上，刷新重放同样拿到）
   │       run.completed/failed/cancelled → 终态
   │     （只认平台事件：带持久序号与 event_id 的点分类型；无法规范化的帧直接丢弃）
   ├── projections/projectConversationMessages（用户行 + 每个 Run 一个助手行）
@@ -382,6 +396,32 @@ attachment draft: queued → uploading → uploaded | failed
   ↓
 用户点击发送 → 文本 + attachment manifest 组成同一 user turn
 ```
+
+### 交付卡片三态（交付物审核）
+
+AgentVersion 的 `deliveryPolicy.mode = "review"` 时，交付物先进入审核池，卡片按 `reviewStatus`
+显示三态，**投影在 `widgets/turn-stream/artifactView.ts`（纯函数，可单测）**：
+
+| `reviewStatus` | 卡片 | 有没有下载 URL |
+|---|---|---|
+| `pending` | 「已提交审核」 | **没有**——服务端本来 404（E2），留着按钮等于引导用户点一个必然失败的链接 |
+| `rejected` | 「未通过审核：<反馈>」 | **没有** |
+| `released` | 「已交付」/「已交付 · 经审核员修订」 | 有 |
+| `null`（direct 会话） | 不显示审核字样，与以前完全一致 | 有 |
+
+**三个渲染点都要按状态挡下载**（漏一个就会出现「卡片说待审、chip 却能下载」）：
+对话流卡片（`TurnCards`）、产物抽屉的 chip（`DeliverablesPanel`，待审/驳回渲染成状态 chip 而不是链接）、
+产物面板（`ArtifactPanel` 沿用既有的「暂不可下载」分支）。
+
+事件侧：`artifact.created` 读 `artifact.ready` 负载里的 `review_status`；放行与驳回分别由
+`artifact.released` / `review.rejected` 归约（事件挂在**原 Run** 上，刷新后靠会话事件重放拿到，
+所以刷新前后状态一致）。
+
+**审核工作台**（`/reviews`，`pages/reviews/`）：列表分待领取 / 我领取的 / 历史（游标分页），
+三态**错误优先**——加载失败显示错误与重试，绝不渲染成「没有待审任务」；详情给出提问与附件清单、
+材料快照（`snapshot_status = unavailable` 时明确提示）、交付物版本链（任一版本可下载）与审计时间线；
+动作是领取 / 释放 / 上传修订（原始字节 body）/ 通过 / 驳回（反馈必填，与 422 `REVIEW_FEEDBACK_REQUIRED` 对齐）。
+**409 版本冲突刷新任务但保留已选择的待上传文件**；错误码到中文的映射在 `pages/reviews/reviewErrors.ts`。
 
 ### 文件下载（P7 产物唯一交付）
 
@@ -449,7 +489,7 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
   | 任务清单 | `todo_write` 的 arguments | 放在首次调用处，显示最新清单 |
   | 提问 | `ask_user_question` | 选项卡片；答案来自工具台账，实时作答时卡片先记住本次提交 |
   | 后台任务 | `bash`（`run_in_background`）及其 `job_output` / `job_kill` | 一张卡；按命令与沙箱进程配对，取真实状态与控制台 |
-  | 产物 | `submit_artifact` | 文件卡，图片产物在流里显示大图；点卡片或图片在右侧抽屉预览（图片、Markdown 渲染、其他文本前 200 KB，其余类型给下载），抽屉下方列出本会话的其他产物（`ArtifactDrawer.tsx`）；下载经 URL allowlist |
+  | 产物 | `submit_artifact` | 文件卡（审核会话里按三态显示，见上文「交付卡片三态」），图片产物在流里显示大图；点卡片或图片在右侧抽屉预览（图片、Markdown 渲染、其他文本前 200 KB，其余类型给下载），抽屉下方列出本会话的其他产物（`ArtifactDrawer.tsx`）；下载经 URL allowlist |
   | 审批 | 审批实体 | 挂在对应工具条目后；审批先于工具到达时，工具名保留在 `approval.command` |
 
 - DSH 的 `message.*` / `thinking.*` 不带 message_id：一轮是 thinking.delta… → message.delta… →

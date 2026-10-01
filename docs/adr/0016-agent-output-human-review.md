@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | **Proposed**（2026-10-01，设计已写，待实施与真实链路验收） |
+| 状态 | **Accepted**（2026-10-01 实施并完成真实链路验收；证据见 [evidence/2026-10-01-agent-output-review-live-chain.md](../evidence/2026-10-01-agent-output-review-live-chain.md)） |
 | 日期 | 2026-10-01 |
 | 决策所有者 | Agent runtime / Sandbox isolation maintainers |
 | 适用范围 | `agent/` 的 AgentVersion 配置契约、Run 终态处理与审核账本；`contract/` 的会话确保契约；`exec/` 的产物与工作区 owner 公共面、新增内部端点；`api-server/` 的审核代理路由；前端交付卡片与审核工作台 |

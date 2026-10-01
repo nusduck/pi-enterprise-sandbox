@@ -48,6 +48,7 @@ export function startReviewLoop(opts: {
   const jobs = new ReviewPublisher({
     outbox,
     createRepositories: opts.createRepositories,
+    db: opts.knex,
     transport,
     log: (message) => log('info', message),
   });
@@ -57,6 +58,7 @@ export function startReviewLoop(opts: {
     outbox,
     store: new NotificationStore(opts.knex, { now: opts.now }),
     createRepositories: opts.createRepositories,
+    db: opts.knex,
     mailer: config.enabled ? createSmtpMailer(config) : null,
     config,
     generateId: opts.generateId,

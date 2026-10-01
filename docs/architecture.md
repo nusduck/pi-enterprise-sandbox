@@ -424,6 +424,7 @@ Agent 与 exec 各自产生一份进程身份。
 | **Path validation** | `resolve()` + `is_relative_to()` — 防止路径逃逸；每 session 物理根隔离 |
 | **Artifact-only delivery** | 仅 `submit_artifact` 向用户交付；`write` 不自动分享 |
 | **交付物可见性（可选）** | AgentVersion 可配 `deliveryPolicy.mode: "review"`：该工作区提交的产物先 `held`，owner 公共面（会话产物列表/下载/产物库/导入）只认 `released`，且该工作区的**字节读路径**（文件列表/读取/预览/下载/ls/find/grep、进程日志、数据集读取）一律 404，上传照常；策略记在 `tbl_agsvc_exec_workspace_policies`，由 agent 在会话确保时经 HMAC 内部面设置且**只能设置、不能撤销**；查询失败时读操作 503（fail-closed）。`direct`（默认）行为与之前完全一致。见 [ADR 0016](adr/0016-agent-output-human-review.md) |
+| **审核账本与放行** | 审核事实的唯一账本是 agent MySQL（`tbl_agsvc_review_tasks` 等四张表）：Run 进任意终态且本轮有 `held` 产物时**与终态同一事务**建任务（`UNIQUE(run_id)`，失败/取消的 Run 也算），没有产物就不建。通过/驳回同样只在一个事务里改状态 + 写审计 + 在**原 Run** 上追加 `artifact.released` / `review.rejected` + 追加会话消息 + 写 outbox；产物真正放行与修订版导入工作区 `审核版/` 由 agent-worker 的审核循环投递（跨服务调用不进事务，exec 侧幂等）。审核面需要 `reviewer` 角色且**不能审自己发起的任务**；任务与材料按 org 作用域，跨 org 与不存在返回同一个 404 |
 | **Command blocking** | 禁止 `sudo`, `su`, `rm -rf /`, `dd`, `mkfs`, `fdisk`, `chmod 777`（hard_deny） |
 | **Output limits** | stdout/stderr 上限 50K chars |
 | **Audit logging** | 每次执行记录 trace_id |

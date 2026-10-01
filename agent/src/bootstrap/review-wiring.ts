@@ -52,6 +52,11 @@ export function createReviewTransportFromEnv(
     baseUrl: rpc.baseUrl,
     keyring: rpc.keyring,
     activeKid: rpc.activeKid,
+    // 与既有两个 exec 传输（sessions/ensure、artifacts/download）同一口径：compose 里
+    // 的 sandbox 是内网明文 HTTP，`http://sandbox:8081` 不是字面 loopback。漏传这一项
+    // 会在启动期抛 `http baseUrl rejected unless loopback or allowInsecureHttp=true`，
+    // 让整个 agent HTTP 进程起不来（2026-10-01 真机重建时踩到过）。
+    allowInsecureHttp: true,
     ...(fetchImpl ? { fetchImpl } : {}),
   });
 }

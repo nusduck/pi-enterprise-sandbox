@@ -83,7 +83,11 @@ function harness(options: {
   let claimedRows: any[] = [];
   const publisher = new ReviewPublisher({
     outbox,
-    createRepositories: () => repos,
+    createRepositories: (db: unknown) => {
+      assert.ok(db, '仓储工厂必须拿到显式执行器');
+      return repos;
+    },
+    db: { isTransaction: false },
     transport,
   });
   return {
@@ -231,6 +235,7 @@ describe('审核消费者：放行与导入', () => {
         async markPendingForRetry(id: string) { state.retried.push(id); return 'pending'; },
       },
       createRepositories: () => repos,
+      db: {},
       transport: { async applyVisibilities() { throw new Error('must not be called'); } } as any,
     });
     void publisher;

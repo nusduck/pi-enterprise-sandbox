@@ -79,7 +79,11 @@ describe('审核结果通知', () => {
     const publisher = new ReviewNotificationPublisher({
       outbox,
       store: store as any,
-      createRepositories: () => repos,
+      createRepositories: (db: unknown) => {
+        assert.ok(db, '仓储工厂必须拿到显式执行器');
+        return repos;
+      },
+      db: { isTransaction: false },
       mailer: { async send(message: any) { state.sent.push(message); } } as any,
       config: { enabled: true, minRunDurationMs: 0, publicWebBaseUrl: 'https://web.example.com' } as any,
       generateId: () => '01K0G2PAV8FPMVC9QHJG7JPN99',
