@@ -9,6 +9,7 @@ import { getArtifactDownloadUrl } from '../../shared/api';
 import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { fileTypeLabel } from '../../shared/state';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
+import { artifactDownloadId } from '../turn-stream/artifactView';
 
 function formatSize(n?: number | null): string {
   if (n == null || Number.isNaN(Number(n))) return '';
@@ -88,8 +89,10 @@ export function ArtifactPanel({
         // 待审 / 驳回的交付物不给 URL（design §3.3 E2：服务端本来就会 404，
         // 留一个必然失败的按钮只是引导用户去点）。direct 会话 `reviewStatus` 为 null。
         const released = a.reviewStatus == null || a.reviewStatus === 'released';
+        // 审核员修订后放行的是修订版：下载与跨会话复制都走它（原件已撤回，会 404）。
+        const deliverId = artifactDownloadId(a);
         const url =
-          sid && a.id && released ? getArtifactDownloadUrl(sid, a.id) : null;
+          sid && a.id && released ? getArtifactDownloadUrl(sid, deliverId) : null;
         const safe = safeApiUrl(url);
         const size = formatSize(a.size);
         const created = formatDate(a.createdAt);
@@ -158,7 +161,7 @@ export function ArtifactPanel({
                 </details>
               ) : null}
             </div>
-            {onImport ? (
+            {onImport && released ? (
               <details
                 className="artifact-import"
                 onClick={(e) => e.stopPropagation()}
@@ -196,7 +199,7 @@ export function ArtifactPanel({
                         setImportingId(a.id);
                         setImportError((current) => ({ ...current, [a.id]: '' }));
                         try {
-                          await onImport(a.id, target, a.name);
+                          await onImport(deliverId, target, a.name);
                         } catch (err) {
                           setImportError((current) => ({
                             ...current,

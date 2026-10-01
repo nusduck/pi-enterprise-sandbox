@@ -210,6 +210,8 @@ export type ArtifactEntity = {
   reviewRevised: boolean;
   /** 驳回反馈（`review.rejected` 事件负载）。 */
   reviewFeedback: string | null;
+  /** 通过时实际放行的 artifact id；有修订时与 `id`（智能体提交的原件）不同，下载走它。 */
+  reviewReleasedId: string | null;
   createdAt: string | null;
 };
 

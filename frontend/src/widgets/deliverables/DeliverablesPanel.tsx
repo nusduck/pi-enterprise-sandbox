@@ -3,7 +3,7 @@ import { useChat } from '../../features/chat/ChatContext';
 import { getArtifactDownloadUrl } from '../../shared/api';
 import { downloadAttrName, safeApiUrl } from '../../shared/security/url';
 import { isDurableArtifactId } from '../../shared/state/runReducer';
-import { deliveryBadge } from '../turn-stream/artifactView';
+import { artifactDownloadId, deliveryBadge, listedNotShownAsCards } from '../turn-stream/artifactView';
 import type { ArtifactEntity } from '../../entities/types';
 import { IconDownload, IconFile } from '../../shared/ui/Icons';
 
@@ -41,6 +41,7 @@ export function DeliverablesPanel() {
       reviewStatus: ArtifactEntity['reviewStatus'];
       reviewRevised: boolean;
       reviewFeedback: string | null;
+      reviewReleasedId: string | null;
     }> = [];
     for (const art of Object.values(entityStore.artifactsById)) {
       if (art.source !== 'submit_artifact') continue;
@@ -56,16 +57,16 @@ export function DeliverablesPanel() {
         reviewStatus: art.reviewStatus,
         reviewRevised: art.reviewRevised,
         reviewFeedback: art.reviewFeedback,
+        reviewReleasedId: art.reviewReleasedId,
       });
     }
     return out;
   }, [entityStore, activeRunId, state.conversationId]);
 
-  const listed = (state.artifacts || []).filter((a) => {
-    const id = a.artifact_id || a.id;
-    if (!id) return false;
-    return !entityArtifacts.some((e) => e.id === id);
-  });
+  const listed = listedNotShownAsCards(
+    state.artifacts || [],
+    entityArtifacts as unknown as ArtifactEntity[],
+  );
 
   const total = entityArtifacts.length + listed.length;
   const hidden = total === 0 || !activeSessionId;
@@ -116,10 +117,11 @@ export function DeliverablesPanel() {
               </span>
             );
           }
-          const url = getArtifactDownloadUrl(sid, a.id);
+          const url = getArtifactDownloadUrl(sid, artifactDownloadId(a as unknown as ArtifactEntity));
           const safe = safeApiUrl(url);
           if (!safe) return null;
-          const size = formatSize(a.size);
+          // 修订版的大小不在卡片实体上（实体记的是原件）：改为标注「经审核员修订」。
+          const size = a.reviewRevised ? '经审核员修订' : formatSize(a.size);
           return (
             <a
               key={a.id}

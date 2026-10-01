@@ -126,13 +126,18 @@ function applyReviewDecision(
     if (!entry || typeof entry !== 'object') continue;
     const row = entry as Record<string, unknown>;
     const artifactId = str(row.artifact_id || row.artifactId);
-    const existing = artifactId ? next.artifactsById[artifactId] : undefined;
+    // 聊天卡片的 id 是智能体提交的原件；审核员修订过时，当前版本是另一个 id，按原件 id 对上。
+    const originalId = str(row.original_artifact_id || row.originalArtifactId);
+    const existing =
+      (artifactId ? next.artifactsById[artifactId] : undefined) ??
+      (originalId ? next.artifactsById[originalId] : undefined);
     if (!existing) continue;
     next = upsertArtifact(next, {
       ...existing,
       reviewStatus: state,
       reviewRevised: state === 'released' ? row.revised === true : false,
       reviewFeedback: feedback,
+      reviewReleasedId: state === 'released' && artifactId ? artifactId : null,
     });
   }
   return next;

@@ -22,11 +22,13 @@ import { createEntityStore } from '../src/entities/index.ts';
 import { createArtifact } from '../src/entities/store.ts';
 import { reducePlatformEvent } from '../src/shared/state/runReducer.ts';
 import { normalizeToRuntimeEvent } from '../src/shared/state/platformEventNormalize.ts';
-import { deliveryBadge, artifactView } from '../src/widgets/turn-stream/artifactView.ts';
+import { deliveryBadge, artifactView, artifactDownloadId, listedNotShownAsCards } from '../src/widgets/turn-stream/artifactView.ts';
 import {
   REVIEW_ERROR_ZH,
   deliveryStateLabel,
+  deliveryStateForTask,
   isVersionConflict,
+  reportActionFailure,
   keepDraftOnError,
   reviewErrorMessage,
   reviewEventLabel,
@@ -116,6 +118,66 @@ describe('交付卡片三态（design §8）', () => {
     assert.equal(view.badge, '已交付 · 经审核员修订');
   });
 
+  it('通过且有修订：按原件 id 找到聊天卡片，标「经审核员修订」，下载指向修订版', () => {
+    // 2026-10-01 浏览器实测：放行事件只带修订版 id，原件卡片找不到对应、永远停在「已提交审核」。
+    const REVISED_ID = 'art_fedcba9876543210';
+    const ready = apply(createEntityStore(), platformEvent({
+      eventId: 'evt-ready-r',
+      sequence: 1,
+      type: 'artifact.ready',
+      data: { artifactId: ARTIFACT, name: '报告.md', review_status: 'pending' },
+    }));
+    const store = apply(ready, platformEvent({
+      eventId: 'evt-released',
+      sequence: 2,
+      type: 'artifact.released',
+      data: {
+        reviewTaskId: '01HZTASK000000000000000000',
+        artifacts: [{ artifactId: REVISED_ID, originalArtifactId: ARTIFACT, name: '报告.md', revised: true }],
+      },
+    }));
+    const card = store.artifactsById[ARTIFACT];
+    assert.equal(card.reviewStatus, 'released');
+    assert.equal(card.reviewRevised, true);
+    const view = artifactView(card, '01HZSESS000000000000000000');
+    assert.equal(view.badge, '已交付 · 经审核员修订');
+    assert.match(String(view.url), new RegExp(REVISED_ID));
+    assert.equal(store.artifactsById[REVISED_ID], undefined, '不凭空多出一张卡片');
+  });
+
+  it('交付物栏：下载 id 用放行版本，会话列表里的同一件不重复显示', () => {
+    // 2026-10-01 浏览器实测：交付物栏用原件 id 拼下载链接（原件已撤回 → 404），且修订版被列表补成第二条。
+    const card = { ...storeWithArtifact('released').artifactsById[ARTIFACT], reviewRevised: true, reviewReleasedId: 'art_fedcba9876543210' };
+    assert.equal(artifactDownloadId(card), 'art_fedcba9876543210');
+    assert.equal(artifactDownloadId(storeWithArtifact(null).artifactsById[ARTIFACT]), ARTIFACT);
+    const listed = [{ artifact_id: 'art_fedcba9876543210' }, { artifact_id: 'art_other00000000000' }, { id: ARTIFACT }];
+    assert.deepEqual(
+      listedNotShownAsCards(listed, [card]).map((row) => row.artifact_id || row.id),
+      ['art_other00000000000'],
+    );
+  });
+
+  it('有修订后驳回：同样按原件 id 把卡片标成未通过', () => {
+    const ready = apply(createEntityStore(), platformEvent({
+      eventId: 'evt-ready-j',
+      sequence: 1,
+      type: 'artifact.ready',
+      data: { artifactId: ARTIFACT, name: '报告.md', review_status: 'pending' },
+    }));
+    const store = apply(ready, platformEvent({
+      eventId: 'evt-rejected',
+      sequence: 2,
+      type: 'review.rejected',
+      data: {
+        reviewTaskId: '01HZTASK000000000000000000',
+        feedback: '数据来源不完整',
+        artifacts: [{ artifactId: 'art_fedcba9876543210', originalArtifactId: ARTIFACT, name: '报告.md' }],
+      },
+    }));
+    assert.equal(store.artifactsById[ARTIFACT].reviewStatus, 'rejected');
+    assert.equal(artifactView(store.artifactsById[ARTIFACT], '01HZSESS000000000000000000').url, null);
+  });
+
   it('direct 会话（reviewStatus 为 null）：行为与以前一致，没有审核字样', () => {
     const artifact = storeWithArtifact(null).artifactsById[ARTIFACT];
     const view = artifactView(artifact, '01HZSESS000000000000000000');
@@ -129,6 +191,15 @@ describe('交付卡片三态（design §8）', () => {
     assert.equal(deliveryStateLabel('released', false), '已交付');
     assert.equal(deliveryStateLabel('released', true), '已交付（经审核员修订）');
     assert.equal(deliveryStateLabel('rejected', false), '未通过审核');
+  });
+
+  it('审核工作台的交付物标签按任务状态推导：待领取/审核中都不是「已交付」', () => {
+    // 2026-10-01 浏览器实测：待领取任务的交付物被标成「已交付」（标签曾按 canAct 推导）。
+    assert.equal(deliveryStateForTask('PENDING'), 'pending');
+    assert.equal(deliveryStateForTask('IN_REVIEW'), 'pending');
+    assert.equal(deliveryStateForTask('APPROVED'), 'released');
+    assert.equal(deliveryStateForTask('REJECTED'), 'rejected');
+    assert.equal(deliveryStateForTask(undefined), 'pending');
   });
 });
 
@@ -334,5 +405,30 @@ describe('页面契约（源码文本断言：没有组件渲染测试）', () =
     assert.match(src('src/widgets/turn-stream/artifactView.ts'), /reviewStatus == null \|\| artifact\.reviewStatus === 'released'/);
     assert.match(src('src/widgets/deliverables/DeliverablesPanel.tsx'), /artifact-chip-held/);
     assert.match(src('src/widgets/artifact-panel/ArtifactPanel.tsx'), /a\.reviewStatus == null \|\| a\.reviewStatus === 'released'/);
+  });
+});
+
+describe('审核工作台：动作失败的提示不能被随后的刷新清掉', () => {
+  it('版本冲突：先刷新（刷新会清空提示），再写入冲突提示，最终留下的是冲突文案', async () => {
+    // 2026-10-01 浏览器实测：409 的提示被紧随其后的列表刷新（load 先清 actionError）抹掉，用户看不到。
+    let shown: string | null = null;
+    let refreshed = 0;
+    await reportActionFailure({ code: 'REVIEW_VERSION_CONFLICT' }, {
+      refresh: async () => { refreshed += 1; shown = null; },
+      setError: (message) => { shown = message; },
+    });
+    assert.equal(refreshed, 1);
+    assert.equal(shown, '任务已被更新，请刷新后重试');
+  });
+
+  it('非冲突错误：不刷新（保留现状与草稿），直接给提示', async () => {
+    let refreshed = 0;
+    let shown: string | null = null;
+    await reportActionFailure({ code: 'REVIEW_FILE_INVALID' }, {
+      refresh: async () => { refreshed += 1; },
+      setError: (message) => { shown = message; },
+    });
+    assert.equal(refreshed, 0);
+    assert.equal(shown, '修订文件不合法（可能为空或超过 100 MiB）');
   });
 });

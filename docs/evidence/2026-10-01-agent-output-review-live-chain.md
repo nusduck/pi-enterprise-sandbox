@@ -160,3 +160,26 @@ exec 下载在读取前按记录大小拒绝（`review_transfer_too_large`），
 api-server（LoadBalancer，旧镜像，没有 `/api/reviews`），而不是 compose 的 BFF。两套栈共享 MySQL 与 Redis，
 所以登录、建 Run 都会成功，只有新路由 404。验收脚本应在 compose 网络内运行（`--network pi-enterprise-sandbox-dev-ingress`，
 `BFF_BASE_URL=http://api-server:4000`）。
+
+## 7. 浏览器实测（2026-10-01，审阅后补做）
+
+compose 栈前端 `http://127.0.0.1:3000`，Chrome 实际操作，真实模型；账号为本地验收账号（admin / requester / reviewer）。
+
+| 路径 | 结果 |
+|---|---|
+| admin：智能体配置页「交付策略」页签，两种策略与一期限制说明 | 正常（第二个单选项的说明换行到下一行，排版小问题，未修） |
+| requester：review 智能体提交 `report.md`，聊天卡片与交付物栏显示「已提交审核」、无下载入口 | 正常 |
+| requester：会话资料面板没有工作区文件页签；会话产物列表接口返回空、进程接口 404 | 正常（进程页签把 404 显示成「还没有后台进程」，措辞不准，未修） |
+| reviewer：主导航出现「交付物审核」，详情含用户提问、附件快照、版本链、审计时间线 | 正常（审计时间线把事件详情 JSON 原样显示，小问题，未修） |
+| reviewer：领取、界面上传修订、通过 | 正常 |
+| 通过后 requester 刷新：卡片「已交付 · 经审核员修订」，三个下载入口均 200 且内容为修订版 | 修复后正常 |
+| 追问再产生 `appendix.md` → 新任务；审核员修订后驳回 → 卡片「未通过审核：反馈」、无下载入口 | 正常；追问回复里模型提到 `审核版/summary.md`，§5.4 注入生效 |
+
+浏览器实测发现并修复的四个缺陷（各有修复前失败的回归用例）：
+
+1. **审核工作台标签**：交付物标签按「当前用户能否操作」推导，待领取的任务显示「已交付」。改为按任务状态推导（`deliveryStateForTask`）。
+2. **版本冲突提示看不见**：409 的提示被紧随其后的列表刷新清掉。改为先刷新、再写提示（`reportActionFailure`）。
+3. **有修订时卡片停在「已提交审核」**：`artifact.released` / `review.rejected` 只带当前版本 id，前端按原件 id 建卡，对不上。agent 在每项加 `originalArtifactId`，前端按原件 id 匹配并记下放行版本（`reviewReleasedId`）。
+4. **有修订时下载 404、交付物重复**：交付物栏与资料面板用原件 id 拼下载链接（原件已撤回），会话列表里的修订版又被补成第二条。统一改用 `artifactDownloadId`，列表去重用 `listedNotShownAsCards`；「复制到其他会话」同样改用放行版本，待审/驳回时不显示。
+
+**已知未修**：发起人页面在 Run 结束后不再订阅事件，审核结果需要刷新页面才出现（会话重放能拿到，SSE 实时刷新拿不到）。

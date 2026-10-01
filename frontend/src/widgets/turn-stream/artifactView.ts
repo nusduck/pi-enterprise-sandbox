@@ -36,13 +36,37 @@ export function deliveryBadge(artifact: ArtifactEntity): string | null {
   return null;
 }
 
+/** 下载用的 artifact id：审核员修订后放行的是修订版（原件已撤回，下载必然 404）。 */
+export function artifactDownloadId(artifact: ArtifactEntity): string {
+  return artifact.reviewReleasedId || artifact.id;
+}
+
+/**
+ * 会话产物列表里**还没有被卡片代表**的行。卡片按原件 id 建，修订放行后指向修订版，
+ * 列表里的修订版就是同一件交付物，不能再补一条。
+ */
+export function listedNotShownAsCards<T extends { artifact_id?: unknown; id?: unknown }>(
+  listed: readonly T[],
+  cards: readonly ArtifactEntity[],
+): T[] {
+  const shown = new Set<string>();
+  for (const card of cards) {
+    shown.add(card.id);
+    if (card.reviewReleasedId) shown.add(card.reviewReleasedId);
+  }
+  return listed.filter((row) => {
+    const id = String(row.artifact_id || row.id || '');
+    return Boolean(id) && !shown.has(id);
+  });
+}
+
 /** Download URL and labels of an artifact card; shared with the preview drawer. */
 export function artifactView(artifact: ArtifactEntity, sessionId: string | null) {
   const sid = sessionId || artifact.sessionId;
   const durable = isDurableArtifactId(artifact.id, artifact.runId || '');
   const released = artifact.reviewStatus == null || artifact.reviewStatus === 'released';
   const url = safeApiUrl(
-    sid && durable && released ? getArtifactDownloadUrl(sid, artifact.id) : null,
+    sid && durable && released ? getArtifactDownloadUrl(sid, artifactDownloadId(artifact)) : null,
   );
   const name = artifact.name || artifact.path || '产物';
   return {

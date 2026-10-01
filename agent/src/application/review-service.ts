@@ -703,8 +703,10 @@ export class ReviewService {
       });
 
       const approved = input.status === 'APPROVED';
+      // `originalArtifactId`：前端聊天卡片的 id 是智能体提交的原件；有修订时靠它把卡片对上当前版本。
       const releasedArtifacts = items.map((item: Loose) => ({
         artifactId: item.currentArtifactId,
+        originalArtifactId: item.originalArtifactId,
         name: item.name,
         mimeType: item.mimeType,
         size: item.sizeBytes,
@@ -718,7 +720,7 @@ export class ReviewService {
         type: approved ? 'artifact.released' : 'review.rejected',
         data: approved
           ? { reviewTaskId, artifacts: releasedArtifacts }
-          : { reviewTaskId, feedback: input.feedback, artifacts: releasedArtifacts.map(({ artifactId, name }: Loose) => ({ artifactId, name })) },
+          : { reviewTaskId, feedback: input.feedback, artifacts: releasedArtifacts.map(({ artifactId, originalArtifactId, name }: Loose) => ({ artifactId, originalArtifactId, name })) },
         generateId,
         now,
       });

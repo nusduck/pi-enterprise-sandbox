@@ -25,10 +25,11 @@ import {
   type ReviewTask,
 } from '../../shared/api/reviews';
 import {
+  deliveryStateForTask,
   deliveryStateLabel,
   formatReviewSize,
   formatReviewTimestamp,
-  isVersionConflict,
+  reportActionFailure,
   itemRevised,
   reviewErrorMessage,
   reviewEventLabel,
@@ -162,12 +163,14 @@ export function ReviewsPage() {
         setRevisionItemNo(null);
         await load({ cursor: null });
       } catch (err) {
-        setActionError(reviewErrorMessage(err));
-        if (isVersionConflict(err)) {
-          // 版本冲突：刷新任务，但**保留**已选择的待上传文件（design §8）。
-          await refreshDetail();
-          await load({ cursor: null });
-        }
+        // 版本冲突：刷新任务，但**保留**已选择的待上传文件（design §8）。
+        await reportActionFailure(err, {
+          refresh: async () => {
+            await refreshDetail();
+            await load({ cursor: null });
+          },
+          setError: setActionError,
+        });
       } finally {
         setBusy(null);
       }
@@ -490,6 +493,7 @@ function ReviewDetailPane(props: {
               key={item.item_no}
               item={item}
               reviewTaskId={detail.review_task_id}
+              taskStatus={detail.status}
               canAct={canAct}
               busy={busy}
               revisionFile={props.revisionItemNo === item.item_no ? props.revisionFile : null}
@@ -592,6 +596,7 @@ function ReviewDetailPane(props: {
 function ItemBlock(props: {
   item: ReviewItem;
   reviewTaskId: string;
+  taskStatus: string;
   canAct: boolean;
   busy: string | null;
   revisionFile: File | null;
@@ -606,7 +611,7 @@ function ItemBlock(props: {
         <b>{item.name}</b>
         <span className={a.sp} />
         <span className={`${a.pill} ${revised ? a.info : a.mute}`}>
-          {deliveryStateLabel(props.canAct ? 'pending' : 'released', revised)}
+          {deliveryStateLabel(deliveryStateForTask(props.taskStatus), revised)}
         </span>
       </div>
       <p className={a.muted}>

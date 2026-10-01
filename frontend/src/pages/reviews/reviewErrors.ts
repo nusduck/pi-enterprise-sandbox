@@ -65,6 +65,19 @@ export function isVersionConflict(error: unknown): boolean {
   return code === 'REVIEW_VERSION_CONFLICT' || code === 'REVIEW_ALREADY_CLAIMED' || code === 'REVIEW_ALREADY_DECIDED';
 }
 
+/**
+ * 动作失败的统一收口。冲突时先刷新（服务端已经变了），**再**写提示：刷新列表会先清空提示，
+ * 顺序反了用户就看不到「任务已被更新」。非冲突错误不刷新，保留现状与草稿。
+ */
+export async function reportActionFailure(
+  error: unknown,
+  deps: { refresh: () => Promise<void>; setError: (message: string) => void },
+): Promise<void> {
+  const message = reviewErrorMessage(error);
+  if (isVersionConflict(error)) await deps.refresh();
+  deps.setError(message);
+}
+
 export type ReviewListState = 'loading' | 'error' | 'empty' | 'ready';
 
 /**
@@ -99,6 +112,13 @@ export function runStatusLabel(status: unknown): string {
 
 /** 交付物卡片上的三态标签（design §8）：待审 / 已交付 / 未通过。 */
 export type DeliveryState = 'pending' | 'released' | 'rejected';
+
+/** 审核工作台里交付物的状态只由**任务状态**决定：通过才算已交付，驳回即未通过，其余都还在审。 */
+export function deliveryStateForTask(taskStatus: unknown): DeliveryState {
+  if (taskStatus === 'APPROVED') return 'released';
+  if (taskStatus === 'REJECTED') return 'rejected';
+  return 'pending';
+}
 
 export function deliveryStateLabel(state: DeliveryState, revised: boolean): string {
   if (state === 'pending') return '已提交审核';

@@ -272,6 +272,27 @@ describe('审核服务：通过', () => {
     ]);
     const released = state.appendedRunEvents[0].payloadJson.data.artifacts;
     assert.equal(released[0].revised, true);
+    // 前端靠原件 id 把聊天里那张「已提交审核」卡片对上修订版（2026-10-01 浏览器实测：缺它卡片永远停在待审）。
+    assert.equal(released[0].artifactId, REVISED);
+    assert.equal(released[0].originalArtifactId, ARTIFACT);
+  });
+
+  it('有修订时驳回：review.rejected 的每一项同样带原件 id', async () => {
+    const { service, state } = harness({
+      items: [{
+        itemNo: 1,
+        originalArtifactId: ARTIFACT,
+        currentArtifactId: REVISED,
+        name: '报告.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 20,
+        sha256: 'c'.repeat(64),
+      }],
+      events: [{ eventType: 'revised', itemNo: 1, fromArtifactId: ARTIFACT, toArtifactId: REVISED }],
+    });
+    await service.reject(ACTOR, TASK, { baseRevision: 3, feedback: '数据来源不完整' });
+    const rejected = state.appendedRunEvents[0].payloadJson.data.artifacts;
+    assert.equal(rejected[0].originalArtifactId, ARTIFACT);
   });
 });
 

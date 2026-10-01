@@ -209,6 +209,8 @@ export function ContextInspector({
       if (art.runId && runIds.size > 0 && !runIds.has(art.runId)) continue;
       if (seen.has(art.id)) continue;
       seen.add(art.id);
+      // 审核员修订后放行的是另一个 id：卡片已经指向它，列表里的同一件不再补一张。
+      if (art.reviewReleasedId) seen.add(art.reviewReleasedId);
       out.push(art);
     }
 
@@ -249,6 +251,7 @@ export function ContextInspector({
         reviewStatus: null,
         reviewRevised: false,
         reviewFeedback: null,
+        reviewReleasedId: null,
         createdAt:
           listed.created_at != null
             ? String(listed.created_at)
