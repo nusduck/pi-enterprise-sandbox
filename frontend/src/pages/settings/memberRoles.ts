@@ -23,7 +23,7 @@ export const MEMBER_ROLE_ERROR_ZH: Record<string, string> = {
 
 /** 角色变更记录的来源 → 中文。未知来源原样显示，不猜。 */
 export const ROLE_EVENT_SOURCE_ZH: Record<string, string> = {
-  console: '界面授予',
+  console: '管理界面',
   bootstrap: '部署引导',
   migration: '数据迁移',
 };

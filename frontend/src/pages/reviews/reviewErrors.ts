@@ -332,3 +332,14 @@ export function formatReviewSize(size: unknown): string {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/**
+ * 选中任务后要不要把详情面板滚进视口。
+ *
+ * ≤1200px 是单栏布局，详情排在整张列表下面：不滚过去，点了任务看起来什么都没发生
+ * （2026-10-01 浏览器复核：1100px 下面板 top=1498、视口高 683）。两栏布局下面板就在
+ * 列表右侧、顶部可见，这时不能乱滚。面板顶部不在视口内（下方或上方）就滚。
+ */
+export function shouldScrollDetailIntoView(input: { top: number; viewportHeight: number }): boolean {
+  return input.top >= input.viewportHeight || input.top < 0;
+}
