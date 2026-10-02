@@ -218,6 +218,10 @@ export function createFakeRunWorld(opts = {}) {
       const notNullCols = [];
       /** @type {{ col: string, dir: string } | null} */
       let order = null;
+      /** @type {Array<{ col: string, dir: string }>} */
+      const orders = [];
+      /** @type {Array<(row: Record<string, unknown>) => boolean>} */
+      const groups = [];
       /** @type {number | null} */
       let limitN = null;
       /** @type {'select'|'insert'|'update'|'max'} */
@@ -252,12 +256,74 @@ export function createFakeRunWorld(opts = {}) {
         for (const [col, vals] of inFilters) {
           if (!vals.includes(row[col])) return false;
         }
+        // 分组谓词（`where((w) => …)` / `andWhere((w) => …)`）：keyset 分页的
+        // `ts < ? OR (ts = ? AND id < ?)` 就长这样，以前这种回调会被当成列名，
+        // 条件静默失效。
+        for (const group of groups) {
+          if (!group(row)) return false;
+        }
         return true;
+      };
+
+      /**
+       * 分组子构建器：AND 先于 OR 结合，`a AND b OR c` 记为两条链。
+       * @returns {{ builder: Record<string, unknown>, matches: (row: Record<string, unknown>) => boolean }}
+       */
+      const createPredicateGroup = () => {
+        /** @type {Array<Array<(row: Record<string, unknown>) => boolean>>} */
+        const chains = [[]];
+        const entryPredicate = (col, op, value) => {
+          const key = String(col).includes('.') ? String(col).split('.').pop() : String(col);
+          const pred = value === undefined ? { op: '=', value: op } : { op, value };
+          return (row) => {
+            if (pred.op === 'isnull') return row[key] == null;
+            if (pred.op === 'notnull') return row[key] != null;
+            if (pred.op === 'like') {
+              const needle = String(pred.value).replace(/^%|%$/g, '');
+              return String(row[key] ?? '').includes(needle);
+            }
+            if (pred.op === '=') return row[key] === pred.value;
+            return cmp(row[key], pred.op, pred.value);
+          };
+        };
+        const builder = {
+          where(col, op, value) {
+            if (typeof col === 'function') {
+              const nested = createPredicateGroup();
+              col(nested.builder);
+              chains[chains.length - 1].push((row) => nested.matches(row));
+              return builder;
+            }
+            chains[chains.length - 1].push(entryPredicate(col, op, value));
+            return builder;
+          },
+          orWhere(col, op, value) {
+            if (typeof col === 'function') {
+              const nested = createPredicateGroup();
+              col(nested.builder);
+              chains.push([(row) => nested.matches(row)]);
+              return builder;
+            }
+            chains.push([entryPredicate(col, op, value)]);
+            return builder;
+          },
+          andWhere(col, op, value) {
+            return builder.where(col, op, value);
+          },
+        };
+        return {
+          builder,
+          matches: (row) => chains.some((chain) => chain.every((pred) => pred(row))),
+        };
       };
 
       const api = {
         where(colOrObj, val) {
-          if (typeof colOrObj === 'object' && colOrObj !== null) {
+          if (typeof colOrObj === 'function') {
+            const group = createPredicateGroup();
+            colOrObj(group.builder);
+            groups.push(group.matches);
+          } else if (typeof colOrObj === 'object' && colOrObj !== null) {
             for (const [k, v] of Object.entries(colOrObj)) {
               filters.push([k, v]);
             }
@@ -267,7 +333,11 @@ export function createFakeRunWorld(opts = {}) {
           return api;
         },
         andWhere(col, opOrVal, maybeVal) {
-          if (maybeVal !== undefined) {
+          if (typeof col === 'function') {
+            const group = createPredicateGroup();
+            col(group.builder);
+            groups.push(group.matches);
+          } else if (maybeVal !== undefined) {
             filters.push([String(col), { op: opOrVal, value: maybeVal }]);
           } else if (typeof col === 'object' && col !== null) {
             for (const [k, v] of Object.entries(col)) {
@@ -298,7 +368,10 @@ export function createFakeRunWorld(opts = {}) {
           return api;
         },
         orderBy(col, dir = 'asc') {
-          order = { col, dir };
+          // 保留多列：keyset 分页的 `ts DESC, id DESC` 少了第二列会在同一时刻
+          // 重复/漏行，只留最后一次调用的假实现看不出这个问题。
+          orders.push({ col, dir });
+          order = orders[orders.length - 1];
           return api;
         },
         limit(n) {
@@ -408,12 +481,15 @@ export function createFakeRunWorld(opts = {}) {
             return rest;
           });
         }
-        if (order) {
-          const { col, dir } = order;
+        if (orders.length) {
           rows = [...rows].sort((a, b) => {
-            if (a[col] === b[col]) return 0;
-            if (a[col] > b[col]) return dir === 'desc' ? -1 : 1;
-            return dir === 'desc' ? 1 : -1;
+            for (const { col, dir } of orders) {
+              const key = col.includes('.') ? col.split('.').pop() : col;
+              if (a[key] === b[key]) continue;
+              if (a[key] > b[key]) return dir === 'desc' ? -1 : 1;
+              return dir === 'desc' ? 1 : -1;
+            }
+            return 0;
           });
         }
         if (limitN != null) rows = rows.slice(0, limitN);

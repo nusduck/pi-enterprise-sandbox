@@ -23,8 +23,11 @@
 .memberCardActions { display: flex; justify-content: flex-end; }
 .memberCardActions button { white-space: nowrap; }
 
+.cardsOnly { display: none; }
+
 @media (max-width: 900px) {
   .tableOnly { display: none; }
+  .cardsOnly { display: flex; flex-direction: column; gap: var(--space-4); }
   .memberCards { display: grid; gap: 10px; }
 }
 

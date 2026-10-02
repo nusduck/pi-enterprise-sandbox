@@ -44,19 +44,16 @@ import {
   streamRunEvents,
   uploadDataset,
   ensureSession,
-  listConversations,
   getConversation,
   deleteConversation,
   listArtifacts,
   importArtifact as apiImportArtifact,
   decideApproval,
 } from '../../shared/api';
+import { useConversationPaging } from './conversationPaging';
 import type { Agent, ModelItem } from '../../shared/api';
 import type { AuthConfig } from '../../shared/schemas/auth';
-import {
-  projectLoginCapabilities,
-  type LoginCapabilities,
-} from '../../shared/schemas/auth';
+import { projectLoginCapabilities, type LoginCapabilities } from '../../shared/schemas/auth';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import { useReviewResultPolling } from './useReviewResultPolling';
 import type { EntityStore } from '../../entities';
@@ -108,6 +105,11 @@ export type ChatController = {
   ) => Promise<void>;
   toggleSidebar: () => void;
   closeSidebar: () => void;
+  refreshConversations: () => Promise<void>;
+  loadMoreConversations: () => Promise<void>;
+  hasMoreConversations: boolean;
+  loadingMoreConversations: boolean;
+  conversationPagingError: string | null;
   // Messaging
   sendMessage: (text?: string) => Promise<void>;
   cancelStream: () => void;
@@ -277,23 +279,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     resetAgents,
   } = useAgentSelection(sessionRevision);
 
-  const refreshConversations = useCallback(async () => {
-    const generation = sessionRevision.current();
-    try {
-      const list = await listConversations();
-      if (!sessionRevision.isCurrent(generation)) return;
-      const conversations = (Array.isArray(list) ? list : []).map((c) => ({
-        ...c,
-        title: c.title ?? undefined,
-        created_at: c.created_at ?? undefined,
-        updated_at: c.updated_at ?? undefined,
-        messages: c.messages as Array<{ role?: string; content?: unknown }> | undefined,
-      }));
-      setState((s) => update(s, { conversations }));
-    } catch (err) {
-      console.warn('[conv] list failed:', (err as Error).message);
-    }
-  }, [sessionRevision]);
+  const {
+    hasMoreConversations,
+    loadingMoreConversations,
+    conversationPagingError,
+    loadMoreConversations,
+    refreshConversations,
+  } = useConversationPaging({ sessionRevision, setState });
 
   const refreshArtifacts = useCallback(async (sessionId?: string | null) => {
     const generation = sessionRevision.current();
@@ -1334,6 +1326,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     importArtifactToConversation,
     toggleSidebar,
     closeSidebar,
+    refreshConversations,
+    loadMoreConversations,
+    hasMoreConversations,
+    loadingMoreConversations,
+    conversationPagingError,
     sendMessage,
     cancelStream,
     stopRun,

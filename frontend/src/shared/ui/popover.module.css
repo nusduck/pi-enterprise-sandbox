@@ -1,0 +1,31 @@
+.popover {
+  position: absolute;
+  z-index: var(--z-sheet);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-2);
+  box-sizing: border-box;
+  outline: none;
+}
+
+.bottom-start {
+  top: calc(100% + var(--space-2));
+  left: 0;
+}
+
+.bottom-end {
+  top: calc(100% + var(--space-2));
+  right: 0;
+}
+
+.top-start {
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+}
+
+.top-end {
+  bottom: calc(100% + var(--space-2));
+  right: 0;
+}

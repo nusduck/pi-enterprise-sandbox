@@ -50,6 +50,11 @@ import {
   type ReviewFilterId,
   type StatusTone,
 } from './reviewErrors';
+import { hasAdminRole, hasReviewerRole } from '../../shared/security/roles';
+import { EmptyState } from '../../shared/ui/EmptyState';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { SegmentedControl } from '../../shared/ui/SegmentedControl';
+import { Pager, useCursorPagination } from '../../shared/ui/Pager';
 import a from '../settings/adminPage.module.css';
 import s from './reviews.module.css';
 
@@ -61,11 +66,12 @@ type FilterId = ReviewFilterId;
 
 export function ReviewsPage() {
   const { state } = useChat();
+  const isReviewer = hasReviewerRole(state.authUser);
+  const isAdmin = hasAdminRole(state.authUser);
   const [filter, setFilter] = useState<FilterId>('pending');
+  const pagination = useCursorPagination({ initialPageSize: PAGE_SIZE });
   const [tasks, setTasks] = useState<ReviewTask[] | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -87,45 +93,41 @@ export function ReviewsPage() {
   const load = useCallback(
     async (opts: { cursor?: string | null; append?: boolean } = {}) => {
       const generation = ++loadGeneration.current;
-      if (opts.append) setLoadingMore(true);
-      else {
-        setLoading(true);
-        setLoadError(null);
-      }
+      setLoading(true);
+      setLoadError(null);
       setActionError(null);
+      const cursorToUse = opts.cursor !== undefined ? opts.cursor : pagination.currentCursor;
       try {
         const page = await listReviews({
           status: activeFilter.status,
           mine: activeFilter.mine,
-          cursor: opts.cursor ?? null,
-          limit: PAGE_SIZE,
+          cursor: cursorToUse,
+          limit: pagination.pageSize,
         });
         // 过期响应（筛选已变）直接丢弃，别覆盖新结果。
         if (generation !== loadGeneration.current) return;
-        setTasks((prev) => (opts.append && prev ? [...prev, ...page.tasks] : page.tasks));
-        setNextCursor(page.next_cursor);
+        setTasks(page.tasks);
+        pagination.setPageData(page.next_cursor);
       } catch (err) {
         if (generation !== loadGeneration.current) return;
         const message = reviewErrorMessage(err);
-        if (opts.append) setActionError(message);
-        else {
-          // 读取失败不能清成空列表：那看起来像「没有待审任务」。
-          setTasks(null);
-          setLoadError(message);
-        }
+        setTasks(null);
+        setLoadError(message);
+        pagination.setPageData(null);
       } finally {
         if (generation === loadGeneration.current) {
           setLoading(false);
-          setLoadingMore(false);
         }
       }
     },
-    [activeFilter],
+    [activeFilter, pagination.currentCursor, pagination.pageSize, pagination.setPageData],
   );
 
   useEffect(() => {
-    void load({ cursor: null });
-  }, [load]);
+    if (isReviewer) {
+      void load({ cursor: null });
+    }
+  }, [load, isReviewer]);
 
   const detailPaneRef = useRef<HTMLDivElement | null>(null);
 
@@ -204,38 +206,48 @@ export function ReviewsPage() {
   const listState = reviewListState({ loading, error: loadError, count: tasks?.length ?? 0 });
   const canAct = detail?.status === 'IN_REVIEW';
 
+  if (!isReviewer) {
+    return (
+      <div className={s.scroll}>
+        <div className={a.page}>
+          <PageHeader
+            title="交付物审核"
+            description="智能体按版本配置「交付物需人工审核」时，它在会话里提交的交付物先进入这里。通过前发起人看不到也下载不了；通过后出现在原会话与产物库里。审核员只能看到用户提问与上传的文件，看不到发起人的工作区。"
+          />
+          <EmptyState
+            variant="forbidden"
+            title="需要审核员权限"
+            description="只有持有 reviewer 角色的成员可以查看和处理交付物审核队列。"
+            action={isAdmin ? { label: '前往成员与角色分配', to: '/admin/members' } : undefined}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={s.scroll}>
       <div className={a.page}>
-        <div className={a.head}>
-          <div>
-            <h1>交付物审核</h1>
-            <p>
-              智能体按版本配置「交付物需人工审核」时，它在会话里提交的交付物先进入这里。
-              通过前发起人看不到也下载不了；通过后出现在原会话与产物库里。审核员只能看到
-              用户提问与上传的文件，看不到发起人的工作区。
-            </p>
-          </div>
-          <span className={a.sp} />
-          <button type="button" className={a.btn} onClick={() => void load({ cursor: null })} disabled={loading}>
-            {loading ? '刷新中…' : '刷新'}
-          </button>
-        </div>
+        <PageHeader
+          title="交付物审核"
+          description="智能体按版本配置「交付物需人工审核」时，它在会话里提交的交付物先进入这里。通过前发起人看不到也下载不了；通过后出现在原会话与产物库里。审核员只能看到用户提问与上传的文件，看不到发起人的工作区。"
+          action={
+            <button type="button" className={a.btn} onClick={() => void load({ cursor: null })} disabled={loading}>
+              {loading ? '刷新中…' : '刷新'}
+            </button>
+          }
+        />
 
         <div className={a.toolbar}>
-          <div className={a.seg} role="group" aria-label="审核筛选">
-            {FILTERS.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                className={a.btn}
-                aria-pressed={filter === entry.id}
-                onClick={() => setFilter(entry.id)}
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            value={filter}
+            onChange={(val) => {
+              setFilter(val as FilterId);
+              pagination.reset();
+            }}
+            options={FILTERS.map((entry) => ({ value: entry.id, label: entry.label }))}
+            aria-label="审核筛选"
+          />
         </div>
 
         {notice ? <p className={a.notice} role="status">{notice}</p> : null}
@@ -245,92 +257,96 @@ export function ReviewsPage() {
           <div className={s.listPane}>
             {listState === 'error' ? (
               // 读取失败不是空队列（AGENTS.md §3）；视觉与 RunsPage 的空态同款（a.empty）。
-              <div className={a.empty} role="alert">
-                <p className={a.error} style={{ margin: '0 0 8px' }}>读取审核队列失败：{loadError}</p>
-                <button type="button" className={a.btn} onClick={() => void load({ cursor: null })}>
-                  重试
-                </button>
-              </div>
+              <EmptyState
+                variant="error"
+                title="读取审核队列失败"
+                description={loadError || '请检查网络或稍后重试'}
+                action={{ label: '重试', onClick: () => void load({ cursor: null }) }}
+              />
             ) : null}
             {listState === 'loading' ? <div className={a.empty}>正在读取…</div> : null}
             {listState === 'empty' ? (
-              <div className={a.empty}>
-                {filter === 'pending' ? '没有待领取的审核任务。' : filter === 'mine' ? '你没有正在审核的任务。' : '还没有历史任务。'}
-              </div>
+              <EmptyState
+                variant="empty"
+                title={filter === 'pending' ? '没有待领取的审核任务。' : filter === 'mine' ? '你没有正在审核的任务。' : '还没有历史任务。'}
+              />
             ) : null}
             {listState === 'ready' ? (
-              <div className={a.tableWrap}>
-                <table className={`${a.table} ${s.listTable}`}>
-                  <colgroup>
-                    <col className={s.colItem} />
-                    <col className={s.colAgent} />
-                    <col className={s.colRequester} />
-                    <col className={s.colStatus} />
-                    <col className={s.colRun} />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th>交付物</th>
-                      <th>智能体</th>
-                      <th>发起人</th>
-                      <th>状态</th>
-                      <th>运行结果</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tasks!.map((task) => (
-                      <tr
-                        key={task.review_task_id}
-                        className={task.review_task_id === selectedId ? s.rowActive : undefined}
-                        tabIndex={0}
-                        aria-label={`查看任务 ${reviewTaskItemLabel(task)}`}
-                        onClick={() => void openDetail(task.review_task_id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            void openDetail(task.review_task_id);
-                          }
-                        }}
-                      >
-                        <td>
-                          <div className={s.cellTitle} title={reviewTaskItemLabel(task)}>
-                            {reviewTaskItemLabel(task)}
-                          </div>
-                          <small className={a.muted}>
-                            {task.item_count && task.item_count > 1 && task.first_item_name
-                              ? `${task.item_count} 件 · `
-                              : ''}
-                            {formatReviewTimestamp(task.created_at)}
-                          </small>
-                        </td>
-                        <td className={s.cellEllipsis} title={reviewTaskAgentLabel(task)}>
-                          {reviewTaskAgentLabel(task)}
-                        </td>
-                        <td className={s.cellEllipsis} title={reviewRequesterLabel(task)}>
-                          {reviewRequesterLabel(task)}
-                        </td>
-                        <td>
-                          <span className={`${a.pill} ${toneClass(reviewStatusTone(task.status), a)}`}>
-                            {reviewStatusLabel(task.status)}
-                          </span>
-                        </td>
-                        <td>{runStatusLabel(task.run_status)}</td>
+              <div className={a.tableCard}>
+                <div className={a.tableWrap}>
+                  <table className={`${a.table} ${s.listTable}`}>
+                    <colgroup>
+                      <col className={s.colItem} />
+                      <col className={s.colAgent} />
+                      <col className={s.colRequester} />
+                      <col className={s.colStatus} />
+                      <col className={s.colRun} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>交付物</th>
+                        <th>智能体</th>
+                        <th>发起人</th>
+                        <th>状态</th>
+                        <th>运行结果</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-            {nextCursor && listState === 'ready' ? (
-              <div className={a.cardActions}>
-                <button
-                  type="button"
-                  className={a.btn}
-                  disabled={loadingMore}
-                  onClick={() => void load({ cursor: nextCursor, append: true })}
-                >
-                  {loadingMore ? '正在加载…' : '加载更多'}
-                </button>
+                    </thead>
+                    <tbody>
+                      {tasks!.map((task) => (
+                        <tr
+                          key={task.review_task_id}
+                          className={task.review_task_id === selectedId ? s.rowActive : undefined}
+                          tabIndex={0}
+                          aria-label={`查看任务 ${reviewTaskItemLabel(task)}`}
+                          onClick={() => void openDetail(task.review_task_id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              void openDetail(task.review_task_id);
+                            }
+                          }}
+                        >
+                          <td>
+                            <div className={s.cellTitle} title={reviewTaskItemLabel(task)}>
+                              {reviewTaskItemLabel(task)}
+                            </div>
+                            <small className={a.muted}>
+                              {task.item_count && task.item_count > 1 && task.first_item_name
+                                ? `${task.item_count} 件 · `
+                                : ''}
+                              {formatReviewTimestamp(task.created_at)}
+                            </small>
+                          </td>
+                          <td className={s.cellEllipsis} title={reviewTaskAgentLabel(task)}>
+                            {reviewTaskAgentLabel(task)}
+                          </td>
+                          <td className={s.cellEllipsis} title={reviewRequesterLabel(task)}>
+                            {reviewRequesterLabel(task)}
+                          </td>
+                          <td>
+                            <span className={`${a.pill} ${toneClass(reviewStatusTone(task.status), a)}`}>
+                              {reviewStatusLabel(task.status)}
+                            </span>
+                          </td>
+                          <td>{runStatusLabel(task.run_status)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {tasks && tasks.length > 0 ? (
+                  <Pager
+                    page={pagination.page}
+                    count={tasks.length}
+                    pageSize={pagination.pageSize}
+                    onPageSizeChange={pagination.setPageSize}
+                    onPrev={pagination.goToPrevPage}
+                    onNext={pagination.goToNextPage}
+                    hasPrev={pagination.hasPrev}
+                    hasNext={pagination.hasNext}
+                    loading={loading}
+                  />
+                ) : null}
               </div>
             ) : null}
           </div>

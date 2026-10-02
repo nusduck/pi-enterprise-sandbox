@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useChat, type AuthConfigState } from '../../features/chat/ChatContext';
+import { useChat } from '../../features/chat/ChatContext';
 import { conversationTitle } from '../../shared/state';
 import { useTheme } from '../../shared/ui/theme';
-import { noLoginMethodMessage } from '../../shared/schemas/auth';
-import { localLoginErrorMessage, ssoLoginUrl, takeSsoError } from '../../shared/api/sso';
 import { conversationRunMarkers, listPendingApprovals } from '../runtime-timeline/buildTimeline';
 import {
   IconCheck,
@@ -26,169 +24,17 @@ import {
 import { SettingsDialog } from '../settings/SettingsDialog';
 import { CommandPalette, type PaletteAction } from '../command-palette/CommandPalette';
 import { listCronJobs } from '../../shared/api/cron-jobs';
+import { listConversations } from '../../shared/api/client';
 import { hasUnseenRuns, readSchedulesSeenAt } from '../../pages/schedules/scheduleModel';
-import { hasAdminRole, hasReviewerRole } from '../../shared/security/roles';
+import { hasAdminRole, hasReviewerRole, primaryRoleLabel } from '../../shared/security/roles';
+import { LoadMoreSentinel } from '../../shared/ui/LoadMoreSentinel';
+import {
+  appendConversations,
+  normalizeServerConversation,
+  CONVERSATION_PAGE_SIZE,
+} from '../../features/chat/conversationPaging';
+import type { ConversationSummary } from '../../shared/state/types';
 import s from './sidebar.module.css';
-
-/**
- * 未登录时的底部面板：登录方式完全来自服务端 config 投影。
- *
- * - 加载/失败：显示状态与重试，**绝不**默认成「账号密码可用」；
- *   失败时连表单都不渲染，避免对服务故障做出「未开放登录」的假结论。
- * - `local.enabled` 才渲染账号密码表单；`registration_enabled` 才渲染注册。
- * - SSO 只有服务端明确 `enabled && available` 才渲染可点击入口（整页跳转到 BFF）；
- *   打开但不可用时只显示「暂不可用」，不给假入口。
- * - `mode=sso` 时账号密码只留给管理员：默认收起，点「管理员账号登录」才展开。
- * - SSO 回调失败带回的 `sso_error` 由调用方翻成文案后经 `ssoError` 传入。
- */
-function SignInPanel({
-  config,
-  authError,
-  logoutWarning,
-  username,
-  password,
-  authErrorText,
-  onRetry,
-  onUsername,
-  onPassword,
-  onSubmit,
-  onRegister,
-  ssoError,
-}: {
-  config: AuthConfigState;
-  authError: string | null;
-  /** 退出后服务端撤销未确认的可见提示；普通退出为 null。 */
-  logoutWarning: string | null;
-  username: string;
-  password: string;
-  authErrorText: string;
-  onRetry: () => void;
-  onUsername: (value: string) => void;
-  onPassword: (value: string) => void;
-  onSubmit: (e: FormEvent) => void;
-  onRegister: () => void;
-  /** SSO 回调失败的文案（来自 `?sso_error=`）；没有为 null。 */
-  ssoError: string | null;
-}) {
-  const [localError, setLocalError] = useState('');
-  const [adminFormOpen, setAdminFormOpen] = useState(false);
-
-  // 服务端身份/能力状态一变就清掉上一次的表单级提示（例如 503 后重试成功）。
-  useEffect(() => {
-    setLocalError('');
-  }, [authError, config.error, config.config, config.loading]);
-
-  // 撤销未确认的提示在任何未登录形态下都要可见：这是「本机已退出，但服务端
-  // 撤销没确认」的安全事实，不能因为 config/身份检查失败而消失。
-  const revocationNotice = logoutWarning ? (
-    <p className={s.authError} role="alert">{logoutWarning}</p>
-  ) : null;
-
-  if (authError) {
-    return (
-      <div className={s.auth}>
-        {revocationNotice}
-        <p className={s.authError} role="alert">{authError}</p>
-        <div className={s.authActions}>
-          <button type="button" className={s.btn} onClick={onRetry}>重试</button>
-        </div>
-      </div>
-    );
-  }
-
-  if (config.loading) {
-    return (
-      <div className={s.auth}>
-        {revocationNotice}
-        <p className={s.authNotice}>正在加载登录方式…</p>
-      </div>
-    );
-  }
-
-  if (config.error) {
-    return (
-      <div className={s.auth}>
-        {revocationNotice}
-        <p className={s.authError} role="alert">{config.error}</p>
-        <div className={s.authActions}>
-          <button type="button" className={s.btn} onClick={onRetry}>重试</button>
-        </div>
-      </div>
-    );
-  }
-
-  const caps = config.capabilities;
-  if (!caps) {
-    return (
-      <div className={s.auth}>
-        {revocationNotice}
-        <p className={s.authError} role="alert">登录方式不可用，请重试。</p>
-        <div className={s.authActions}>
-          <button type="button" className={s.btn} onClick={onRetry}>重试</button>
-        </div>
-      </div>
-    );
-  }
-
-  const showLocalForm = caps.localEnabled && (!caps.localAdminOnly || adminFormOpen);
-  const returnTo = `${window.location.pathname}${window.location.search}`;
-
-  return (
-    <form className={s.auth} onSubmit={onSubmit} autoComplete="on">
-      {revocationNotice}
-      {ssoError ? <p className={s.authError} role="alert">{ssoError}</p> : null}
-      {caps.ssoAvailable ? (
-        <a className={s.ssoBtn} href={ssoLoginUrl(returnTo)}>
-          使用{caps.ssoLabel} 登录
-        </a>
-      ) : null}
-      {showLocalForm ? (
-        <>
-          <input
-            name="username"
-            placeholder={caps.localAdminOnly ? '管理员用户名' : '用户名'}
-            autoComplete="username"
-            minLength={2}
-            required
-            value={username}
-            onChange={(e) => onUsername(e.target.value)}
-          />
-          <input
-            type="password"
-            name="password"
-            placeholder="密码"
-            autoComplete="current-password"
-            minLength={6}
-            required
-            value={password}
-            onChange={(e) => onPassword(e.target.value)}
-          />
-          <div className={s.authActions}>
-            <button type="submit" className={caps.localAdminOnly ? s.btn : s.primary}>登录</button>
-            {caps.registrationEnabled ? (
-              <button type="button" onClick={onRegister}>注册</button>
-            ) : null}
-          </div>
-        </>
-      ) : null}
-      {caps.localEnabled && caps.localAdminOnly && !adminFormOpen ? (
-        <button type="button" className={s.linkBtn} onClick={() => setAdminFormOpen(true)}>
-          管理员账号登录
-        </button>
-      ) : null}
-      {caps.ssoAvailable ? null : caps.ssoEnabled ? (
-        <p className={s.empty}>{caps.ssoLabel} 暂不可用，请稍后重试或联系管理员。</p>
-      ) : (
-        <p className={s.empty}>
-          {noLoginMethodMessage(caps) || `${caps.ssoLabel} 尚未开放，本次仅支持账号密码登录。`}
-        </p>
-      )}
-      {localError || authErrorText ? (
-        <p className={s.authError} role="alert">{localError || authErrorText}</p>
-      ) : null}
-    </form>
-  );
-}
 
 /**
  * Left rail: brand, primary navigation, search, the conversation list grouped
@@ -207,16 +53,28 @@ export function ConversationSidebar() {
     removeConversation,
     closeSidebar,
     toggleSidebar,
-    login,
-    register,
     logout,
-    authConfig,
-    retryAuth,
-    logoutWarning,
+    hasMoreConversations,
+    loadingMoreConversations,
+    conversationPagingError,
+    loadMoreConversations,
   } = useChat();
   const [theme, toggleTheme] = useTheme();
 
   const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<ConversationSummary[] | null>(null);
+  const [searchNextCursor, setSearchNextCursor] = useState<string | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [hasLoadedMoreNormal, setHasLoadedMoreNormal] = useState(false);
+  const [searchHasAppended, setSearchHasAppended] = useState(false);
+  const searchGenRef = useRef(0);
+
+  useEffect(() => {
+    setHasLoadedMoreNormal(false);
+  }, [state.authUser?.user_id]);
+
   const [agentFilter, setAgentFilter] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [listOpen, setListOpen] = useState(true);
@@ -224,14 +82,76 @@ export function ConversationSidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [schedulesDot, setSchedulesDot] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [authError, setAuthError] = useState('');
-  // SSO 回调失败时 BFF 带回 `?sso_error=`：读出一次、从地址栏抹掉，再在登录面板展示。
-  // 放在 effect 里（不是 useState 初始化）：它会改 history，StrictMode 的二次调用无副作用。
-  const [ssoError, setSsoError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const footRef = useRef<HTMLDivElement>(null);
+
+  // 250ms debounce for server-side search (q)
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setSearchResults(null);
+      setSearchNextCursor(null);
+      setSearchError(null);
+      setSearchLoading(false);
+      setSearchHasAppended(false);
+      return;
+    }
+
+    const gen = ++searchGenRef.current;
+    setSearchLoading(true);
+    setSearchError(null);
+    setSearchHasAppended(false);
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const page = await listConversations({ limit: CONVERSATION_PAGE_SIZE, q: trimmed });
+        if (gen !== searchGenRef.current) return;
+        setSearchResults((page.conversations || []).map(normalizeServerConversation));
+        setSearchNextCursor(page.next_cursor);
+      } catch (err) {
+        if (gen !== searchGenRef.current) return;
+        setSearchError((err as Error).message || '搜索会话失败');
+        setSearchResults([]);
+      } finally {
+        if (gen === searchGenRef.current) {
+          setSearchLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  const loadMoreSearch = useCallback(async () => {
+    const trimmed = query.trim();
+    if (!trimmed || !searchNextCursor || searchLoadingMore) return;
+    const gen = ++searchGenRef.current;
+    setSearchLoadingMore(true);
+    setSearchError(null);
+    try {
+      const page = await listConversations({
+        limit: CONVERSATION_PAGE_SIZE,
+        cursor: searchNextCursor,
+        q: trimmed,
+      });
+      if (gen !== searchGenRef.current) return;
+      setSearchResults((prev) => appendConversations(prev, page.conversations || []));
+      setSearchNextCursor(page.next_cursor);
+      setSearchHasAppended(true);
+    } catch (err) {
+      if (gen !== searchGenRef.current) return;
+      setSearchError((err as Error).message || '加载更多搜索结果失败');
+    } finally {
+      if (gen === searchGenRef.current) {
+        setSearchLoadingMore(false);
+      }
+    }
+  }, [query, searchNextCursor, searchLoadingMore]);
+
+  const isSearching = Boolean(query.trim());
+  const activeConversations = isSearching ? searchResults ?? [] : state.conversations || [];
 
   const open = state.sidebarOpen !== false;
   const isMobile =
@@ -250,15 +170,26 @@ export function ConversationSidebar() {
   const groups = useMemo(
     () =>
       groupConversations(
-        filterConversations(state.conversations || [], query, agentFilter, conversationTitle),
+        filterConversations(activeConversations, isSearching ? '' : query, agentFilter, conversationTitle),
       ),
-    [state.conversations, query, agentFilter],
+    [activeConversations, isSearching, query, agentFilter],
   );
 
-  useEffect(() => {
-    const message = takeSsoError();
-    if (message) setSsoError(message);
-  }, []);
+  const sentinelLoading = isSearching ? searchLoadingMore || searchLoading : loadingMoreConversations;
+  const sentinelHasMore = isSearching ? Boolean(searchNextCursor) : hasMoreConversations;
+  const sentinelError = isSearching ? searchError : conversationPagingError;
+  const handleLoadMore = useCallback(async () => {
+    if (isSearching) {
+      await loadMoreSearch();
+    } else {
+      await loadMoreConversations();
+      setHasLoadedMoreNormal(true);
+    }
+  }, [isSearching, loadMoreSearch, loadMoreConversations]);
+
+  const sentinelShowEnd = isSearching
+    ? searchHasAppended
+    : hasLoadedMoreNormal || Boolean(state.conversations && state.conversations.length > CONVERSATION_PAGE_SIZE);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -317,36 +248,8 @@ export function ConversationSidebar() {
     go(`/c/${encodeURIComponent(convId)}`);
   }
 
-  async function onLogin(e: FormEvent) {
-    e.preventDefault();
-    if (!username.trim() || !password) return;
-    // 新的一次登录尝试：上一次 SSO 回调的错误不再相关，避免两条错误叠在一起。
-    setSsoError(null);
-    try {
-      setAuthError('');
-      await login(username.trim(), password);
-    } catch (err) {
-      setAuthError(localLoginErrorMessage(err, '登录失败'));
-    }
-  }
-
-  async function onRegister() {
-    if (!username.trim() || !password) {
-      setAuthError('请填写用户名和密码');
-      return;
-    }
-    try {
-      setAuthError('');
-      await register(username.trim(), password);
-    } catch (err) {
-      setAuthError((err as Error).message || '注册失败');
-    }
-  }
-
   async function onLogout() {
     setMenuOpen(false);
-    setUsername('');
-    setPassword('');
     await logout();
   }
 
@@ -362,6 +265,10 @@ export function ConversationSidebar() {
     const name = c.agent_id ? agentNameById(c.agent_id) : null;
     return { id: c.id, title: conversationTitle(c), hint: name && !isDefaultAgentName(name) ? name : undefined };
   });
+
+  if (!signedIn) {
+    return null;
+  }
 
   const rootClass = [s.side, !isMobile && !open ? s.collapsed : '', isMobile && open ? s.mobileOpen : '']
     .filter(Boolean)
@@ -472,6 +379,10 @@ export function ConversationSidebar() {
         <div className={s.list} role="list" hidden={!listOpen}>
           {!signedIn ? (
             <div className={s.empty}>登录后查看你的会话</div>
+          ) : isSearching && searchLoading && (!searchResults || searchResults.length === 0) ? (
+            <div className={s.empty}>正在搜索…</div>
+          ) : isSearching && searchError && (!searchResults || searchResults.length === 0) ? (
+            <div className={s.empty} role="alert">{searchError}</div>
           ) : groups.length === 0 ? (
             <div className={s.empty}>{query || agentFilter ? '没有匹配的会话' : '还没有会话'}</div>
           ) : (
@@ -523,53 +434,44 @@ export function ConversationSidebar() {
               </div>
             ))
           )}
+          {signedIn && activeConversations.length > 0 ? (
+            <LoadMoreSentinel
+              onLoadMore={handleLoadMore}
+              loading={sentinelLoading}
+              hasMore={sentinelHasMore}
+              error={sentinelError}
+              onRetry={handleLoadMore}
+              showEndMessage={sentinelShowEnd}
+            />
+          ) : null}
         </div>
 
         <div className={s.foot} ref={footRef}>
-          {signedIn ? (
-            <>
-              {menuOpen ? (
-                <div className={s.menu} role="menu" style={{ bottom: 58, left: 8, right: 8 }}>
-                  <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setSettingsOpen(true); }}>设置</button>
-                  {isAdmin ? (
-                    <button type="button" role="menuitem" onClick={() => go('/admin/runs')}>
-                      管理控制台
-                      {pendingApprovals.length ? <span className={s.badge}>{pendingApprovals.length} 待审批</span> : null}
-                    </button>
-                  ) : null}
-                  <button type="button" role="menuitem" onClick={() => toggleTheme()}>
-                    {theme === 'light' ? '切换到深色' : '切换到浅色'}
-                  </button>
-                  <hr />
-                  <button type="button" role="menuitem" onClick={() => void onLogout()}>退出登录</button>
-                </div>
+          {menuOpen ? (
+            <div className={s.menu} role="menu" style={{ bottom: 58, left: 8, right: 8 }}>
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setSettingsOpen(true); }}>设置</button>
+              {isAdmin ? (
+                <button type="button" role="menuitem" onClick={() => go('/admin/runs')}>
+                  管理控制台
+                  {pendingApprovals.length ? <span className={s.badge}>{pendingApprovals.length} 待审批</span> : null}
+                </button>
               ) : null}
-              <button type="button" className={s.me} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}>
-                <span className={s.avatar} aria-hidden="true">
-                  {(state.authUser?.username || '?').slice(0, 1).toUpperCase()}
-                </span>
-                <span className={s.meText}>
-                  {state.authUser?.username}
-                  <small>{isAdmin ? '管理员' : '普通用户'}</small>
-                </span>
+              <button type="button" role="menuitem" onClick={() => toggleTheme()}>
+                {theme === 'light' ? '切换到深色' : '切换到浅色'}
               </button>
-            </>
-          ) : (
-            <SignInPanel
-              config={authConfig}
-              authError={state.authError}
-              logoutWarning={logoutWarning}
-              username={username}
-              password={password}
-              authErrorText={authError}
-              onRetry={() => { void retryAuth(); }}
-              onUsername={setUsername}
-              onPassword={setPassword}
-              onSubmit={onLogin}
-              onRegister={() => { void onRegister(); }}
-              ssoError={ssoError}
-            />
-          )}
+              <hr />
+              <button type="button" role="menuitem" onClick={() => void onLogout()}>退出登录</button>
+            </div>
+          ) : null}
+          <button type="button" className={s.me} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}>
+            <span className={s.avatar} aria-hidden="true">
+              {(state.authUser?.username || '?').slice(0, 1).toUpperCase()}
+            </span>
+            <span className={s.meText}>
+              {state.authUser?.username}
+              <small>{primaryRoleLabel(state.authUser)}</small>
+            </span>
+          </button>
         </div>
       </aside>
       <div id="sidebar-backdrop" className={s.backdrop} hidden={!isMobile || !open} onClick={closeSidebar} />

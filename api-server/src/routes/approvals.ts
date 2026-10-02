@@ -14,13 +14,11 @@ import { sendError, sendJson as json } from '../http/response.js';
 export async function handleListApprovals(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
-    const result = await listAgentApprovals(
-      {
-        status: parsedUrl.searchParams.get('status') || null,
-        limit: parsedUrl.searchParams.get('limit') || null,
-      },
-      { auth, traceId: req?.traceId },
-    );
+    // `status`/`limit`/`cursor` 的语义（含空 status）由客户端白名单与 agent/ 决定。
+    const result = await listAgentApprovals(parsedUrl.searchParams, {
+      auth,
+      traceId: req?.traceId,
+    });
     json(res, 200, result);
   } catch (err: any) {
     console.error('[approvals] list:', err.message);

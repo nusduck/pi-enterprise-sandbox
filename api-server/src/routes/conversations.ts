@@ -24,11 +24,17 @@ function isUlid(value: unknown): boolean {
 
 /**
  * GET /api/conversations
+ *
+ * `limit`/`cursor`/`q` 走白名单转发（未知键丢弃），范围与游标解码由 agent/
+ * 判定：越界的 `limit` 必须原样到 agent，再由它的 400 VALIDATION_ERROR 回来。
  */
-export async function handleListConversations(res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
+export async function handleListConversations(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
-    const list = await listAgentConversations({ auth, traceId: req?.traceId });
+    const list = await listAgentConversations(parsedUrl.searchParams, {
+      auth,
+      traceId: req?.traceId,
+    });
     json(res, 200, list);
   } catch (err: any) {
     console.error('[conversations] list:', err.message);

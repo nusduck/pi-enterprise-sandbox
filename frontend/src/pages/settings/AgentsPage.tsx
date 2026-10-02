@@ -7,7 +7,7 @@
  * （`docs/design/multi-agent-selection.md` D4）。把它写成"保存"而不解释，用户
  * 会以为是原地修改，然后困惑于"为什么改了配置老会话没变"。
  */
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   createAgent,
   createAgentVersion,
@@ -93,6 +93,25 @@ function validationState(result: AgentConfigValidation): AgentConfigValidationSt
     effectiveSummary: result.effectiveSummary,
     capabilityRevision: result.capabilityRevision,
   };
+}
+
+function sectionForPath(path: string): EditorSection {
+  if (path.startsWith('modelPolicy')) return 'model';
+  if (path.startsWith('toolPolicy')) return 'tools';
+  if (path.startsWith('mcpServers')) return 'mcp';
+  if (path.startsWith('delegation')) return 'delegation';
+  if (path.startsWith('deliveryPolicy')) return 'deliveryPolicy';
+  if (path.startsWith('dataSources')) return 'dataSources';
+  if (path.startsWith('skillPolicy')) return 'skills';
+  if (
+    path.startsWith('systemPrompt') ||
+    path.startsWith('prompt') ||
+    path.startsWith('instructions') ||
+    path.startsWith('maxSteps')
+  ) {
+    return 'basic';
+  }
+  return 'json';
 }
 
 export function AgentsPage() {
@@ -543,19 +562,63 @@ export function AgentsPage() {
   const delegationCount = delegation ? delegation.agents.length + delegation.remoteAgents.length : 0;
   const dataSourceCount = draftConfig.ok ? dataSourcesOf(draftConfig.config).length : 0;
   const skillCount = draftConfig.ok ? skillPolicyCount(draftConfig.config) : 0;
-  const tabs: Array<[AgentTab, string, number?]> = [
-    ['basic', '基本信息'],
-    ['model', '模型'],
-    ['tools', '工具权限', overrideCount],
-    ['mcp', 'MCP', mcpCount],
-    ['delegation', '协作', delegationCount],
-    ['deliveryPolicy', '交付策略'],
-    ['dataSources', '数据源', dataSourceCount],
-    ['skills', '技能', skillCount],
-    ...(creating ? [] : [['versions', '版本历史'] as [AgentTab, string]]),
-    ...(creating ? [] : [['access', '可见范围'] as [AgentTab, string]]),
-    ['json', 'JSON'],
+  type NavItem = [AgentTab, string, number?];
+  type NavGroup = { label: string; items: NavItem[] };
+  const navGroups: NavGroup[] = [
+    {
+      label: '基础',
+      items: [
+        ['basic', '基本信息'],
+        ['model', '模型'],
+      ],
+    },
+    {
+      label: '能力',
+      items: [
+        ['skills', '技能', skillCount || undefined],
+        ['tools', '工具权限', overrideCount || undefined],
+        ['mcp', 'MCP', mcpCount || undefined],
+        ['dataSources', '数据源', dataSourceCount || undefined],
+      ],
+    },
+    {
+      label: '协作与交付',
+      items: [
+        ['delegation', '协作', delegationCount || undefined],
+        ['deliveryPolicy', '交付策略'],
+      ],
+    },
+    ...(creating
+      ? []
+      : [
+          {
+            label: '发布',
+            items: [
+              ['access' as AgentTab, '可见范围'],
+              ['versions' as AgentTab, '版本历史'],
+            ] as NavItem[],
+          },
+        ]),
+    {
+      label: '高级',
+      items: [['json', 'JSON']] as NavItem[],
+    },
   ];
+
+  const dirtySections = useMemo(() => {
+    const set = new Set<AgentTab>();
+    if (!creating && configChanged) {
+      if (parsedDraft.ok && draftChanges.length > 0) {
+        for (const change of draftChanges) {
+          set.add(sectionForPath(change.path));
+        }
+      } else {
+        set.add(tab === 'json' ? 'json' : 'basic');
+      }
+    }
+    return set;
+  }, [creating, configChanged, parsedDraft.ok, draftChanges, tab]);
+
   const section: EditorSection = tab === 'versions' || tab === 'access' ? 'basic' : tab;
   const editorProps = {
     section,
@@ -642,121 +705,194 @@ export function AgentsPage() {
               <span className={s.unsaved}>{draftChanges.length ? `${draftChanges.length} 处未保存修改` : '未保存修改'}</span>
             ) : null}
             {statusText && (creating || configChanged) ? <span className={`${s.status} ${statusCls}`}>{statusText}</span> : null}
-            {creating ? (
-              <button type="submit" form="new-agent-form" className={s.btnPri} disabled={mutating || !newName.trim()}>
-                创建智能体
-              </button>
-            ) : (
-              <>
-                <button type="button" className={s.btn} disabled={mutating || !configChanged} onClick={discardDraft}>放弃修改</button>
-                <button type="button" className={s.btn} disabled={!canPublish} onClick={() => void saveAsNewVersion(false)}>仅保存为 v{nextVersionNo}</button>
-                <button type="button" className={s.btnPri} disabled={!canPublish} onClick={() => void saveAsNewVersion(true)}>保存并启用 v{nextVersionNo}</button>
-              </>
-            )}
           </div>
         ) : null}
-
-        {error ? <p className={s.errBox} role="alert">{error}</p> : null}
-        {notice ? <p className={s.okBox} role="status">{notice}</p> : null}
 
         {creating || selectedAgent ? (
-          <div className={s.tabs} role="tablist" aria-label="配置分类">
-            {tabs.map(([id, label, count]) => (
-              <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
-                {label}{count ? <span className={s.tabCount} title={id === 'tools' ? '已覆盖的工具数' : '已选的 MCP 服务数'}>{count}</span> : null}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        {creating ? (
-          <form id="new-agent-form" className={s.body} onSubmit={submitNewAgent}>
-            {tab === 'basic' ? (
-              <div className={s.grid2}>
-                <label className={s.field}>
-                  <span>名称</span>
-                  <input value={newName} maxLength={255} required placeholder="数据分析助手" onChange={(event) => setNewName(event.target.value)} />
-                </label>
-                <label className={s.field}>
-                  <span>简介（可选）</span>
-                  <input value={newDescription} maxLength={2000} placeholder="SQL 查询与图表" onChange={(event) => setNewDescription(event.target.value)} />
-                </label>
-              </div>
-            ) : null}
-            <AgentConfigEditor {...editorProps} value={newConfig} onChange={setNewConfig} errors={newValidation.errors} />
-            <AgentValidationPanel state={newValidation} draft={newConfig} />
-          </form>
-        ) : selectedAgent ? (
-          <div className={s.body}>
-            {tab === 'access' ? (
-              <AgentAccessPanel
-                agentId={selectedAgent.agent_id}
-                isDefault={isDefaultAgentName(selectedAgent.name)}
-                onSaved={(access) => setAgents((list) => list.map((item) => (
-                  item.agent_id === access.agent_id ? { ...item, visibility: access.visibility } : item
-                )))}
-              />
-            ) : tab === 'versions' ? (
-              <>
-                <p className={s.hint}>回滚就是启用旧版本：不修复数据，也不影响正在进行的会话。只有新会话会用新启用的版本。</p>
-                {draftChanges.length ? (
-                  <div className={s.diff} aria-label="草稿与启用版本的差异">
-                    <div className={s.diffHead}>
-                      <b>v{activeVersion?.version_no ?? '—'} → 草稿（将保存为 v{nextVersionNo}）</b>
-                      <span className={s.hint}>{draftChanges.length} 处修改</span>
-                    </div>
-                    {draftChanges.map((c) => (
-                      <div key={c.path} className={s.diffRow}>
-                        <code className={s.diffDel}>- {c.path}: {formatDiffValue(c.before)}</code>
-                        <code className={s.diffAdd}>+ {c.path}: {formatDiffValue(c.after)}</code>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                <div className={s.versions}>
-                  {versions.map((version) => {
-                    const isActive = version.agent_version_id === selectedAgent.active_version_id;
-                    const open = version.agent_version_id === viewVersionId;
+          <div className={s.editorWorkspace}>
+            <nav className={s.sideNav} aria-label="配置分区">
+              {navGroups.map((g) => (
+                <div key={g.label}>
+                  <div className={s.navGroupTitle}>{g.label}</div>
+                  {g.items.map(([id, label, count]) => {
+                    const isDirty = dirtySections.has(id);
+                    const isActive = tab === id;
                     return (
-                      <div key={version.agent_version_id} className={`${s.version}${open ? ` ${s.on}` : ''}`}>
-                        <div className={s.versionHead}>
-                          <b>v{version.version_no}</b>
-                          {isActive ? <span className={`${s.status} ${s.stOk}`}>当前启用</span> : null}
-                          <code className={s.hint}>{String(version.config_hash || '').slice(0, 12) || '—'}</code>
-                          <span className={s.hint}>{formatTime(version.created_at)}</span>
-                          <span className={s.sp} />
-                          <button type="button" className={s.btnSm} onClick={() => setViewVersionId(open ? null : version.agent_version_id)}>{open ? '收起' : '查看'}</button>
-                          <button type="button" className={s.btnSm} disabled={mutating} onClick={() => copyToDraft(version)}>复制到草稿</button>
-                          <button type="button" className={s.btnSm} disabled={mutating || isActive} onClick={() => void activate(version.agent_version_id, version.version_no)}>
-                            {isActive ? '已启用' : '启用'}
-                          </button>
-                        </div>
-                        {open ? <pre className={s.pre}>{formatAgentConfig(version.config)}</pre> : null}
-                      </div>
+                      <button
+                        key={id}
+                        type="button"
+                        className={`${s.navItem}${isActive ? ` ${s.on}` : ''}`}
+                        aria-current={isActive ? 'true' : undefined}
+                        onClick={() => setTab(id)}
+                      >
+                        <span className={s.navLabel}>
+                          <span>{label}</span>
+                          {count ? <span className={s.tabCount}>{count}</span> : null}
+                        </span>
+                        {isDirty ? <span className={s.dirtyDot} aria-label="有未保存修改" title="有未保存修改" /> : null}
+                      </button>
                     );
                   })}
-                  {!versions.length ? <p className={s.hint}>没有版本记录。</p> : null}
                 </div>
-              </>
-            ) : (
-              <>
+              ))}
+            </nav>
+
+            {creating ? (
+              <form id="new-agent-form" className={s.body} onSubmit={submitNewAgent}>
+                {error ? <p className={s.errBox} role="alert">{error}</p> : null}
+                {notice ? <p className={s.okBox} role="status">{notice}</p> : null}
                 {tab === 'basic' ? (
-                  <div className={s.meta}>
-                    <span>名称<b>{selectedAgent.name}</b></span>
-                    <span>简介<b>{selectedAgent.description || '—'}</b></span>
-                    <span>状态<b>{selectedAgent.status === 'active' ? '启用' : selectedAgent.status}</b></span>
-                    {viewedVersion && viewedVersion.agent_version_id !== activeVersion?.agent_version_id
-                      ? <span>草稿来源<b>v{viewedVersion.version_no}</b></span>
-                      : null}
+                  <div className={s.grid2}>
+                    <label className={s.field}>
+                      <span>名称</span>
+                      <input value={newName} maxLength={255} required placeholder="数据分析助手" onChange={(event) => setNewName(event.target.value)} />
+                    </label>
+                    <label className={s.field}>
+                      <span>简介（可选）</span>
+                      <input value={newDescription} maxLength={2000} placeholder="SQL 查询与图表" onChange={(event) => setNewDescription(event.target.value)} />
+                    </label>
                   </div>
                 ) : null}
-                <AgentConfigEditor {...editorProps} value={configDraft} onChange={setConfigDraft} errors={validation.errors} />
-                <AgentValidationPanel state={validation} draft={configDraft} />
-              </>
-            )}
+                <AgentConfigEditor {...editorProps} value={newConfig} onChange={setNewConfig} errors={newValidation.errors} />
+                <AgentValidationPanel state={newValidation} draft={newConfig} />
+              </form>
+            ) : selectedAgent ? (
+              <div className={s.body}>
+                {error ? <p className={s.errBox} role="alert">{error}</p> : null}
+                {notice ? <p className={s.okBox} role="status">{notice}</p> : null}
+                {tab === 'access' ? (
+                  <AgentAccessPanel
+                    agentId={selectedAgent.agent_id}
+                    isDefault={isDefaultAgentName(selectedAgent.name)}
+                    onSaved={(access) => setAgents((list) => list.map((item) => (
+                      item.agent_id === access.agent_id ? { ...item, visibility: access.visibility } : item
+                    )))}
+                  />
+                ) : tab === 'versions' ? (
+                  <>
+                    <p className={s.hint}>回滚就是启用旧版本：不修复数据，也不影响正在进行的会话。只有新会话会用新启用的版本。</p>
+                    {draftChanges.length ? (
+                      <div className={s.diff} aria-label="草稿与启用版本的差异">
+                        <div className={s.diffHead}>
+                          <b>v{activeVersion?.version_no ?? '—'} → 草稿（将保存为 v{nextVersionNo}）</b>
+                          <span className={s.hint}>{draftChanges.length} 处修改</span>
+                        </div>
+                        {draftChanges.map((c) => (
+                          <div key={c.path} className={s.diffRow}>
+                            <code className={s.diffDel}>- {c.path}: {formatDiffValue(c.before)}</code>
+                            <code className={s.diffAdd}>+ {c.path}: {formatDiffValue(c.after)}</code>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className={s.versions}>
+                      {versions.map((version) => {
+                        const isActive = version.agent_version_id === selectedAgent.active_version_id;
+                        const open = version.agent_version_id === viewVersionId;
+                        return (
+                          <div key={version.agent_version_id} className={`${s.version}${open ? ` ${s.on}` : ''}`}>
+                            <div className={s.versionHead}>
+                              <b>v{version.version_no}</b>
+                              {isActive ? <span className={`${s.status} ${s.stOk}`}>当前启用</span> : null}
+                              <code className={s.hint}>{String(version.config_hash || '').slice(0, 12) || '—'}</code>
+                              <span className={s.hint}>{formatTime(version.created_at)}</span>
+                              <span className={s.sp} />
+                              <button type="button" className={s.btnSm} onClick={() => setViewVersionId(open ? null : version.agent_version_id)}>{open ? '收起' : '查看'}</button>
+                              <button type="button" className={s.btnSm} disabled={mutating} onClick={() => copyToDraft(version)}>复制到草稿</button>
+                              <button type="button" className={s.btnSm} disabled={mutating || isActive} onClick={() => void activate(version.agent_version_id, version.version_no)}>
+                                {isActive ? '已启用' : '启用'}
+                              </button>
+                            </div>
+                            {open ? <pre className={s.pre}>{formatAgentConfig(version.config)}</pre> : null}
+                          </div>
+                        );
+                      })}
+                      {!versions.length ? <p className={s.hint}>没有版本记录。</p> : null}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {tab === 'basic' ? (
+                      <div className={s.meta}>
+                        <span>名称<b>{selectedAgent.name}</b></span>
+                        <span>简介<b>{selectedAgent.description || '—'}</b></span>
+                        <span>状态<b>{selectedAgent.status === 'active' ? '启用' : selectedAgent.status}</b></span>
+                        {viewedVersion && viewedVersion.agent_version_id !== activeVersion?.agent_version_id
+                          ? <span>草稿来源<b>v{viewedVersion.version_no}</b></span>
+                          : null}
+                      </div>
+                    ) : null}
+                    <AgentConfigEditor {...editorProps} value={configDraft} onChange={setConfigDraft} errors={validation.errors} />
+                    <AgentValidationPanel state={validation} draft={configDraft} />
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
         ) : !loading ? (
           <div className={s.empty}>从左侧选择一个智能体，或新建一个。</div>
+        ) : null}
+
+        {creating ? (
+          <div className={s.saveBar}>
+            <span className={s.saveNotice}>新建智能体草稿</span>
+            <div className={s.saveActions}>
+              <button
+                type="button"
+                className={s.btnGhost}
+                disabled={mutating}
+                onClick={() => {
+                  setMode('edit');
+                  setTab('basic');
+                  setError('');
+                  setNotice('');
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                form="new-agent-form"
+                className={s.btnPri}
+                disabled={mutating || !newName.trim()}
+              >
+                创建智能体
+              </button>
+            </div>
+          </div>
+        ) : selectedAgent && dirtySections.size > 0 ? (
+          <div className={s.saveBar}>
+            <span className={s.saveNotice}>
+              <span className={s.dirtyDot} aria-hidden="true" />
+              {dirtySections.size} 个分区有未保存修改
+            </span>
+            <div className={s.saveActions}>
+              <button
+                type="button"
+                className={s.btnGhost}
+                disabled={mutating}
+                onClick={discardDraft}
+              >
+                放弃修改
+              </button>
+              <button
+                type="button"
+                className={s.btn}
+                disabled={!canPublish}
+                onClick={() => void saveAsNewVersion(false)}
+              >
+                仅保存为 v{nextVersionNo}
+              </button>
+              <button
+                type="button"
+                className={s.btnPri}
+                disabled={!canPublish}
+                onClick={() => void saveAsNewVersion(true)}
+              >
+                保存并启用 v{nextVersionNo}
+              </button>
+            </div>
+          </div>
         ) : null}
       </section>
     </div>

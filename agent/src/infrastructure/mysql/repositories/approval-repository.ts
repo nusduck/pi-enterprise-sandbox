@@ -26,6 +26,7 @@ import {
 } from '../../../domain/tool/approval-status.js';
 import { redactPayload } from '../../../lib/event-redaction.js';
 import { TOOL_EXECUTION_CHILD_SELECT } from './tool-execution-repository.js';
+import type { KeysetPosition } from '../../../application/keyset-cursor.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -128,10 +129,15 @@ export class ApprovalRepository {
   /**
    * List approvals visible to an owner. The Run join is intentional: an
    * approval's org_id alone is not sufficient to prove user ownership.
+   *
+   * 排序 `created_at desc, approval_id desc` + `before` keyset（design
+   * ui-polish §2.4）：单键排序会让同一毫秒的两条审批在翻页时重复/漏掉；游标
+   * 只是位置，owner 由上面的 Run join 决定。
+   *
    * @param scope
    * @param [opts]
    */
-  async listForOwner(scope: { orgId: string, userId: string }, opts: { status?: string, limit?: number } = {}) {
+  async listForOwner(scope: { orgId: string, userId: string }, opts: { status?: string, limit?: number, before?: KeysetPosition | null } = {}) {
     const s = requireOwnerScope(scope);
     const rawLimit = opts.limit == null ? APPROVAL_LIST_DEFAULT_LIMIT : Number(opts.limit);
     if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > APPROVAL_LIST_MAX_LIMIT) {
@@ -139,13 +145,23 @@ export class ApprovalRepository {
         `limit must be an integer between 1 and ${APPROVAL_LIST_MAX_LIMIT}`,
       );
     }
-    let query = this.#ownedApprovalQuery(s)
-      .orderBy('a.created_at', 'desc')
-      .limit(rawLimit);
+    let query = this.#ownedApprovalQuery(s);
     if (opts.status != null) {
       query = query.andWhere('a.status', assertApprovalStatus(String(opts.status).toUpperCase()));
     }
-    const rows = await query;
+    if (opts.before) {
+      const at = toMysqlDateTime(opts.before.sortValue);
+      const id = assertUlid(opts.before.key, 'cursor.approvalId');
+      query = query.andWhere((w: Loose) => {
+        w.where('a.created_at', '<', at).orWhere((w2: Loose) => {
+          w2.where('a.created_at', '=', at).andWhere('a.approval_id', '<', id);
+        });
+      });
+    }
+    const rows = await query
+      .orderBy('a.created_at', 'desc')
+      .orderBy('a.approval_id', 'desc')
+      .limit(rawLimit);
     return (rows || []).map(mapApproval);
   }
 

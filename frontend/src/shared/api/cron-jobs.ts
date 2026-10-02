@@ -76,9 +76,35 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await resp.json()) as T;
 }
 
+/** `GET /api/cron-jobs` 的一页：`next_cursor === null` 表示到底（§2.4）。 */
+export type CronJobPage = {
+  cron_jobs: CronJob[];
+  next_cursor: string | null;
+};
+
+/**
+ * GET /api/cron-jobs — cursor-paginated page (`limit` 1..100, server default 50).
+ * `limit`/`cursor` only travel when the caller set them; the server owns defaults.
+ */
+export async function listCronJobsPage(opts: {
+  limit?: number;
+  cursor?: string | null;
+} = {}): Promise<CronJobPage> {
+  const q = new URLSearchParams();
+  if (opts.limit != null) q.set('limit', String(opts.limit));
+  if (opts.cursor) q.set('cursor', opts.cursor);
+  const qs = q.toString() ? `?${q}` : '';
+  const result = await request<{ cron_jobs?: CronJob[]; next_cursor?: unknown }>(qs, { method: 'GET' });
+  return {
+    cron_jobs: Array.isArray(result.cron_jobs) ? result.cron_jobs : [],
+    next_cursor: typeof result.next_cursor === 'string' ? result.next_cursor : null,
+  };
+}
+
+/** GET /api/cron-jobs — first page as a plain array (call sites predating pagination). */
 export async function listCronJobs(): Promise<CronJob[]> {
-  const result = await request<{ cron_jobs?: CronJob[] }>('', { method: 'GET' });
-  return Array.isArray(result.cron_jobs) ? result.cron_jobs : [];
+  const { cron_jobs: cronJobs } = await listCronJobsPage();
+  return cronJobs;
 }
 
 export function createCronJob(input: CronJobInput): Promise<CronJob> {

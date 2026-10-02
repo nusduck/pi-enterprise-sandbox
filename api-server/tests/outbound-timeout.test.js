@@ -53,7 +53,7 @@ describe('outbound calls are time-bounded', () => {
 
   it('Agent conversation reads give up', async () => {
     const err = await mustSettle('listAgentConversations', () =>
-      agentClient.listAgentConversations({ auth: AUTH }),
+      agentClient.listAgentConversations(null, { auth: AUTH }),
     );
     assert.match(String(err?.message ?? err), /timed out|aborted/i);
   });

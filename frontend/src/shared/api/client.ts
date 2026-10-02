@@ -46,15 +46,41 @@ async function errorBody(resp: Response): Promise<Record<string, unknown>> {
 
 // ── Conversations ───────────────────────────────
 
-export async function listConversations(): Promise<Conversation[]> {
-  const resp = await fetch(`${BASE}/conversations`, {
+/** `GET /api/conversations` 的一页：`next_cursor === null` 表示到底（§2.4）。 */
+export type ConversationPage = {
+  conversations: Conversation[];
+  next_cursor: string | null;
+};
+
+/**
+ * GET /api/conversations — cursor-paginated list (`q` filters titles server-side).
+ * `limit` / `cursor` / `q` only go on the query string when the caller set them;
+ * the server owns their defaults (limit 30). `URLSearchParams` escapes `q`.
+ */
+export async function listConversations(opts: {
+  limit?: number;
+  cursor?: string | null;
+  q?: string | null;
+} = {}): Promise<ConversationPage> {
+  const q = new URLSearchParams();
+  if (opts.limit != null) q.set('limit', String(opts.limit));
+  if (opts.cursor) q.set('cursor', opts.cursor);
+  if (opts.q) q.set('q', opts.q);
+  const qs = q.toString() ? `?${q}` : '';
+  const resp = await fetch(`${BASE}/conversations${qs}`, {
     headers: authHeaders(),
   });
   if (!resp.ok) {
     const err = await errorBody(resp);
     throw new Error(String(err.error || `List conversations failed: ${resp.status}`));
   }
-  return parseApi(ConversationListSchema, await resp.json(), 'conversations');
+  const page = parseApi(ConversationListSchema, await resp.json(), 'conversations');
+  // parseApi 软失败时会把原始 body 原样放行（例如响应仍是旧版裸数组），这里再兜一层，
+  // 不把 undefined 当列表、也不把「缺 cursor」读成「还有下一页」交给调用方。
+  return {
+    conversations: Array.isArray(page.conversations) ? page.conversations : [],
+    next_cursor: typeof page.next_cursor === 'string' ? page.next_cursor : null,
+  };
 }
 
 export async function getConversation(id: string): Promise<Conversation> {

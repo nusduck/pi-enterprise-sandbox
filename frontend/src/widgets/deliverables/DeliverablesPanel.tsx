@@ -75,7 +75,7 @@ export function DeliverablesPanel() {
     return (
       <div id="deliverables" className="deliverables" hidden>
         <div className="deliverables-head">
-          <span className="deliverables-title">Deliverables</span>
+          <span className="deliverables-title">交付物</span>
           <span className="deliverables-count" id="deliverables-count">
             0
           </span>
@@ -89,7 +89,7 @@ export function DeliverablesPanel() {
     <div id="deliverables" className="deliverables">
       <div className="deliverables-head">
         <IconFile size={14} className="deliverables-icon" />
-        <span className="deliverables-title">Deliverables</span>
+        <span className="deliverables-title">交付物</span>
         <span className="deliverables-count" id="deliverables-count">
           {total}
         </span>

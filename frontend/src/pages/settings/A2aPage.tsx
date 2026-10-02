@@ -6,6 +6,9 @@ import {
   rotateA2aCredential,
   type A2aConfig,
 } from '../../shared/api/a2a';
+import { FormField } from '../../shared/ui/FormField';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { SegmentedControl } from '../../shared/ui/SegmentedControl';
 import a from './adminPage.module.css';
 import s from './a2a.module.css';
 
@@ -160,30 +163,31 @@ export function A2aPage() {
 
   return (
     <div className={a.page}>
-      <div className={a.head}>
-        <div>
-          <h1>A2A 接入</h1>
-          <p>让外部系统以 A2A 协议调用本部署的智能体：按智能体签发带范围的凭据，查看调用记录与审计。</p>
-        </div>
-        <span className={a.sp} />
-        {config?.agents.length ? (
-          <select
-            className={s.select}
-            aria-label="选择智能体"
-            value={selectedAgentId}
-            onChange={(event) => {
-              const id = event.target.value;
-              setSelectedAgentId(id);
-              void refresh(id);
-            }}
-          >
-            {config.agents.map((agent) => <option key={agent.agentId} value={agent.agentId}>{agent.name}</option>)}
-          </select>
-        ) : null}
-        <button type="button" className={a.btn} onClick={() => void refresh(selectedAgentId)} disabled={loading}>
-          {loading ? '刷新中…' : '刷新'}
-        </button>
-      </div>
+      <PageHeader
+        title="A2A 接入"
+        description="让外部系统以 A2A 协议调用本部署的智能体：按智能体签发带范围的凭据，查看调用记录与审计。"
+        action={
+          <div className={s.headerActions}>
+            {config?.agents.length ? (
+              <select
+                className={s.select}
+                aria-label="选择智能体"
+                value={selectedAgentId}
+                onChange={(event) => {
+                  const id = event.target.value;
+                  setSelectedAgentId(id);
+                  void refresh(id);
+                }}
+              >
+                {config.agents.map((agent) => <option key={agent.agentId} value={agent.agentId}>{agent.name}</option>)}
+              </select>
+            ) : null}
+            <button type="button" className={a.btn} onClick={() => void refresh(selectedAgentId)} disabled={loading}>
+              {loading ? '刷新中…' : '刷新'}
+            </button>
+          </div>
+        }
+      />
 
       {error ? <p className={s.error} role="alert">{error}</p> : null}
       {loading && !config ? <div className={a.empty}>正在读取…</div> : null}
@@ -201,44 +205,74 @@ export function A2aPage() {
             </dl>
           ) : <div className={a.empty}>这个组织还没有智能体。</div>}
 
-          <div className={a.tabs} role="tablist" aria-label="A2A">
-            {([
-              ['credentials', '凭据', config.credentials.length],
-              ['tasks', '调用记录', config.recentTasks.length],
-              ['audit', '审计', config.audit.length],
-              ['example', '接入示例', null],
-            ] as Array<[Tab, string, number | null]>).map(([id, label, count]) => (
-              <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
-                {label}{count != null ? <small>{count}</small> : null}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            value={tab}
+            onChange={(v) => setTab(v as Tab)}
+            options={[
+              { value: 'credentials', label: '凭据', count: config.credentials.length },
+              { value: 'tasks', label: '调用记录', count: config.recentTasks.length },
+              { value: 'audit', label: '审计', count: config.audit.length },
+              { value: 'example', label: '接入示例' },
+            ]}
+            aria-label="A2A 分类"
+          />
 
           {tab === 'credentials' ? (
             <>
               <form className={s.issue} onSubmit={issue}>
-                <label className={s.field}>
-                  <span>调用方（Client ID）</span>
-                  <input value={clientId} maxLength={128} onChange={(event) => setClientId(event.target.value)} placeholder="reporting-service" required />
-                </label>
-                <label className={s.field}>
-                  <span>过期时间（可选）</span>
-                  <input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
-                </label>
-                <fieldset className={s.scopes}>
-                  <legend>权限范围</legend>
-                  {SCOPES.map((scope) => (
-                    <label key={scope} title={scope}>
-                      <input
-                        type="checkbox"
-                        checked={scopes.includes(scope)}
-                        onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))}
-                      />
-                      {SCOPE_ZH[scope] || scope}
-                    </label>
-                  ))}
-                </fieldset>
-                <button type="submit" className={a.btnPri} disabled={mutating || !selectedAgentId || !clientId.trim()}>签发凭据</button>
+                <div className={s.issueGrid}>
+                  <FormField label="调用方（Client ID）" required>
+                    <input
+                      value={clientId}
+                      maxLength={128}
+                      onChange={(event) => setClientId(event.target.value)}
+                      placeholder="reporting-service"
+                      required
+                    />
+                  </FormField>
+                  <FormField label="过期时间（可选）">
+                    <input
+                      type="datetime-local"
+                      value={expiresAt}
+                      onChange={(event) => setExpiresAt(event.target.value)}
+                    />
+                  </FormField>
+                </div>
+                <FormField label="权限范围">
+                  <div className={s.scopes} role="group" aria-label="权限范围">
+                    {SCOPES.map((scope) => {
+                      const checked = scopes.includes(scope);
+                      return (
+                        <button
+                          key={scope}
+                          type="button"
+                          role="checkbox"
+                          aria-checked={checked}
+                          className={`${s.scopeChip}${checked ? ` ${s.chipChecked}` : ''}`}
+                          title={scope}
+                          onClick={() =>
+                            setScopes((current) =>
+                              checked
+                                ? current.filter((item) => item !== scope)
+                                : [...current, scope],
+                            )
+                          }
+                        >
+                          {SCOPE_ZH[scope] || scope}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </FormField>
+                <div>
+                  <button
+                    type="submit"
+                    className={a.btnPri}
+                    disabled={mutating || !selectedAgentId || !clientId.trim()}
+                  >
+                    签发凭据
+                  </button>
+                </div>
               </form>
 
               {oneTimeToken ? (

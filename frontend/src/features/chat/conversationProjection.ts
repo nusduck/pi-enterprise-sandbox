@@ -8,14 +8,20 @@
  */
 import type { ConversationSummary } from '../../shared/state/types';
 
-/** 用服务端返回的最新字段覆盖列表里的同一条，其余保持原引用。 */
+/**
+ * 本地新建或更新的会话一律 unshift 到顶（§2.4）；若已存在则更新字段并移至最前。
+ */
 export function mergeConversation(
   conversations: readonly ConversationSummary[] | null | undefined,
   next: ConversationSummary,
 ): ConversationSummary[] {
-  return (conversations || []).map((conversation) =>
-    conversation.id === next.id ? { ...conversation, ...next } : conversation,
-  );
+  const list = conversations || [];
+  const nextId = (next as any).conversation_id || next.id;
+  const existing = list.find((c) => c.id === nextId);
+  const updated: ConversationSummary = existing
+    ? { ...existing, ...next, id: nextId }
+    : { ...next, id: nextId };
+  return [updated, ...list.filter((c) => c.id !== nextId)];
 }
 
 /**

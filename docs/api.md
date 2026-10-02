@@ -167,7 +167,7 @@ org 作用域、状态机合法性都在 Agent；浏览器的同名 `X-Acting-Ro
 | `POST` | `/api/capabilities/skills/{name}/share-requests` | body `{ note? }`。对当前用户**已启用**的版本发起申请，钉住该摘要。未启用 → 409 `SKILL_NOT_ENABLED` |
 | `GET` | `/api/capabilities/skills/share-requests` | 本人的申请列表 |
 | `POST` | `/api/capabilities/skills/share-requests/{id}/withdraw` | 撤回本人的 `pending` |
-| `GET` | `/api/admin/skills/share-requests?status=` | **admin**：本 org 的申请队列 |
+| `GET` | `/api/admin/skills/share-requests?status=&limit=&cursor=` | **admin**：本 org 的申请队列，返回 `{ requests, next_cursor }`（键集分页见「列表分页」，默认每页 50） |
 | `GET` | `/api/admin/skills/share-requests/{id}/manifest` | **admin**：被申请版本的文件清单与截断 `SKILL.md`（只看这一个版本，不开放浏览作者的其他 Skill）。响应 `{ request, name, contentDigest, fileCount, totalBytes, files[], skillMd, truncated }`，摘要字段与 org 版本清单同形 |
 | `POST` | `/api/admin/skills/share-requests/{id}/approve` | **admin**：body `{ setCurrent?, note? }`。复制作者**已发布**版本到 org 层并重算摘要，不一致即拒绝 |
 | `POST` | `/api/admin/skills/share-requests/{id}/reject` | **admin**：body `{ note }`，**必填**（没有原因的驳回在审计里等于没解释） |
@@ -180,7 +180,7 @@ admin 检查，而且这个参数由 BFF 写死（浏览器不能拿它换到别
 `SKILL_NOT_ENABLED`(409)、`SKILL_ORG_NAME_TAKEN`(409，名字已被别的作者占用)、
 `SKILL_SHARE_REQUEST_DECIDED`(409，终态不能二次决定)、
 `SKILL_SHARE_DIGEST_MISMATCH`(400，作者在申请后改过——申请**保持 pending**)、
-`SKILL_SHARE_NOTE_REQUIRED`(400)。
+`SKILL_SHARE_NOTE_REQUIRED`(400)、`VALIDATION_ERROR`(400，`limit`/`cursor` 形状非法)。
 
 **批准是「先字节后状态」**：字节那一步失败时申请保持 `pending`，作者可以重新发布再申请。
 反过来会留下「已批准但 org 层没有这个版本」的不可恢复状态。UI 侧批准失败时**不把行从队列
@@ -285,6 +285,34 @@ review 工作区的**工作区字节读路径**（文件列表/读取/下载、�
   `review_notification`——Run 终态邮件消费者按 `aggregate_type` 过滤，共用会被它按「Run 结束了」
   的语义处理掉。
 
+### 列表分页：会话 / 审批 / 定时任务 / Skill 共享申请
+
+四个列表接口用同一套 **keyset（键集）分页** 契约（design ui-polish §2.4）。共享工具在
+`agent/src/application/keyset-cursor.ts`（`admin-run-query-service.ts` 与 `review-service.ts`
+里原有的两份同类实现不在本次改造范围内）：
+
+- **请求**：`?limit=<1..100>&cursor=<不透明串>`，外加各接口原有的过滤参数。
+  `limit` 缺省用各接口的默认值；越界（0、101、非整数）→ **400 `VALIDATION_ERROR`**，
+  **不做 clamp**——静默截断会让客户端以为自己拿到了全部数据。
+  `cursor` 无法解码（不是 base64url、缺分隔符、排序列不是时刻、主键不是 ULID）→ 同样是
+  **400 `VALIDATION_ERROR`**；空值表示第一页。**空页不等于错误**：解不出来的游标绝不退回第一页。
+- **响应**：`{ <items>: [...], next_cursor: string | null }`；`next_cursor === null` 表示到底。
+  服务端多取一条来判断是否还有下一页，游标编码的是**排序列的值 + 该行主键**，因此同一毫秒的
+  两行不会重复或漏掉。
+- **游标只是位置，不携带身份**：作用域始终来自服务端解析出的 owner / org，查询先套作用域、
+  再用游标定位。把别人的游标拿过来用，得到的仍是自己行集里位于该位置之后的数据，不会泄漏
+  任何他人的行。
+
+| 接口 | 默认 `limit` | 排序（倒序） | 额外参数 |
+|---|---|---|---|
+| `GET /api/conversations` | 30 | `updated_at`, `conversation_id` | `q`：会话标题模糊匹配，≤100 字符（超长 400）；`%` / `_` / `\` 按字面量匹配 |
+| `GET /api/approvals` | 50 | `created_at`, `approval_id` | `status` |
+| `GET /api/cron-jobs` | 50 | `created_at`, `cron_job_id` | — |
+| `GET /api/admin/skills/share-requests` | 50 | `created_at`, `request_id` | `status`；列表键名仍是 `requests` |
+
+> `GET /api/conversations` 的响应**曾经是裸数组**，现在改为 `{ conversations, next_cursor }`；
+> `GET /api/approvals` 原来同时给 `approvals` 与同值的 `items`，现在只保留 `approvals`。
+
 ### 会话时间线：`GET /api/conversations/{id}/events`（一次性 JSON，**不是 SSE**）
 
 返回该 Conversation 下**已持久化的完整 Run 时间线**：一次响应、`application/json`，没有
@@ -356,7 +384,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/auth/sso/callback` | IdP 回调：换票 → Agent 验签兑换 → 写会话 Cookie，303 回站内路径；失败 303 `/?sso_error=<码>` |
 | `GET` | `/api/auth/me` | 当前用户 |
 | `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称、邮箱与长任务完成邮件开关 |
-| `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation |
+| `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation；列表带 `limit` / `cursor` / `q`，返回 `{ conversations, next_cursor }`（见「列表分页」） |
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
 | `GET` | `/api/conversations/{id}/events` | 会话完整时间线（**一次性 JSON，不是 SSE**，见下） |
 | `POST` | `/api/conversations/{id}/runs` | 在指定 Conversation 下创建 Run |
@@ -372,7 +400,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/runs/{id}/steer` | 运行中改向 |
 | `POST` | `/api/runs/{id}/resume-approval` | 审批后恢复 |
 | `POST` | `/api/runs/{id}/interactions/{iid}/respond` | 回答 `ask_user` |
-| `GET` | `/api/approvals` | 待审批列表 |
+| `GET` | `/api/approvals` | 待审批列表；`status` / `limit` / `cursor`，返回 `{ approvals, next_cursor }`（见「列表分页」） |
 | `GET` | `/api/approvals/{id}` | 审批详情 |
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
 | `GET` | `/api/artifacts` | 带 `session_id`：该会话的产物；不带：产物库（本人所有会话，`q` / `kind` / `cursor` / `limit`） |
@@ -404,12 +432,12 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/admin/skills/org/{name}/versions/{digest}/manifest` | 该版本的文件清单、截断 `SKILL.md` 与完整 `affectedAgentVersionIds` 引用列表（**admin**） |
 | `POST` | `/api/admin/skills/org/{name}/current` | 改「当前推荐版本」（**admin**） |
 | `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate\|revoke` | 弃用 / 吊销某版本，返回完整 `affectedAgentVersionIds`（**admin**） |
-| `GET` | `/api/admin/skills/share-requests` | 本 org 的共享申请队列（**admin**） |
+| `GET` | `/api/admin/skills/share-requests` | 本 org 的共享申请队列（**admin**）；`status` / `limit` / `cursor`，返回 `{ requests, next_cursor }`（见「列表分页」） |
 | `GET` `POST` | `/api/admin/skills/share-requests/{id}/manifest\|approve\|reject` | 审阅清单 / 批准 / 驳回（**admin**） |
 | `GET` | `/api/admin/users` | 本 org 成员列表（含 `roles` / `pinned_roles`，**admin**） |
 | `PUT` `DELETE` | `/api/admin/users/{userId}/roles/{role}` | 授予 / 撤销角色，幂等（**admin**） |
 | `GET` | `/api/admin/users/{userId}/role-events` | 角色变更记录（**admin**） |
-| `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务 |
+| `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务；列表带 `limit` / `cursor`，返回 `{ cron_jobs, next_cursor }`（见「列表分页」） |
 | `GET` `PATCH` `DELETE` | `/api/cron-jobs/{id}` | 详情 / 修改 / 删除 |
 | `GET` | `/api/cron-jobs/runs` | 本人所有未删除任务的执行记录（`since` ISO，`limit` 1–1000，默认 500），每条带 `job_name` / `job_timezone` |
 | `GET` | `/api/cron-jobs/{id}/runs` | 该定时任务的历史 Run |

@@ -1,7 +1,12 @@
 /* Artifact library: date-grouped grid with a preview dialog. */
 
-.page { flex: 1; overflow: auto; padding: 24px 28px 48px; min-width: 0; }
-.inner { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.page { flex: 1; overflow: auto; padding: var(--space-8) var(--space-10) var(--space-12); min-width: 0; box-sizing: border-box; }
+.inner { max-width: 1200px; margin-left: 0; margin-right: auto; display: flex; flex-direction: column; gap: var(--space-6); }
+
+@media (max-width: 768px) {
+  .page { padding: var(--space-5) var(--space-4); }
+  .inner { gap: var(--space-4); }
+}
 .sp { flex: 1; }
 .muted { color: var(--color-text-muted); font-size: 13px; }
 .mono { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
@@ -107,7 +112,7 @@
   text-decoration: none;
 }
 .btn:hover { background: var(--color-bg-hover); }
-.btnPri { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.btnPri { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-text-inverse); }
 
 @media (max-width: 760px) {
   .page { padding: 16px; }

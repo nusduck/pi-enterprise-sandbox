@@ -16,6 +16,10 @@ import {
   type LibraryArtifact,
 } from '../../shared/api/artifactLibrary';
 import { conversationTitle } from '../../shared/state';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { Toolbar } from '../../shared/ui/Toolbar';
+import { EmptyState } from '../../shared/ui/EmptyState';
+import { LoadMoreSentinel } from '../../shared/ui/LoadMoreSentinel';
 import s from './artifacts.module.css';
 
 const KINDS: Array<[ArtifactKind, string]> = [['all', '全部'], ['document', '文档'], ['image', '图片'], ['data', '数据']];
@@ -38,7 +42,9 @@ export function ArtifactsPage() {
   const [items, setItems] = useState<LibraryArtifact[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [appendError, setAppendError] = useState<string | null>(null);
   const [open, setOpen] = useState<LibraryArtifact | null>(null);
   const generation = useRef(0);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -50,21 +56,37 @@ export function ArtifactsPage() {
 
   const load = useCallback(async (after: string | null = null) => {
     const gen = ++generation.current;
-    setLoading(true);
-    setError(null);
+    if (after) {
+      setLoadingMore(true);
+      setAppendError(null);
+    } else {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const page = await listLibraryArtifacts({ q: debounced || null, kind, cursor: after });
       if (gen !== generation.current) return;
       setItems((cur) => (after ? [...cur, ...page.artifacts] : page.artifacts));
       setCursor(page.nextCursor);
     } catch (err) {
-      if (gen === generation.current) setError((err as Error).message || '读取产物失败');
+      if (gen !== generation.current) return;
+      const msg = (err as Error).message || '读取产物失败';
+      if (after) {
+        setAppendError(msg);
+      } else {
+        setError(msg);
+        setItems([]);
+      }
     } finally {
-      if (gen === generation.current) setLoading(false);
+      if (gen === generation.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, [debounced, kind]);
 
   useEffect(() => {
+    setCursor(null);
     void load();
   }, [load]);
 
@@ -97,7 +119,12 @@ export function ArtifactsPage() {
   return (
     <div className={s.page}>
       <div className={s.inner}>
-        <div className={s.top}>
+        <PageHeader
+          title="产物库"
+          description="智能体在会话中交付的文件产物，支持按类型筛选、搜索、预览与下载。"
+        />
+
+        <Toolbar>
           <div className={s.tabs} role="tablist" aria-label="产物类型">
             {KINDS.map(([id, label]) => (
               <button key={id} type="button" role="tab" aria-selected={kind === id} onClick={() => setKind(id)}>{label}</button>
@@ -105,14 +132,22 @@ export function ArtifactsPage() {
           </div>
           <span className={s.sp} />
           <input className={s.search} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索文件名" aria-label="搜索产物" />
-        </div>
+        </Toolbar>
 
-        {error ? <p className={s.banner} role="alert">{error}</p> : null}
+        {error ? (
+          <EmptyState
+            variant="error"
+            title="读取产物失败"
+            description={error}
+            action={{ label: '重试', onClick: () => void load() }}
+          />
+        ) : null}
         {!loading && !error && items.length === 0 ? (
-          <div className={s.empty}>
-            <b>{debounced || kind !== 'all' ? '没有符合条件的产物' : '还没有产物'}</b>
-            <span>智能体用「提交产物」交付的文件会出现在这里，可以下载，或在输入框的「＋」里引用到其他会话。</span>
-          </div>
+          <EmptyState
+            variant="empty"
+            title={debounced || kind !== 'all' ? '没有符合条件的产物' : '还没有产物'}
+            description="智能体用「提交产物」交付的文件会出现在这里，可以下载，或在输入框的「＋」里引用到其他会话。"
+          />
         ) : null}
 
         {groups.map(([bucket, list]) => (
@@ -138,9 +173,19 @@ export function ArtifactsPage() {
           </section>
         ))}
 
-        {loading ? <p className={s.muted}>正在读取…</p> : null}
-        {cursor && !loading ? (
-          <button type="button" className={s.more} onClick={() => void load(cursor)}>加载更多</button>
+        {loading && !items.length ? <p className={s.muted}>正在读取…</p> : null}
+        {items.length > 0 ? (
+          <LoadMoreSentinel
+            onLoadMore={() => {
+              if (cursor && !loadingMore) void load(cursor);
+            }}
+            loading={loadingMore}
+            hasMore={Boolean(cursor)}
+            error={appendError}
+            onRetry={() => {
+              if (cursor) void load(cursor);
+            }}
+          />
         ) : null}
       </div>
 

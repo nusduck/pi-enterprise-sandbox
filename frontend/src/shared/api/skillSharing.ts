@@ -107,10 +107,39 @@ export function withdrawSkillShare(requestId: string): Promise<{ request: SkillS
 
 // ── 管理员侧 ────────────────────────────────────────────────────────────
 
+/** 共享申请队列的一页：`next_cursor === null` 表示到底（design ui-polish.md §2.4）。 */
+export interface SkillShareQueuePage {
+  requests: SkillShareRequest[];
+  next_cursor: string | null;
+}
+
+/**
+ * GET /api/admin/skills/share-requests — cursor-paginated page
+ * (`limit` 1..100, server default 50)。仍是硬失败：错误带 `code` 抛给调用方。
+ */
+export async function listSkillShareQueuePage(opts: {
+  status?: ShareRequestStatus;
+  limit?: number;
+  cursor?: string | null;
+} = {}): Promise<SkillShareQueuePage> {
+  const query = new URLSearchParams();
+  if (opts.status) query.set('status', opts.status);
+  if (opts.limit != null) query.set('limit', String(opts.limit));
+  if (opts.cursor) query.set('cursor', opts.cursor);
+  const qs = query.toString() ? `?${query}` : '';
+  const body = await request<{ requests?: SkillShareRequest[]; next_cursor?: unknown }>(
+    `/admin/skills/share-requests${qs}`,
+  );
+  return {
+    requests: body.requests ?? [],
+    next_cursor: typeof body.next_cursor === 'string' ? body.next_cursor : null,
+  };
+}
+
+/** 队列首页，保持旧的数组返回（`SkillAdminPage` 尚未迁移到分页）。 */
 export async function listSkillShareQueue(status?: ShareRequestStatus): Promise<SkillShareRequest[]> {
-  const query = status ? `?status=${encodeURIComponent(status)}` : '';
-  const body = await request<{ requests?: SkillShareRequest[] }>(`/admin/skills/share-requests${query}`);
-  return body.requests ?? [];
+  const { requests } = await listSkillShareQueuePage(status ? { status } : {});
+  return requests;
 }
 
 export function getShareRequestManifest(requestId: string): Promise<SkillManifest> {

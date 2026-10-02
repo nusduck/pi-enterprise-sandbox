@@ -6,6 +6,8 @@
 import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { mapConversation, toMysqlDateTime } from '../row-mappers.js';
 import { NotFoundError } from '../errors.js';
+import { assertUlid } from '../../../domain/shared/ulid.js';
+import { escapeLikePattern, type KeysetPosition } from '../../../application/keyset-cursor.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -93,7 +95,17 @@ export class ConversationRepository {
     return row;
   }
 
-  async listForOwner(scope: { orgId: string, userId: string }, opts: { limit?: number, includeArchived?: boolean } = {}) {
+  /**
+   * Owner-scoped page of conversations, newest activity first.
+   *
+   * 排序是 `updated_at desc, conversation_id desc`：只按时间排序时，同一毫秒更新
+   * 的两行在 keyset 翻页里会重复或漏掉（design ui-polish §2.4）。`before` 只是
+   * 位置——作用域在上面的 owner 过滤里，游标带不进别人的行。
+   *
+   * @param scope
+   * @param [opts]
+   */
+  async listForOwner(scope: { orgId: string, userId: string }, opts: { limit?: number, includeArchived?: boolean, includeSubagent?: boolean, before?: KeysetPosition | null, titleQuery?: string | null } = {}) {
     const s = requireOwnerScope(scope);
     const limit = opts.limit ?? 50;
     let query = applyOwnerScope(this.db('tbl_agsvc_conversations'), s);
@@ -101,9 +113,24 @@ export class ConversationRepository {
     // A sub-agent's conversation belongs to the Run that spawned it, not
     // beside it in the owner's list. It stays fully readable by id — hiding it
     // here is a listing decision, never an access one.
-    // @ts-expect-error 遗留JS占位类型object未展开，访问includeSubagent需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'includeSubagent' does not exist on type '{ limit?:
     if (opts.includeSubagent !== true) query = query.whereNull('parent_run_id');
-    const rows = await query.orderBy('updated_at', 'desc').limit(limit);
+    if (opts.titleQuery) {
+      // 用户搜 `%` 时命中「全部」不是搜索，是 LIKE 没转义（同 admin-run-read-repository）。
+      query = query.andWhere('title', 'like', `%${escapeLikePattern(opts.titleQuery)}%`);
+    }
+    if (opts.before) {
+      const at = toMysqlDateTime(opts.before.sortValue);
+      const id = assertUlid(opts.before.key, 'cursor.conversationId');
+      query = query.andWhere((w: Loose) => {
+        w.where('updated_at', '<', at).orWhere((w2: Loose) => {
+          w2.where('updated_at', '=', at).andWhere('conversation_id', '<', id);
+        });
+      });
+    }
+    const rows = await query
+      .orderBy('updated_at', 'desc')
+      .orderBy('conversation_id', 'desc')
+      .limit(limit);
     return rows.map(mapConversation);
   }
 

@@ -174,7 +174,7 @@
   font-size: 13px;
   cursor: pointer;
 }
-.btnPri { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.btnPri { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-text-inverse); }
 .btnPri:disabled { opacity: 0.5; cursor: default; }
 .imp { display: grid; grid-template-columns: 220px minmax(0, 1fr); height: min(440px, 64vh); }
 .impList { border-right: 1px solid var(--color-border); overflow: auto; padding: 6px; }
@@ -240,5 +240,14 @@
   border-top-color: var(--color-primary);
   animation: composer-spin 0.9s linear infinite;
 }
-.statusDot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-warning, #d97706); }
+.statusDot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-warning); }
 @keyframes composer-spin { to { transform: rotate(360deg); } }
+
+.pickerDivider {
+  width: 1px;
+  height: 16px;
+  background: var(--color-separator);
+  margin: 0 var(--space-1);
+  flex-shrink: 0;
+}
+

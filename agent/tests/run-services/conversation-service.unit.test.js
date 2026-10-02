@@ -80,7 +80,7 @@ describe('ConversationService MySQL authority', () => {
 
   it('returns an empty list for a trusted owner that has not been provisioned', async () => {
     const service = createService(createFakeRunWorld());
-    assert.deepEqual(await service.list(FIXED_AUTH), []);
+    assert.deepEqual((await service.list(FIXED_AUTH)).conversations, []);
   });
 
   it('derives legacy placeholder titles from the first durable user message', async () => {
@@ -101,7 +101,7 @@ describe('ConversationService MySQL authority', () => {
     world.tables.tbl_agsvc_conversations[0].title = 'New chat';
 
     const service = createService(world);
-    const listed = await service.list(FIXED_AUTH);
+    const listed = (await service.list(FIXED_AUTH)).conversations;
     assert.equal(listed[0].title, '分析一下这个问题');
     assert.equal(
       (await service.get(created.conversationId, FIXED_AUTH)).title,
@@ -147,7 +147,7 @@ describe('ConversationService MySQL authority', () => {
     assert.equal(refs[0].external_subject, created.id);
     assert.equal(refs[0].conversation_id, created.id);
 
-    const listed = await service.list(FIXED_AUTH);
+    const listed = (await service.list(FIXED_AUTH)).conversations;
     assert.deepEqual(listed.map((row) => row.id), [created.id]);
     assert.equal((await service.get(created.id, FIXED_AUTH)).title, 'MySQL chat');
 
@@ -159,7 +159,7 @@ describe('ConversationService MySQL authority', () => {
       title: 'Foreign chat',
     });
     assert.deepEqual(
-      (await service.list(foreign)).map((row) => row.id),
+      (await service.list(foreign)).conversations.map((row) => row.id),
       [foreignConversation.id],
     );
     await assert.rejects(
@@ -168,7 +168,7 @@ describe('ConversationService MySQL authority', () => {
     );
 
     await service.delete(created.id, FIXED_AUTH);
-    assert.deepEqual(await service.list(FIXED_AUTH), []);
+    assert.deepEqual((await service.list(FIXED_AUTH)).conversations, []);
     await assert.rejects(
       service.get(created.id, FIXED_AUTH),
       OwnerScopedNotFoundError,

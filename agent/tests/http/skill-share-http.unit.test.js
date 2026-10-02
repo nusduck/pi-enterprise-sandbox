@@ -124,6 +124,7 @@ describe('共享申请路由 (/internal/skills/share-requests*)', () => {
       headers: headers('admin', ADMIN),
     })).json();
     assert.equal(queue.requests.length, 1);
+    assert.equal(queue.next_cursor, null);
     const requestId = queue.requests[0].requestId;
 
     const review = await (await fetch(url(`/${requestId}/manifest`), {
@@ -210,6 +211,35 @@ describe('共享申请路由 (/internal/skills/share-requests*)', () => {
     });
     assert.equal(own.status, 200);
     assert.equal((await own.json()).request.status, 'withdrawn');
+  });
+
+  it('管理员队列的分页参数走 HTTP：非法 limit/cursor → 400 VALIDATION_ERROR', async () => {
+    await fetch(url(), {
+      method: 'POST',
+      headers: headers('user'),
+      body: JSON.stringify({ name: 'enabled-skill' }),
+    });
+
+    const badLimit = await fetch(url('?scope=org&limit=101'), {
+      headers: headers('admin', ADMIN),
+    });
+    assert.equal(badLimit.status, 400);
+    assert.equal((await badLimit.json()).code, 'VALIDATION_ERROR');
+
+    const badCursor = await fetch(url('?scope=org&cursor=not-a-cursor'), {
+      headers: headers('admin', ADMIN),
+    });
+    assert.equal(badCursor.status, 400);
+    assert.equal((await badCursor.json()).code, 'VALIDATION_ERROR');
+
+    // 合法对照：同一路径带合法 limit 正常 200，且页大小生效。
+    const page = await fetch(url('?scope=org&limit=1&status=pending'), {
+      headers: headers('admin', ADMIN),
+    });
+    assert.equal(page.status, 200);
+    const body = await page.json();
+    assert.equal(body.requests.length <= 1, true);
+    assert.equal(typeof body.next_cursor === 'string' || body.next_cursor === null, true);
   });
 
   it('没有 acting 身份 → 400（不能靠「没带头」蒙过去）', async () => {

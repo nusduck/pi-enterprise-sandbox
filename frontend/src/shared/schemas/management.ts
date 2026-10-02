@@ -54,12 +54,22 @@ export const ApprovalListItemSchema = z
   })
   .passthrough();
 
+/**
+ * `GET /api/approvals` 的响应（design ui-polish.md §2.4）：对象形状
+ * `{ approvals, next_cursor }`。裸数组是旧契约，继续容忍，让未迁移的调用方
+ * 与历史夹具不至于因此软失败。
+ *
+ * 这里 `next_cursor` 保持 `.optional()`（与 artifactLibrary / reviews 的页 schema 一致），
+ * 由适配层统一 `?? null` 归一：管理端各列表目前都是一次性取第一页，
+ * 是谁消费这个字段由调用方决定，schema 不替它补默认值。
+ */
 export const ApprovalListSchema = z.union([
   z.array(ApprovalListItemSchema),
   z
     .object({
       approvals: z.array(ApprovalListItemSchema).optional(),
       total: z.number().optional(),
+      next_cursor: z.string().nullable().optional(),
     })
     .passthrough(),
 ]);

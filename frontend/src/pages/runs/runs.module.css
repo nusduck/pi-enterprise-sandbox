@@ -2,7 +2,7 @@
 
 .scope { margin: -8px 0 0; font-size: 12.5px; color: var(--color-text-muted); }
 
-.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-3); }
 .kpi {
   border: 1px solid var(--color-border);
   border-radius: 10px;

@@ -70,7 +70,21 @@ export const ConversationSchema = z
   })
   .passthrough();
 
-export const ConversationListSchema = z.array(ConversationSchema);
+/**
+ * `GET /api/conversations` 的分页响应（design ui-polish.md §2.4）：
+ * `{ conversations, next_cursor }`，`next_cursor === null` 表示最后一页。
+ *
+ * `next_cursor` 这里用 `.default(null)` 而不是 `.optional()`：它是「还有没有下一页」
+ * 的唯一信号，字段缺失时只能读成「到底」。加了默认值后输出类型仍是 `string | null`，
+ * 调用方拿不到 `undefined`——`undefined !== null` 会让翻页判断以为还有下一页而原地打转。
+ * 服务端正常总是带这个字段，默认值只为兼容旧版 BFF 与历史夹具。
+ */
+export const ConversationListSchema = z
+  .object({
+    conversations: z.array(ConversationSchema),
+    next_cursor: z.string().nullable().default(null),
+  })
+  .passthrough();
 
 export const ConversationDetailSchema = ConversationSchema;
 

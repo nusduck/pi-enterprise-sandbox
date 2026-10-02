@@ -59,13 +59,14 @@ function likeMatches(value, pattern) {
  * @param {{ isTransaction?: boolean }} [opts]
  */
 function createQuery(state, tableName, opts = {}) {
-  /** @type {{ type: string, filters: Array<[string, unknown]>, inFilters: Array<[string, unknown[]]>, notInFilters: Array<[string, unknown[]]>, order?: { col: string, dir: string }, limitN?: number, forUpdateFlag?: boolean, forShareFlag?: boolean, join?: { table: string, left: string, right: string }, selectCols?: string[], maxCol?: string, updates?: Record<string, unknown>, insertRow?: Record<string, unknown> }} */
+  /** @type {{ type: string, filters: Array<[string, unknown]>, inFilters: Array<[string, unknown[]]>, notInFilters: Array<[string, unknown[]]>, order?: { col: string, dir: string }, orders: Array<{ col: string, dir: string }>, limitN?: number, forUpdateFlag?: boolean, forShareFlag?: boolean, join?: { table: string, left: string, right: string }, selectCols?: string[], maxCol?: string, updates?: Record<string, unknown>, insertRow?: Record<string, unknown> }} */
   const ctx = {
     type: 'select',
     filters: [],
     inFilters: [],
     notInFilters: [],
-    /** @type {Array<Array<[string, unknown]>>} grouped OR predicates */
+    orders: [],
+    /** @type {Array<Array<(row: Record<string, unknown>) => boolean>>} grouped predicates */
     orGroups: [],
   };
 
@@ -112,11 +113,7 @@ function createQuery(state, tableName, opts = {}) {
     if (!eqOk) return false;
     // where((b) => b.where(..).orWhere(..)): every group must have one hit.
     const orOk = ctx.orGroups.every((group) =>
-      group.some(([col, val]) =>
-        val && typeof val === 'object' && val.op === 'like'
-          ? likeMatches(row[col], val.value)
-          : row[col] === val,
-      ),
+      group.some((predicate) => predicate(row)),
     );
     if (!orOk) return false;
     const inOk = ctx.inFilters.every(([col, vals]) => {
@@ -130,25 +127,92 @@ function createQuery(state, tableName, opts = {}) {
     });
   };
 
+  /**
+   * 组内单个条件的判定。列名可能带表别名（`r.created_at`），按裸列名取值。
+   *
+   * @param {Record<string, unknown>} row
+   * @param {string} col
+   * @param {{ op: string, value: unknown }} entry
+   */
+  const matchesEntry = (row, col, entry) => {
+    const key = col.includes('.') ? col.split('.').pop() : col;
+    const value = row[key];
+    if (entry.op === 'isnull') return value == null;
+    if (entry.op === 'notnull') return value != null;
+    if (entry.op === 'like') return likeMatches(value, entry.value);
+    if (entry.op !== '=') {
+      const right = entry.value;
+      // DATETIME 列在库里是 'YYYY-MM-DD HH:MM:SS.mmm' 串，字典序与时间序一致
+      // （keyset 游标正是拿这个串做比较）；数值列（sequence_no 等）仍按数值比。
+      const cmp =
+        typeof value === 'string' && typeof right === 'string'
+          ? value < right
+            ? -1
+            : value > right
+              ? 1
+              : 0
+          : Number(value) - Number(right);
+      if (entry.op === '>') return cmp > 0;
+      if (entry.op === '>=') return cmp >= 0;
+      if (entry.op === '<') return cmp < 0;
+      if (entry.op === '<=') return cmp <= 0;
+      return false;
+    }
+    return value === entry.value || row[col] === entry.value;
+  };
+
+  /**
+   * 分组子构建器：`where((w) => w.where(a).orWhere(b))`，可嵌套。
+   *
+   * 条件按「AND 链的列表」保存——`a AND b OR c` 记为 `[[a, b], [c]]`——命中任一链
+   * 即命中该组，与 MySQL 的 AND 先于 OR 结合一致。之前这里把所有条件一律当 OR、
+   * 也不认 `andWhere` 与比较运算，于是 keyset 分页的经典写法
+   * `w.where(a, '<', x).orWhere((w2) => w2.where(a, x).andWhere(id, '<', y))`
+   * 在单测里根本跑不起来，仓储的游标条件因此完全没有覆盖。
+   */
+  const createPredicateGroup = () => {
+    /** @type {Array<Array<(row: Record<string, unknown>) => boolean>>} */
+    const chains = [[]];
+    const builder = {
+      where(col, op, value) {
+        if (typeof col === 'function') {
+          const nested = createPredicateGroup();
+          col(nested.builder);
+          chains[chains.length - 1].push((row) => nested.matches(row));
+          return builder;
+        }
+        const entry = value === undefined ? { op: '=', value: op } : { op, value };
+        chains[chains.length - 1].push((row) => matchesEntry(row, String(col), entry));
+        return builder;
+      },
+      orWhere(col, op, value) {
+        if (typeof col === 'function') {
+          const nested = createPredicateGroup();
+          col(nested.builder);
+          chains.push([(row) => nested.matches(row)]);
+          return builder;
+        }
+        const entry = value === undefined ? { op: '=', value: op } : { op, value };
+        chains.push([(row) => matchesEntry(row, String(col), entry)]);
+        return builder;
+      },
+      andWhere(col, op, value) {
+        return builder.where(col, op, value);
+      },
+    };
+    return {
+      builder,
+      matches: (row) => chains.some((chain) => chain.every((predicate) => predicate(row))),
+    };
+  };
+
   const api = {
     where(colOrObj, opOrVal, maybeVal) {
       if (typeof colOrObj === 'function') {
         // Grouped OR: knex hands the callback a sub-builder.
-        /** @type {Array<[string, unknown]>} */
-        const group = [];
-        const sub = {
-          where(col, op, value) {
-            group.push(
-              value === undefined ? [String(col), op] : [String(col), { op, value }],
-            );
-            return sub;
-          },
-          orWhere(col, op, value) {
-            return sub.where(col, op, value);
-          },
-        };
-        colOrObj(sub);
-        ctx.orGroups.push(group);
+        const group = createPredicateGroup();
+        colOrObj(group.builder);
+        ctx.orGroups.push([(row) => group.matches(row)]);
         return api;
       }
       if (maybeVal !== undefined) {
@@ -166,6 +230,12 @@ function createQuery(state, tableName, opts = {}) {
       return api;
     },
     andWhere(col, opOrVal, maybeVal) {
+      if (typeof col === 'function') {
+        // andWhere((w) => …) 与 where((w) => …) 一样是分组谓词；这里以前会把它
+        // 当成普通列名（String(fn)）塞进 filters，于是整个条件静默失效——
+        // keyset 分页的仓储写法正好都长这样。
+        return api.where(col);
+      }
       if (maybeVal !== undefined) {
         // andWhere('sequence_no', '>', after)
         ctx.filters.push([
@@ -206,7 +276,10 @@ function createQuery(state, tableName, opts = {}) {
       return api;
     },
     orderBy(col, dir = 'asc') {
-      ctx.order = { col, dir };
+      // 多列排序要保序：keyset 分页的 `ORDER BY ts DESC, id DESC` 少了第二列就会
+      // 在相同时间戳上漏行/重行，只留最后一次 orderBy 的假实现看不出这个 bug。
+      ctx.orders.push({ col, dir });
+      ctx.order = ctx.orders[ctx.orders.length - 1];
       return api;
     },
     limit(n) {
@@ -577,15 +650,17 @@ function createQuery(state, tableName, opts = {}) {
       });
     }
 
-    if (ctx.order) {
-      const { col, dir } = ctx.order;
-      const orderKey = col.includes('.') ? col.split('.').pop() : col;
+    if (ctx.orders.length) {
       rows = [...rows].sort((a, b) => {
-        const av = a[orderKey];
-        const bv = b[orderKey];
-        if (av === bv) return 0;
-        if (av > bv) return dir === 'desc' ? -1 : 1;
-        return dir === 'desc' ? 1 : -1;
+        for (const { col, dir } of ctx.orders) {
+          const orderKey = col.includes('.') ? col.split('.').pop() : col;
+          const av = a[orderKey];
+          const bv = b[orderKey];
+          if (av === bv) continue;
+          if (av > bv) return dir === 'desc' ? -1 : 1;
+          return dir === 'desc' ? 1 : -1;
+        }
+        return 0;
       });
     }
 

@@ -4,6 +4,7 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 import { NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
+import type { KeysetPosition } from '../../../application/keyset-cursor.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -149,15 +150,34 @@ export class CronJobRepository {
     return job;
   }
 
+  /**
+   * Owner-scoped page of live cron jobs, newest first.
+   *
+   * 排序 `created_at desc, cron_job_id desc` + `before` keyset（design ui-polish
+   * §2.4）。`created_at` 是 `DATETIME(3)`，同毫秒建的两个任务只靠时间排序会重复/
+   * 漏行，所以主键必须参与排序与游标。
+   */
   async listForOwner(
     scope: OwnerScope,
-    opts: { enabled?: boolean; limit?: number } = {},
+    opts: { enabled?: boolean; limit?: number; before?: KeysetPosition | null } = {},
   ) {
     const owner = requireOwner(scope);
     const limit = requireLimit(opts.limit, CRON_JOB_LIST_DEFAULT_LIMIT);
     let query = applyOwnerScope(this.db('tbl_agsvc_cron_jobs'), owner).whereNull('deleted_at');
     if (opts.enabled != null) query = query.where({ enabled: Boolean(opts.enabled) });
-    const rows = await query.orderBy('created_at', 'desc').limit(limit);
+    if (opts.before) {
+      const at = toMysqlDateTime(opts.before.sortValue);
+      const id = assertUlid(opts.before.key, 'cursor.cronJobId');
+      query = query.andWhere((w: Loose) => {
+        w.where('created_at', '<', at).orWhere((w2: Loose) => {
+          w2.where('created_at', '=', at).andWhere('cron_job_id', '<', id);
+        });
+      });
+    }
+    const rows = await query
+      .orderBy('created_at', 'desc')
+      .orderBy('cron_job_id', 'desc')
+      .limit(limit);
     return rows.map(mapCronJob);
   }
 
