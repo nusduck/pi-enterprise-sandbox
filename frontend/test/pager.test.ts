@@ -92,5 +92,22 @@ describe('Pager component markup and accessibility', () => {
     assert.match(tsx, /disabled=\{\s*!hasPrev\s*\|\|\s*loading\s*\}/);
     assert.match(tsx, /disabled=\{\s*!hasNext\s*\|\|\s*loading\s*\}/);
   });
+
+  it('renders custom accessible dropdown trigger with portal menu and checkmark', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const tsx = readFileSync(join(here, '..', 'src', 'shared', 'ui', 'Pager.tsx'), 'utf8');
+
+    assert.match(tsx, /aria-haspopup="listbox"/);
+    assert.match(tsx, /aria-expanded=\{open\}/);
+    assert.match(tsx, /role="listbox"/);
+    assert.match(tsx, /role="option"/);
+    assert.match(tsx, /createPortal/);
+    assert.match(tsx, /IconChevronDown/);
+    assert.match(tsx, /IconCheck/);
+    assert.match(tsx, /\{\s*pageSize\s*\}\s*条/);
+  });
 });
 
