@@ -40,7 +40,8 @@
     "20261002000001_browser_auth_sessions.js",
     "20261002000002_sso_identities.js",
     "20261002000003_agent_visibility.js",
-    "20261003000001_hiagent_remote_conversations.js"
+    "20261003000001_hiagent_remote_conversations.js",
+    "20261003000002_notification_scenarios.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -2869,6 +2870,15 @@
           "collation": null,
           "generation": null
         },
+        "notify_policy": {
+          "type": "char(16)",
+          "nullable": false,
+          "default": "failure",
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
         "org_id": {
           "type": "char(26)",
           "nullable": false,
@@ -4693,6 +4703,15 @@
           "collation": null,
           "generation": null
         },
+        "dedupe_key": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
         "delivery_id": {
           "type": "char(26)",
           "nullable": false,
@@ -4792,12 +4811,11 @@
             "delivery_id"
           ]
         },
-        "ind_agsvc_nd_a1": {
+        "ind_agsvc_nd_a2": {
           "unique": true,
           "type": "BTREE",
           "columns": [
-            "run_id",
-            "kind"
+            "dedupe_key"
           ]
         },
         "ind_agsvc_nd_i1": {
@@ -4807,6 +4825,13 @@
             "org_id",
             "user_id",
             "created_at"
+          ]
+        },
+        "ind_agsvc_nd_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "run_id"
           ]
         }
       },
@@ -9001,10 +9026,37 @@
           "collation": "utf8mb4_unicode_ci",
           "generation": null
         },
+        "notify_review_pending": {
+          "type": "tinyint(1)",
+          "nullable": false,
+          "default": "1",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "notify_review_result": {
+          "type": "tinyint(1)",
+          "nullable": false,
+          "default": "1",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
         "notify_run_complete": {
           "type": "tinyint(1)",
           "nullable": false,
           "default": "0",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "notify_run_waiting": {
+          "type": "tinyint(1)",
+          "nullable": false,
+          "default": "1",
           "extra": "",
           "charset": null,
           "collation": null,
