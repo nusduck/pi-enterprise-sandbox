@@ -13,7 +13,7 @@ import { usePreference, type Preferences } from '../../shared/ui/preferences';
 import { getProfile, updateProfile, type Profile } from '../../shared/api/account';
 import { ApiError } from '../../shared/api/client';
 import { loginMethodLabel } from '../../shared/schemas/auth';
-import { hasAdminRole, hasReviewerRole } from '../../shared/security/roles';
+import { hasAdminRole, hasReviewerRole, primaryRoleLabel } from '../../shared/security/roles';
 import {
   buildProfilePatch,
   draftFromProfile,
@@ -119,6 +119,7 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
   // 两个来源任一为 admin 即 admin：profile 是权威读，fallback 是已加载的 me。
   const isAdmin = hasAdminRole(profile) || hasAdminRole(fallback);
   const isReviewer = hasReviewerRole(profile) || hasReviewerRole(fallback);
+  const roleLabel = primaryRoleLabel(profile || fallback);
   const name = (profile?.display_name || '') || username;
   const editable = new Set(profile?.editable_fields || []);
   const dirty = isDirty(profile, draft);
@@ -181,7 +182,7 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
         <span className={s.avatar} aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
         <div className={s.rowText}>
           <b>{name}</b>
-          <small>{username} · {isAdmin ? '管理员' : '普通用户'}</small>
+          <small>{username} · {roleLabel}</small>
         </div>
         <button type="button" className={s.btn} onClick={onLogout}>退出登录</button>
       </div>
@@ -245,7 +246,7 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
       <dl className={s.kv}>
         <dt>用户名</dt><dd>{username || '—'}</dd>
         <dt>机构</dt><dd>{profile?.organization_name || '—'}</dd>
-        <dt>用户类型</dt><dd>{isAdmin ? '管理员' : '普通用户'}<span className={s.muted}> · 由管理员设置</span></dd>
+        <dt>用户类型</dt><dd>{roleLabel}<span className={s.muted}> · 由管理员设置</span></dd>
         <dt>登录方式</dt><dd>{profile ? loginMethodLabel(profile.login_method) : '—'}</dd>
         <dt>身份来源</dt><dd>{profile?.identity_provider || '本平台账号'}</dd>
         <dt>账户状态</dt><dd>{profile ? (profile.status === 'active' ? '正常' : '已停用') : '—'}</dd>

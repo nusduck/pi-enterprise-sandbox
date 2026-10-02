@@ -219,6 +219,35 @@ details[open] > summary > .chev { transform: rotate(90deg); }
   padding: 5px 10px;
   font-size: 13px;
 }
+.decisionForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.reasonTextarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border-hover);
+  background: var(--color-bg-input);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.reasonTextarea:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+}
+.reasonError {
+  font-size: 12px;
+  color: var(--color-danger-text, #ef4444);
+}
 
 /* sub-tasks */
 .sub { border-top: 1px solid var(--color-border); }

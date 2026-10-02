@@ -15,6 +15,7 @@ import {
   formatArgs,
   mergeApprovalRows,
   normalizeApprovalStatus,
+  validateApprovalReason,
   type ApprovalRow,
   type ApprovalStatusFilterId,
 } from './approvalHelpers';
@@ -57,6 +58,9 @@ export function ApprovalsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [decisionModeById, setDecisionModeById] = useState<Record<string, 'approve' | 'reject'>>({});
+  const [reasonDraftById, setReasonDraftById] = useState<Record<string, string>>({});
+  const [rowErrorById, setRowErrorById] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -91,19 +95,38 @@ export function ApprovalsPage() {
     [state.conversations],
   );
 
-  async function onDecide(row: ApprovalRow, decision: 'approve' | 'reject') {
+  async function onDecide(row: ApprovalRow, decision: 'approve' | 'reject', reason?: string) {
     if (!canDecideApproval(row.status)) return;
     setBusyId(row.id);
+    setRowErrorById((prev) => {
+      const next = { ...prev };
+      delete next[row.id];
+      return next;
+    });
     try {
-      const applied = await resolveApproval(row.id, decision);
+      const applied = await resolveApproval(row.id, decision, reason);
       if (!applied) {
-        setBanner('操作失败，这条审批仍在等待处理。');
+        const msg = '操作失败，这条审批仍在等待处理。';
+        setBanner(msg);
+        setRowErrorById((prev) => ({ ...prev, [row.id]: msg }));
         return;
       }
       setBanner(`${decision === 'approve' ? '已批准' : '已拒绝'} ${row.tool || shortId(row.id)}`);
+      setDecisionModeById((prev) => {
+        const next = { ...prev };
+        delete next[row.id];
+        return next;
+      });
+      setReasonDraftById((prev) => {
+        const next = { ...prev };
+        delete next[row.id];
+        return next;
+      });
       await refresh();
     } catch (err) {
-      setBanner((err as Error).message || '操作失败');
+      const msg = (err as Error).message || '操作失败';
+      setBanner(msg);
+      setRowErrorById((prev) => ({ ...prev, [row.id]: msg }));
     } finally {
       setBusyId(null);
     }
@@ -164,6 +187,10 @@ export function ApprovalsPage() {
             const [statusLabel] = STATUS_ZH[statusKey] || [row.status, a.mute];
             const risk = row.riskLevel ? RISK_ZH[row.riskLevel.toLowerCase()] || [row.riskLevel, a.mute] : null;
             const title = row.conversationId ? titleById.get(row.conversationId) : null;
+            const mode = decisionModeById[row.id] || null;
+            const reasonDraft = reasonDraftById[row.id] || '';
+            const reasonValidation = validateApprovalReason(reasonDraft);
+            const rowError = rowErrorById[row.id] || null;
             return (
               <li key={row.id} className={`${s.card}${pending ? ` ${s.pending}` : ''}`}>
                 <div className={s.head}>
@@ -173,7 +200,11 @@ export function ApprovalsPage() {
                   <span className={a.sp} />
                   <time className={`${a.muted} ${a.num}`}>{formatTime(row.createdAt)}</time>
                 </div>
-                {row.reason ? <p className={s.reason}>{row.reason}</p> : null}
+                {row.reason ? (
+                  <p className={s.reason}>
+                    {!pending && !row.reason.startsWith('原因：') ? `原因：${row.reason}` : row.reason}
+                  </p>
+                ) : null}
                 {row.command ? <pre className={s.cmd}>{row.command}</pre> : null}
                 {open && row.arguments != null ? <pre className={s.cmd}>{formatArgs(row.arguments)}</pre> : null}
                 <div className={s.foot}>
@@ -194,12 +225,81 @@ export function ApprovalsPage() {
                     </button>
                   ) : null}
                   {pending ? (
-                    <>
-                      <button type="button" className={a.btn} disabled={busyId === row.id} onClick={() => void onDecide(row, 'reject')}>拒绝</button>
-                      <button type="button" className={a.btnPri} disabled={busyId === row.id} onClick={() => void onDecide(row, 'approve')}>
-                        {busyId === row.id ? '处理中…' : '批准'}
-                      </button>
-                    </>
+                    mode ? (
+                      <div className={s.decisionBox}>
+                        <textarea
+                          className={s.reasonInput}
+                          rows={2}
+                          placeholder={mode === 'reject' ? '拒绝原因（可选）' : '批准原因（可选）'}
+                          value={reasonDraft}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setReasonDraftById((prev) => ({ ...prev, [row.id]: val }));
+                            if (rowErrorById[row.id]) {
+                              setRowErrorById((prev) => {
+                                const next = { ...prev };
+                                delete next[row.id];
+                                return next;
+                              });
+                            }
+                          }}
+                          disabled={busyId === row.id}
+                        />
+                        {reasonValidation.error ? (
+                          <small className={s.fieldError}>{reasonValidation.error}</small>
+                        ) : null}
+                        {rowError ? <small className={s.fieldError}>{rowError}</small> : null}
+                        <div className={s.decisionActions}>
+                          <span className={a.sp} />
+                          <button
+                            type="button"
+                            className={a.btn}
+                            disabled={busyId === row.id}
+                            onClick={() => {
+                              setDecisionModeById((prev) => {
+                                const next = { ...prev };
+                                delete next[row.id];
+                                return next;
+                              });
+                              setRowErrorById((prev) => {
+                                const next = { ...prev };
+                                delete next[row.id];
+                                return next;
+                              });
+                            }}
+                          >
+                            取消
+                          </button>
+                          <button
+                            type="button"
+                            className={mode === 'approve' ? a.btnPri : a.btn}
+                            disabled={busyId === row.id || !reasonValidation.valid}
+                            onClick={() => void onDecide(row, mode, reasonDraft.trim() || undefined)}
+                          >
+                            {busyId === row.id ? '处理中…' : mode === 'approve' ? '确认批准' : '确认拒绝'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className={a.btn}
+                          disabled={busyId === row.id}
+                          onClick={() => setDecisionModeById((prev) => ({ ...prev, [row.id]: 'reject' }))}
+                        >
+                          拒绝
+                        </button>
+                        <button
+                          type="button"
+                          className={a.btnPri}
+                          disabled={busyId === row.id}
+                          onClick={() => setDecisionModeById((prev) => ({ ...prev, [row.id]: 'approve' }))}
+                        >
+                          {busyId === row.id ? '处理中…' : '批准'}
+                        </button>
+                      </>
+                    )
                   ) : null}
                 </div>
               </li>

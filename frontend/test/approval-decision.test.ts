@@ -14,7 +14,9 @@ import {
   canDecideApproval,
   mergeApprovalRows,
   normalizeApprovalStatus,
+  validateApprovalReason,
 } from '../src/pages/approvals/approvalHelpers.ts';
+import { decideApproval } from '../src/shared/api/client.ts';
 import {
   createApproval,
   createEntityStore,
@@ -195,3 +197,94 @@ describe('approval decision resumes the live stream', () => {
     assert.equal(followed, 0);
   });
 });
+
+describe('approval decision reason handling', () => {
+  it('decideApproval 带上 reason 发送请求体', async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      let capturedBody: any = null;
+      globalThis.fetch = (async (_url: string, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ ok: true, status: 'approved' }), { status: 200 });
+      }) as any;
+
+      await decideApproval('appr_123', 'approve', '安全检查通过');
+      assert.deepEqual(capturedBody, { decision: 'approve', reason: '安全检查通过' });
+
+      await decideApproval('appr_123', 'reject', '高风险操作已拒绝');
+      assert.deepEqual(capturedBody, { decision: 'reject', reason: '高风险操作已拒绝' });
+
+      await decideApproval('appr_123', 'approve');
+      assert.deepEqual(capturedBody, { decision: 'approve' });
+
+      await decideApproval('appr_123', 'approve', '');
+      assert.deepEqual(capturedBody, { decision: 'approve' });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('resolveApprovalDecision 将 reason 透传给 decide 与 markApproval', async () => {
+    const { calls, deps } = createDeps({
+      decide: async (id, decision, reason) => {
+        calls.push(['decide', id, decision, reason]);
+        return { agent_resume_status: 'queued' };
+      },
+    });
+
+    assert.equal(
+      await resolveApprovalDecision('appr_test', 'reject', deps, '不符合安全规范'),
+      true,
+    );
+    assert.deepEqual(calls[0], ['decide', 'appr_test', 'reject', '不符合安全规范']);
+    assert.deepEqual(calls[1], ['mark', 'appr_test', 'rejected', '不符合安全规范']);
+  });
+
+  it('超长被拦：超过 2000 字返回校验失败并给出提示', () => {
+    assert.equal(validateApprovalReason('').valid, true);
+    assert.equal(validateApprovalReason('a'.repeat(2000)).valid, true);
+    assert.equal(validateApprovalReason('a'.repeat(2000)).error, null);
+
+    const invalid = validateApprovalReason('a'.repeat(2001));
+    assert.equal(invalid.valid, false);
+    assert.match(invalid.error!, /原因不能超过 2000 字/);
+    assert.match(invalid.error!, /2001/);
+  });
+
+  it('决策入口组件包含原因输入、占位文案、超长校验拦截接线', () => {
+    const approvalsPageSrc = readFileSync(
+      join(here, '..', 'src', 'pages', 'approvals', 'ApprovalsPage.tsx'),
+      'utf8',
+    );
+    assert.match(approvalsPageSrc, /validateApprovalReason/);
+    assert.match(approvalsPageSrc, /拒绝原因（可选）/);
+    assert.match(approvalsPageSrc, /批准原因（可选）/);
+    assert.match(approvalsPageSrc, /!reasonValidation\.valid/);
+
+    const turnCardsSrc = readFileSync(
+      join(here, '..', 'src', 'widgets', 'turn-stream', 'TurnCards.tsx'),
+      'utf8',
+    );
+    assert.match(turnCardsSrc, /validateApprovalReason/);
+    assert.match(turnCardsSrc, /拒绝原因（可选）/);
+    assert.match(turnCardsSrc, /批准原因（可选）/);
+    assert.match(turnCardsSrc, /isTooLong/);
+    assert.match(turnCardsSrc, /approval\.reason \? <span className=\{s\.muted\}>原因：\{approval\.reason\}<\/span>/);
+  });
+
+  it('失败时输入保留：API 报错时不清除草稿并展示错误', async () => {
+    let preservedDraft = '这是用户输入的待保留拒绝原因';
+    const { calls, deps } = createDeps({
+      decide: async () => {
+        throw new Error('网络超时，提交失败');
+      },
+    });
+
+    const applied = await resolveApprovalDecision('appr_fail', 'reject', deps, preservedDraft);
+    assert.equal(applied, false);
+    // 草稿内容在调用失败后未被丢弃
+    assert.equal(preservedDraft, '这是用户输入的待保留拒绝原因');
+    assert.deepEqual(calls, [['error', '网络超时，提交失败']]);
+  });
+});
+

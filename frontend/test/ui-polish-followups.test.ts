@@ -100,4 +100,14 @@ describe('primaryRoleLabel', () => {
   it('is used by the sidebar user menu', () => {
     assert.match(readSrc('widgets', 'conversation-sidebar', 'ConversationSidebar.tsx'), /<small>\{primaryRoleLabel\(state\.authUser\)\}<\/small>/);
   });
+
+  it('is used by SettingsDialog so reviewer shows 审核员 instead of 普通用户', () => {
+    const src = readSrc('widgets', 'settings', 'SettingsDialog.tsx');
+    assert.doesNotMatch(src, /isAdmin \? '管理员' : '普通用户'/);
+    assert.match(src, /primaryRoleLabel\(profile \|\| fallback\)/);
+    // When user has reviewer role, primaryRoleLabel returns 审核员
+    assert.equal(primaryRoleLabel({ roles: ['reviewer'] }), '审核员');
+    assert.equal(primaryRoleLabel({ roles: ['reviewer', 'user'] }), '审核员');
+    assert.equal(primaryRoleLabel({ role: 'reviewer' }), '审核员');
+  });
 });

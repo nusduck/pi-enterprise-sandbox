@@ -46,7 +46,6 @@ scope was narrowed, in
 | Virtualized timeline for 10k+ tool cards | Activity drawer maps full run tool/process lists; process logs capped at 256KiB/stream | Low for typical runs | Avoid DOM growth on extreme runs | Optional windowing if field shows large timelines |
 | Trace panel span tree completeness | Spans projected from tool/model/artifact events only; no OpenTelemetry backend yet | Low | Full distributed trace UI | Wire when observability exports span trees |
 | Dataset delete/replace controls | Panel is read-only status + path; upload still via composer/attachments | Low | Full §19.7 ops | Product UX when DELETE dataset API is productized |
-| Approval decision reason input field | `ApprovalsPage.tsx` 只有批准/拒绝按钮，`reason` 只展示。对话流里的审批同样没有原因输入框（源码检索，2026-09-29 未再走浏览器） | Low | Auditability of deny reasons | Optional form control |
 | A2A blocking SendMessage (return_immediately=false) | Always non-blocking create + optional stream. Remote client sends `returnImmediately: true` | Low | Spec default blocking mode | Optional wait-for-terminal path |
 | Live Redis XREAD BLOCK on A2A stream | Same as BFF SSE: poll + `readAfter` (default poll 500ms) | Low | Lower latency | Share duplex Redis client work |
 | GetTask artifact scan safety ceiling | Hard fail over 10k events / 500 artifacts (no silent truncate) | Low for typical runs | Streaming artifact index | Raise limits or dedicated index table |
@@ -76,3 +75,6 @@ scope was narrowed, in
 | 远端 A2A 委派只支持一问一答 | `a2a-remote-client.ts` 的 `sendMessage` 不带 `contextId`（每次都是新任务，不续聊），`returnImmediately: true`。远端文件只带回名称和链接，不导入工作区。`INPUT_REQUIRED` / `AUTH_REQUIRED` 按 `A2A_REMOTE_NEEDS_INPUT` 失败（[设计](design/a2a-remote-delegation.md) §2 非目标） | 低：有意划出的范围 | 支持需要追问或返回文件的远端（如 hi-agent） | 接入具体远端后按需求决定补哪几项 |
 | 远端 Agent 凭据加密存储与界面登记（暂不做） | 远端清单与凭据只来自环境变量 `A2A_REMOTE_AGENTS_JSON`；仓库无静态加密设施，凭据入库即明文（[设计 D2](design/a2a-remote-delegation.md)）。2026-09-26 产品决定暂不做 | 无（当前不存储凭据） | 各部门自助登记外部智能体 | 需要时另立设计：信封加密 + 主密钥（K8s Secret / KMS）、按组织的登记表、SSRF 限制，并新增 ADR 取代 D2 |
 | 设置面板身份行不显示审核员角色 | 2026-10-03 截图：reviewer 在设置面板显示「reviewer · 普通用户」，用户菜单里已是「审核员」（[证据](evidence/2026-10-03-integration-live-chain.md) 新发现 3）。身份行按旧的单值 `role` 字段而不是 `roles[]` 取标签 | 低：展示问题 | 角色展示一致 | 设置面板改用与用户菜单相同的角色标签函数 |
+
+| exec `signal` 端点无视信号种类 | `exec/src/shell/job-registry.ts` `signalInternal` 先调用活句柄 `cancel()` 结束整个作业，再补发指定信号；发 `SIGINT` / `SIGUSR1` 这类本意不终止的信号也会结束进程。2026-10-03 真机：`kill`（SIGKILL）与旧的 SIGTERM 都会让忽略 TERM 的进程结束（[证据](evidence/2026-10-03-integration-live-chain.md) 新发现 1） | 低：目前只有终止类用法；但 `signal` 的语义与名字不符，向进程发控制信号（如 SIGUSR1 让其打印状态）不可用 | 能向运行中的进程发非终止信号 | 只对终止类信号走 `cancel()`，其余信号只经 `safeSignalIdentity` 发送，并补测试 |
+

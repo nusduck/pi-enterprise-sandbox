@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   （按 pid / pgid / 启动身份校验，防 PID 复用）发给进程组，不结束作业、不改状态。
   公共路由允许集（`SIGTERM` / `SIGKILL` / `SIGINT` / `SIGHUP`）不变。
 
+### Added — 审批决策支持填写原因
+
+- 管理端审批页（`ApprovalsPage`）与对话流审批卡片（`ApprovalCard`）在批准或拒绝时
+  支持展开填写可选的原因输入（限制 ≤2000 字，超长禁用提交并实时提示），提交失败保留输入草稿并展示错误信息。
+- 已决定的审批在列表与卡片上展示决策原因。`decideApproval` API 客户端增加可选 `reason` 参数。
+
+### Fixed — 设置面板身份行支持展示审核员角色
+
+- `SettingsDialog` 账户面板身份行与用户类型行此前硬编码 `isAdmin ? '管理员' : '普通用户'`，审核员（reviewer）
+  被误展示为「普通用户」。改用 `primaryRoleLabel`（与侧栏用户菜单保持一致），正确展示为「审核员」。
+
 ### Fixed — 共享申请批准的名字占用检查移进名字锁内
 
 - `SkillShareService.approve` 此前先调 `orgSkillOwnerOf` 读名字归属、之后才在

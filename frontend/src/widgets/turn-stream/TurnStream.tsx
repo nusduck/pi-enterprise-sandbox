@@ -110,10 +110,10 @@ export function TurnStream({ runId }: { runId: string }) {
     ? turnSummary(run, (run.toolExecutionIds || []).map((id) => entityStore.toolExecutionsById[id]).filter(Boolean) as ToolExecutionEntity[])
     : '';
 
-  async function decide(id: string, decision: 'approve' | 'reject') {
+  async function decide(id: string, decision: 'approve' | 'reject', reason?: string) {
     setBusyApproval(id);
     try {
-      await resolveApproval(id, decision);
+      return await resolveApproval(id, decision, reason);
     } finally {
       setBusyApproval(null);
     }
@@ -173,7 +173,7 @@ export function TurnStream({ runId }: { runId: string }) {
         approval={a}
         tool={a.toolExecutionId ? entityStore.toolExecutionsById[a.toolExecutionId] || null : null}
         busy={busyApproval === a.id}
-        onDecide={(id, decision) => void decide(id, decision)}
+        onDecide={(id, decision, reason) => decide(id, decision, reason)}
       />
     ));
   }
