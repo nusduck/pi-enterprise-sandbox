@@ -4,8 +4,13 @@ export type ApprovalDecisionDeps = {
   decide: (
     approvalId: string,
     decision: ApprovalDecision,
+    reason?: string | null,
   ) => Promise<Record<string, unknown>>;
-  markApproval: (approvalId: string, status: 'approved' | 'rejected') => void;
+  markApproval: (
+    approvalId: string,
+    status: 'approved' | 'rejected',
+    reason?: string | null,
+  ) => void;
   setStatus: (text: string, color: string) => void;
   flashError: (message: string) => void;
   /**
@@ -21,14 +26,26 @@ export async function resolveApprovalDecision(
   approvalId: string,
   decision: ApprovalDecision,
   deps: ApprovalDecisionDeps,
+  reason?: string | null,
 ): Promise<boolean> {
   if (!approvalId) return false;
   try {
-    const result = await deps.decide(approvalId, decision);
-    deps.markApproval(
-      approvalId,
-      decision === 'approve' ? 'approved' : 'rejected',
-    );
+    const trimmedReason = reason?.trim();
+    const result = trimmedReason
+      ? await deps.decide(approvalId, decision, trimmedReason)
+      : await deps.decide(approvalId, decision);
+    if (trimmedReason) {
+      deps.markApproval(
+        approvalId,
+        decision === 'approve' ? 'approved' : 'rejected',
+        trimmedReason,
+      );
+    } else {
+      deps.markApproval(
+        approvalId,
+        decision === 'approve' ? 'approved' : 'rejected',
+      );
+    }
     deps.setStatus(
       decision === 'approve' ? 'Approved' : 'Rejected',
       decision === 'approve' ? '#22c55e' : '#ef4444',

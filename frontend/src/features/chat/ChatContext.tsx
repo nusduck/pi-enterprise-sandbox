@@ -132,6 +132,7 @@ export type ChatController = {
   resolveApproval: (
     approvalId: string,
     decision: 'approve' | 'reject',
+    reason?: string | null,
   ) => Promise<boolean>;
   // Auth
   login: (username: string, password: string) => Promise<void>;
@@ -1064,13 +1065,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const resolveApproval = useCallback(
-    async (approvalId: string, decision: 'approve' | 'reject') => {
+    async (approvalId: string, decision: 'approve' | 'reject', reason?: string | null) => {
       return resolveApprovalDecision(approvalId, decision, {
-        decide: decideApproval, markApproval: (id, status) => bridge.markApproval(id, status),
+        decide: decideApproval, markApproval: (id, status, r) => bridge.markApproval(id, status, r),
         setStatus,
         flashError,
         followRun: () => void bridge.rehydrateInProgress(stateRef.current.conversationId).catch(() => {}),
-      });
+      }, reason);
     },
     [bridge, setStatus, flashError],
   );

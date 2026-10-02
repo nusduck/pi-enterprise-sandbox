@@ -158,3 +158,16 @@ export function formatArgs(args: unknown): string {
     return String(args);
   }
 }
+
+export const MAX_APPROVAL_REASON_LENGTH = 2000;
+
+export function validateApprovalReason(reason: string): { valid: boolean; error: string | null } {
+  if (reason.length > MAX_APPROVAL_REASON_LENGTH) {
+    return {
+      valid: false,
+      error: `原因不能超过 ${MAX_APPROVAL_REASON_LENGTH} 字（当前 ${reason.length} 字）`,
+    };
+  }
+  return { valid: true, error: null };
+}
+

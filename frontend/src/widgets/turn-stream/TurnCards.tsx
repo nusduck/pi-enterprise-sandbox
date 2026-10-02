@@ -32,6 +32,7 @@ import {
 } from '../../features/chat/projections/turnFields';
 import type { ToolStep } from '../../features/chat/projections/turnItems';
 import { usePreference } from '../../shared/ui/preferences';
+import { validateApprovalReason } from '../../pages/approvals/approvalHelpers';
 import s from './turnStream.module.css';
 
 export function Chevron() {
@@ -197,8 +198,13 @@ export function ApprovalCard({
   approval: ApprovalEntity;
   tool: ToolExecutionEntity | null;
   busy: boolean;
-  onDecide: (id: string, decision: 'approve' | 'reject') => void;
+  onDecide: (id: string, decision: 'approve' | 'reject', reason?: string) => Promise<boolean> | void;
 }) {
+  const [decisionMode, setDecisionMode] = useState<'approve' | 'reject' | null>(null);
+  const [reasonDraft, setReasonDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
   const pending = approval.status === 'pending';
   // An approval can arrive before its tool starts; the reducer then keeps the
   // tool name in `command`, which reads better as an action.
@@ -213,9 +219,103 @@ export function ApprovalCard({
       <div className={s.resolved}>
         <Pill tone={approval.status === 'approved' ? 'ok' : 'mute'}>{label}</Pill>
         <span className={s.arg}>{remoteDone ? `远程委派 ${(tool && subtaskFields(tool).agent) || ''}`.trim() : what}</span>
+        {approval.reason ? <span className={s.muted}>原因：{approval.reason}</span> : null}
       </div>
     );
   }
+
+  const reasonValidation = validateApprovalReason(reasonDraft);
+  const isTooLong = !reasonValidation.valid;
+
+  async function handleConfirm(decision: 'approve' | 'reject') {
+    if (isTooLong) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const ok = await onDecide(approval.id, decision, reasonDraft.trim() || undefined);
+      if (ok === false) {
+        setError('操作失败，这条审批仍在等待处理。');
+      }
+    } catch (err) {
+      setError((err as Error).message || '操作失败');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const renderActions = () => {
+    if (decisionMode) {
+      return (
+        <div className={s.decisionForm}>
+          <textarea
+            className={s.reasonTextarea}
+            rows={2}
+            value={reasonDraft}
+            placeholder={decisionMode === 'reject' ? '拒绝原因（可选）' : '批准原因（可选）'}
+            onChange={(e) => {
+              setReasonDraft(e.target.value);
+              if (error) setError(null);
+            }}
+            disabled={busy || submitting}
+          />
+          {reasonValidation.error ? (
+            <div className={s.reasonError}>{reasonValidation.error}</div>
+          ) : null}
+          {error ? <div className={s.reasonError}>{error}</div> : null}
+          <div className={s.actions} style={{ padding: 0 }}>
+            <button
+              type="button"
+              className={decisionMode === 'approve' ? s.btnPri : s.btn}
+              disabled={busy || submitting || isTooLong}
+              onClick={() => void handleConfirm(decisionMode)}
+            >
+              {busy || submitting ? '处理中…' : decisionMode === 'approve' ? '确认批准' : '确认拒绝'}
+            </button>
+            <button
+              type="button"
+              className={s.btn}
+              disabled={busy || submitting}
+              onClick={() => {
+                setDecisionMode(null);
+                setError(null);
+              }}
+            >
+              取消
+            </button>
+            <span className={s.muted}>本轮会等你决定后继续</span>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className={s.actions}>
+        <button
+          type="button"
+          className={s.btnPri}
+          disabled={busy || submitting}
+          onClick={() => {
+            setError(null);
+            setDecisionMode('approve');
+          }}
+        >
+          批准
+        </button>
+        <button
+          type="button"
+          className={s.btn}
+          disabled={busy || submitting}
+          onClick={() => {
+            setError(null);
+            setDecisionMode('reject');
+          }}
+        >
+          拒绝
+        </button>
+        <span className={s.muted}>本轮会等你决定后继续</span>
+      </div>
+    );
+  };
+
   const remote = (tool?.name || approval.command) === 'delegate_to_remote_agent';
   if (remote) {
     const f = tool ? subtaskFields(tool) : null;
@@ -233,15 +333,7 @@ export function ApprovalCard({
           {f?.prompt ? <><dt>发送内容</dt><dd><pre className={s.pre}>{clip(f.prompt, 2000)}</pre></dd></> : null}
         </dl>
         <div className={s.muted}>任务会离开本组织：只发送上面这段文字，不带附件、工作区文件或对话记录。</div>
-        <div className={s.actions}>
-          <button type="button" className={s.btnPri} disabled={busy} onClick={() => onDecide(approval.id, 'approve')}>
-            批准
-          </button>
-          <button type="button" className={s.btn} disabled={busy} onClick={() => onDecide(approval.id, 'reject')}>
-            拒绝
-          </button>
-          <span className={s.muted}>本轮会等你决定后继续</span>
-        </div>
+        {renderActions()}
       </div>
     );
   }
@@ -258,15 +350,7 @@ export function ApprovalCard({
         {approval.reason ? <div className={s.muted}>{approval.reason}</div> : null}
         {args && args !== what ? <pre className={s.pre}>{clip(args, 2000)}</pre> : null}
       </div>
-      <div className={s.actions}>
-        <button type="button" className={s.btnPri} disabled={busy} onClick={() => onDecide(approval.id, 'approve')}>
-          批准
-        </button>
-        <button type="button" className={s.btn} disabled={busy} onClick={() => onDecide(approval.id, 'reject')}>
-          拒绝
-        </button>
-        <span className={s.muted}>本轮会等你决定后继续</span>
-      </div>
+      {renderActions()}
     </div>
   );
 }

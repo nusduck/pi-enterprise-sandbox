@@ -251,6 +251,7 @@ export type EntityBridge = {
   markApproval: (
     approvalId: string,
     status: Extract<ApprovalStatus, 'approved' | 'rejected'>,
+    reason?: string | null,
   ) => void;
   /** Immediately publish a successful upload into the normalized Dataset store. */
   recordDataset: (
@@ -1010,6 +1011,7 @@ export function createEntityBridge(
   function markApproval(
     approvalId: string,
     status: Extract<ApprovalStatus, 'approved' | 'rejected'>,
+    reason?: string | null,
   ): void {
     const s = manager.getStore();
     const existing = s.approvalsById[approvalId];
@@ -1017,6 +1019,7 @@ export function createEntityBridge(
     store = upsertApproval(s, {
       ...existing,
       status,
+      reason: reason?.trim() ? reason.trim() : existing.reason,
       decidedAt: new Date().toISOString(),
     });
     manager.setStore(store);

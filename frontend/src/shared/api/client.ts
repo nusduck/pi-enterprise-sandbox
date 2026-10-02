@@ -210,13 +210,18 @@ export async function importArtifact(input: {
 export async function decideApproval(
   approvalId: string,
   decision: 'approve' | 'reject',
+  reason?: string | null,
 ): Promise<Record<string, unknown>> {
+  const payload: Record<string, unknown> = { decision };
+  if (reason != null && reason !== '') {
+    payload.reason = reason;
+  }
   const resp = await fetch(
     `${BASE}/approvals/${encodeURIComponent(approvalId)}/decide`,
     {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify(payload),
     },
   );
   if (!resp.ok) {

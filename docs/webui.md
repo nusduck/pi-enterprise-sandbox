@@ -332,7 +332,7 @@ tooltip 说明是 `SANDBOX_AUTH_ADMIN_USERNAMES` 锁定。**列表加载失败�
 + 纯白滑块几乎看不见，非文本对比度不足 3:1）。
 
 **审批**（`/admin/approvals`）：默认显示待审批；每条一张卡片（工具、风险、状态、原因、命令，可展开参数），
-待审批的卡片可直接批准 / 拒绝，效果与对话内审批卡相同。
+待审批的卡片支持展开填写可选的原因输入（限制 ≤2000 字，超长禁用提交；提交失败保留草稿并展示错误），批准 / 拒绝效果与对话内审批卡相同；已决定的审批在列表与卡片上展示决策原因。
 
 **A2A 接入**（`/admin/a2a`）：右上角切换智能体；上方是端点、Agent Card、认证方式等摘要，下方分「凭据 / 调用记录 /
 审计 / 接入示例」。签发后的一次性凭据只显示一次；吊销需要第二次点击确认。
@@ -532,7 +532,7 @@ render → security.isAllowedApiUrl 校验后生成 <a class="dl" href="/api/...
   | 提问 | `ask_user_question` | 选项卡片；答案来自工具台账，实时作答时卡片先记住本次提交 |
   | 后台任务 | `bash`（`run_in_background`）及其 `job_output` / `job_kill` | 一张卡；按命令与沙箱进程配对，取真实状态与控制台 |
   | 产物 | `submit_artifact` | 文件卡（审核会话里按三态显示，见上文「交付卡片三态」），图片产物在流里显示大图；点卡片或图片在右侧抽屉预览（图片、Markdown 渲染、其他文本前 200 KB，其余类型给下载），抽屉下方列出本会话的其他产物（`ArtifactDrawer.tsx`）；下载经 URL allowlist |
-  | 审批 | 审批实体 | 挂在对应工具条目后；审批先于工具到达时，工具名保留在 `approval.command` |
+  | 审批 | 审批实体 | 挂在对应工具条目后；审批先于工具到达时，工具名保留在 `approval.command`；决策时可展开填写可选原因（≤2000 字，超长禁用提交，失败保留草稿），已决定的审批展示原因 |
 
 - DSH 的 `message.*` / `thinking.*` 不带 message_id：一轮是 thinking.delta… → message.delta… →
   thinking.completed → 工具 start → message.completed，下一轮以新的 thinking.delta 开始。没有流式

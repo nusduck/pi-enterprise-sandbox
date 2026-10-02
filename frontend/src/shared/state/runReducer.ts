@@ -543,6 +543,7 @@ export function reduceRuntimeEvent(
         next = upsertApproval(next, {
           ...existing,
           status: decision,
+          reason: str(payload.reason) || existing.reason,
           decidedAt: ts,
         });
       }
