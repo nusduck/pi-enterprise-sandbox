@@ -21,6 +21,7 @@ export const AdminMemberSchema = z
     username: nullableString,
     display_name: nullableString,
     email: nullableString,
+    department: nullableString,
     roles: z.array(z.string()).default([]),
     /** 其中被部署环境变量锁定的角色；当前只有 `admin`。 */
     pinned_roles: z.array(z.string()).default([]),

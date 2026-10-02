@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 账户设置「邮件通知」小节改为四个开关（待我审核只对 reviewer 显示）；定时任务新建 / 编辑表单
   新增「完成后通知」下拉。`GET/PATCH /api/auth/profile` 与定时任务接口同步新增字段。
 
+### Added — 部门信息预留
+
+- 新增 `SSO_DEPARTMENT_CLAIM` 环境变量：SSO 登录时将公司下发的部门信息记录至 `users.department`（仅记录与展示，不做任何按部门授权的判断）。
+- 管理端成员列表接口及「成员与角色」页面新增「部门」字段与表格列（空值展示「—」）。
+
 ### Fixed — 分页每页条数选择器 UI 修复
 
 - 分页组件（`Pager`）的每页条数选择从原生 `<select>` 改为自定义可访问下拉菜单（`role="listbox"` / `role="option"`，基于 Portal 浮层定位并自适应翻转），消除 macOS 下原生弹出菜单与左侧文案重叠、缺少单位标识与系统暗黑模式毛玻璃遮挡的问题，并统一暗色/亮色视觉与键盘交互。

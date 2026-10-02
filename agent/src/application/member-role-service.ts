@@ -55,6 +55,7 @@ export interface MemberView {
   readonly username: string | null;
   readonly display_name: string | null;
   readonly email: string | null;
+  readonly department: string | null;
   readonly roles: string[];
   readonly pinned_roles: string[];
   readonly last_login_at: string | null;
@@ -185,6 +186,7 @@ export class MemberRoleService {
       username: member.username,
       display_name: member.displayName,
       email: member.email,
+      department: member.department ?? null,
       roles: granted,
       // 只有真的持有 admin 才显示为锁定：否则界面会置灰一个本来就打不开的开关。
       pinned_roles:

@@ -69,6 +69,7 @@ export function mapUser(row: Record<string, unknown>) {
     externalSubject: String(row.external_subject),
     displayName: row.display_name == null ? null : String(row.display_name),
     email: row.email == null ? null : String(row.email),
+    department: row.department == null ? null : String(row.department),
     status: String(row.status),
     createdAt: formatDateTime(row.created_at),
     updatedAt: formatDateTime(row.updated_at),

@@ -12,6 +12,7 @@ import { hasRole } from '../../shared/security/roles';
 import {
   NO_LOGIN_RECORD_TOOLTIP,
   ROLE_PINNED_TOOLTIP,
+  formatMemberDepartment,
   formatMemberTimestamp,
   isRolePinned,
   isSelfMember,
@@ -401,6 +402,7 @@ export function MembersPage() {
                   <thead>
                     <tr>
                       <th>成员</th>
+                      <th>部门</th>
                       <th>最近登录</th>
                       <th title="角色代码：admin">{roleLabel('admin')}</th>
                       <th title="角色代码：reviewer">{roleLabel('reviewer')}</th>
@@ -412,6 +414,9 @@ export function MembersPage() {
                       <tr key={member.user_id}>
                         <td>
                           <MemberIdentity member={member} />
+                        </td>
+                        <td>
+                          {formatMemberDepartment(member.department)}
                         </td>
                         <td className={`${a.num} ${a.muted}`}>
                           <MemberLastLogin member={member} />
@@ -466,6 +471,10 @@ export function MembersPage() {
                 <li key={member.user_id} className={s.memberCard}>
                   <MemberIdentity member={member} />
                   <dl className={s.memberCardMeta}>
+                    <div>
+                      <dt>部门</dt>
+                      <dd>{formatMemberDepartment(member.department)}</dd>
+                    </div>
                     <div>
                       <dt>最近登录</dt>
                       <dd className={a.num}>

@@ -227,7 +227,7 @@ admin 检查，而且这个参数由 BFF 写死（浏览器不能拿它换到别
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/admin/users?q=&role=&cursor=&limit=` | 本 org 成员列表（只含已 provisioning、至少登录过一次的账号）。响应 `{ members: [{ user_id, username, display_name, email, roles[], pinned_roles[], last_login_at }], next_cursor }`；`q` 匹配用户名或显示名，`role` 只接受白名单值，`limit` 默认 50、上限 200 |
+| `GET` | `/api/admin/users?q=&role=&cursor=&limit=` | 本 org 成员列表（只含已 provisioning、至少登录过一次的账号）。响应 `{ members: [{ user_id, username, display_name, email, department, roles[], pinned_roles[], last_login_at }], next_cursor }`；`q` 匹配用户名或显示名，`role` 只接受白名单值，`limit` 默认 50、上限 200 |
 | `PUT` | `/api/admin/users/{userId}/roles/{role}` | 授予，**幂等**（已有该角色返回 200，内容与当前一致，不重复写审计）。响应是上面单个成员对象 |
 | `DELETE` | `/api/admin/users/{userId}/roles/{role}` | 撤销，**幂等**（本来就没有该角色返回 200）。删除的是授予行，审计由只追加的 `tbl_agsvc_member_role_events` 承担 |
 | `GET` | `/api/admin/users/{userId}/role-events?limit=` | 该成员的角色变更记录（新到旧，`limit` 默认 50、上限 200）：`{ events: [{ event_id, role, action, source, actor_user_id, actor_username, actor_display_name, created_at }] }`，`source` ∈ `console` / `bootstrap` / `migration` |
@@ -434,7 +434,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/admin/skills/org/{name}/versions/{digest}/deprecate\|revoke` | 弃用 / 吊销某版本，返回完整 `affectedAgentVersionIds`（**admin**） |
 | `GET` | `/api/admin/skills/share-requests` | 本 org 的共享申请队列（**admin**）；`status` / `limit` / `cursor`，返回 `{ requests, next_cursor }`（见「列表分页」） |
 | `GET` `POST` | `/api/admin/skills/share-requests/{id}/manifest\|approve\|reject` | 审阅清单 / 批准 / 驳回（**admin**） |
-| `GET` | `/api/admin/users` | 本 org 成员列表（含 `roles` / `pinned_roles`，**admin**） |
+| `GET` | `/api/admin/users` | 本 org 成员列表（含 `department` / `roles` / `pinned_roles`，**admin**） |
 | `PUT` `DELETE` | `/api/admin/users/{userId}/roles/{role}` | 授予 / 撤销角色，幂等（**admin**） |
 | `GET` | `/api/admin/users/{userId}/role-events` | 角色变更记录（**admin**） |
 | `GET` `POST` | `/api/cron-jobs` | 列出 / 创建定时任务；列表带 `limit` / `cursor`，返回 `{ cron_jobs, next_cursor }`（见「列表分页」）。创建与修改可带 `notify_policy`（`never` / `failure`（默认）/ `always`），其他值 → 400 `VALIDATION_ERROR`；列表与详情都返回该字段 |

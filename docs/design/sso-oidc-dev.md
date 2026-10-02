@@ -103,7 +103,7 @@ SSO 按钮是指向 `/api/auth/sso/login` 的整页链接（带当前路径作 `
 - 两侧共享：`SSO_ENABLED`、`SSO_ISSUER`、`SSO_CLIENT_ID`、`SSO_ALLOW_INSECURE_HTTP`、`SSO_REQUEST_TIMEOUT_MS`。
 - 仅 BFF：`SSO_CLIENT_SECRET`、`SSO_REDIRECT_URI`、`SSO_SCOPES`、`SSO_TRANSACTION_SECRET`（≥32）、
   `SSO_TRANSACTION_TTL_SECONDS`。
-- 仅 Agent：`SSO_EMPLOYEE_ID_CLAIM`（默认 `employee_id`）、`SSO_ORG_ID`、`SSO_JWKS_URI`、`SSO_LABEL`。
+- 仅 Agent：`SSO_EMPLOYEE_ID_CLAIM`（默认 `employee_id`）、`SSO_DEPARTMENT_CLAIM`（默认空 = 不读部门）、`SSO_ORG_ID`、`SSO_JWKS_URI`、`SSO_LABEL`。
 - `SSO_ALLOW_INSECURE_HTTP` 只给开发替身；生产 issuer/回调必须 https。
 
 ## 6. 错误码
@@ -138,3 +138,16 @@ SSO 按钮是指向 `/api/auth/sso/login` 的整页链接（带当前路径作 `
 3. 站点改 HTTPS，Cookie 加 `Secure`（`api-server/src/http/cookies.ts`），`SSO_ALLOW_INSECURE_HTTP=false`；
 4. 若 JWKS 不在 issuer 同源，配 `SSO_JWKS_URI`；若 IdP 要求 `client_secret_basic`，需改
    `sso-flow.ts` 的 client 认证方式（当前固定 `client_secret_post`）。
+
+## 9. 部门预留（2026-10-03）
+
+本期按部门授权不做，只做预留——记录与展示，不做任何按部门授权的业务判定：
+- 配置：Agent 新增环境变量 `SSO_DEPARTMENT_CLAIM`（部门 claim 名，默认空 = 不读部门）。
+- 存储：`tbl_agsvc_users` 加 `department VARCHAR(255) NULL` 列。
+- 写入规则：首次 JIT 建用户时，以及每次 SSO 登录时，若配置了部门 claim 且 claim 是非空字符串（trim 后，最长 255），写入 `users.department`；claim 缺失或为空时保持原值不变（不清空）。只接受字符串，其他类型忽略。claim 名为空时完全不读、不写。
+- 展示：管理端成员列表接口（`/api/admin/users`）与前端「成员与角色」页（`MembersPage.tsx`）增加「部门」字段与展示列，空值显示「—」。只读字段，不提供修改接口。
+- 以后按部门授权要另立设计，待定问题包括：
+  - 部门作为授权主体加入智能体可见范围 `agent_user_grants` 的扩展（或独立 `agent_department_grants`）；
+  - 部门来源以 SSO ID token claim 为准还是以企业通讯录定时全量同步为准；
+  - 树状部门层级与继承关系。
+

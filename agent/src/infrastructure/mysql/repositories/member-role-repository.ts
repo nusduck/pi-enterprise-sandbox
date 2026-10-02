@@ -53,6 +53,7 @@ export interface MemberRow {
   readonly username: string | null;
   readonly displayName: string | null;
   readonly email: string | null;
+  readonly department: string | null;
   readonly lastLoginAt: string | null;
 }
 
@@ -142,6 +143,7 @@ export class MemberRoleRepository {
         'u.user_id as user_id',
         'u.display_name as display_name',
         'u.email as email',
+        'u.department as department',
         'ac.username as username',
         'ac.last_login_at as last_login_at',
       );
@@ -177,6 +179,7 @@ export class MemberRoleRepository {
         username: row.username == null ? null : String(row.username),
         displayName: row.display_name == null ? null : String(row.display_name),
         email: row.email == null ? null : String(row.email),
+        department: row.department == null ? null : String(row.department),
         lastLoginAt: formatDateTime(row.last_login_at),
       })),
       nextCursor: hasMore ? String(page[page.length - 1].user_id) : null,
@@ -196,6 +199,7 @@ export class MemberRoleRepository {
         'u.user_id as user_id',
         'u.display_name as display_name',
         'u.email as email',
+        'u.department as department',
         'ac.username as username',
         'ac.last_login_at as last_login_at',
       )
@@ -207,6 +211,7 @@ export class MemberRoleRepository {
       username: row.username == null ? null : String(row.username),
       displayName: row.display_name == null ? null : String(row.display_name),
       email: row.email == null ? null : String(row.email),
+      department: row.department == null ? null : String(row.department),
       lastLoginAt: formatDateTime(row.last_login_at),
     };
   }

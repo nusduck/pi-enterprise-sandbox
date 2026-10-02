@@ -126,7 +126,16 @@ export class OrganizationRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async createUser(input: { userId: string, externalSubject: string, displayName?: string | null, email?: string | null, status: string, createdAt?: Date | string, updatedAt?: Date | string, }) {
+  async createUser(input: {
+    userId: string;
+    externalSubject: string;
+    displayName?: string | null;
+    email?: string | null;
+    department?: string | null;
+    status: string;
+    createdAt?: Date | string;
+    updatedAt?: Date | string;
+  }) {
     const userId = assertUlid(input.userId, 'userId');
     if (typeof input.externalSubject !== 'string' || !input.externalSubject.trim()) {
       throw new Error('externalSubject must be a non-empty string');
@@ -146,6 +155,7 @@ export class OrganizationRepository {
       external_subject: externalSubject,
       display_name: input.displayName ?? null,
       email: input.email ?? null,
+      department: input.department ?? null,
       status: input.status,
       created_at: now,
       updated_at: updated,
@@ -204,7 +214,16 @@ export class OrganizationRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async createUserIfAbsent(input: { userId: string, externalSubject: string, displayName?: string | null, email?: string | null, status: string, createdAt?: Date | string, updatedAt?: Date | string, }) {
+  async createUserIfAbsent(input: {
+    userId: string;
+    externalSubject: string;
+    displayName?: string | null;
+    email?: string | null;
+    department?: string | null;
+    status: string;
+    createdAt?: Date | string;
+    updatedAt?: Date | string;
+  }) {
     // Validate ULID early so race path and insert share the same contract.
     assertUlid(input.userId, 'userId');
     const existing = await this.getUserByExternalSubject(input.externalSubject);
@@ -242,6 +261,19 @@ export class OrganizationRepository {
       }
       return raced;
     }
+  }
+
+  async setDepartmentByExternalSubject(externalSubject: string, department: string): Promise<void> {
+    if (typeof externalSubject !== 'string' || !externalSubject.trim()) {
+      throw new Error('externalSubject must be a non-empty string');
+    }
+    const subject = externalSubject.trim();
+    await this.db('tbl_agsvc_users')
+      .where({ external_subject: subject })
+      .update({
+        department,
+        updated_at: toMysqlDateTime(this.now()),
+      });
   }
 
   /**

@@ -17,6 +17,8 @@ export interface SsoConfig {
   readonly jwksUri: string;
   /** 工号所在 claim 名（公司实际字段到位后只改配置）。 */
   readonly employeeIdClaim: string;
+  /** 部门所在 claim 名（默认空 = 不读部门；非空时写入 users.department，只展示不授权）。 */
+  readonly departmentClaim: string;
   /** 所有 SSO 用户落入的唯一 org（外部 org ID，对应 `organization_external_refs`）。 */
   readonly orgExternalId: string;
   /** 仅开发替身：允许 http issuer。生产必须 https。 */
@@ -65,6 +67,7 @@ export function resolveSsoConfig(env: Record<string, string | undefined>): SsoCo
     clientId,
     jwksUri,
     employeeIdClaim: String(env.SSO_EMPLOYEE_ID_CLAIM || 'employee_id').trim() || 'employee_id',
+    departmentClaim: String(env.SSO_DEPARTMENT_CLAIM || '').trim(),
     orgExternalId: String(env.SSO_ORG_ID || 'org_bootstrap').trim() || 'org_bootstrap',
     allowInsecureHttp,
     requestTimeoutMs,
