@@ -12,6 +12,9 @@ import type { PersistedAgentEvent, ToolExecutionSnapshot } from '../../shared/sc
 import { canCancelRun, formatRunDuration, runInputLabel } from './runHelpers';
 import { buildRunTimeline, formatSpan, type TimelineNode } from './runTimeline';
 import { RunStatus, formatClock } from './RunsPage';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { StatusBadge } from '../../shared/ui/StatusBadge';
+import { EmptyState } from '../../shared/ui/EmptyState';
 import a from '../settings/adminPage.module.css';
 import s from './runDetail.module.css';
 
@@ -139,27 +142,36 @@ export function RunDetailPage() {
       <div className={s.crumb}>
         <Link to="/admin/runs">运行</Link> / <span className={a.mono}>{runId.slice(0, 10)}</span>
       </div>
-      <div className={a.head}>
-        <div>
-          <h1>{run?.conversation_title || '（无标题会话）'}</h1>
-          {run ? (
-            <p>
+      <PageHeader
+        title={run?.conversation_title || '（无标题会话）'}
+        description={
+          run ? (
+            <>
               {run.parent_run_id ? '子运行' : run.turn_no ? `第 ${run.turn_no} 轮` : ''}
               {runInputLabel(run.user_input, 120) ? `${run.parent_run_id || run.turn_no ? '：' : ''}${runInputLabel(run.user_input, 120)}` : ''}
-            </p>
-          ) : null}
-        </div>
-        {run ? <RunStatus status={status} /> : null}
-        <span className={a.sp} />
-        {cancellable ? <button type="button" className={a.btn} onClick={() => void cancel()}>{confirmCancel ? '确认取消运行' : '取消运行'}</button> : null}
-        {run?.conversation_id && isOwn ? (
-          <button type="button" className={a.btn} onClick={() => navigate(`/c/${encodeURIComponent(run.conversation_id!)}`)}>打开会话</button>
-        ) : null}
-        <button type="button" className={a.btn} onClick={() => void copyId()}>复制 Run ID</button>
-      </div>
+            </>
+          ) : undefined
+        }
+        action={
+          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+            {run ? <RunStatus status={status} /> : null}
+            {cancellable ? <button type="button" className={a.btn} onClick={() => void cancel()}>{confirmCancel ? '确认取消运行' : '取消运行'}</button> : null}
+            {run?.conversation_id && isOwn ? (
+              <button type="button" className={a.btn} onClick={() => navigate(`/c/${encodeURIComponent(run.conversation_id!)}`)}>打开会话</button>
+            ) : null}
+            <button type="button" className={a.btn} onClick={() => void copyId()}>复制 Run ID</button>
+          </div>
+        }
+      />
 
       {notice ? <p className={a.notice} role="status" onClick={() => setNotice(null)}>{notice}</p> : null}
-      {error ? <p className={s.error} role="alert">{error}</p> : null}
+      {error ? (
+        <EmptyState
+          variant={error.includes('权限') ? 'forbidden' : 'error'}
+          title="无法加载运行"
+          description={error}
+        />
+      ) : null}
 
       {run ? (
         <div className={s.meta}>
@@ -222,7 +234,7 @@ export function RunDetailPage() {
               <div className={s.inspHead}>
                 <b>{current.name}</b>
                 <span>
-                  <span className={`${a.pill} ${NODE_STATUS[current.status][1]}`}>{NODE_STATUS[current.status][0]}</span>{' '}
+                  <StatusBadge status={current.status} label={NODE_STATUS[current.status][0]} />{' '}
                   <span className={`${a.muted} ${a.num}`}>
                     开始 +{formatSpan(current.start - timeline.start)} · 耗时 {current.end == null ? '进行中' : formatSpan(current.end - current.start)}
                   </span>

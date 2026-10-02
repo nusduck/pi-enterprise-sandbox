@@ -480,7 +480,7 @@ const server = http.createServer(async (rawReq, res) => {
 
     // ── Conversations ──
     if (req.method === 'GET' && path === '/api/conversations') {
-      await handleListConversations(res, req);
+      await handleListConversations(parsedUrl, res, req);
       return;
     }
     if (req.method === 'POST' && path === '/api/conversations') {

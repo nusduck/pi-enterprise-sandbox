@@ -6,6 +6,7 @@ import {
   deleteCronJob,
   listAllCronJobRuns,
   listCronJobs,
+  listCronJobsPage,
   runCronJobNow,
   updateCronJob,
   type CronJob,
@@ -16,6 +17,10 @@ import { getRun } from '../../shared/api/runs';
 import { agentTone, isDefaultAgentName } from '../../widgets/conversation-sidebar/sidebarModel';
 import { dailyStrip, describeJob, formatInstant, markSchedulesSeen, runOutcome, type RunOutcome } from './scheduleModel';
 import { ScheduleDialog } from './ScheduleDialog';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { StatusBadge } from '../../shared/ui/StatusBadge';
+import { EmptyState } from '../../shared/ui/EmptyState';
+import { Pager, useCursorPagination } from '../../shared/ui/Pager';
 import s from './schedules.module.css';
 
 type Tab = 'jobs' | 'runs';
@@ -37,6 +42,7 @@ export function SchedulesPage() {
   const navigate = useNavigate();
   const { agents, agentNameById } = useChat();
   const [tab, setTab] = useState<Tab>('jobs');
+  const pagination = useCursorPagination({ initialPageSize: 20 });
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,9 +61,13 @@ export function SchedulesPage() {
       const since = new Date();
       since.setHours(0, 0, 0, 0);
       since.setDate(since.getDate() - 30);
-      const [list, runs] = await Promise.all([listCronJobs(), listAllCronJobRuns(since)]);
+      const [page, runs] = await Promise.all([
+        listCronJobsPage({ limit: pagination.pageSize, cursor: pagination.currentCursor }),
+        listAllCronJobRuns(since),
+      ]);
       if (gen !== generation.current) return;
-      setJobs(list);
+      setJobs(page.cron_jobs);
+      pagination.setPageData(page.next_cursor);
       setError(null);
       setHistory(runs.map((r) => ({ ...r, jobName: r.job_name, timezone: r.job_timezone })));
     } catch (err) {
@@ -65,7 +75,7 @@ export function SchedulesPage() {
     } finally {
       if (gen === generation.current) setLoading(false);
     }
-  }, []);
+  }, [pagination.pageSize, pagination.currentCursor, pagination.setPageData]);
 
   useEffect(() => {
     void refresh();
@@ -136,13 +146,19 @@ export function SchedulesPage() {
   return (
     <div className={s.page}>
       <div className={s.inner}>
+        <PageHeader
+          title="定时任务"
+          description="按计划自动发起对话或运行智能体，运行结果直接进入会话列表。"
+          action={
+            <button type="button" className={s.primaryPill} onClick={() => setEditing({ job: null })}>新建定时任务</button>
+          }
+        />
+
         <div className={s.top}>
           <div className={s.tabs} role="tablist" aria-label="定时任务">
             <button type="button" role="tab" aria-selected={tab === 'jobs'} onClick={() => setTab('jobs')}>定时任务</button>
             <button type="button" role="tab" aria-selected={tab === 'runs'} onClick={() => setTab('runs')}>运行</button>
           </div>
-          <span className={s.sp} />
-          <button type="button" className={s.primaryPill} onClick={() => setEditing({ job: null })}>新建定时任务</button>
         </div>
 
         {error ? <p className={s.banner} role="alert" onClick={() => setError(null)}>{error}</p> : null}
@@ -173,10 +189,12 @@ export function SchedulesPage() {
           <section className={`${s.panel} ${s.tableWrap}`}>
             {loading && !jobs.length ? <p className={s.empty}>正在读取…</p> : null}
             {!loading && !jobs.length ? (
-              <div className={s.empty}>
-                <b>还没有定时任务</b>
-                <span>定时任务会按计划自动发起一次对话，结果出现在会话列表里。</span>
-              </div>
+              <EmptyState
+                variant="empty"
+                title="还没有定时任务"
+                description="定时任务会按计划自动发起一次对话，结果出现在会话列表里。"
+                action={{ label: '新建定时任务', onClick: () => setEditing({ job: null }) }}
+              />
             ) : null}
             {jobs.length ? (
               <table className={s.table}>
@@ -198,10 +216,10 @@ export function SchedulesPage() {
                       <td className={s.muted}>{describeJob(job)}</td>
                       <td className={s.num}>{job.enabled ? formatInstant(job.next_run_at, job.timezone) : '—'}</td>
                       <td>
-                        <span className={s.state}>
-                          <i className={job.enabled ? s.dotOn : s.dotOff} aria-hidden="true" />
-                          {job.enabled ? '已启用' : '已暂停'}
-                        </span>
+                        <StatusBadge
+                          status={job.enabled ? 'running' : 'neutral'}
+                          label={job.enabled ? '已启用' : '已暂停'}
+                        />
                       </td>
                       <td className={s.more} onClick={(e) => e.stopPropagation()}>
                         <button
@@ -244,23 +262,45 @@ export function SchedulesPage() {
                 </tbody>
               </table>
             ) : null}
+            {jobs.length ? (
+              <Pager
+                page={pagination.page}
+                count={jobs.length}
+                pageSize={pagination.pageSize}
+                onPageSizeChange={pagination.setPageSize}
+                onPrev={pagination.goToPrevPage}
+                onNext={pagination.goToNextPage}
+                hasPrev={pagination.hasPrev}
+                hasNext={pagination.hasNext}
+                loading={loading}
+              />
+            ) : null}
           </section>
         ) : (
           <section className={`${s.panel} ${s.tableWrap}`}>
-            {!history.length ? <div className={s.empty}><b>还没有运行记录</b></div> : (
+            {!history.length ? (
+              <EmptyState
+                variant="empty"
+                title="还没有运行记录"
+                description="定时任务触发运行后，历史记录将展示在这里。"
+              />
+            ) : (
               <table className={s.table}>
                 <thead>
                   <tr><th>计划时间</th><th>定时任务</th><th>结果</th><th aria-label="操作" /></tr>
                 </thead>
                 <tbody>
                   {history.map((run) => {
-                    const [label, cls] = OUTCOME[runOutcome(run)];
+                    const [label] = OUTCOME[runOutcome(run)];
                     return (
                       <tr key={run.cron_job_run_id} className={s.static}>
                         <td className={s.num}>{formatInstant(run.scheduled_at, run.timezone)}</td>
                         <td>{run.jobName}</td>
                         <td>
-                          <span className={`${s.pill} ${cls}`}>{label}</span>
+                          <StatusBadge
+                            status={runOutcome(run) === 'ok' ? 'success' : runOutcome(run) === 'err' ? 'failed' : runOutcome(run) === 'live' ? 'running' : 'neutral'}
+                            label={label}
+                          />
                           {run.error_message ? <span className={s.errText}> {run.error_message}</span> : null}
                         </td>
                         <td className={s.right}>

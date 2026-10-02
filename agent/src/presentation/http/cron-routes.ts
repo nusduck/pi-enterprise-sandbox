@@ -19,7 +19,7 @@ import { mapErrorToHttp } from './error-mapper.js';
  * "能调什么"，不该知道它由谁实现。
  */
 export interface CronJobServiceLike {
-  list(auth: AuthSubjects, opts: { limit?: number | undefined }): Promise<unknown>;
+  list(auth: AuthSubjects, opts: { limit?: unknown; cursor?: unknown }): Promise<unknown>;
   create(auth: AuthSubjects, body: unknown): Promise<unknown>;
   listAllRuns(auth: AuthSubjects, opts: { since?: string | null; limit?: unknown }): Promise<unknown>;
   listRuns(
@@ -98,10 +98,16 @@ export async function handleCronRoute({
     if (!auth) return true;
     try {
       if (req.method === 'GET') {
-        const limit = Number(parsedUrl.searchParams.get('limit')) || undefined;
-        json(res, 200, {
-          cron_jobs: await cronJobService.list(auth, { limit }),
-        });
+        // 原样交给服务：`limit` 的边界与 `cursor` 的解码都在 CronJobService 里判，
+        // 这里 `Number(x) || undefined` 会把 `limit=abc` 静默变成默认页大小。
+        json(
+          res,
+          200,
+          await cronJobService.list(auth, {
+            limit: parsedUrl.searchParams.get('limit'),
+            cursor: parsedUrl.searchParams.get('cursor'),
+          }),
+        );
         return true;
       }
       if (req.method === 'POST') {

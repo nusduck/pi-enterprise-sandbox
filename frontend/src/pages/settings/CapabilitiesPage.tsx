@@ -14,9 +14,15 @@ import { mcpStatus, toolStatus, usageTitle } from './capabilityFormat';
 import { isDraftSkill, isOrgSkill, isUserSkill } from './skillHelpers';
 import { useChat } from '../../features/chat/ChatContext';
 import { getAdminSkillUsage, type SkillUsageEntry } from '../../shared/api/adminRuns';
+import { Pager } from '../../shared/ui/Pager';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { Toolbar } from '../../shared/ui/Toolbar';
+import { SegmentedControl } from '../../shared/ui/SegmentedControl';
 import s from './adminPage.module.css';
 
 type Tab = 'skills' | 'mcp' | 'tools' | 'models';
+
+const PAGE_SIZE = 25;
 
 const EMPTY: SoftListResult<never> = { items: [], available: true };
 
@@ -113,6 +119,8 @@ export function CapabilitiesPage() {
 
   const [loading, setLoading] = useState(true);
 
+  const [page, setPage] = useState(1);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -130,6 +138,10 @@ export function CapabilitiesPage() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [query, tab, skillScope]);
+
   const skillRows = useMemo(
     () =>
       skills.items.filter((item) => {
@@ -138,6 +150,39 @@ export function CapabilitiesPage() {
       }),
     [skills.items, skillScope, query],
   );
+
+  const mcpRows = useMemo(
+    () => mcp.items.filter((m) => matches(query, m.name, m.server_id, m.id)),
+    [mcp.items, query],
+  );
+
+  const toolRows = useMemo(
+    () => tools.items.filter((t) => matches(query, t.name, t.id, t.description, t.category)),
+    [tools.items, query],
+  );
+
+  const modelRows = useMemo(
+    () => models.items.filter((m) => matches(query, m.name, m.model_id, m.id, m.provider)),
+    [models.items, query],
+  );
+
+  const activeTotal =
+    tab === 'skills'
+      ? skillRows.length
+      : tab === 'mcp'
+        ? mcpRows.length
+        : tab === 'tools'
+          ? toolRows.length
+          : modelRows.length;
+
+  const totalPages = Math.max(1, Math.ceil(activeTotal / PAGE_SIZE));
+  const startIndex = (page - 1) * PAGE_SIZE;
+  const endIndex = startIndex + PAGE_SIZE;
+
+  const pagedSkillRows = useMemo(() => skillRows.slice(startIndex, endIndex), [skillRows, startIndex, endIndex]);
+  const pagedMcpRows = useMemo(() => mcpRows.slice(startIndex, endIndex), [mcpRows, startIndex, endIndex]);
+  const pagedToolRows = useMemo(() => toolRows.slice(startIndex, endIndex), [toolRows, startIndex, endIndex]);
+  const pagedModelRows = useMemo(() => modelRows.slice(startIndex, endIndex), [modelRows, startIndex, endIndex]);
 
   const tabs: Array<[Tab, string, number]> = [
     ['skills', 'Skills', skills.items.length],
@@ -148,11 +193,11 @@ export function CapabilitiesPage() {
 
   let body: ReactNode;
   if (tab === 'skills') {
-    body = skills.items.length === 0 ? <Unavailable result={skills} noun=" Skill " loading={loading} /> : (
+    body = skillRows.length === 0 ? <Unavailable result={skills} noun=" Skill " loading={loading} /> : (
       <table className={s.table}>
         <thead><tr><th>名称</th><th>说明</th><th>来源</th><th title="用户 Skill 只列出你自己的">所有者</th><th>状态</th>{usage ? <th className={s.right} title="全组织近 7 天 skill 工具的调用次数；直接读取 Skill 文件不计入">近 7 天调用</th> : null}</tr></thead>
         <tbody>
-          {skillRows.map((item, i) => {
+          {pagedSkillRows.map((item, i) => {
             const [label, cls] = skillSource(item);
             return (
               <tr key={`${item.source}-${item.name || i}`}>
@@ -186,11 +231,11 @@ export function CapabilitiesPage() {
       </table>
     );
   } else if (tab === 'mcp') {
-    body = mcp.items.length === 0 ? <Unavailable result={mcp} noun=" MCP 服务" loading={loading} /> : (
+    body = mcpRows.length === 0 ? <Unavailable result={mcp} noun=" MCP 服务" loading={loading} /> : (
       <table className={s.table}>
         <thead><tr><th>服务</th><th>状态</th><th className={s.right}>工具数</th><th>授权方式</th><th>最近刷新</th></tr></thead>
         <tbody>
-          {mcp.items.filter((m) => matches(query, m.name, m.server_id, m.id)).map((m, i) => {
+          {pagedMcpRows.map((m, i) => {
             const id = m.server_id || m.id || m.name || `mcp-${i}`;
             const count = m.tools_count ?? m.tool_count ?? null;
             return (
@@ -207,13 +252,12 @@ export function CapabilitiesPage() {
       </table>
     );
   } else if (tab === 'tools') {
-    // The registry often carries no descriptions; an all-dash column is noise.
     const described = tools.items.some((t) => t.description);
-    body = tools.items.length === 0 ? <Unavailable result={tools} noun="工具" loading={loading} /> : (
+    body = toolRows.length === 0 ? <Unavailable result={tools} noun="工具" loading={loading} /> : (
       <table className={s.table}>
         <thead><tr><th>工具</th>{described ? <th>说明</th> : null}<th>类别</th><th>风险</th><th>默认审批</th><th>状态</th></tr></thead>
         <tbody>
-          {tools.items.filter((t) => matches(query, t.name, t.id, t.description, t.category)).map((t, i) => {
+          {pagedToolRows.map((t, i) => {
             const name = t.name || t.id || `tool-${i}`;
             const [risk, riskCls] = RISK_ZH[String(t.risk_level || '').toLowerCase()] || [t.risk_level || '—', s.mute];
             return (
@@ -231,11 +275,11 @@ export function CapabilitiesPage() {
       </table>
     );
   } else {
-    body = models.items.length === 0 ? <Unavailable result={models} noun="模型" loading={loading} /> : (
+    body = modelRows.length === 0 ? <Unavailable result={models} noun="模型" loading={loading} /> : (
       <table className={s.table}>
         <thead><tr><th>模型</th><th>提供方</th><th className={s.right}>上下文</th><th className={s.right}>最大输出</th><th>能力</th><th>状态</th></tr></thead>
         <tbody>
-          {models.items.filter((m) => matches(query, m.name, m.model_id, m.id, m.provider)).map((m, i) => {
+          {pagedModelRows.map((m, i) => {
             const id = m.model_id || m.id || `model-${i}`;
             const vision = Array.isArray(m.input_modalities) && m.input_modalities.map(String).includes('image');
             return (
@@ -266,14 +310,15 @@ export function CapabilitiesPage() {
 
   return (
     <div className={s.page}>
-      <div className={s.head}>
-        <div>
-          <h1>能力</h1>
-          <p>当前部署提供的 Skills、MCP 服务、工具和模型。智能体可以使用哪些，在各自的版本配置里设置；个人 Skill 在「设置」里管理。</p>
-        </div>
-        <span className={s.sp} />
-        <button type="button" className={s.btn} onClick={() => void refresh()}>刷新</button>
-      </div>
+      <PageHeader
+        title="能力"
+        description="当前部署提供的 Skills、MCP 服务、工具和模型。智能体可以使用哪些，在各自的版本配置里设置；个人 Skill 在「设置」里管理。"
+        actions={
+          <button type="button" className={s.btn} onClick={() => void refresh()} disabled={loading}>
+            {loading ? '刷新中…' : '刷新'}
+          </button>
+        }
+      />
       <div className={s.tabs} role="tablist" aria-label="能力分类">
         {tabs.map(([id, label, count]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
@@ -281,17 +326,51 @@ export function CapabilitiesPage() {
           </button>
         ))}
       </div>
-      <div className={s.toolbar}>
-        <input className={s.search} id="cap-search" placeholder="搜索名称或说明" aria-label="搜索" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <Toolbar>
+        <input
+          className={s.search}
+          id="cap-search"
+          placeholder="搜索名称或说明"
+          aria-label="搜索"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
         {tab === 'skills' ? (
-          <div className={s.seg} role="group" aria-label="Skill 来源">
-            {([['all', '全部'], ['system', '系统'], ['org', '组织'], ['user', '用户']] as const).map(([v, label]) => (
-              <button key={v} type="button" aria-pressed={skillScope === v} onClick={() => setSkillScope(v)}>{label}</button>
-            ))}
-          </div>
+          <SegmentedControl
+            value={skillScope}
+            onChange={(v) => setSkillScope(v as 'all' | SkillScope)}
+            options={([
+              ['all', '全部'],
+              ['system', '系统'],
+              ['org', '组织'],
+              ['user', '用户'],
+            ] as const).map(([v, label]) => ({ value: v, label }))}
+            aria-label="Skill 来源"
+          />
+        ) : null}
+      </Toolbar>
+      <div className={s.tableCard}>
+        <div className={s.tableWrap}>{body}</div>
+        {activeTotal > 0 ? (
+          <Pager
+            page={page}
+            count={
+              tab === 'skills'
+                ? pagedSkillRows.length
+                : tab === 'mcp'
+                  ? pagedMcpRows.length
+                  : tab === 'tools'
+                    ? pagedToolRows.length
+                    : pagedModelRows.length
+            }
+            pageSize={PAGE_SIZE}
+            hasPrev={page > 1}
+            hasNext={page < totalPages}
+            onPrev={() => setPage((p) => Math.max(1, p - 1))}
+            onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+          />
         ) : null}
       </div>
-      <div className={s.tableWrap}>{body}</div>
     </div>
   );
 }

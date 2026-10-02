@@ -30,6 +30,11 @@ import type {
 } from '../infrastructure/mysql/repositories/skill-share-request-repository.js';
 import { ShareRequestError } from '../infrastructure/mysql/repositories/skill-share-request-repository.js';
 import { ROLE_ADMIN, hasRole } from '../domain/identity/roles.js';
+import { ValidationError } from './errors.js';
+import { decodeKeysetCursor, encodeKeysetCursor, parseKeysetLimit } from './keyset-cursor.js';
+
+/** 共享申请队列默认每页 50（design ui-polish §2.4）。 */
+export const SHARE_REQUEST_LIST_DEFAULT_LIMIT = 50;
 
 /** 发起申请的人。 */
 export interface RequesterActor {
@@ -172,6 +177,11 @@ export function statusForShareError(error: unknown): { status: number; code: str
     // 摘要不一致 / 源缺失 / 已撤销，都是**可以解释给管理员看**的业务结果。
     return { status: 400, code: error.code, message: error.message };
   }
+  // 列表分页的形状错误（`limit` 越界、`cursor` 解不出来）走与其它接口同一个
+  // 对外码：调用方按 `VALIDATION_ERROR` 分流，不该因为走的是共享申请面而不同。
+  if (error instanceof ValidationError) {
+    return { status: 400, code: error.code, message: error.message };
+  }
   return {
     status: 400,
     code: 'SKILL_SHARE_OPERATION_FAILED',
@@ -269,16 +279,34 @@ export class SkillShareService {
    *
    * 按 org 过滤**在这里**做：仓储的 `listForOrg` 要 orgId，而 orgId 来自服务端解析出的
    * 调用者身份——不信任任何请求参数。
+   *
+   * 返回 `{ requests, next_cursor }`（design ui-polish §2.4）：保持 `requests`
+   * 键名，游标只是位置，作用域仍是解析出的 org。默认每页 50。
    */
   async listForAdmin(input: {
     actor: DeciderActor | null;
     status?: 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'superseded';
-  }): Promise<ShareRequestRow[]> {
+    limit?: unknown;
+    cursor?: unknown;
+  }): Promise<{ requests: ShareRequestRow[]; next_cursor: string | null }> {
+    const limit = parseKeysetLimit(input.limit, SHARE_REQUEST_LIST_DEFAULT_LIMIT);
+    const before = decodeKeysetCursor(input.cursor);
     const actor = await this.#actor(requireDecider(input.actor));
-    return this.deps.requests.listForOrg({
+    const rows = await this.deps.requests.listForOrg({
       orgId: actor.externalOrgId,
       ...(input.status ? { status: input.status } : {}),
+      limit: limit + 1,
+      before,
     });
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      requests: page,
+      next_cursor:
+        rows.length > limit && last
+          ? encodeKeysetCursor(last.createdAt, last.requestId)
+          : null,
+    };
   }
 
   /**
@@ -526,12 +554,12 @@ export function createSkillShareHandler(
             const allowed = ['pending', 'approved', 'rejected', 'withdrawn', 'superseded'];
             return {
               status: 200,
-              body: {
-                requests: await service.listForAdmin({
-                  actor: auth,
-                  ...(allowed.includes(status) ? { status: status as 'pending' } : {}),
-                }),
-              },
+              body: await service.listForAdmin({
+                actor: auth,
+                ...(allowed.includes(status) ? { status: status as 'pending' } : {}),
+                limit: input.query.get('limit'),
+                cursor: input.query.get('cursor'),
+              }),
             };
           }
           return { status: 200, body: { requests: await service.listMine({ actor: auth }) } };

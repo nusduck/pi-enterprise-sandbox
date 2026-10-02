@@ -30,6 +30,7 @@ import {
   resolveRequestId,
   readIdempotencyKey,
   readBody,
+  listQueryParams,
   json,
 } from '../presentation/http/request-response.js';
 import {
@@ -264,9 +265,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         }
         try {
           if (req.method === 'GET') {
-            const requestedLimit = Number(parsedUrl.searchParams.get('limit')) || 200;
-            const limit = Math.min(200, Math.max(1, requestedLimit));
-            json(res, 200, await conversationService.list(auth, { limit }));
+            // 形状与边界由 ConversationService 判（越界 → 400）；不在这里 clamp，
+            // 静默截断会把客户端的错误输入伪装成正常分页。
+            json(res, 200, await conversationService.list(auth, listQueryParams(parsedUrl, ['limit', 'cursor', 'q'])));
             return;
           }
           if (req.method === 'POST') {
@@ -486,11 +487,9 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           return;
         }
         try {
-          const approvals = await approvalQueryService.list(auth, {
-            status: parsedUrl.searchParams.get('status') || undefined,
-            limit: parsedUrl.searchParams.get('limit') || undefined,
-          });
-          json(res, 200, { approvals, items: approvals });
+          // 契约是 `{ approvals, next_cursor }`：原来的同值 `items` 已删除。
+          const query = listQueryParams(parsedUrl, ['status', 'limit', 'cursor']);
+          json(res, 200, await approvalQueryService.list(auth, query));
         } catch (err) {
           const mapped = mapErrorToHttp(err);
           json(res, mapped.status, mapped.body);

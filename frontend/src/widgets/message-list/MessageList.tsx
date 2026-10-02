@@ -9,10 +9,20 @@ import {
 import { conversationDisplay } from '../../features/chat/conversationLoading';
 import { isTerminalRunStatus } from '../../entities';
 import { IconChevronDown } from '../../shared/ui/Icons';
+import { agentTone, isDefaultAgentName } from '../conversation-sidebar/sidebarModel';
 import s from './messageList.module.css';
 
 export function MessageList() {
-  const { state, displayMessages, sendMessage, entityStore, activeRunId, activeSessionId } = useChat();
+  const {
+    state,
+    displayMessages,
+    sendMessage,
+    entityStore,
+    activeRunId,
+    activeSessionId,
+    agents,
+    selectedAgentId,
+  } = useChat();
   const ref = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -102,15 +112,36 @@ export function MessageList() {
     >
       {loading ? (
         <div className={s.welcome} role="status">正在恢复会话…</div>
-      ) : visibleMessages.length === 0 ? (
-        <div className={s.welcome}>
-          <h2>今天想让智能体做什么？</h2>
-          <p>描述任务，或者把文件拖进来。运行过程会在这里逐步展示。</p>
-          <p className={s.keys}>
-            <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>⌘U</kbd> 添加文件 · <kbd>⌘L</kbd> 新建会话
-          </p>
-        </div>
-      ) : (
+      ) : visibleMessages.length === 0 ? (() => {
+        const currentConv = state.conversationId
+          ? (state.conversations || []).find((c) => c.id === state.conversationId)
+          : null;
+        const currentAgentId = currentConv ? currentConv.agent_id : selectedAgentId;
+        const currentAgent =
+          agents.find((a) => a.agent_id === currentAgentId) ||
+          agents.find((a) => isDefaultAgentName(a.name)) ||
+          agents[0] ||
+          null;
+        const toneIdx = currentAgent ? agentTone(currentAgent.agent_id) : 0;
+        const initial = (currentAgent?.name || '智').slice(0, 1);
+
+        return (
+          <div className={s.welcome}>
+            {currentAgent ? (
+              <div className={`${s.agentAvatar} ${s[`t${toneIdx}`]}`} aria-hidden="true">
+                {initial}
+              </div>
+            ) : null}
+            <h2>{currentAgent?.name || '今天想让智能体做什么？'}</h2>
+            <p className={s.agentDesc}>
+              {currentAgent?.description || '描述任务，或者把文件拖进来。运行过程会在这里逐步展示。'}
+            </p>
+            <p className={s.keys}>
+              <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>⌘U</kbd> 添加文件 · <kbd>⌘L</kbd> 新建会话
+            </p>
+          </div>
+        );
+      })() : (
         visibleMessages.map((msg, idx) => {
           const canRegenerate =
             regen.allowed && idx === regen.assistantIdx;

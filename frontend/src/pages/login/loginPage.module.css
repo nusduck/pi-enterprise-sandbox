@@ -1,0 +1,408 @@
+.page {
+  width: 100vw;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 520px minmax(0, 1fr);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  box-sizing: border-box;
+}
+
+@media (max-width: 900px) {
+  .page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .brandCol {
+    display: none !important;
+  }
+}
+
+/* ── 左栏品牌区 ──
+   品牌栏在两种主题下都保持深色调：利用局部变量映射 tokens 变量。
+   暗色主题（默认）：取 --color-bg / --color-text 等；
+   浅色主题：取暗色 token（--color-text 为暗黑背景，--color-text-inverse 为亮白文字）。
+*/
+.brandCol {
+  --brand-bg: var(--color-bg);
+  --brand-text: var(--color-text);
+  --brand-text-bright: var(--color-text);
+  --brand-text-secondary: var(--color-text-secondary);
+  --brand-text-muted: var(--color-text-muted);
+  --brand-accent: var(--color-primary-tint);
+  --brand-logo-bg: var(--color-text);
+  --brand-logo-text: var(--color-bg);
+
+  background: var(--brand-bg);
+  color: var(--brand-text);
+  padding: var(--space-12) 56px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+
+[data-theme='light'] .brandCol {
+  --brand-bg: var(--color-text);
+  --brand-text: var(--color-bg);
+  --brand-text-bright: var(--color-text-inverse);
+  --brand-text-secondary: var(--color-bg-sidebar);
+  --brand-text-muted: var(--color-text-dim);
+  --brand-accent: var(--color-primary-tint);
+  --brand-logo-bg: var(--color-bg);
+  --brand-logo-text: var(--color-text);
+}
+
+.brandHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.logoIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--brand-logo-bg);
+  color: var(--brand-logo-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: var(--font-size-sm);
+}
+
+.brandTitle {
+  font-weight: 600;
+  font-size: var(--font-size-lg);
+  color: var(--brand-text-bright);
+}
+
+.brandBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.heroTitle {
+  margin: 0;
+  font-size: var(--font-size-display);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-title);
+  font-weight: 650;
+  color: var(--brand-text-bright);
+}
+
+.featureList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.featureItem {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.featureIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--brand-accent);
+}
+
+.featureTitle {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--brand-text-bright);
+}
+
+.featureDesc {
+  font-size: var(--font-size-sm);
+  color: var(--brand-text-secondary);
+  margin-top: var(--space-1);
+  line-height: 1.55;
+}
+
+.brandFooter {
+  font-size: var(--font-size-xs);
+  color: var(--brand-text-muted);
+}
+
+/* ── 右栏登录卡片 ── */
+.formCol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-10) var(--space-6);
+  box-sizing: border-box;
+}
+
+.card {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.cardHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: var(--tracking-title);
+  color: var(--color-text);
+}
+
+.cardSubtitle {
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text-secondary);
+}
+
+.loadingState {
+  padding: var(--space-4) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  border: 1px dashed var(--color-border);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+.warningAlert {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning-border);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+}
+
+.errorAlert {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger-border);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-snug);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.ssoSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ssoPrimaryBtn {
+  height: 44px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+
+.ssoPrimaryBtn:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.ssoPrimaryBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ssoHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text-dim);
+  font-size: var(--font-size-xs);
+  margin: var(--space-1) 0;
+}
+
+.dividerLine {
+  flex-grow: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.dividerText {
+  color: var(--color-text-muted);
+}
+
+.adminToggleBtn {
+  height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+
+.adminToggleBtn:hover {
+  background: var(--color-bg-card-hover);
+  border-color: var(--color-border-hover);
+}
+
+/* ── 表单样式 ── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.label {
+  font-size: var(--font-size-sm);
+  font-weight: 550;
+  color: var(--color-text);
+}
+
+.input {
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  font-size: var(--font-size-md);
+  font-family: inherit;
+  color: var(--color-text);
+  transition: border-color var(--duration-fast);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
+
+.inputError {
+  border-color: var(--color-danger) !important;
+}
+
+.passwordWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.passwordWrapper .input {
+  width: 100%;
+  padding-right: 44px;
+}
+
+.showPwBtn {
+  position: absolute;
+  right: 4px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.showPwBtn:hover {
+  color: var(--color-text);
+}
+
+.fieldError {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  line-height: var(--leading-snug);
+  margin-top: 2px;
+}
+
+.submitBtn {
+  height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-text);
+  color: var(--color-text-inverse);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity var(--duration-fast);
+}
+
+.submitBtn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.submitBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondaryBtn {
+  height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.adminFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+}
+
+.linkBtn {
+  border: none;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}

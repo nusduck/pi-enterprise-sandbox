@@ -59,6 +59,27 @@ function internalHeaders(extra: Record<string, string> = {}): Record<string, str
   return h;
 }
 
+/**
+ * Query keys the Agent list endpoints accept (design §2.4). Everything else a
+ * browser sends stays here — same discipline as `agent-admin-client.pick()`.
+ * `limit`/`cursor` are forwarded verbatim on purpose: range checks and cursor
+ * decoding are `agent/`'s call, so `limit=999` must reach it and come back 400.
+ */
+const CONVERSATION_LIST_KEYS = ['limit', 'cursor', 'q'] as const;
+const APPROVAL_LIST_KEYS = ['status', 'limit', 'cursor'] as const;
+const CRON_JOB_LIST_KEYS = ['limit', 'cursor'] as const;
+
+/** Whitelisted `?a=b` suffix, or `''` when nothing survives. Empty values drop out. */
+function pickListQuery(source: URLSearchParams | null, keys: readonly string[]): string {
+  if (!source) return '';
+  const picked = new URLSearchParams();
+  for (const key of keys) {
+    const value = source.get(key);
+    if (value != null && value !== '') picked.set(key, value);
+  }
+  return picked.size ? `?${picked}` : '';
+}
+
 
 /**
  * Build a W3C traceparent with non-zero random span-id (8 bytes / 16 hex).
@@ -366,9 +387,13 @@ async function requestAgentConversation(
 }
 
 export async function listAgentConversations(
+  query: URLSearchParams | null = null,
   { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
 ): Promise<any> {
-  return requestAgentConversation('', { auth, traceId });
+  return requestAgentConversation(pickListQuery(query, CONVERSATION_LIST_KEYS), {
+    auth,
+    traceId,
+  });
 }
 
 export async function getAgentConversation(
@@ -516,11 +541,10 @@ async function requestAgentCron(
 
 
 export async function listAgentCronJobs(
-  { limit }: { limit?: number | string } = {},
+  query: URLSearchParams | null = null,
   { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
 ): Promise<any> {
-  const query = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
-  return requestAgentCron(query, { auth, traceId });
+  return requestAgentCron(pickListQuery(query, CRON_JOB_LIST_KEYS), { auth, traceId });
 }
 
 export async function createAgentCronJob(body: any, { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {}): Promise<any> {
@@ -758,14 +782,10 @@ async function requestAgentApproval(
 
 /** List owner-scoped durable approvals from Agent MySQL. */
 export async function listAgentApprovals(
-  { status = null, limit = null }: { status?: string | null; limit?: number | string | null } = {},
+  query: URLSearchParams | null = null,
   { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
 ): Promise<any> {
-  const query = new URLSearchParams();
-  if (status) query.set('status', String(status));
-  if (limit != null) query.set('limit', String(limit));
-  const suffix = query.size ? `?${query}` : '';
-  return requestAgentApproval(suffix, { auth, traceId });
+  return requestAgentApproval(pickListQuery(query, APPROVAL_LIST_KEYS), { auth, traceId });
 }
 
 /** Load one owner-scoped durable approval from Agent MySQL. */

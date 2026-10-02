@@ -103,6 +103,11 @@ export function listAdminSkillShareRequests(query: URLSearchParams, opts: Opts =
   const status = query.get('status');
   if (status != null && status !== '') scoped.set('status', status);
   scoped.set('scope', 'org');
+  // 分页键只是位置（design §2.4）：不判范围，agent 说限多少就是多少。
+  for (const key of ['limit', 'cursor'] as const) {
+    const value = query.get(key);
+    if (value != null && value !== '') scoped.set(key, value);
+  }
   return requestAgentSkill('/internal/skills/share-requests', { query: scoped, ...opts });
 }
 

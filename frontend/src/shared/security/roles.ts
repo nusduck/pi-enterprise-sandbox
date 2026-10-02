@@ -84,3 +84,13 @@ export function hasAdminRole(user: RoleUserInput): boolean {
 export function hasReviewerRole(user: RoleUserInput): boolean {
   return hasRole(user, 'reviewer');
 }
+
+/**
+ * 用户菜单里显示的身份：取最高的那个角色（管理员 > 审核员 > 普通用户）。
+ * 只是展示；权限判定仍以服务端为准。
+ */
+export function primaryRoleLabel(user: RoleUserInput): '管理员' | '审核员' | '普通用户' {
+  if (hasAdminRole(user)) return '管理员';
+  if (hasReviewerRole(user)) return '审核员';
+  return '普通用户';
+}

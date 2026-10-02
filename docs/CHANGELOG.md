@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — UI 打磨：独立登录页、智能体选择、统一版式与列表分页
+
+- 新增独立登录页 `/login`：未登录访问任何页面跳转登录并在登录后回到原路径（`return_to` 只接受站内路径）；
+  登录表单从侧栏移出。SSO 为主入口，本地账号收起为「管理员账号登录」；密码错误显示中文提示。
+- 新会话的智能体选择从原生下拉框改为 chip + 弹层（头像、默认徽标、描述，支持键盘与 Esc）；单智能体时也显示
+  当前智能体，会话开始后只读；欢迎区随所选智能体切换。
+- 智能体编辑器的 11 个横向 tab 改为左侧分组导航，未保存分区显示黄点，保存操作移到底部固定保存栏。
+- 全部一级页面统一页头、工具栏、状态徽标、空/错误/无权限状态与间距；交付物审核对无审核员角色的用户显示
+  说明而不是报错；「Deliverables」改为「交付物」；用户菜单显示审核员角色。
+- 列表分页：侧栏会话滚动到底自动加载、搜索改为服务端查询全部会话；管理端运行、审批、成员、审核、Skill 共享、
+  定时任务表格使用统一的上一页/下一页分页；能力页目录前端分页（每页 25）。
+
+### Changed（破坏性）— 列表接口改为 cursor 分页
+
+- **`GET /api/conversations` 的响应从裸数组改为 `{ conversations, next_cursor }`**：旧客户端把
+  响应当数组用会直接失效，必须改取 `.conversations`。同时新增 `limit`（1–100，默认 **30**，
+  不再是「一次 200 条」）、`cursor`、`q`（会话标题模糊匹配，≤100 字符；`%` / `_` / `\` 按
+  字面量匹配，不再命中全部）。排序固定为 `updated_at desc, conversation_id desc`。
+- `GET /api/approvals` 新增 `limit`（默认 50）与 `cursor`，响应统一为 `{ approvals, next_cursor }`
+  ——原来同时给出的同值 `items` 键已删除。
+- `GET /api/cron-jobs` 新增 `cursor`，响应为 `{ cron_jobs, next_cursor }`；默认每页从 100 条
+  改为 **50** 条（要一次看更多请显式传 `limit`，上限 100）。
+- 管理端 Skill 共享申请队列（`GET /api/admin/skills/share-requests`）新增 `limit`（默认 50）与
+  `cursor`，响应保持 `requests` 键名并新增 `next_cursor`；队列顺序由「最早在前」改为
+  **按创建时间倒序**（最新在前），与其它管理端列表一致。
+- 四个接口的 `limit` 越界与无法解码的 `cursor` 一律返回 **400 `VALIDATION_ERROR`**，不再静默
+  clamp 或退回第一页。作用域（owner / org）仍先于游标生效：别人的游标只表示位置，拿不到他人数据。
+
 ### Fixed — Journal 分页字节预算与文档对齐
 
 - 会话 Journal 读取按单页累计字节（16 MiB）提前截页，带内联图片的会话不再一页拉进 GB 级数据；翻页仍保证前进、整体加载不丢行。

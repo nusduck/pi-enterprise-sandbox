@@ -20,11 +20,20 @@ import {
   conversationTitleFromMessages,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
+import {
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+  normalizeListSearch,
+  parseKeysetLimit,
+} from './keyset-cursor.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
 
 const MAX_CREATE_ATTEMPTS = 3;
+
+/** 会话列表默认每页 30（design ui-polish §2.4）。 */
+export const CONVERSATION_LIST_DEFAULT_LIMIT = 30;
 
 function sanitizeError(error) {
   const message = error instanceof Error ? error.message : String(error || 'Unknown error');
@@ -231,22 +240,41 @@ export class ConversationService {
     }
   }
 
-  async list(auth: ExternalAuth, opts: { limit?: number } = {}) {
+  /**
+   * Owner-scoped page of conversations: `{ conversations, next_cursor }`.
+   *
+   * 排序 `updated_at desc, conversation_id desc`，多取一条判断是否还有下一页
+   * （design ui-polish §2.4）。`cursor` 只表示位置：作用域来自解析出的 owner，
+   * 所以别人给的游标只会落在调用者自己的会话里。`q` 是标题模糊匹配，转义由仓储
+   * 负责（这里只做长度与形状校验）。
+   *
+   * @param auth
+   * @param [opts]
+   */
+  async list(auth: ExternalAuth, opts: { limit?: unknown; cursor?: unknown; q?: unknown } = {}) {
+    const limit = parseKeysetLimit(opts.limit, CONVERSATION_LIST_DEFAULT_LIMIT);
+    const before = decodeKeysetCursor(opts.cursor);
+    const titleQuery = normalizeListSearch(opts.q);
     const repos = this.createRepositories(this.db);
     let owner;
     try {
       owner = await this.#resolveOwner(auth, repos);
     } catch (err) {
       // A trusted principal with no provisioned owner has no conversations yet.
-      if (err instanceof OwnerScopedNotFoundError) return [];
+      if (err instanceof OwnerScopedNotFoundError) {
+        return { conversations: [], next_cursor: null };
+      }
       throw err;
     }
     const rows = await repos.conversations.listForOwner(owner, {
-      limit: opts.limit ?? 200,
+      limit: limit + 1,
       includeArchived: false,
+      titleQuery,
+      before,
     });
+    const page = rows.slice(0, limit);
     const presented = [];
-    for (const row of rows) {
+    for (const row of page) {
       const session = await this.#sessionForConversation(repos, row, owner);
       let displayRow = row;
       if (
@@ -270,7 +298,16 @@ export class ConversationService {
       }
       presented.push(presentConversation(displayRow, [], session));
     }
-    return presented;
+    const last = page[page.length - 1];
+    return {
+      conversations: presented,
+      // 游标用**原始行**的 updated_at（展示用的标题可能被上面改写过），
+      // 它必须与 SQL 的排序键是同一个值。
+      next_cursor:
+        rows.length > limit && last
+          ? encodeKeysetCursor(last.updatedAt, last.conversationId)
+          : null,
+    };
   }
 
   async get(conversationId, auth) {

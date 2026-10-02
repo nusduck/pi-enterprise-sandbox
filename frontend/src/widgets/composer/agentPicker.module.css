@@ -1,0 +1,208 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.chip {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 10px 0 4px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: var(--material-fill);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+
+.chip:hover:not(:disabled):not(.chipStatic) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-hover);
+}
+
+.chipOpen {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-border);
+}
+
+.chipStatic {
+  cursor: default;
+  opacity: 0.9;
+}
+
+.avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  color: var(--color-text-inverse);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-xs);
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+.agentName {
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.arrow {
+  color: var(--color-text-muted);
+}
+
+/* ── Popover ── */
+.popover {
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--color-border);
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 36px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--material-fill);
+  margin-bottom: var(--space-1);
+}
+
+.searchIcon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  border: none;
+  background: transparent;
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: var(--color-text);
+  width: 100%;
+  outline: none;
+}
+
+.listHeader {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  padding: 6px var(--space-2) 2px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.agentItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+  transition: background var(--duration-fast);
+}
+
+.agentItem:hover {
+  background: var(--color-bg-hover);
+}
+
+.agentItem:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
+.itemSelected {
+  background: var(--color-primary-soft);
+}
+
+.itemAvatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-inverse);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 650;
+  font-size: var(--font-size-sm);
+  flex-shrink: 0;
+}
+
+.itemContent {
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.itemRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.itemName {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.defaultBadge {
+  font-size: var(--font-size-xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--material-fill);
+  color: var(--color-text-secondary);
+}
+
+.itemDesc {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.checkIcon {
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.popoverFooter {
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-2) 4px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* ── Agent Avatar Color Tones ── */
+.t0 { background: var(--agent-tone-0); }
+.t1 { background: var(--agent-tone-1); }
+.t2 { background: var(--agent-tone-2); }
+.t3 { background: var(--agent-tone-3); }
+.t4 { background: var(--agent-tone-4); }
+.t5 { background: var(--agent-tone-5); }

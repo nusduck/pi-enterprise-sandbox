@@ -367,6 +367,19 @@ export function Composer() {
                 }
               }}
             />
+            {/* 智能体选择在最左侧；单智能体显示静态 chip；会话开始后只读不可换 */}
+            <AgentPicker
+              agents={agents}
+              selectedAgentId={
+                state.conversationId
+                  ? (state.conversations || []).find((c) => c.id === state.conversationId)?.agent_id || selectedAgentId
+                  : selectedAgentId
+              }
+              onSelect={setSelectedAgentId}
+              disabled={mode !== 'idle'}
+              readOnly={Boolean(state.conversationId)}
+            />
+            <div className={s.pickerDivider} aria-hidden="true" />
             <ModelPicker
               models={models}
               selectedModelId={selectedModelId}
@@ -374,15 +387,6 @@ export function Composer() {
               fixedModelId={fixedModelId}
               disabled={mode !== 'idle' || models.length === 0}
             />
-            {/* 只在建会话前可选：会话一旦开始就绑定了智能体。 */}
-            {agents.length > 1 && !state.conversationId ? (
-              <AgentPicker
-                agents={agents}
-                selectedAgentId={selectedAgentId}
-                onSelect={setSelectedAgentId}
-                disabled={mode !== 'idle'}
-              />
-            ) : null}
             <span className={s.note} role="status">{note}</span>
             <div className={s.actions} role="group" aria-label="Running action">
               {canStop(mode) ? (

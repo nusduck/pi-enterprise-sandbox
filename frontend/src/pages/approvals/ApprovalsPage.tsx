@@ -5,8 +5,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChat } from '../../features/chat/ChatContext';
-import { listApprovals } from '../../shared/api/approvals';
+import { listApprovalsPage } from '../../shared/api/approvals';
 import type { ApprovalListItem } from '../../shared/schemas/management';
+import { Pager, useCursorPagination } from '../../shared/ui/Pager';
 import {
   APPROVAL_STATUS_FILTERS,
   canDecideApproval,
@@ -18,6 +19,9 @@ import {
   type ApprovalStatusFilterId,
 } from './approvalHelpers';
 import { shortId } from '../runs/runHelpers';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { StatusBadge } from '../../shared/ui/StatusBadge';
+import { EmptyState } from '../../shared/ui/EmptyState';
 import a from '../settings/adminPage.module.css';
 import s from './approvals.module.css';
 
@@ -46,6 +50,7 @@ export function ApprovalsPage() {
   const { entityStore, resolveApproval, state } = useChat();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<ApprovalStatusFilterId>('pending');
+  const pagination = useCursorPagination({ initialPageSize: 20 });
   const [apiItems, setApiItems] = useState<ApprovalListItem[]>([]);
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,15 +61,22 @@ export function ApprovalsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setApiItems(await listApprovals(filter === 'all' ? {} : { status: filter }));
+      const page = await listApprovalsPage({
+        status: filter === 'all' ? undefined : filter,
+        limit: pagination.pageSize,
+        cursor: pagination.currentCursor,
+      });
+      setApiItems(page.approvals);
+      pagination.setPageData(page.next_cursor);
       setApiAvailable(true);
     } catch {
       setApiItems([]);
+      pagination.setPageData(null);
       setApiAvailable(false);
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, pagination.pageSize, pagination.currentCursor, pagination.setPageData]);
 
   useEffect(() => {
     void refresh();
@@ -99,49 +111,65 @@ export function ApprovalsPage() {
 
   return (
     <div className={a.page}>
-      <div className={a.head}>
-        <div>
-          <h1>审批</h1>
-          <p>需要人工确认的工具调用。在这里的决定与对话里的审批卡等效，批准后运行会继续。</p>
-        </div>
-        <span className={a.sp} />
-        <button type="button" className={a.btn} onClick={() => void refresh()} disabled={loading}>
-          {loading ? '刷新中…' : '刷新'}
-        </button>
-      </div>
+      <PageHeader
+        title="审批"
+        description="需要人工确认的工具调用。在这里的决定与对话里的审批卡等效，批准后运行会继续。"
+        action={
+          <button type="button" className={a.btn} onClick={() => void refresh()} disabled={loading}>
+            {loading ? '刷新中…' : '刷新'}
+          </button>
+        }
+      />
 
       {banner ? <p className={a.notice} role="status" onClick={() => setBanner(null)}>{banner}</p> : null}
 
       <div className={a.tabs} role="tablist" aria-label="按状态筛选">
         {APPROVAL_STATUS_FILTERS.map((f) => (
-          <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} onClick={() => setFilter(f.id)}>
+          <button
+            key={f.id}
+            type="button"
+            role="tab"
+            aria-selected={filter === f.id}
+            onClick={() => {
+              setFilter(f.id);
+              pagination.reset();
+            }}
+          >
             {f.label}
           </button>
         ))}
       </div>
 
       {rows.length === 0 ? (
-        <div className={`${a.tableWrap} ${a.empty}`}>
-          {loading
-            ? '正在读取…'
-            : apiAvailable === false
-              ? '审批列表接口暂不可用；本页只能显示这个浏览器里产生的审批。'
-              : filter === 'pending' ? '没有待处理的审批。' : '没有符合这个状态的审批。'}
-        </div>
+        <EmptyState
+          variant={apiAvailable === false ? 'error' : 'empty'}
+          title={loading ? '正在读取…' : apiAvailable === false ? '审批列表接口暂不可用' : '暂无审批'}
+          description={
+            loading
+              ? '正在读取…'
+              : apiAvailable === false
+                ? '审批列表接口暂不可用；本页只能显示这个浏览器里产生的审批。'
+                : filter === 'pending'
+                  ? '没有待处理的审批。'
+                  : '没有符合这个状态的审批。'
+          }
+        />
       ) : (
-        <ul className={s.list}>
+        <div className={`${a.tableCard} ${s.listCard}`}>
+          <ul className={s.list}>
           {rows.map((row) => {
             const open = expandedId === row.id;
             const pending = canDecideApproval(row.status);
-            const [statusLabel, statusCls] = STATUS_ZH[normalizeApprovalStatus(row.status)] || [row.status, a.mute];
+            const statusKey = normalizeApprovalStatus(row.status);
+            const [statusLabel] = STATUS_ZH[statusKey] || [row.status, a.mute];
             const risk = row.riskLevel ? RISK_ZH[row.riskLevel.toLowerCase()] || [row.riskLevel, a.mute] : null;
             const title = row.conversationId ? titleById.get(row.conversationId) : null;
             return (
               <li key={row.id} className={`${s.card}${pending ? ` ${s.pending}` : ''}`}>
                 <div className={s.head}>
                   <code className={s.tool}>{row.tool || '工具调用'}</code>
-                  {risk ? <span className={`${a.pill} ${risk[1]}`}>{risk[0]}</span> : null}
-                  <span className={`${a.pill} ${statusCls}`}>{statusLabel}</span>
+                  {risk ? <StatusBadge status={row.riskLevel?.toLowerCase() || 'neutral'} label={risk[0]} /> : null}
+                  <StatusBadge status={statusKey} label={statusLabel} />
                   <span className={a.sp} />
                   <time className={`${a.muted} ${a.num}`}>{formatTime(row.createdAt)}</time>
                 </div>
@@ -178,7 +206,19 @@ export function ApprovalsPage() {
             );
           })}
         </ul>
-      )}
+        <Pager
+          page={pagination.page}
+          count={rows.length}
+          pageSize={pagination.pageSize}
+          onPageSizeChange={pagination.setPageSize}
+          onPrev={pagination.goToPrevPage}
+          onNext={pagination.goToNextPage}
+          hasPrev={pagination.hasPrev}
+          hasNext={pagination.hasNext}
+          loading={loading}
+        />
+      </div>
+    )}
     </div>
   );
 }

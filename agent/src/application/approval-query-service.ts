@@ -7,6 +7,8 @@ import {
 } from './errors.js';
 import { NotFoundError } from '../infrastructure/mysql/errors.js';
 import { isUlid } from '../domain/shared/ulid.js';
+import { APPROVAL_LIST_DEFAULT_LIMIT } from '../infrastructure/mysql/repositories/approval-repository.js';
+import { decodeKeysetCursor, encodeKeysetCursor, parseKeysetLimit } from './keyset-cursor.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -79,17 +81,40 @@ export class ApprovalQueryService {
     return resolver.resolveOwner(auth);
   }
 
-  async list(auth, opts = {}) {
+  /**
+   * Owner-scoped page of approvals: `{ approvals, next_cursor }`（design
+   * ui-polish §2.4）。
+   *
+   * 排序 `created_at desc, id desc` 由仓储保证；这里只做 limit/cursor 的形状
+   * 校验与「多取一条」的翻页判断。游标不含身份——作用域仍是解析出的 owner。
+   */
+  async list(auth, opts: { status?: string | null; limit?: unknown; cursor?: unknown } = {}) {
+    const limit = parseKeysetLimit(opts.limit, APPROVAL_LIST_DEFAULT_LIMIT);
+    const before = decodeKeysetCursor(opts.cursor);
     const repos = this.createRepositories(this.db);
     let owner;
     try {
       owner = await this.#owner(auth, repos);
     } catch (err) {
-      if (err instanceof OwnerScopedNotFoundError) return [];
+      if (err instanceof OwnerScopedNotFoundError) {
+        return { approvals: [], next_cursor: null };
+      }
       throw err;
     }
-    const rows = await repos.approvals.listForOwner(owner, opts);
-    return rows.map(presentApproval);
+    const rows = await repos.approvals.listForOwner(owner, {
+      ...(opts.status != null ? { status: opts.status } : {}),
+      limit: limit + 1,
+      before,
+    });
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      approvals: page.map(presentApproval),
+      next_cursor:
+        rows.length > limit && last
+          ? encodeKeysetCursor(last.createdAt, last.approvalId)
+          : null,
+    };
   }
 
   async get(approvalId, auth) {

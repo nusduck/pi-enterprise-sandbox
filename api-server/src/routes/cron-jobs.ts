@@ -17,8 +17,10 @@ import { sendError, sendJson as json } from '../http/response.js';
 export async function handleListCronJobs(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   try {
     const auth = await resolveTrustedAuth(req);
-    const limit = parsedUrl.searchParams.get('limit') || undefined;
-    const result = await listAgentCronJobs({ limit }, { auth, traceId: req?.traceId });
+    const result = await listAgentCronJobs(parsedUrl.searchParams, {
+      auth,
+      traceId: req?.traceId,
+    });
     json(res, 200, result);
   } catch (error) {
     sendError(res, error, req?.traceId);

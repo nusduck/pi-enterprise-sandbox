@@ -27,6 +27,7 @@
  */
 import { physicalTableName } from '../schema-tables.js';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
+import type { KeysetPosition } from '../../../application/keyset-cursor.js';
 
 type Loose = any;
 
@@ -164,17 +165,30 @@ export class SkillShareRequestRepository {
   /**
    * 本 org 的申请，可按状态过滤（管理员列表）。
    *
-   * 按 `created_at` 升序：最早的申请排在前面，管理员从最旧的开始处理。
+   * 排序 `created_at desc, request_id desc`（design ui-polish §2.4）：本来的
+   * 升序没有主键参与，同毫秒的两条申请在 keyset 翻页里会重复/漏掉；主键是
+   * `CHAR(26)`，字典序与「同一时刻内后建的排在前面」一致。
    */
   async listForOrg(input: {
     orgId: string;
     status?: ShareRequestStatus;
     limit?: number;
+    before?: KeysetPosition | null;
   }): Promise<ShareRequestRow[]> {
-    const query = this.db(REQUESTS).where({ org_id: String(input.orgId) });
+    let query = this.db(REQUESTS).where({ org_id: String(input.orgId) });
     if (input.status) query.where({ status: input.status });
+    if (input.before) {
+      const at = toMysqlDateTime(input.before.sortValue);
+      const id = String(input.before.key);
+      query = query.andWhere((w: Loose) => {
+        w.where('created_at', '<', at).orWhere((w2: Loose) => {
+          w2.where('created_at', '=', at).andWhere('request_id', '<', id);
+        });
+      });
+    }
     const rows: Loose[] = await query
-      .orderBy('created_at', 'asc')
+      .orderBy('created_at', 'desc')
+      .orderBy('request_id', 'desc')
       .limit(Math.max(1, Math.min(Number(input.limit) || 200, 500)));
     return rows.map(mapRow);
   }

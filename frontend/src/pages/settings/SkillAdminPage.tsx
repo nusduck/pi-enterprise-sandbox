@@ -5,6 +5,7 @@ import {
   getShareRequestManifest,
   listOrgSkills,
   listSkillShareQueue,
+  listSkillShareQueuePage,
   rejectSkillShare,
   setOrgSkillCurrent,
   setOrgSkillVersionStatus,
@@ -14,6 +15,9 @@ import {
   type SkillManifest,
   type SkillShareRequest,
 } from '../../shared/api/skillSharing';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { StatusBadge } from '../../shared/ui/StatusBadge';
+import { Pager, useCursorPagination } from '../../shared/ui/Pager';
 import a from './adminPage.module.css';
 import s from './skillAdmin.module.css';
 
@@ -36,8 +40,8 @@ const VERSION_ZH: Record<string, [string, string]> = {
 const MAX_SKILL_BYTES = 50 * 1024 * 1024;
 
 function Pill({ value, table }: { value: string; table: Record<string, [string, string]> }) {
-  const [label, cls] = table[value] || [value, a.mute];
-  return <span className={`${a.pill} ${cls}`}>{label}</span>;
+  const [label] = table[value] || [value, a.mute];
+  return <StatusBadge status={value} label={label} />;
 }
 
 function shortDigest(digest: string): string {
@@ -550,19 +554,31 @@ function RequestRow({
 
 function QueuePane({ onInspectManifest }: { onInspectManifest: (manifest: SkillManifest) => void }) {
   const [filter, setFilter] = useState<ShareRequestStatus | 'all'>('pending');
+  const pagination = useCursorPagination({ initialPageSize: 20 });
   const [items, setItems] = useState<SkillShareRequest[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
+    setLoading(true);
     try {
-      setItems(await listSkillShareQueue(filter === 'all' ? undefined : filter));
+      const page = await listSkillShareQueuePage({
+        status: filter === 'all' ? undefined : filter,
+        limit: pagination.pageSize,
+        cursor: pagination.currentCursor,
+      });
+      setItems(page.requests);
+      pagination.setPageData(page.next_cursor);
     } catch (err) {
       // 读取失败不显示成空队列：那会让管理员以为没人申请。
       setItems(null);
+      pagination.setPageData(null);
       setError((err as Error).message || '读取申请队列失败');
+    } finally {
+      setLoading(false);
     }
-  }, [filter]);
+  }, [filter, pagination.pageSize, pagination.currentCursor, pagination.setPageData]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -570,7 +586,15 @@ function QueuePane({ onInspectManifest }: { onInspectManifest: (manifest: SkillM
     <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div className={a.seg} role="group" aria-label="申请状态">
         {(['pending', 'all', 'approved', 'rejected'] as const).map((v) => (
-          <button key={v} type="button" aria-pressed={filter === v} onClick={() => setFilter(v)}>
+          <button
+            key={v}
+            type="button"
+            aria-pressed={filter === v}
+            onClick={() => {
+              setFilter(v);
+              pagination.reset();
+            }}
+          >
             {v === 'all' ? '全部' : STATUS_ZH[v][0]}
           </button>
         ))}
@@ -578,14 +602,29 @@ function QueuePane({ onInspectManifest }: { onInspectManifest: (manifest: SkillM
       {error ? <p className={a.error} role="alert">{error}</p> : null}
       {items == null ? <p className={a.muted}>{error ? '' : '正在读取…'}</p> : null}
       {items && items.length === 0 ? <p className={a.empty}>没有申请。</p> : null}
-      {items?.map((request) => (
-        <RequestRow
-          key={request.requestId}
-          request={request}
-          onChanged={load}
-          onInspectManifest={onInspectManifest}
-        />
-      ))}
+      {items && items.length > 0 ? (
+        <div className={a.tableCard}>
+          {items.map((request) => (
+            <RequestRow
+              key={request.requestId}
+              request={request}
+              onChanged={load}
+              onInspectManifest={onInspectManifest}
+            />
+          ))}
+          <Pager
+            page={pagination.page}
+            count={items.length}
+            pageSize={pagination.pageSize}
+            onPageSizeChange={pagination.setPageSize}
+            onPrev={pagination.goToPrevPage}
+            onNext={pagination.goToNextPage}
+            hasPrev={pagination.hasPrev}
+            hasNext={pagination.hasNext}
+            loading={loading}
+          />
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -812,12 +851,10 @@ export function SkillAdminPage() {
 
   return (
     <div className={a.page}>
-      <div className={a.head}>
-        <div>
-          <h1>Skill 共享</h1>
-          <p>用户申请把自研 Skill 提升到组织共享层；批准后字节复制到组织层，与作者的草稿再无关系。版本一旦被某个智能体引用就不会被回收。</p>
-        </div>
-      </div>
+      <PageHeader
+        title="Skill 共享"
+        description="用户申请把自研 Skill 提升到组织共享层；批准后字节复制到组织层，与作者的草稿再无关系。版本一旦被某个智能体引用就不会被回收。"
+      />
       <div className={a.tabs} role="tablist" aria-label="Skill 共享分类">
         {tabs.map(([id, label]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>

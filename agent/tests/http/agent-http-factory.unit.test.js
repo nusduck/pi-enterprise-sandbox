@@ -167,8 +167,8 @@ describe('createAgentHttpServer factory', () => {
 
     const conversationService = {
       async list(auth) {
-        if (auth.externalUserId === 'foreign') return [];
-        return [...conversations.values()];
+        if (auth.externalUserId === 'foreign') return { conversations: [], next_cursor: null };
+        return { conversations: [...conversations.values()], next_cursor: null };
       },
       async create(_auth, body) {
         const row = {
@@ -221,9 +221,11 @@ describe('createAgentHttpServer factory', () => {
     };
     const approvalQueryService = {
       async list(auth, opts) {
-        if (auth.externalUserId === 'foreign') return [];
-        if (opts.status && opts.status.toLowerCase() !== approval.status) return [];
-        return [approval];
+        if (auth.externalUserId === 'foreign') return { approvals: [], next_cursor: null };
+        if (opts.status && opts.status.toLowerCase() !== approval.status) {
+          return { approvals: [], next_cursor: null };
+        }
+        return { approvals: [approval], next_cursor: null };
       },
       async get(approvalId, auth) {
         if (auth.externalUserId === 'foreign' || approvalId !== APPROVAL) {
@@ -323,7 +325,10 @@ describe('createAgentHttpServer factory', () => {
     const cronJobService = {
       async list(auth) {
         cronCalls.push({ operation: 'list', auth });
-        return [{ cron_job_id: CRON, name: 'Daily report', enabled: true }];
+        return {
+          cron_jobs: [{ cron_job_id: CRON, name: 'Daily report', enabled: true }],
+          next_cursor: null,
+        };
       },
       async get(cronJobId, auth) {
         cronCalls.push({ operation: 'get', cronJobId, auth });
@@ -418,7 +423,8 @@ describe('createAgentHttpServer factory', () => {
 
     const listed = await req(port, 'GET', '/internal/conversations');
     assert.equal(listed.status, 200);
-    assert.deepEqual(listed.json.map((row) => row.id), [CONV]);
+    assert.deepEqual(listed.json.conversations.map((row) => row.id), [CONV]);
+    assert.equal(listed.json.next_cursor, null);
 
     const loaded = await req(port, 'GET', `/internal/conversations/${CONV}`);
     assert.equal(loaded.status, 200);

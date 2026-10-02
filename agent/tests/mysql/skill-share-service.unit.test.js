@@ -103,7 +103,7 @@ describe('SkillShareService 权限与作用域', () => {
       () => service.reject({ actor: MEMBER_ACTOR, requestId: row.requestId, note: 'x' }),
       ShareAdminRequiredError,
     );
-    assert.equal((await service.listForAdmin({ actor: ADMIN_ACTOR })).length, 1);
+    assert.equal((await service.listForAdmin({ actor: ADMIN_ACTOR })).requests.length, 1);
   });
 
   it('role 为 null 也按非 admin 拒——fail-closed', async () => {
@@ -118,7 +118,7 @@ describe('SkillShareService 权限与作用域', () => {
     const { service } = makeService();
     // 正向对照 + 拒绝对照成对出现，避免「全部拒绝」假通过。
     const listed = await service.listForAdmin({ actor: { ...ADMIN_ACTOR, role: 'admin,reviewer' } });
-    assert.equal(Array.isArray(listed), true);
+    assert.equal(Array.isArray(listed.requests), true);
     await assert.rejects(
       () => service.listForAdmin({ actor: { ...ADMIN_ACTOR, role: 'reviewer' } }),
       ShareAdminRequiredError,
@@ -145,6 +145,49 @@ describe('SkillShareService 权限与作用域', () => {
     const { service } = makeService();
     await pendingRequest(service);
     assert.deepEqual(await service.listMine({ actor: { externalOrgId: ORG, externalUserId: BOB } }), []);
+  });
+
+  it('管理员队列按 created_at desc, id desc 分页，末页 next_cursor 为 null', async () => {
+    const { service, requests } = makeService();
+    const a = await pendingRequest(service);
+    const b = await service.requestShare({ actor: ALICE_ACTOR, name: 'second' });
+    const c = await service.requestShare({ actor: ALICE_ACTOR, name: 'third' });
+    // 同一毫秒建的三条：只按时间排序时双键游标会重复/漏行。
+    await requests.db('tbl_agsvc_skill_share_requests')
+      .update({ created_at: '2026-09-30 00:00:00.000' });
+
+    const first = await service.listForAdmin({ actor: ADMIN_ACTOR, limit: '2' });
+    assert.equal(first.requests.length, 2);
+    assert.equal(typeof first.next_cursor, 'string');
+
+    const second = await service.listForAdmin({
+      actor: ADMIN_ACTOR,
+      limit: '2',
+      cursor: first.next_cursor,
+    });
+    assert.equal(second.requests.length, 1);
+    assert.equal(second.next_cursor, null);
+    assert.deepEqual(
+      [...first.requests, ...second.requests].map((row) => row.requestId),
+      [c.requestId, b.requestId, a.requestId],
+    );
+  });
+
+  it('管理员队列保留 requests 键名，非法 limit/cursor → 400 VALIDATION_ERROR', async () => {
+    const { service } = makeService();
+    await pendingRequest(service);
+    const page = await service.listForAdmin({ actor: ADMIN_ACTOR });
+    assert.deepEqual(Object.keys(page).sort(), ['next_cursor', 'requests']);
+    assert.equal(page.next_cursor, null);
+
+    for (const input of [{ limit: '0' }, { limit: '101' }, { cursor: 'garbage' }]) {
+      await assert.rejects(
+        () => service.listForAdmin({ actor: ADMIN_ACTOR, ...input }),
+        (err) => statusForShareError(err).status === 400
+          && statusForShareError(err).code === 'VALIDATION_ERROR',
+        JSON.stringify(input),
+      );
+    }
   });
 });
 

@@ -78,6 +78,22 @@ export function readIdempotencyKey(req: RequestLike): string | null {
   return value !== undefined && value.trim() ? value.trim() : null;
 }
 
+/**
+ * 列表接口的查询参数原样取出，**只取白名单里的键**。
+ *
+ * 存在的理由有两条：`limit` / `cursor` 的边界判定属于应用层（路由不做 clamp，
+ * 也不把 `limit=abc` 静默变成默认页大小），而每个列表路由各写一遍
+ * `searchParams.get(...)` 会把 create-http-server 顶过它的行数预算。
+ */
+export function listQueryParams(
+  parsedUrl: URL,
+  keys: readonly string[],
+): Record<string, string | null> {
+  const query: Record<string, string | null> = {};
+  for (const key of keys) query[key] = parsedUrl.searchParams.get(key);
+  return query;
+}
+
 export function readBody(req: ReadableRequest, maxBytes = 1_048_576): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];

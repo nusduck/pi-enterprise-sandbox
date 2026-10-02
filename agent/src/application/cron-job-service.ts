@@ -13,6 +13,7 @@ import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 import { CRON_OWNER_RUN_LIST_MAX_LIMIT } from '../infrastructure/mysql/repositories/cron-job-repository.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
+import { decodeKeysetCursor, encodeKeysetCursor, parseKeysetLimit } from './keyset-cursor.js';
 import {
   assertTimeZone,
   nextCronOccurrence,
@@ -23,6 +24,9 @@ import {
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
+
+/** 定时任务列表默认每页 50（design ui-polish §2.4）。 */
+export const CRON_JOB_LIST_DEFAULT_PAGE_LIMIT = 50;
 
 export const CRON_MISFIRE_POLICIES = Object.freeze(['skip', 'fire_once']);
 export const CRON_CONCURRENCY_POLICIES = Object.freeze(['forbid', 'allow']);
@@ -241,15 +245,36 @@ export class CronJobService {
     };
   }
 
-  async list(auth, opts = {}) {
+  /**
+   * 本人的定时任务分页：`{ cron_jobs, next_cursor }`（design ui-polish §2.4）。
+   *
+   * 默认每页 50，排序 `created_at desc, id desc` 由仓储保证；`cursor` 只是位置，
+   * 作用域来自解析出的 owner。
+   */
+  async list(auth, opts: { limit?: unknown; cursor?: unknown } = {}) {
+    const limit = parseKeysetLimit(opts.limit, CRON_JOB_LIST_DEFAULT_PAGE_LIMIT);
+    const before = decodeKeysetCursor(opts.cursor);
     const repos = this.createRepositories(this.db);
     try {
       const owner = await this.#resolveOwner(auth, repos);
-      const jobs = await repos.cronJobs.listForOwner(owner, opts);
-      return jobs.map(presentCronJob);
+      const jobs = await repos.cronJobs.listForOwner(owner, {
+        limit: limit + 1,
+        before,
+      });
+      const page = jobs.slice(0, limit);
+      const last = page[page.length - 1];
+      return {
+        cron_jobs: page.map(presentCronJob),
+        next_cursor:
+          jobs.length > limit && last
+            ? encodeKeysetCursor(last.createdAt, last.cronJobId)
+            : null,
+      };
     } catch (error) {
       // A trusted identity without any Runs has no provisioned owner yet.
-      if (error instanceof OwnerScopedNotFoundError) return [];
+      if (error instanceof OwnerScopedNotFoundError) {
+        return { cron_jobs: [], next_cursor: null };
+      }
       throw error;
     }
   }

@@ -26,6 +26,10 @@ import {
   sortRoleEventsDesc,
   withRole,
 } from './memberRoles';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { Toolbar } from '../../shared/ui/Toolbar';
+import { Pager, useCursorPagination } from '../../shared/ui/Pager';
+import { EmptyState } from '../../shared/ui/EmptyState';
 import a from './adminPage.module.css';
 import s from './membersAdmin.module.css';
 
@@ -218,10 +222,9 @@ export function MembersPage() {
   const [query, setQuery] = useState('');
   const [appliedQuery, setAppliedQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
+  const pagination = useCursorPagination({ initialPageSize: PAGE_SIZE });
   const [members, setMembers] = useState<AdminMember[] | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -235,47 +238,41 @@ export function MembersPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  const load = useCallback(
-    async (opts: { cursor?: string | null; append?: boolean } = {}) => {
-      const generation = ++loadGenerationRef.current;
-      if (opts.append) setLoadingMore(true);
-      else {
-        setLoading(true);
-        setLoadError(null);
-      }
-      setActionError(null);
-      try {
-        const page = await listAdminMembers({
-          q: appliedQuery || null,
-          role: roleFilter === 'all' ? null : roleFilter,
-          cursor: opts.cursor ?? null,
-          limit: PAGE_SIZE,
-        });
-        // 过期响应（筛选已变）直接丢弃，别覆盖新结果。
-        if (generation !== loadGenerationRef.current) return;
-        setMembers((prev) => (opts.append && prev ? [...prev, ...page.members] : page.members));
-        setNextCursor(page.next_cursor ?? null);
-      } catch (err: unknown) {
-        if (generation !== loadGenerationRef.current) return;
-        const message = memberRoleErrorMessage(err);
-        if (opts.append) {
-          setActionError(message);
-        } else {
-          // 读取失败不能清成空列表：那看起来像「本组织没有成员」。
-          setMembers(null);
-          setLoadError(message);
-        }
-      } finally {
-        if (generation === loadGenerationRef.current) {
-          setLoading(false);
-          setLoadingMore(false);
-        }
-      }
-    },
-    [appliedQuery, roleFilter],
-  );
+  useEffect(() => {
+    pagination.reset();
+  }, [appliedQuery, roleFilter]);
 
-  useEffect(() => { void load({ cursor: null }); }, [load]);
+  const load = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
+    setLoading(true);
+    setLoadError(null);
+    setActionError(null);
+    try {
+      const page = await listAdminMembers({
+        q: appliedQuery || null,
+        role: roleFilter === 'all' ? null : roleFilter,
+        cursor: pagination.currentCursor,
+        limit: pagination.pageSize,
+      });
+      // 过期响应（筛选已变）直接丢弃，别覆盖新结果。
+      if (generation !== loadGenerationRef.current) return;
+      setMembers(page.members);
+      pagination.setPageData(page.next_cursor ?? null);
+    } catch (err: unknown) {
+      if (generation !== loadGenerationRef.current) return;
+      const message = memberRoleErrorMessage(err);
+      // 读取失败不能清成空列表：那看起来像「本组织没有成员」。
+      setMembers(null);
+      setLoadError(message);
+      pagination.setPageData(null);
+    } finally {
+      if (generation === loadGenerationRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [appliedQuery, roleFilter, pagination.currentCursor, pagination.pageSize, pagination.setPageData]);
+
+  useEffect(() => { void load(); }, [load]);
 
   async function toggleRole(member: AdminMember, role: KnownRole, next: boolean) {
     const self = isSelfMember(member, state.authUser);
@@ -324,28 +321,25 @@ export function MembersPage() {
 
   return (
     <div className={a.page}>
-      <div className={a.head}>
-        <div>
-          <h1>成员与角色</h1>
-          <p>
-            角色挂在本组织的成员关系上，授予与撤销在下一个请求即生效。名单包含本组织
-            全部已开通的成员账号（平台创建或在本平台首次登录时自动开通）；「最近登录」
-            显示「—」表示这个账号还没有平台登录记录，通常是脚本或部署引导创建的，不代表
-            它不是成员。由部署环境变量名单锁定的管理员不能在界面撤销。
-          </p>
-        </div>
-        <span className={a.sp} />
-        <button
-          type="button"
-          className={a.btn}
-          onClick={() => void load({ cursor: null })}
-          disabled={loading}
-        >
-          {loading ? '刷新中…' : '刷新'}
-        </button>
-      </div>
+      <PageHeader
+        title="成员与角色"
+        description="角色挂在本组织的成员关系上，授予与撤销在下一个请求即生效。名单包含本组织全部已开通的成员账号（平台创建或在本平台首次登录时自动开通）；「最近登录」显示「—」表示这个账号还没有平台登录记录，通常是脚本或部署引导创建的，不代表它不是成员。由部署环境变量名单锁定的管理员不能在界面撤销。"
+        action={
+          <button
+            type="button"
+            className={a.btn}
+            onClick={() => {
+              pagination.reset();
+              void load();
+            }}
+            disabled={loading}
+          >
+            {loading ? '刷新中…' : '刷新'}
+          </button>
+        }
+      />
 
-      <div className={a.toolbar}>
+      <Toolbar>
         <input
           className={a.search}
           type="search"
@@ -369,9 +363,9 @@ export function MembersPage() {
           ))}
         </div>
         <span className={a.muted} style={{ fontSize: '12.5px' }}>
-          已列出 {members?.length ?? 0} 位成员{nextCursor ? '（还有更多）' : ''}
+          已列出 {members?.length ?? 0} 位成员{pagination.hasNext ? '（还有更多）' : ''}
         </span>
-      </div>
+      </Toolbar>
 
       {notice ? <p className={a.notice} role="status">{notice}</p> : null}
       {actionError ? <p className={a.error} role="alert">{actionError}</p> : null}
@@ -381,7 +375,7 @@ export function MembersPage() {
           <b>读取成员列表失败</b>
           <p className={a.error} style={{ margin: 0 }}>{loadError}</p>
           <div className={a.cardActions}>
-            <button type="button" className={a.btn} onClick={() => void load({ cursor: null })}>
+            <button type="button" className={a.btn} onClick={() => void load()}>
               重试
             </button>
           </div>
@@ -391,119 +385,139 @@ export function MembersPage() {
       {listState === 'loading' ? <p className={a.muted}>正在读取…</p> : null}
 
       {listState === 'empty' ? (
-        <p className={a.empty}>
-          {appliedQuery || roleFilter !== 'all' ? '没有匹配的成员。' : '本组织还没有已登录过的成员。'}
-        </p>
+        <EmptyState
+          variant="empty"
+          title="未找到成员"
+          description={appliedQuery || roleFilter !== 'all' ? '没有匹配的成员。' : '本组织还没有已登录过的成员。'}
+        />
       ) : null}
 
       {listState === 'ready' ? (
         <>
           <div className={s.tableOnly}>
-            <div className={a.tableWrap}>
-              <table className={a.table}>
-                <thead>
-                  <tr>
-                    <th>成员</th>
-                    <th>最近登录</th>
-                    <th title="角色代码：admin">{roleLabel('admin')}</th>
-                    <th title="角色代码：reviewer">{roleLabel('reviewer')}</th>
-                    <th className={a.right}>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {members?.map((member) => (
-                    <tr key={member.user_id}>
-                      <td>
-                        <MemberIdentity member={member} />
-                      </td>
-                      <td className={`${a.num} ${a.muted}`}>
+            <div className={a.tableCard}>
+              <div className={a.tableWrap}>
+                <table className={a.table}>
+                  <thead>
+                    <tr>
+                      <th>成员</th>
+                      <th>最近登录</th>
+                      <th title="角色代码：admin">{roleLabel('admin')}</th>
+                      <th title="角色代码：reviewer">{roleLabel('reviewer')}</th>
+                      <th className={a.right}>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {members?.map((member) => (
+                      <tr key={member.user_id}>
+                        <td>
+                          <MemberIdentity member={member} />
+                        </td>
+                        <td className={`${a.num} ${a.muted}`}>
+                          <MemberLastLogin member={member} />
+                        </td>
+                        <td>
+                          <RoleCell
+                            member={member}
+                            role="admin"
+                            busyKey={busyKey}
+                            onToggle={(m, r, next) => void toggleRole(m, r, next)}
+                          />
+                        </td>
+                        <td>
+                          <RoleCell
+                            member={member}
+                            role="reviewer"
+                            busyKey={busyKey}
+                            onToggle={(m, r, next) => void toggleRole(m, r, next)}
+                          />
+                        </td>
+                        <td className={a.right}>
+                          <button type="button" className={a.btn} onClick={() => setEventsMember(member)}>
+                            变更记录
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {members && members.length > 0 ? (
+                <Pager
+                  page={pagination.page}
+                  count={members.length}
+                  pageSize={pagination.pageSize}
+                  onPageSizeChange={pagination.setPageSize}
+                  onPrev={pagination.goToPrevPage}
+                  onNext={pagination.goToNextPage}
+                  hasPrev={pagination.hasPrev}
+                  hasNext={pagination.hasNext}
+                  loading={loading}
+                />
+              ) : null}
+            </div>
+          </div>
+
+          {/* 窄屏（≤900px）用卡片式行：表格在 ~490px 的可用宽度里放不下 5 列，
+              「操作」会被挤到屏幕外、按钮竖排把整行撑高（返工单 R4）。 */}
+          <div className={s.cardsOnly}>
+            <ul className={s.memberCards}>
+              {members?.map((member) => (
+                <li key={member.user_id} className={s.memberCard}>
+                  <MemberIdentity member={member} />
+                  <dl className={s.memberCardMeta}>
+                    <div>
+                      <dt>最近登录</dt>
+                      <dd className={a.num}>
                         <MemberLastLogin member={member} />
-                      </td>
-                      <td>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt title="角色代码：admin">{roleLabel('admin')}</dt>
+                      <dd>
                         <RoleCell
                           member={member}
                           role="admin"
                           busyKey={busyKey}
                           onToggle={(m, r, next) => void toggleRole(m, r, next)}
                         />
-                      </td>
-                      <td>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt title="角色代码：reviewer">{roleLabel('reviewer')}</dt>
+                      <dd>
                         <RoleCell
                           member={member}
                           role="reviewer"
                           busyKey={busyKey}
                           onToggle={(m, r, next) => void toggleRole(m, r, next)}
                         />
-                      </td>
-                      <td className={a.right}>
-                        <button type="button" className={a.btn} onClick={() => setEventsMember(member)}>
-                          变更记录
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      </dd>
+                    </div>
+                  </dl>
+                  <div className={s.memberCardActions}>
+                    <button type="button" className={a.btn} onClick={() => setEventsMember(member)}>
+                      变更记录
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            {members && members.length > 0 ? (
+              <Pager
+                page={pagination.page}
+                count={members.length}
+                pageSize={pagination.pageSize}
+                onPageSizeChange={pagination.setPageSize}
+                onPrev={pagination.goToPrevPage}
+                onNext={pagination.goToNextPage}
+                hasPrev={pagination.hasPrev}
+                hasNext={pagination.hasNext}
+                loading={loading}
+              />
+            ) : null}
           </div>
-
-          {/* 窄屏（≤900px）用卡片式行：表格在 ~490px 的可用宽度里放不下 5 列，
-              「操作」会被挤到屏幕外、按钮竖排把整行撑高（返工单 R4）。 */}
-          <ul className={s.memberCards}>
-            {members?.map((member) => (
-              <li key={member.user_id} className={s.memberCard}>
-                <MemberIdentity member={member} />
-                <dl className={s.memberCardMeta}>
-                  <div>
-                    <dt>最近登录</dt>
-                    <dd className={a.num}>
-                      <MemberLastLogin member={member} />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt title="角色代码：admin">{roleLabel('admin')}</dt>
-                    <dd>
-                      <RoleCell
-                        member={member}
-                        role="admin"
-                        busyKey={busyKey}
-                        onToggle={(m, r, next) => void toggleRole(m, r, next)}
-                      />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt title="角色代码：reviewer">{roleLabel('reviewer')}</dt>
-                    <dd>
-                      <RoleCell
-                        member={member}
-                        role="reviewer"
-                        busyKey={busyKey}
-                        onToggle={(m, r, next) => void toggleRole(m, r, next)}
-                      />
-                    </dd>
-                  </div>
-                </dl>
-                <div className={s.memberCardActions}>
-                  <button type="button" className={a.btn} onClick={() => setEventsMember(member)}>
-                    变更记录
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-
-          {nextCursor ? (
-            <div className={s.more}>
-              <button
-                type="button"
-                className={a.btn}
-                disabled={loadingMore}
-                onClick={() => void load({ cursor: nextCursor, append: true })}
-              >
-                {loadingMore ? '正在加载…' : '加载更多'}
-              </button>
-            </div>
-          ) : null}
         </>
       ) : null}
 
