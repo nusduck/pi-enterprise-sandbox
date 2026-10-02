@@ -11,12 +11,7 @@ import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { RUN_STATUS, runStateMachine } from '../domain/run/index.js';
 import { APPROVAL_STATUS } from '../domain/tool/approval-status.js';
 import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
-import { assertUlid } from '../domain/shared/ulid.js';
-import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
-import {
-  buildCanonicalEnvelope,
-  redactEventData,
-} from './fenced-run-event-recorder.js';
+import { appendEventInTxn } from './run-event-append.js';
 import { applyRunTransitionInTxn } from './run-transition.js';
 
 const PARKED_TOOL_CANCELLABLE_STATUSES = new Set([
@@ -25,67 +20,6 @@ const PARKED_TOOL_CANCELLABLE_STATUSES = new Set([
   TOOL_EXECUTION_STATUS.RUNNING,
 ]);
 
-async function appendEventInTxn({
-  repos,
-  run,
-  eventType,
-  data,
-  generateId,
-  now,
-}) {
-  const timestamp = now();
-  const eventId = assertUlid(generateId(), 'eventId');
-  const outboxId = assertUlid(generateId(), 'outboxId');
-  const context = {
-    orgId: run.orgId,
-    userId: run.userId,
-    conversationId: run.conversationId,
-    agentSessionId: run.agentSessionId,
-    runId: run.runId,
-    traceId: run.traceId,
-    spanId: null,
-  };
-  const cleanData = redactEventData(data ?? {});
-  const stored = await repos.runEvents.append({
-    eventId,
-    runId: run.runId,
-    orgId: run.orgId,
-    userId: run.userId,
-    eventType,
-    eventVersion: 1,
-    payloadJson: { context, data: cleanData },
-    traceId: run.traceId,
-    spanId: null,
-    createdAt: timestamp,
-  });
-  const envelope = buildCanonicalEnvelope({
-    eventId: stored.eventId,
-    sequence: stored.sequenceNo,
-    type: eventType,
-    timestamp,
-    context,
-    data: cleanData,
-    eventVersion: 1,
-  });
-  await repos.outbox.insert({
-    outboxId,
-    aggregateType: AGGREGATE_TYPE_RUN,
-    aggregateId: run.runId,
-    eventType,
-    payloadJson: {
-      eventId: envelope.eventId,
-      eventVersion: envelope.eventVersion,
-      sequence: envelope.sequence,
-      type: envelope.type,
-      timestamp: envelope.timestamp,
-      context: envelope.context,
-      data: envelope.data,
-      runId: run.runId,
-      orgId: run.orgId,
-      userId: run.userId,
-    },
-  });
-}
 
 /**
  * Terminalize a parked WAITING_APPROVAL Run inside an open transaction.
