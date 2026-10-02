@@ -6,6 +6,7 @@
  * 不做任何持久化——进程退出即丢，这正是它只能用于测试、不能用于生产的
  * 原因（生产要满足"Worker 重启后仍能查到进程"，见 ADR 0008 D7）。
  */
+import { isTerminalJobStatus } from './job-types.js';
 import type {
   JobOwnerScope,
   JobRecord,
@@ -45,6 +46,8 @@ export class InMemoryJobStore implements JobStore {
     if (existing === undefined || !ownedBy(existing, owner)) {
       throw new Error(`job ${id} not found`);
     }
+    // 终态不被非终态覆盖：signal 写 `stopping` 时作业可能已经结算（见 job-store-mysql.ts 同处注释）。
+    if (!isTerminalJobStatus(patch.status) && isTerminalJobStatus(existing.status)) return;
     const next: JobRecord = {
       ...existing,
       status: patch.status,

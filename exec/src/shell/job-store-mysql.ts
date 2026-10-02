@@ -16,6 +16,7 @@
  *
  * 每个方法都是一条参数化 SQL，不拼接调用方输入到语句文本里。
  */
+import { isTerminalJobStatus } from './job-types.js';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { ExecDbPool as Pool } from '../db/failover-pool.js';
 import { sqlLimit } from '../db/client.js';
@@ -127,7 +128,8 @@ export class MySqlJobStore implements JobStore {
            reported = COALESCE(?, reported),
            started_at = COALESCE(?, started_at),
            finished_at = COALESCE(?, finished_at)
-       WHERE process_id = ? AND org_id = ? AND user_id = ? AND workspace_id = ?`,
+       WHERE process_id = ? AND org_id = ? AND user_id = ? AND workspace_id = ?
+         AND (? OR status NOT IN ('completed', 'killed', 'failed'))`,
       [
         patch.status,
         hasDetail,
@@ -143,6 +145,9 @@ export class MySqlJobStore implements JobStore {
         owner.orgId,
         owner.userId,
         owner.workspaceId,
+        // 终态不被非终态覆盖：signal 先 cancel() 再写 `stopping`，作业若已在这之间结算为
+        // killed / completed / failed，迟到的 `stopping` 不得把终态改回去（2026-10-03 真机竞态）。
+        isTerminalJobStatus(patch.status),
       ],
     );
     // 行不存在（或不是这个 owner 的）时 MySQL 报告 affectedRows=0 而不是抛错；
