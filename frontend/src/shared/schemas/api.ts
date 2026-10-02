@@ -24,8 +24,6 @@ export const AuthResponseSchema = z
     user: AuthUserSchema.optional(),
   });
 
-export const MeResponseSchema = AuthUserSchema;
-
 /**
  * Durable transcript row. Keep both wire naming conventions while the Agent
  * boundary migrates, and retain unknown fields for forward compatibility.
@@ -85,8 +83,6 @@ export const ConversationListSchema = z
     next_cursor: z.string().nullable().default(null),
   })
   .passthrough();
-
-export const ConversationDetailSchema = ConversationSchema;
 
 export const EnsureSessionSchema = z
   .object({

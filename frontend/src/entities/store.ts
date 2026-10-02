@@ -256,6 +256,9 @@ export function createTraceSpan(
 
 // ── Upsert helpers (return new store) ───────────
 
+/**
+ * @visibleForTesting Retained for testing / test store construction.
+ */
 export function upsertConversation(
   store: EntityStore,
   entity: ConversationEntity,
@@ -438,6 +441,9 @@ export function listActiveRuns(store: EntityStore): RunEntity[] {
   return Object.values(store.runsById).filter((r) => !terminal.has(r.status));
 }
 
+/**
+ * @visibleForTesting Retained for testing / test store inspection.
+ */
 export function getRunMessages(
   store: EntityStore,
   runId: string,

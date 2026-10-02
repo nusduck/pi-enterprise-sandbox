@@ -25,7 +25,6 @@ import {
   formatDuration,
   formatRunStatusLabel,
   listPendingApprovals,
-  runStatusTone,
   selectionToInspectorTab,
   summarizeToolInput,
 } from '../src/widgets/runtime-timeline/buildTimeline.ts';
@@ -48,13 +47,8 @@ describe('buildTimeline helpers', () => {
     assert.equal(formatDuration(null), '—');
   });
 
-  it('formatRunStatusLabel and runStatusTone map known statuses', () => {
+  it('formatRunStatusLabel maps known statuses', () => {
     assert.equal(formatRunStatusLabel('waiting_approval'), 'Waiting approval');
-    assert.equal(runStatusTone('running'), 'active');
-    assert.equal(runStatusTone('waiting_approval'), 'warning');
-    assert.equal(runStatusTone('failed'), 'danger');
-    assert.equal(runStatusTone('succeeded'), 'success');
-    assert.equal(runStatusTone(null), 'idle');
   });
 
   it('summarizeToolInput prefers path/command fields', () => {

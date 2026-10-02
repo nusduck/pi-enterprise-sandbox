@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityStore } from '../src/entities/index.ts';
 import type { EntityStore } from '../src/entities/types.ts';
-import { reducePlatformEventBatch, rehydrateRun } from '../src/shared/state/runReducer.ts';
+import { reduceRuntimeEventBatch, rehydrateRun } from '../src/shared/state/runReducer.ts';
 import { projectTurnItems, runHasTurnEntities } from '../src/features/chat/projections/turnItems.ts';
 
 const RUN = '01M2X8NG3Y81BMWSQ3SM7HVV60';
@@ -77,7 +77,7 @@ function twoTurnRun() {
 }
 
 function replay(events: unknown[]): EntityStore {
-  return reducePlatformEventBatch(createEntityStore(), events as never).store;
+  return reduceRuntimeEventBatch(createEntityStore(), events as never).store;
 }
 
 function assistantMessages(store: EntityStore) {
@@ -179,7 +179,7 @@ describe('projectTurnItems', () => {
   it('gives the same items whether events arrive live or as a sorted history page', () => {
     const events = twoTurnRun();
     const live = events.reduce<EntityStore>(
-      (store, e) => reducePlatformEventBatch(store, [e] as never).store,
+      (store, e) => reduceRuntimeEventBatch(store, [e] as never).store,
       createEntityStore(),
     );
     const shuffled = [...events].reverse();

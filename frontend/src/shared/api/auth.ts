@@ -14,7 +14,7 @@ import type { AuthConfig } from '../schemas/auth';
 import { AuthConfigSchema } from '../schemas/auth';
 import {
   AuthResponseSchema,
-  MeResponseSchema,
+  AuthUserSchema,
   parseApi,
   parseApiStrict,
   type AuthResponse,
@@ -84,7 +84,7 @@ export function register(body: {
 }
 
 export function me(): Promise<AuthUser> {
-  return fetchAuthJson(`${BASE}/auth/me`, 'Me failed', MeResponseSchema) as Promise<AuthUser>;
+  return fetchAuthJson(`${BASE}/auth/me`, 'Me failed', AuthUserSchema) as Promise<AuthUser>;
 }
 
 /** `GET /api/auth/config`：登录能力投影，未登录可读。 */

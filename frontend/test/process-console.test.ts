@@ -20,7 +20,6 @@ import {
   writeProcessStdin,
 } from '../src/shared/api/processes.ts';
 import { createEntityStore, createProcess, upsertProcess } from '../src/entities/index.ts';
-import { reducePlatformEventBatch } from '../src/shared/state/runReducer.ts';
 import { makeRuntimeEvent } from '../src/shared/schemas/events.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));

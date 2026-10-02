@@ -2,7 +2,7 @@
  * Process Control API client (B2/B3).
  * BFF routes are owner-scoped through the Agent process authority.
  */
-import { authHeaders, ApiError } from './client';
+import { authHeaders, ApiError, errorBody, throwApiError, toApiError } from './client';
 
 const BASE = '/api';
 
@@ -38,20 +38,9 @@ export type ProcessActionResult = {
   error?: string | null;
 };
 
-async function errorBody(resp: Response): Promise<Record<string, unknown>> {
-  return (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-}
-
 async function requireOk(resp: Response, fallback: string): Promise<void> {
   if (resp.ok) return;
-  const err = await errorBody(resp);
-  throw new ApiError(
-    String(err.error || err.detail || `${fallback}: ${resp.status}`),
-    {
-      status: resp.status,
-      code: typeof err.code === 'string' ? err.code : null,
-    },
-  );
+  await throwApiError(resp, fallback);
 }
 
 export async function listProcesses(
@@ -89,11 +78,7 @@ export async function getProcessLogs(
     { headers: authHeaders() },
   );
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new ApiError(
-      String(err.error || err.detail || `Process logs failed: ${resp.status}`),
-      { status: resp.status },
-    );
+    await throwApiError(resp, 'Process logs failed');
   }
   const data = (await resp.json()) as ProcessLogs;
   return {
@@ -130,7 +115,7 @@ export async function writeProcessStdin(
       return {
         ok: false,
         status: resp.status,
-        error: String(err.error || err.detail || `stdin failed: ${resp.status}`),
+        error: toApiError(resp, err, 'stdin failed').message,
       };
     }
     return {
@@ -165,7 +150,7 @@ export async function signalProcess(
       return {
         ok: false,
         status: resp.status,
-        error: String(err.error || err.detail || `signal failed: ${resp.status}`),
+        error: toApiError(resp, err, 'signal failed').message,
       };
     }
     return {
@@ -199,7 +184,7 @@ export async function cancelProcess(
       return {
         ok: false,
         status: resp.status,
-        error: String(err.error || err.detail || `cancel failed: ${resp.status}`),
+        error: toApiError(resp, err, 'cancel failed').message,
       };
     }
     return {

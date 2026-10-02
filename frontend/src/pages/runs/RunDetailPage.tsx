@@ -23,13 +23,13 @@ type Tab = 'timeline' | 'tools' | 'processes';
 const KIND_LABEL: Record<TimelineNode['kind'], string> = {
   run: 'RUN', queue: 'QUEUE', model: 'LLM', tool: 'TOOL', sub: 'SUB', wait: 'WAIT',
 };
-const NODE_STATUS: Record<TimelineNode['status'], [string, string]> = {
-  ok: ['成功', a.ok],
-  error: ['失败', a.err],
-  running: ['进行中', a.info],
-  waiting: ['等待中', a.warn],
-  approved: ['已批准', a.warn],
-  rejected: ['已拒绝', a.err],
+const NODE_STATUS: Record<TimelineNode['status'], string> = {
+  ok: '成功',
+  error: '失败',
+  running: '进行中',
+  waiting: '等待中',
+  approved: '已批准',
+  rejected: '已拒绝',
 };
 
 function pretty(value: unknown): string {
@@ -234,7 +234,7 @@ export function RunDetailPage() {
               <div className={s.inspHead}>
                 <b>{current.name}</b>
                 <span>
-                  <StatusBadge status={current.status} label={NODE_STATUS[current.status][0]} />{' '}
+                  <StatusBadge status={current.status} label={NODE_STATUS[current.status]} />{' '}
                   <span className={`${a.muted} ${a.num}`}>
                     开始 +{formatSpan(current.start - timeline.start)} · 耗时 {current.end == null ? '进行中' : formatSpan(current.end - current.start)}
                   </span>

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityStore } from '../src/entities/index.ts';
-import { reducePlatformEventBatch } from '../src/shared/state/runReducer.ts';
+import { reduceRuntimeEventBatch } from '../src/shared/state/runReducer.ts';
 import { normalizeToRuntimeEvent } from '../src/shared/state/platformEventNormalize.ts';
 import type { PlatformEvent } from '../src/shared/schemas/events.ts';
 
@@ -51,7 +51,7 @@ describe('stream preview preservation and truncation normalization', () => {
     const fullText = 'a'.repeat(886);
     const previewText = `${'a'.repeat(512)}…`;
 
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({ eventId: 'p_1', sequence: 1, type: 'run.started', runId }),
       platform({
         eventId: 'p_3',

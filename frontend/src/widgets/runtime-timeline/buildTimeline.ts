@@ -129,29 +129,6 @@ export function formatRunStatusLabel(status: string | null | undefined): string 
   }
 }
 
-export function runStatusTone(
-  status: string | null | undefined,
-): 'idle' | 'active' | 'warning' | 'danger' | 'success' {
-  if (!status) return 'idle';
-  if (status === 'running' || status === 'queued' || status === 'restoring_session') {
-    return 'active';
-  }
-  if (
-    status === 'waiting_approval' ||
-    status === 'waiting_input' ||
-    status === 'cancel_requested' ||
-    status === 'interrupted' ||
-    status === 'budget_exceeded'
-  ) {
-    return 'warning';
-  }
-  if (status === 'failed' || status === 'cancelled' || status === 'orphaned') {
-    return 'danger';
-  }
-  if (status === 'succeeded') return 'success';
-  return 'idle';
-}
-
 /** Summarize tool input for card subtitle (file path, command, etc.). */
 export function summarizeToolInput(input: unknown): string {
   if (input == null) return '';

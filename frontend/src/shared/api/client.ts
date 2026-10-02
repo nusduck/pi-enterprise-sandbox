@@ -7,9 +7,9 @@ import {
   ApprovalDecisionSchema,
   ArtifactImportResponseSchema,
   ArtifactListSchema,
-  ConversationDetailSchema,
   ConversationEventsResponseSchema,
   ConversationListSchema,
+  ConversationSchema,
   EnsureSessionSchema,
   parseApi,
   parseApiStrict,
@@ -40,8 +40,45 @@ export class ApiError extends Error {
   }
 }
 
-async function errorBody(resp: Response): Promise<Record<string, unknown>> {
+export async function errorBody(resp: Response): Promise<Record<string, unknown>> {
   return (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+}
+
+/**
+ * Build the ApiError for a failed response.
+ *
+ * - message (shown to people): `error`, then `detail`, then `${fallback}: ${status}`.
+ * - code (for branching): the specific `reason_code` when the server sent one, else `code`.
+ */
+export function toApiError(
+  resp: Response,
+  body: Record<string, unknown> | null | undefined,
+  fallback: string,
+): ApiError {
+  const b = body || {};
+  const message =
+    (typeof b.error === 'string' && b.error.trim()) ||
+    (typeof b.detail === 'string' && b.detail.trim()) ||
+    (b.error != null && typeof b.error === 'object' ? JSON.stringify(b.error) : '') ||
+    (b.error != null && String(b.error).trim() ? String(b.error) : '') ||
+    (b.detail != null && typeof b.detail === 'object' ? JSON.stringify(b.detail) : '') ||
+    (b.detail != null && String(b.detail).trim() ? String(b.detail) : '') ||
+    `${fallback}: ${resp.status}`;
+  const code =
+    (typeof b.reason_code === 'string' && b.reason_code.trim()) ||
+    (typeof b.code === 'string' && b.code.trim()) ||
+    null;
+  return new ApiError(message, {
+    status: resp.status,
+    code,
+    traceId: (b.trace_id as string) || resp.headers.get('x-trace-id') || null,
+    detail: b,
+  });
+}
+
+export async function throwApiError(resp: Response, fallback: string): Promise<never> {
+  const body = await errorBody(resp);
+  throw toApiError(resp, body, fallback);
 }
 
 // ── Conversations ───────────────────────────────
@@ -71,8 +108,7 @@ export async function listConversations(opts: {
     headers: authHeaders(),
   });
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || `List conversations failed: ${resp.status}`));
+    await throwApiError(resp, 'List conversations failed');
   }
   const page = parseApi(ConversationListSchema, await resp.json(), 'conversations');
   // parseApi 软失败时会把原始 body 原样放行（例如响应仍是旧版裸数组），这里再兜一层，
@@ -88,10 +124,9 @@ export async function getConversation(id: string): Promise<Conversation> {
     headers: authHeaders(),
   });
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || `Get conversation failed: ${resp.status}`));
+    await throwApiError(resp, 'Get conversation failed');
   }
-  return parseApi(ConversationDetailSchema, await resp.json(), 'conversation');
+  return parseApi(ConversationSchema, await resp.json(), 'conversation');
 }
 
 export async function getConversationEvents(
@@ -102,14 +137,7 @@ export async function getConversationEvents(
     { headers: authHeaders() },
   );
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new ApiError(
-      String(err.error || err.detail || `Conversation events failed: ${resp.status}`),
-      {
-        status: resp.status,
-        traceId: resp.headers.get('x-trace-id'),
-      },
-    );
+    await throwApiError(resp, 'Conversation events failed');
   }
   return parseApiStrict(
     ConversationEventsResponseSchema,
@@ -124,8 +152,7 @@ export async function deleteConversation(id: string): Promise<boolean> {
     headers: authHeaders(),
   });
   if (!resp.ok && resp.status !== 204) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || `Delete conversation failed: ${resp.status}`));
+    await throwApiError(resp, 'Delete conversation failed');
   }
   return true;
 }
@@ -140,8 +167,7 @@ export async function listArtifacts(
     headers: authHeaders(),
   });
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || `List artifacts failed: ${resp.status}`));
+    await throwApiError(resp, 'List artifacts failed');
   }
   const data = parseApi(ArtifactListSchema, await resp.json(), 'artifacts');
   if (Array.isArray(data)) {
@@ -172,16 +198,7 @@ export async function importArtifact(input: {
     },
   );
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new ApiError(
-      String(err.error || err.detail || `Artifact import failed: ${resp.status}`),
-      {
-        status: resp.status,
-        code: typeof err.code === 'string' ? err.code : null,
-        traceId: resp.headers.get('x-trace-id'),
-        detail: err,
-      },
-    );
+    await throwApiError(resp, 'Artifact import failed');
   }
   return parseApiStrict(
     ArtifactImportResponseSchema,
@@ -203,8 +220,7 @@ export async function decideApproval(
     },
   );
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new Error(String(err.error || `Approval failed: ${resp.status}`));
+    await throwApiError(resp, 'Approval failed');
   }
   return parseApi(ApprovalDecisionSchema, await resp.json(), 'approval');
 }
@@ -220,12 +236,7 @@ export async function ensureSession(
     body: JSON.stringify(conversationId ? { conversation_id: conversationId } : {}),
   });
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    const msg = err.error || err.detail || `Ensure session failed: ${resp.status}`;
-    throw new ApiError(typeof msg === 'string' ? msg : JSON.stringify(msg), {
-      status: resp.status,
-      traceId: (err.trace_id as string) || resp.headers.get('x-trace-id') || null,
-    });
+    await throwApiError(resp, 'Ensure session failed');
   }
   return parseApi(EnsureSessionSchema, await resp.json(), 'ensureSession');
 }
