@@ -75,14 +75,12 @@ export class LeaseBusyError extends Error {
   name: string;
   code: string;
   runId: Loose;
-  delayMs: Loose;
 
-  constructor(runId: string, opts: { delayMs?: number } = {}) {
+  constructor(runId: string) {
     super(`Run lease busy for ${runId}; delayed retry`);
     this.name = 'LeaseBusyError';
     this.code = 'LEASE_BUSY';
     this.runId = runId;
-    this.delayMs = opts.delayMs ?? 5_000;
   }
 }
 

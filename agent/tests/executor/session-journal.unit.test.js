@@ -305,6 +305,36 @@ describe('SessionJournalRepository', () => {
     assert.equal(forced.__forceIndex, JOURNAL_ORDER_INDEX);
   });
 
+  it('字节预算提前截页：至少一行、翻页前进、listAllBySession 不丢行', async () => {
+    const repo = new SessionJournalRepository(knex);
+    await repo.appendHeader({ messageId: MSG1, agentSessionId: SESS, ...scope, header });
+    let parent = null;
+    for (let i = 0; i < 6; i += 1) {
+      const entry = msgEntry(`big-${i}`, 'x'.repeat(1000), parent);
+      await repo.appendEntry({ messageId: nextId(), agentSessionId: SESS, ...scope, entry });
+      parent = `big-${i}`;
+    }
+    // 每行约 1KB+，预算 2.5KB：一页只能装下 header 之外的约 2 行，不能一次返回全部 7 行。
+    const page = await repo.listBySession(SESS, scope, { maxBytes: 2500 });
+    assert.ok(page.length >= 1 && page.length < 7, `page=${page.length}`);
+    // 预算小于单行也必须返回一行，否则翻页卡死。
+    const tiny = await repo.listBySession(SESS, scope, { maxBytes: 1 });
+    assert.equal(tiny.length, 1);
+    // 小预算逐页翻完，行数与顺序不变。
+    const seen = [];
+    let after = 0;
+    for (;;) {
+      const p = await repo.listBySession(SESS, scope, { afterSequence: after, maxBytes: 1 });
+      if (!p.length) break;
+      seen.push(...p.map((r) => r.sequenceNo));
+      after = p[p.length - 1].sequenceNo;
+    }
+    assert.equal(seen.length, 7);
+    assert.deepEqual(seen, [...seen].sort((a, b) => a - b));
+    // 默认预算下整体加载仍然完整。
+    assert.equal((await repo.listAllBySession(SESS, scope, { pageSize: 3 })).length, 7);
+  });
+
   it('pins an index the schema actually defines', () => {
     // 以随包 schema 清单（由真实迁移生成）为准：索引改名后 FORCE INDEX 会在运行期失败。
     const here = nodePath.dirname(fileURLToPath(import.meta.url));

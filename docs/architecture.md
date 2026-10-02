@@ -276,8 +276,8 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
   的子 Run。
 - **深度与并发在事务内复查**。父行加锁后再数存活兄弟，两个并发 spawn 不会同时读到
   "还剩一个名额"。默认 `maxDepth=2`、`maxConcurrent=5`，可由
-  `AGENT_SUBAGENT_MAX_DEPTH` / `AGENT_SUBAGENT_MAX_CONCURRENT` 收紧，也可由
-  AgentVersion 的 `configJson.subagent` 按租户收紧（只能更严，不能更松）。
+  `AGENT_SUBAGENT_MAX_DEPTH` / `AGENT_SUBAGENT_MAX_CONCURRENT` 收紧。AgentVersion
+  的 `configJson.subagent` 目前**没有读取方**，不起作用（见 `design/agent-delegation.md` §1）。
 
 子 Run 沿用父 Run 的 `trace_id`，并把 `trace_parent_span_id` 指向父 Run 的 run
 span，所以一次 fan-out 在链路上是一棵树而不是 N 个孤立的 root。
@@ -416,7 +416,7 @@ Agent 与 exec 各自产生一份进程身份。
 | 层级 | 防护措施 |
 |------|----------|
 | **Docker** | 容器隔离；`backend_internal`（internal）与 `service_egress`；Sandbox 无 NET_ADMIN/NET_RAW |
-| **执行网络** | 生产 `network_mode=disabled` + Bubblewrap `--unshare-net`；无 per-child egress proxy 时禁止 allowlist 伪装隔离 |
+| **执行网络** | 执行子进程始终在 Bubblewrap `--unshare-net` 的空网络命名空间里，没有开关；业务库只经 exec 转发的 unix socket（见 `deployment.md`「出站执行网络」） |
 | **入站 HTTP** | exec 内部面 `EXEC_INTERNAL_ALLOW_CIDR`（空值拒绝全部）+ HMAC；公共会话面 `SANDBOX_API_TOKEN`；MCP 窄桥独立 token（与出站执行策略分离） |
 | **non-root** | Sandbox 子进程以 `sandbox` 用户（10001）运行；K8s 内的 api-server、agent / agent-worker、sandbox-mcp、frontend 容器以 `up_docker`（1000:1000）运行（2026-09-18 起；此前 agent / api-server 为同 uid 的 `node`，sandbox-mcp 为 10001，frontend 为 root 主进程） |
 | **BFF 出站边界** | 所有 BFF→Agent/Sandbox 调用受超时约束（`AGENT_REQUEST_TIMEOUT_MS` / `SANDBOX_REQUEST_TIMEOUT_MS`，默认 15s；SSE 长连接除外），挂起的依赖不会钉死浏览器请求与 socket |

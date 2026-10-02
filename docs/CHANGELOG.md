@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Journal 分页字节预算与文档对齐
+
+- 会话 Journal 读取按单页累计字节（16 MiB）提前截页，带内联图片的会话不再一页拉进 GB 级数据；翻页仍保证前进、整体加载不丢行。
+- 删除 `LeaseBusyError` / `NeedsReconciliationError` 上没有读取方的 `delayMs`；`architecture.md` / `deployment.md` 不再写已删除的网络模式开关和未实现的 `configJson.subagent`。
+
 ### Added — 智能体可见范围
 
 - 管理员可以把智能体设为「全员可用」或「指定员工」，按工号或姓名搜索员工加入名单；未授权的员工在选择器里看不到它，也无法通过会话、任务或定时任务使用。

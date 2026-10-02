@@ -363,10 +363,8 @@ Server（例如可能崩溃循环的 stdio 子进程）在该条目里显式写
 
 `strict` 是代码默认值，也是生产唯一允许的 profile。`balanced` 不放宽 session/path
 归属、Skill 根只读、最小环境、能力丢弃、设备/namespace hard-deny 或审批开关；它只
-减少 `pip/npm/yarn/pnpm install` 等常见开发命令的重复审批。若 `network_mode=disabled`
-（生产唯一允许值），进程启动器拒绝网络类命令，且 Bubblewrap 子进程使用
-`--unshare-net`（空 netns）。`allowlist` / `unrestricted` 仅可在研发显式开启，且
-**不得**当作生产隔离：当前没有 per-child 受控 egress proxy，生产校验 fail-closed。
+减少 `pip/npm/yarn/pnpm install` 等常见开发命令的重复审批。执行子进程在任何 profile
+下都使用 `--unshare-net`（空 netns），没有网络模式开关（见下文「出站执行网络」）。
 metadata/link-local 目的地阻断始终开启。
 
 迁移与回滚：开发环境可先设置 `SANDBOX_POLICY_PROFILE=strict`，验证 `/ready` 和审批
@@ -651,8 +649,8 @@ exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-1
 **读不到也拒启**：Redis 读取异常、不认识的 key 类型、MySQL 查询失败都按「无法证明
 已收敛」处理，不当作空（只有 key 不存在才算 0）。拒启交给编排器重启重试。
 
-缩深顺序：停止产生超深子任务（暂停接新 Run，或用 AgentVersion `configJson.subagent`
-收紧深度——**不要**先改 `AGENT_SUBAGENT_MAX_DEPTH`，它同时决定消费拓扑）→ 原拓扑继续
+缩深顺序：停止产生超深子任务（暂停接新 Run；AgentVersion 的 `configJson.subagent`
+目前没有读取方，不能用来收紧——**不要**先改 `AGENT_SUBAGENT_MAX_DEPTH`，它同时决定消费拓扑）→ 原拓扑继续
 运行，让超深的 Run 走到终态（含处理完挂起的审批 / 输入）→ 以新配置启动，闸门不再
 报错即为收敛。禁止新旧消费者同时在跑。
 

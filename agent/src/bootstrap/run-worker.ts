@@ -36,12 +36,11 @@ export class NeedsReconciliationError extends Error {
    * @param {string} runId
    * @param {string} [status]
    */
-  // 这四个字段原本是构造器里动态赋的属性。转 TS 时声明出来——BullMQ 的重试
-  // 逻辑靠 `code` 与 `delayMs` 决策，它们是这个错误的契约，不是附带信息。
+  // 这几个字段原本是构造器里动态赋的属性。转 TS 时声明出来。队列延后多久由
+  // `createRunJobHandler` 的 deferDelayMs / waitDelayMs 决定，不读错误上的字段。
   readonly code = 'NEEDS_RECONCILIATION';
   readonly runId: string;
   readonly status: string;
-  readonly delayMs = 5_000;
 
   constructor(runId: string, status = 'UNKNOWN', detail = '') {
     super(
@@ -196,7 +195,7 @@ export function createRunWorkerRuntime(deps: RunWorkerDeps) {
             workerId,
           });
           if (result?.leaseBusy) {
-            throw new LeaseBusyError(ref.runId, { delayMs: 5_000 });
+            throw new LeaseBusyError(ref.runId);
           }
           // Lease-lost / re-entry refuse / unknown infrastructure: keep job active
           // so recovery can terminalize and a later attempt can observe terminal.
