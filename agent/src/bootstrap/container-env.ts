@@ -23,13 +23,11 @@ import { ToolExecutionRepository } from '../infrastructure/mysql/repositories/to
 import { ApprovalRepository } from '../infrastructure/mysql/repositories/approval-repository.js';
 import { InteractionRepository } from '../infrastructure/mysql/repositories/interaction-repository.js';
 import { RemoteConversationRepository } from '../infrastructure/mysql/repositories/remote-conversation-repository.js';
-import { TaskStateRepository } from '../infrastructure/mysql/repositories/task-state-repository.js';
 import { SandboxAuditEventRepository } from '../infrastructure/mysql/repositories/sandbox-audit-event-repository.js';
 import { A2aCredentialRepository } from '../infrastructure/mysql/repositories/a2a-credential-repository.js';
 import { A2aTaskRepository } from '../infrastructure/mysql/repositories/a2a-task-repository.js';
 import { A2aAuditRepository } from '../infrastructure/mysql/repositories/a2a-audit-repository.js';
 import { ArtifactRepository } from '../infrastructure/mysql/repositories/artifact-repository.js';
-import { ProcessExecutionRepository } from '../infrastructure/mysql/repositories/process-execution-repository.js';
 import { CronJobRepository } from '../infrastructure/mysql/repositories/cron-job-repository.js';
 import { SkillEnablementRepository } from '../infrastructure/mysql/repositories/skill-enablement-repository.js';
 import { OrgSkillRepository } from '../infrastructure/mysql/repositories/org-skill-repository.js';
@@ -284,11 +282,6 @@ export function createRepositoryBundle(
     toolExecutions: new ToolExecutionRepository(db, { now }),
     approvals: new ApprovalRepository(db, { now }),
     interactions: new InteractionRepository(db, { now }),
-    /** Agent working memory: session todo list + owner-scoped note log. */
-    taskState: new TaskStateRepository(db, {
-      now,
-      generateId: opts.generateId,
-    }),
     sandboxAudit: new SandboxAuditEventRepository(db, { now }),
     outbox: new OutboxRepository(db, { now }),
     /** PR-12 A2A protocol. */
@@ -296,7 +289,6 @@ export function createRepositoryBundle(
     a2aTasks: new A2aTaskRepository(db, { now }),
     a2aAudit: new A2aAuditRepository(db, { now }),
     artifacts: new ArtifactRepository(db),
-    processExecutions: new ProcessExecutionRepository(db),
     cronJobs: new CronJobRepository(db, { now }),
     skillEnablements: new SkillEnablementRepository(db, {
       now,

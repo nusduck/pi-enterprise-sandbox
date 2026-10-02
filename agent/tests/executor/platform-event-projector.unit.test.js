@@ -6,7 +6,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PlatformEventProjector,
-  projectAgentEvent,
   PROJECTOR_EVENT_TYPES,
 } from '../../src/infrastructure/dsh/event-projector.js';
 import { redactInlineSecrets } from '../../src/lib/event-redaction.js';
@@ -278,7 +277,7 @@ describe('PlatformEventProjector', () => {
   });
 
   it('unknown → [] and is deterministic', () => {
-    assert.deepEqual(projectAgentEvent({ type: 'totally_unknown', secret: 'x' }), []);
+    assert.deepEqual(new PlatformEventProjector().project({ type: 'totally_unknown', secret: 'x' }), []);
     const events = [
       { type: 'agent_start' },
       {

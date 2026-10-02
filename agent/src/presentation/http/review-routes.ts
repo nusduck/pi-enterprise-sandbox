@@ -29,8 +29,6 @@ import {
 import { ReviewError } from '../../application/review-service.js';
 import { REVIEW_TRANSFER_MAX_BYTES } from '@dsh/contract/delivery-policy.js';
 
-/** 修订文件上限：审核面传输上限（100 MiB，见 `REVIEW_TRANSFER_MAX_BYTES` 的说明）。 */
-export const REVIEW_REVISION_MAX_BYTES = REVIEW_TRANSFER_MAX_BYTES;
 /** JSON body（决定、备注）上限。 */
 const JSON_BODY_MAX_BYTES = 64 * 1024;
 
@@ -233,7 +231,7 @@ export async function handleReviewRoute(input: ReviewRouteInput): Promise<boolea
       if (itemNoText === null || action !== 'revisions') return (notFound(res), true);
       if (!/^[1-9][0-9]{0,5}$/.test(itemNoText)) return (notFound(res), true);
       if (req.method !== 'POST') return (methodNotAllowed(res), true);
-      const bytes = await readRawBody(req, REVIEW_REVISION_MAX_BYTES);
+      const bytes = await readRawBody(req, REVIEW_TRANSFER_MAX_BYTES);
       const rawFilename = headerText(req, 'x-filename');
       const filename = rawFilename === null ? null : decodeSegment(rawFilename);
       json(res, 200, await service.uploadRevision(auth, reviewTaskId, Number(itemNoText), {

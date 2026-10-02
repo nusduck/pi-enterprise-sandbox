@@ -312,7 +312,3 @@ export class PlatformEventProjector {
     return base;
   }
 }
-
-export function projectAgentEvent(event: Record<string, any>, ctx: Record<string, any> = {}) {
-  return new PlatformEventProjector().project(event, ctx);
-}

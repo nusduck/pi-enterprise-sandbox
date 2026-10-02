@@ -10,18 +10,8 @@ export const OUTBOX_STATUS = Object.freeze({
   FAILED: 'FAILED',
 });
 
-/** @type {readonly string[]} */
-export const OUTBOX_STATUSES = Object.freeze(Object.values(OUTBOX_STATUS));
-
 /** outbox 行的状态取值。 */
 export type OutboxStatus = (typeof OUTBOX_STATUS)[keyof typeof OUTBOX_STATUS];
-
-/** 是不是一个合法的 outbox 状态。 */
-export function isOutboxStatus(value: unknown): value is OutboxStatus {
-  return (
-    typeof value === 'string' && (OUTBOX_STATUSES as readonly string[]).includes(value)
-  );
-}
 
 /** Aggregate type that maps to run:stream:{runId}. */
 export const AGGREGATE_TYPE_RUN = 'run';

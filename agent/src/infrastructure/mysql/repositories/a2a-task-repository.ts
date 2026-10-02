@@ -229,21 +229,4 @@ export class A2aTaskRepository {
     const rows = await query.limit(limit);
     return rows.map(mapA2aTask);
   }
-
-  /**
-   * Unscoped by id — only for internal join after client scope already verified.
-   * Prefer getById with client scope.
-   *
-   * @param a2aTaskId
-   * @param ownerScope
-   */
-  async getByIdUnderOwner(a2aTaskId: string, ownerScope: { orgId: string, userId: string }) {
-    const id = assertUlid(a2aTaskId, 'a2aTaskId');
-    const scope = requireOwnerScope(ownerScope);
-    const row = await applyOwnerScope(
-      this.db('tbl_agsvc_a2a_tasks').where({ a2a_task_id: id }),
-      scope,
-    ).first();
-    return row ? mapA2aTask(row) : null;
-  }
 }

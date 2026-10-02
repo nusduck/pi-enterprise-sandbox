@@ -332,31 +332,6 @@ export class SkillShareRequestRepository {
     });
   }
 
-  /**
-   * 成员被移出 org 时把其 pending 申请置为 `withdrawn`（design §12）。
-   *
-   * 不删行：审批轨迹是审计材料，「他申请过、因为离开组织而作废」是事实的一部分。
-   */
-  async withdrawAllForRequester(input: {
-    orgId: string;
-    requesterUserId: string;
-  }): Promise<number> {
-    const now = toMysqlDateTime(this.now());
-    const affected = await this.db(REQUESTS)
-      .where({
-        org_id: String(input.orgId),
-        requester_user_id: String(input.requesterUserId),
-        status: 'pending',
-      })
-      .update({
-        status: 'withdrawn',
-        decided_by_user_id: String(input.requesterUserId),
-        decided_at: now,
-        decision_note: 'requester left the organization',
-      });
-    return Number(affected) || 0;
-  }
-
   /** 供测试与审计：断言终态集合没有被动过。 */
   static isTerminal(status: ShareRequestStatus): boolean {
     return TERMINAL.includes(status);

@@ -25,9 +25,6 @@ export const CANCEL_SIGNAL_TTL_MS = 86_400_000;
 /** BullMQ logical queue name for Agent runs (keys under {bull}:agent-runs:… by default prefix). */
 export const AGENT_RUNS_QUEUE_NAME = 'agent-runs';
 
-/** Outbox publisher wakeup channel / key (plan §9.2). */
-export const OUTBOX_WAKEUP_KEY = 'outbox:wakeup';
-
 /**
  * Job payload must be a pure reference — no conversation/dataset blobs.
  * @type {readonly string[]}
