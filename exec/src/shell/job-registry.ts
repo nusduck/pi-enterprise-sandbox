@@ -11,7 +11,7 @@
  * `workspaceId` 层级与 `sandbox_session_id` 不对齐、NOT NULL 外键等。
  * 新表 `exec_jobs` 由 W3-D 建，迁移权威在 `agent/`。
  *
- * 与 Python 版 `sandbox/services/process_manager.py`（1733 行）的关系：
+ * 与已退役的 Python 执行面（旧 `sandbox/services/process_manager.py`，现按职责拆到本目录各模块）1733 行的关系：
  * 那 1733 行被按职责拆成：`job-types.ts`（词汇）、`job-cursor.ts`（环形
  * 缓冲）、`job-identity.ts`（PID 复用防护）、`job-owner-access.ts`（归属）、
  * `job-store-*.ts`（持久化）、`output-capture.ts`（前/后台输出）、

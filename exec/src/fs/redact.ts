@@ -1,5 +1,5 @@
 /**
- * 物理路径脱敏——移植自 Python 版 `sandbox/paths.py` 的 `sanitize_physical_paths`
+ * 物理路径脱敏——移植自已退役的 Python 执行面（旧 `sandbox/paths.py`，现为本模块）的 `sanitize_physical_paths`
  * / `sanitize_path_error`。
  *
  * 为什么需要它：`dsh-fs-local` 的错误消息里，除了我们控制的 `target.displayPath`

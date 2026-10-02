@@ -15,7 +15,7 @@
 
 import { Hono } from 'hono';
 import { badRequest, conflict, errorBody, HttpError, notFound, payloadTooLarge } from './errors.js';
-import { parseActingHeaders, requireOwnedSession } from './ownership.js';
+import { actingHeadersFrom, parseActingHeaders, requireOwnedSession } from './ownership.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { MySqlJobRegistry } from '../../shell/job-registry.js';
 import type { JobSnapshot } from '../../shell/job-types.js';
@@ -33,14 +33,8 @@ export interface PublicProcessDeps {
 const ALLOWED_SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP']);
 const MAX_STDIN_BYTES = 64 * 1024;
 
-function actingFrom(c: import('hono').Context): Record<string, string | undefined> {
-  const h: Record<string, string | undefined> = {};
-  for (const k of ['x-acting-organization-id', 'x-acting-user-id']) {
-    const v = c.req.header(k);
-    if (v !== undefined) h[k] = v;
-  }
-  return h;
-}
+/** 本路由采集的 acting 头（见 `ownership.ts` 的 `actingHeadersFrom`）。 */
+const ACTING_KEYS = ['x-acting-organization-id', 'x-acting-user-id'] as const;
 
 function publicStatus(status: JobSnapshot['status']): string {
   if (status === 'stopping') return 'cancel_requested';
@@ -69,7 +63,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
     const sessionId = c.req.param('sessionId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const url = new URL(c.req.url);
@@ -99,7 +93,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
     const processId = c.req.param('processId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const owner = { orgId: own.workspace.orgId, userId: own.workspace.userId, workspaceId: own.workspace.workspaceId };
@@ -118,7 +112,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
     const processId = c.req.param('processId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const url = new URL(c.req.url);
@@ -153,7 +147,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
     const processId = c.req.param('processId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const url = new URL(c.req.url);
@@ -180,7 +174,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
     const processId = c.req.param('processId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const body = (await c.req.json().catch(() => ({}))) as { signal?: string };
@@ -206,7 +200,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
     const processId = c.req.param('processId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const body = (await c.req.json().catch(() => ({}))) as { data?: string; eof?: boolean };
@@ -232,7 +226,7 @@ export function registerPublicProcessRoutes(app: Hono, deps: PublicProcessDeps):
     const processId = c.req.param('processId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const owner = { orgId: own.workspace.orgId, userId: own.workspace.userId, workspaceId: own.workspace.workspaceId };

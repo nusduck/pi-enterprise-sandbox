@@ -5,7 +5,6 @@
   "description": "Agent 与执行面之间的共享类型与 RPC 信封。类型系统即契约。",
   "type": "module",
   "exports": {
-    ".": "./dist/index.js",
     "./errors.js": "./dist/errors.js",
     "./envelope.js": "./dist/envelope.js",
     "./hmac.js": "./dist/hmac.js",
@@ -27,7 +26,6 @@
     "./dbpm-config": "./dist/dbpm-config.js",
     "./shell-payload": "./dist/shell-payload.js"
   },
-  "types": "./dist/index.d.ts",
   "engines": { "node": ">=22.19.0 <23" },
   "scripts": {
     "build": "tsc -b",

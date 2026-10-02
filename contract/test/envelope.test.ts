@@ -1,5 +1,5 @@
 /**
- * `envelope.ts` 的测试：信封是从网络反序列化来的，`assertEnvelope` 必须
+ * `envelope.ts` 的测试：信封是从网络反序列化来的，`parseEnvelope` 必须
  * 真的在运行时逐字段校验，而不是只在编译期"看起来"类型对。
  */
 
@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ContractError } from '../src/errors.js';
-import { assertEnvelope, errResult, okResult, parseEnvelope } from '../src/envelope.js';
+import { parseEnvelope } from '../src/envelope.js';
 import type { RpcEnvelope } from '../src/envelope.js';
 
 const VALID_ENVELOPE: RpcEnvelope = Object.freeze({
@@ -20,14 +20,14 @@ const VALID_ENVELOPE: RpcEnvelope = Object.freeze({
 
 function expectEnvelopeInvalid(value: unknown): void {
   assert.throws(
-    () => assertEnvelope(value),
+    () => parseEnvelope(value),
     (error: unknown) => error instanceof ContractError && error.code === 'ENVELOPE_INVALID',
   );
 }
 
-describe('assertEnvelope', () => {
-  it('accepts a fully-populated envelope', () => {
-    assert.doesNotThrow(() => assertEnvelope(VALID_ENVELOPE));
+describe('parseEnvelope', () => {
+  it('accepts a fully-populated envelope and returns it', () => {
+    assert.deepEqual(parseEnvelope(VALID_ENVELOPE), VALID_ENVELOPE);
   });
 
   it('rejects a non-object value', () => {
@@ -66,31 +66,13 @@ describe('assertEnvelope', () => {
   });
 
   it('accepts fenceToken 0 (fence tokens start counting at zero)', () => {
-    assert.doesNotThrow(() => assertEnvelope({ ...VALID_ENVELOPE, fenceToken: 0 }));
-  });
-});
-
-describe('parseEnvelope', () => {
-  it('returns the same value once validated', () => {
-    assert.deepEqual(parseEnvelope(VALID_ENVELOPE), VALID_ENVELOPE);
+    assert.doesNotThrow(() => parseEnvelope({ ...VALID_ENVELOPE, fenceToken: 0 }));
   });
 
-  it('throws the same ContractError as assertEnvelope', () => {
+  it('throws ContractError ENVELOPE_INVALID without echoing the payload', () => {
     assert.throws(
       () => parseEnvelope({}),
       (error: unknown) => error instanceof ContractError && error.code === 'ENVELOPE_INVALID',
     );
-  });
-});
-
-describe('okResult / errResult', () => {
-  it('wraps success and failure results with the expected discriminant', () => {
-    const success = okResult({ hello: 'world' });
-    assert.equal(success.ok, true);
-    assert.deepEqual(success.data, { hello: 'world' });
-
-    const failure = errResult({ code: 'AUTH_FAILED', message: 'nope' });
-    assert.equal(failure.ok, false);
-    assert.deepEqual(failure.error, { code: 'AUTH_FAILED', message: 'nope' });
   });
 });

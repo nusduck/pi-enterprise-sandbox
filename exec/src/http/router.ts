@@ -3,7 +3,7 @@
  *
  * 这是 W3-A 的唯一组合入口（_shared #3：入口只做组合）。
  * 所有内部请求必须：1) 过 CIDR，2) 过 HMAC（含 body_sha256），3) 信封必带 workspaceId。
- * 错误一律经 `toWireError` 脱敏后以 RpcFailure 形式返回，不泄漏物理路径。
+ * 错误一律经 `toWireError` 脱敏后以 `{ ok: false, error }` 失败包形式返回，不泄漏物理路径。
  */
 
 import { Hono } from 'hono';

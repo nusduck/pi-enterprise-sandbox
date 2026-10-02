@@ -22,12 +22,11 @@
  * 服务端在两处都要校验，二者不一致时必须拒绝（这是 exec 侧内部端点的
  * 职责，不在这个模块里做，因为这里拿不到已解码的令牌 claims）。
  *
- * 信封来自网络，不能只信 TypeScript 的编译期类型——`assertEnvelope` 是
+ * 信封来自网络，不能只信 TypeScript 的编译期类型——`parseEnvelope` 是
  * 运行时校验，供 exec 的 HTTP 处理器在反序列化请求体之后立刻调用。
  */
 
 import { ContractError } from './errors.js';
-import type { WireError } from './errors.js';
 
 /** 每个内部请求必须携带的信封。 */
 export interface RpcEnvelope {
@@ -38,37 +37,6 @@ export interface RpcEnvelope {
   readonly userId: string;
   /** execution fence token；单调递增，用于拒绝过期 Run 的孤儿请求。 */
   readonly fenceToken: number;
-}
-
-/** 带信封的一次内部请求。 */
-export interface RpcRequest<T> {
-  readonly envelope: RpcEnvelope;
-  readonly payload: T;
-}
-
-/** 成功的 RPC 响应。 */
-export interface RpcSuccess<T> {
-  readonly ok: true;
-  readonly data: T;
-}
-
-/** 失败的 RPC 响应；`error` 的形状见 `errors.ts` 的 `WireError`。 */
-export interface RpcFailure {
-  readonly ok: false;
-  readonly error: WireError;
-}
-
-/** 统一的 RPC 响应包装：成功带 `data`，失败带脱敏后的 `error`。 */
-export type RpcResult<T> = RpcSuccess<T> | RpcFailure;
-
-/** 构造成功响应。 */
-export function okResult<T>(data: T): RpcSuccess<T> {
-  return { ok: true, data };
-}
-
-/** 构造失败响应。 */
-export function errResult(error: WireError): RpcFailure {
-  return { ok: false, error };
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -90,8 +58,10 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
  * 上游已经校验过。失败时抛 `ContractError('ENVELOPE_INVALID', ...)`，
  * 消息里只描述"哪个字段不对"，不回显信封原始内容（避免把调用方拼错的
  * 内容原样回显造成的注入/日志污染面）。
+ *
+ * 只经由 {@link parseEnvelope} 对外使用，不单独导出。
  */
-export function assertEnvelope(value: unknown): asserts value is RpcEnvelope {
+function assertEnvelope(value: unknown): asserts value is RpcEnvelope {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new ContractError('ENVELOPE_INVALID', 'envelope must be an object');
   }
@@ -119,7 +89,7 @@ export function assertEnvelope(value: unknown): asserts value is RpcEnvelope {
 
 /**
  * 校验并返回一个信封（便于 `const envelope = parseEnvelope(body.envelope)`
- * 这种一行式用法，而不用先声明变量再调用 `assertEnvelope`）。
+ * 这种一行式用法）。
  */
 export function parseEnvelope(value: unknown): RpcEnvelope {
   assertEnvelope(value);

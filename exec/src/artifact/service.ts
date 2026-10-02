@@ -1,6 +1,6 @@
 /**
- * 产物提交 / 列举 / 下载 / 导入。移植自 Python 版
- * `sandbox/artifact/infrastructure/manager.py` + `application/facade.py`。
+ * 产物提交 / 列举 / 下载 / 导入。移植自已退役的 Python 执行面
+ * （旧 `sandbox/artifact/infrastructure/manager.py` + `application/facade.py`，现为本模块）。
  *
  * **快照存控制面，不存工作区。** 早前的 TS 版把产物写进
  * `工作区/artifacts/{id}/{name}`，而工作区是模型可写的——模型能改写甚至删掉

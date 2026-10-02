@@ -1,14 +1,14 @@
 /**
- * 文件名脱敏与校验——移植自 Python 版
+ * 文件名脱敏与校验——移植自已退役的 Python 执行面（旧
  * `sandbox/services/attachment_manager.py:sanitize_filename` /
- * `extension_of` / `is_allowed_extension`。
+ * `extension_of` / `is_allowed_extension`，现为本模块）。
  *
  * 为什么单独一层：`artifact/` 与 `dataset/` 也要对外部传进来的文件名做
  * 同一条校验——路径穿越、空字节、超长、危险字符都在这里挡掉，避免
  * 两个模块各写一份校验最后悄悄分叉（_shared.md §7）。
  */
 
-const COMPOUND_SUFFIXES = ['.tar.gz', '.tar.bz2', '.tar.xz'] as const;
+const COMPOUND_SUFFIXES = ['.tar.gz', '.tar.bz2', '.tar.xz', '.tar.zst'] as const;
 
 const ALLOWED_EXTENSIONS = new Set<string>([
   '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl', '.xml',
@@ -26,14 +26,18 @@ const ALLOWED_EXTENSIONS = new Set<string>([
   '.zip', '.tar', '.gz', '.tgz', '.tar.gz',
 ]);
 
+/**
+ * 文件名扩展名（含复合后缀）。`attachment/` 与 `dataset/` 共用这一处实现：
+ * 复合后缀集合与点文件口径（`dot > 0`，`.bashrc` 这类前导点不算扩展名）
+ * 以 `dataset/service.ts` 的版本为准，并把 `.tar.zst` 纳入。
+ */
 export function extensionOf(filename: string): string {
   const lower = (filename ?? '').toLowerCase().trim();
   for (const compound of COMPOUND_SUFFIXES) {
     if (lower.endsWith(compound)) return compound;
   }
   const dot = lower.lastIndexOf('.');
-  if (dot === -1) return '';
-  return lower.slice(dot);
+  return dot > 0 ? lower.slice(dot) : '';
 }
 
 export function isAllowedExtension(filename: string): boolean {

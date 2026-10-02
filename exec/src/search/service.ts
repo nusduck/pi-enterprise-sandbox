@@ -1,6 +1,6 @@
 /**
  * 预算受限的 find / grep，限定在一个会话工作区内。
- * 移植自 `sandbox/services/file_search.py` 的 `FileSearchService`。
+ * 移植自已退役的 Python 执行面（旧 `sandbox/services/file_search.py`，现为本模块）的 `FileSearchService`。
  *
  * 两条不变量，逐条对应 Python 原版，改动前先想清楚：
  *

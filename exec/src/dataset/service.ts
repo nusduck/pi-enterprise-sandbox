@@ -1,6 +1,6 @@
 /**
  * 数据集上传——**三段式流式**：`beginUpload` → `writeChunk` → `finishUpload`。
- * 移植自 `sandbox/services/dataset_manager.py`。
+ * 移植自已退役的 Python 执行面（旧 `sandbox/services/dataset_manager.py`，现为本模块）。
  *
  * **为什么必须是流式**：之前的 TS 版签名是 `create(content: Uint8Array)`，
  * 整个文件进内存。`STATUS.md` C8 记着一次 5GiB 实测——那个签名下 5GiB 会
@@ -27,6 +27,7 @@ import type { WriteStream } from 'node:fs';
 import path from 'node:path';
 import type { WorkspaceContext } from '../types.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
+import { extensionOf } from '../attachment/sanitize.js';
 import type { WorkspaceFileSystem } from '../fs/workspace-fs.js';
 import type {
   DatasetOwnerScope,
@@ -56,19 +57,7 @@ export class DatasetError extends Error {
 
 const DEFAULT_MAX_DATASET_BYTES = 100 * 1024 * 1024;
 
-/** 复合扩展名要整体保留，否则 `a.tar.gz` 截断后变成 `a.gz`。 */
-const COMPOUND_SUFFIXES = ['.tar.gz', '.tar.bz2', '.tar.xz', '.tar.zst'];
-
-export function extensionOf(filename: string): string {
-  const lower = (filename || '').toLowerCase().trim();
-  for (const compound of COMPOUND_SUFFIXES) {
-    if (lower.endsWith(compound)) return compound;
-  }
-  const dot = lower.lastIndexOf('.');
-  return dot > 0 ? lower.slice(dot) : '';
-}
-
-/** 逐条对应 Python `sanitize_dataset_filename`。 */
+/** 逐条对应 Python `sanitize_dataset_filename`。超长截断时复合扩展名整体保留。 */
 export function sanitizeDatasetFilename(name: string): string {
   const raw = name || 'dataset';
   if (raw.includes('\0')) {

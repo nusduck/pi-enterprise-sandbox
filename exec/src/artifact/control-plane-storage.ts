@@ -1,6 +1,6 @@
 /**
- * 控制面存储底座。移植自 `sandbox/services/control_plane_storage.py` 里
- * 产物路径所需的部分（`stream_copy_hash_*` / `open_control_file_read` /
+ * 控制面存储底座。移植自已退役的 Python 执行面（旧 `sandbox/services/control_plane_storage.py`，
+ * 现为本模块）里产物路径所需的部分（`stream_copy_hash_*` / `open_control_file_read` /
  * `artifact_blob_path` / `FileIdentity`）。
  *
  * **为什么快照不放工作区**：工作区是模型可写的。产物的意义是"提交那一刻的

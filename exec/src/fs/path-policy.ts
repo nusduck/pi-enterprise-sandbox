@@ -1,6 +1,6 @@
 /**
- * 逻辑路径解析与围栏规则——从 Python 版 `sandbox/security/path_validation.py`
- * 的 `parse_sandbox_path` / `resolve_safe_path` 移植过来的纯函数部分。
+ * 逻辑路径解析与围栏规则——从已退役的 Python 执行面（旧 `sandbox/security/path_validation.py`，
+ * 现为本模块）的 `parse_sandbox_path` / `resolve_safe_path` 移植过来的纯函数部分。
  *
  * 背景：`dsh-fs-local` 的 `resolve()` 只把相对路径解析到一个固定的 `cwd`，
  * 绝对路径和 `..` 完全不受它管（这是它 README 里写明的限制，不是 bug）。

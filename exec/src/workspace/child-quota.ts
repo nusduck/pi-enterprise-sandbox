@@ -1,6 +1,6 @@
 /**
- * 子进程磁盘监控——移植自 Python 版
- * `sandbox/services/child_workspace_quota.py`。
+ * 子进程磁盘监控——移植自已退役的 Python 执行面（旧
+ * `sandbox/services/child_workspace_quota.py`，现为本模块）。
  *
  * 背景（原样保留自 Python 版模块级注释）：API 的文件/数据集路径走
  * `quota-ledger.ts` 那套控制面账本；但 `bash`/`python` 这些托管子进程直接
@@ -22,7 +22,7 @@
  * `ChildQuotaMeasureError.message`（例如 `f"workspace root inaccessible:
  * {exc}"`），而 Python 的 `OSError.__str__()` 通常包含出错的物理路径
  * （`[Errno 13] Permission denied: '/var/sandbox/workspaces/...'`）。这条
- * 消息经 `format_decision_message()` 直接进了 `sandbox/services/
+ * 消息经 `format_decision_message()` 直接进了已退役 Python 执行面的旧 `sandbox/services/
  * process_manager.py:544` 和 `execution_manager.py:273/361` 的 API 响应体
  * `error` 字段——**没有经过 `sanitize_path_error()`**，是一个真实的物理路径
  * 泄漏点。这里的 `measureTreeBounded()` 对**任何**离开这个函数的错误消息都

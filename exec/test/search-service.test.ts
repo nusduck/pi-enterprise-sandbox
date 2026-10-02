@@ -1,5 +1,5 @@
 /**
- * `search/` 的单元测试——对照 `sandbox/services/file_search.py` 的行为。
+ * `search/` 的单元测试——对照已退役的 Python 执行面（旧 `sandbox/services/file_search.py`，现为 `exec/src/search/`）的行为。
  *
  * 路由层的语义用例（`semantic-gaps.test.ts`）只覆盖"能不能搜到"，这里补的是
  * 路由测不到的三类：**预算钳制**、**符号链接安全**、**不安全正则拒绝**。

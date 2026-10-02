@@ -1,7 +1,7 @@
 /**
  * Preflight：渲染与 `prepare` **同一个** profile（ADR 0008 D2 / D3，验证要求 2）。
  *
- * 今天 Python 版 `preflight()`（`sandbox/isolation/bubblewrap.py:333-402`）是
+ * 已退役的 Python 执行面 `preflight()`（旧 `sandbox/isolation/bubblewrap.py:333-402`，现为本模块）是
  * 手抄的另一份 argv 拼接，跟 `prepare()` 各写各的。逐项核对下来，它已经悄悄
  * 漏了这些东西（不是猜测——是逐行比对两个函数数出来的）：
  *

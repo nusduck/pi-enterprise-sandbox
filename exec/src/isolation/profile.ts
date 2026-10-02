@@ -1,7 +1,7 @@
 /**
  * 隔离层的数据模型（ADR 0008 D3）。
  *
- * 背景：今天 Python 版 `sandbox/isolation/bubblewrap.py` 的 `prepare()` 是一段
+ * 背景：已退役的 Python 执行面（旧 `sandbox/isolation/bubblewrap.py`，现为本模块）的 `prepare()` 是一段
  * 130 行的线性 argv 拼接，把命名空间、挂载、环境变量、启动命令八件事揉在一起写。
  * 后果有两个：
  *
@@ -72,7 +72,7 @@ interface MountCommon {
  *   `--ro-bind` / `--bind`。
  * - `required: false` → **只**宽恕 ENOENT，其它错误（最常见是 EACCES：目录存在
  *   但不可遍历）一样致命，对应今天的 `--ro-bind-try` / `--bind-try`。这条是
- *   `sandbox/isolation/bubblewrap.py:163-179` 里专门为用户 skill 目录写的一段
+ *   旧 `sandbox/isolation/bubblewrap.py:163-179`（已退役 Python 执行面）里专门为用户 skill 目录写的一段
  *   探测逻辑想说清楚的事——bwrap 的 `-try` 变体只吃 ENOENT，一个"目录存在但读不了"
  *   的坏挂载如果原样传给 bwrap，会带着 bash、python、甚至 `pwd` 一起死。
  *   `exec/src/isolation/bubblewrap.ts` 的 `resolveEffectiveMounts()` 把这条
@@ -169,7 +169,7 @@ export class IsolationConfigError extends Error {
 }
 
 // ── 沙箱内固定的逻辑路径常量 ─────────────────────────────────────────
-// 与 `sandbox/paths.py` 的同名常量一一对应，是 Agent 提示词里 <location> 依赖
+// 与已退役 Python 执行面的旧 `sandbox/paths.py` 同名常量一一对应，是 Agent 提示词里 <location> 依赖
 // 的稳定路径；改这些字符串等于改变模型看到的世界，不要顺手改。
 
 export const AGENT_SKILL_PATH = '/home/sandbox/skill';

@@ -6,7 +6,7 @@
  *
  * - 读 `/proc/self/status` 决定要不要在 exec 前用 `setpriv` 剥离服务自身的
  *   Linux capabilities（今天 `_capability_drop_prefix()`，
- *   `sandbox/isolation/bubblewrap.py:40-72`）
+ *   对应已退役 Python 执行面的旧 `sandbox/isolation/bubblewrap.py:40-72`）
  * - spawn 之前探测每条 `required: false` 挂载的源路径，把探测失败的挂载从
  *   最终 argv 里摘掉——见下面 `resolveEffectiveMounts()` 的文档，这里做了一个
  *   相对今天 Python 版的**泛化**，不是纯移植，务必看完整段注释
@@ -130,8 +130,8 @@ function defaultOnDegraded(mount: BindMount, error: unknown): void {
  * spawn 前把 `MountPlan` 变成"这次真的能挂"的版本。这是相对今天 Python 版的
  * 一处泛化，不是逐字移植，主控评审时请留意：
  *
- * Python 版只对**用户 skill 目录**这一条 `--ro-bind-try` 做了探测（见
- * `sandbox/isolation/bubblewrap.py:158-179`）：先 `stat()`，`ENOENT` 就正常
+ * Python 版只对**用户 skill 目录**这一条 `--ro-bind-try` 做了探测（见已退役
+ * 旧 `sandbox/isolation/bubblewrap.py:158-179`）：先 `stat()`，`ENOENT` 就正常
  * 略过，其它错误（典型是 `0700` 权限导致的 `EACCES`）就打日志退回系统 skill
  * 层，而不是把这条 `--ro-bind-try` 原样传给 bwrap。原因是 bwrap 自己的
  * `--ro-bind-try`/`--bind-try` **只**吃 `ENOENT`——源存在但不可读会让 bwrap

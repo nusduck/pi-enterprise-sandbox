@@ -50,12 +50,6 @@ export interface ExecArtifactRecord {
  */
 export type ArtifactVisibility = 'released' | 'held' | 'withdrawn';
 
-export const ARTIFACT_VISIBILITIES: readonly ArtifactVisibility[] = Object.freeze([
-  'released',
-  'held',
-  'withdrawn',
-]);
-
 /** 谁提交了这一版：模型工具，还是审核员的修订上传。 */
 export type ArtifactCreatedByKind = 'agent' | 'reviewer';
 
@@ -75,30 +69,6 @@ export interface ExecArtifactInsert {
   readonly revisionOf?: string | null;
   readonly createdByKind?: ArtifactCreatedByKind;
 }
-
-export const EXEC_ARTIFACTS_DDL = `
-CREATE TABLE tbl_agsvc_exec_artifacts (
-  artifact_id     VARCHAR(64)       NOT NULL,
-  session_id      VARCHAR(191)      NOT NULL,
-  workspace_id    VARCHAR(191)      NOT NULL,
-  org_id          CHAR(26)          NOT NULL,
-  user_id         CHAR(26)          NOT NULL,
-  name            VARCHAR(1024)     NOT NULL DEFAULT '',
-  source_path     VARCHAR(4096)     NOT NULL DEFAULT '',
-  mime_type       VARCHAR(255)      NOT NULL DEFAULT 'application/octet-stream',
-  sha256          CHAR(64)          NOT NULL,
-  size_bytes      BIGINT UNSIGNED   NOT NULL DEFAULT 0,
-  identity        JSON              NULL,
-  visibility      CHAR(16)          NOT NULL DEFAULT 'released',
-  revision_of     VARCHAR(64)       NULL,
-  created_by_kind CHAR(16)          NOT NULL DEFAULT 'agent',
-  created_at      DATETIME(3)       NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (artifact_id),
-  KEY ind_agsvc_ea_i2 (session_id),
-  KEY ind_agsvc_ea_i3 (workspace_id),
-  KEY ind_agsvc_ea_i1 (org_id, user_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-`.trim();
 
 interface Row extends RowDataPacket {
   artifact_id: string;

@@ -1,5 +1,5 @@
 /**
- * 六个 MCP 工具的注册。移植自 `sandbox/mcp/app.py` 的 `@mcp.tool` 段。
+ * 六个 MCP 工具的注册。移植自已退役的 Python 执行面（旧 `sandbox/mcp/app.py`，现为本模块）的 `@mcp.tool` 段。
  *
  * ## Model Experience
  * 工具名与描述**逐字**沿用 Python 版：外部客户端（UPAgent、Dify 等）的提示词

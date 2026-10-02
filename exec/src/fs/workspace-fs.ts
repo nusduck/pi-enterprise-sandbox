@@ -13,8 +13,8 @@
  * 全套 `FS_*` 错误码——这些都不重新实现，见 `exec/node_modules/@deepseek-ai/
  * dsh-fs-local/README.md`。它自己写明的限制是"`config.cwd` 不是沙箱"，
  * 我们补的正是这个洞。上游同类做法是 `dsh-fs-sandbox`（`extends LocalFileSystem`
- * 再加模式围栏），我们是同一个思路，只是围栏规则从 Python 版
- * `sandbox/security/path_validation.py` 移植（见 `./path-policy.ts`）。
+ * 再加模式围栏），我们是同一个思路，只是围栏规则从已退役的 Python 执行面
+ * （旧 `sandbox/security/path_validation.py`，现为 `./path-policy.ts`）移植。
  *
  * 额外做的一件事（严格说超出"只覆盖两件事"，但是硬要求）：所有 12 个基础操作
  * 都包了一层 `guard()`，在错误消息离开这一层之前做物理路径脱敏

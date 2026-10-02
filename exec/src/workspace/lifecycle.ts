@@ -1,6 +1,6 @@
 /**
- * 工作区生命周期——移植自 Python 版 `sandbox/services/workspace_manager.py`
- * 的 `WorkspaceManager`。
+ * 工作区生命周期——移植自已退役的 Python 执行面（旧 `sandbox/services/workspace_manager.py`，
+ * 现为本模块）的 `WorkspaceManager`。
  *
  * 一个 Agent Session 独占一个稳定工作区：同一会话多轮 Run 复用同一个
  * `workspaceId`，物理根固定为 `workspacesBaseRoot/{workspaceId}`，配对的
@@ -11,8 +11,8 @@
  * 消息在离开这个模块之前都经过 `redactPhysicalRoots()`（复用 W1-B 的
  * `fs/redact.ts`），这是硬约束，不是"调用方要求才做"的可选项。
  *
- * 与 Python 版的一个已知行为差异，移植时特意修正（详见函数级注释）：
- * Python 的 `sandbox/routers/session_workspace.py` 把
+ * 与已退役 Python 版的一个已知行为差异，移植时特意修正（详见函数级注释）：
+ * 旧 `sandbox/routers/session_workspace.py` 把
  * `WorkspaceCleanupError` 的 `str(exc)` 原样塞进 HTTP 503 的 `detail` 字段
  * ——而 `remove_workspace()` 内部拼接的错误文本直接来自 `shutil.rmtree()`
  * 抛出的 `OSError`，那类错误的 `str()` 天然带物理路径（例如

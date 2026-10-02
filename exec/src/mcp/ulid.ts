@@ -1,5 +1,5 @@
 /**
- * Crockford Base32 ULID，无外部依赖。移植自 `sandbox/mcp/ulid.py`。
+ * Crockford Base32 ULID，无外部依赖。移植自已退役的 Python 执行面（旧 `sandbox/mcp/ulid.py`，现为本模块）。
  *
  * 与正式域 ID 兼容：26 个大写 Crockford 字符。不是 UUID，也永远不会产生
  * `exec_...` 前缀。同一毫秒内单调递增——靠对熵值加一，而不是重新取随机数，

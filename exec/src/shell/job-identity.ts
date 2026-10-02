@@ -1,6 +1,6 @@
 /**
- * 可重新验证的 OS 进程身份——移植自 Python 版
- * `sandbox/services/process_identity.py`。
+ * 可重新验证的 OS 进程身份——移植自已退役的 Python 执行面
+ * （旧 `sandbox/services/process_identity.py`，现为本模块）。
  *
  * 这是什么、为什么需要：孤儿回收（`job-registry.ts` 的 `recoverOrphans()`）
  * 要在 Worker 重启后，凭 MySQL 里存的 `pid`/`pgid` 去杀一个"可能是它、

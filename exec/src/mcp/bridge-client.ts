@@ -1,5 +1,5 @@
 /**
- * facade 私有的窄桥 HTTP 客户端。移植自 `sandbox/mcp/sandbox_client.py`。
+ * facade 私有的窄桥 HTTP 客户端。移植自已退役的 Python 执行面（旧 `sandbox/mcp/sandbox_client.py`，现为本模块）。
  *
  * 这条桥是 facade 唯一能碰到执行面的通道：它只认识 `/internal/mcp/v1/*` 这
  * 八条路由，且用与内部面 HMAC 不同的一枚 `SANDBOX_MCP_INTERNAL_TOKEN`。

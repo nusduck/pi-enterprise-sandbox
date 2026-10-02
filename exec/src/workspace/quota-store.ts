@@ -3,7 +3,7 @@
  * （见任务说明"数据库怎么处理"一节）。这里不建平行仓储体系：只定义接口 +
  * 一个 `mysql2` 实现 + 一个测试用内存实现，迁移权威仍在 `agent/`。
  *
- * 为什么预留记录要挪进这里而不是继续用 Python 版的做法：Python 版
+ * 为什么预留记录要挪进这里而不是继续用已退役 Python 执行面的做法：旧
  * `sandbox/services/workspace_quota_ledger.py` 把预留写成
  * `control_root/quota/{workspace_id}/res/{reservation_id}` 下的一个个文件，
  * 理由写在它的 docstring 里——"reservations live **outside** the untrusted

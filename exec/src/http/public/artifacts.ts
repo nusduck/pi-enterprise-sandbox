@@ -1,9 +1,9 @@
 /**
- * 公共面产物路由——对 BFF `/api/artifacts` 与 Python `artifact/api/public.py` 对齐。
+ * 公共面产物路由——对 BFF `/api/artifacts` 与已退役的 Python 执行面（旧 `artifact/api/public.py`，现为本模块）对齐。
  *
  * - GET  /artifacts?q=&kind=&cursor=&limit= → 200 {artifacts,next_cursor}（产物库：同一 owner 跨会话）
  * - GET  /sessions/:id/artifacts → 200 {artifacts,total}（owner 作用域，跨租户当作空）
- * - POST /sessions/:id/artifacts/register|submit → 201 ArtifactResponse
+ * - POST /sessions/:id/artifacts/submit → 201 ArtifactResponse
  * - POST /sessions/:id/artifacts/imports {artifact_id,target_filename?} → 201
  * - GET  /sessions/:id/artifacts/:artifactId/download → 200 流
  *
@@ -20,8 +20,8 @@
 import { Hono } from 'hono';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { badRequest, errorBody, HttpError, notFound } from './errors.js';
-import { parseActingHeaders, requireOwnedSession } from './ownership.js';
+import { badRequest, domainHttpError, errorBody, HttpError, notFound } from './errors.js';
+import { actingHeadersFrom, parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import type { ArtifactService } from '../../artifact/service.js';
@@ -29,6 +29,7 @@ import { ArtifactError, downloadMimeType } from '../../artifact/service.js';
 import type { ArtifactKind, ExecArtifactRecord } from '../../db/repositories/artifacts.js';
 import type { WorkspacePolicyStore } from '../../db/repositories/workspace-policies.js';
 import { newUlid } from '../../mcp/ulid.js';
+import { artifactContentDisposition, artifactFilenameHeader } from '../../mcp/disposition.js';
 
 export interface PublicArtifactDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -42,51 +43,8 @@ export interface PublicArtifactDeps {
   readonly workspacePolicies?: WorkspacePolicyStore | undefined;
 }
 
-function actingFrom(c: import('hono').Context): Record<string, string | undefined> {
-  const h: Record<string, string | undefined> = {};
-  for (const k of ['x-acting-organization-id', 'x-acting-user-id']) {
-    const v = c.req.header(k);
-    if (v !== undefined) h[k] = v;
-  }
-  return h;
-}
-
-const ASCII_EXT_RE = /\.([A-Za-z0-9]{1,8})$/;
-
-/**
- * 显示名 + 从存储路径借来的扩展名。
- *
- * `submit` 的 name 是用户可见标题（`随机 Markdown 文档`），扩展名常常只存在于
- * 工作区路径里。原样下载标题会存出一个没有应用打得开的文件。
- */
-function displayFilename(record: ExecArtifactRecord): string {
-  const base = path.basename(record.name || 'artifact');
-  if (ASCII_EXT_RE.test(base)) return base;
-  const matched = ASCII_EXT_RE.exec(path.basename(record.sourcePath || ''));
-  return matched ? `${base}${matched[0]}` : base;
-}
-
-/** latin-1 安全的 `filename=` 兜底值，保留扩展名。 */
-function asciiFallback(name: string): string {
-  const base = path.basename(String(name || 'download'));
-  const ext = path.extname(base);
-  const body = ext ? base.slice(0, -ext.length) : base;
-  let ascii = '';
-  for (const ch of body) {
-    const code = ch.codePointAt(0) ?? 0;
-    ascii += code >= 0x20 && code <= 0x7e ? ch : '_';
-  }
-  ascii = ascii.replace(/[_\s.]+/g, '_').replace(/^[._]+|[._]+$/g, '') || 'download';
-  return `${ascii}${ext}`.slice(0, 200);
-}
-
-/** Python `quote(safe='')`：比 encodeURIComponent 多编码 `!'()*`。 */
-function quoteAll(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-}
+/** 本路由采集的 acting 头（见 `ownership.ts` 的 `actingHeadersFrom`）。 */
+const ACTING_KEYS = ['x-acting-organization-id', 'x-acting-user-id'] as const;
 
 /** 对外的产物 JSON。字段名与 Python `ArtifactResponse` 一致。 */
 function toResponse(record: ExecArtifactRecord): Record<string, unknown> {
@@ -105,19 +63,10 @@ function toResponse(record: ExecArtifactRecord): Record<string, unknown> {
   };
 }
 
-function mapError(err: unknown, roots: readonly string[]): HttpError {
-  if (err instanceof HttpError) return err;
-  if (err instanceof ArtifactError) {
-    return new HttpError(err.status, redactPhysicalRoots(err.message, roots), err.code);
-  }
-  const raw = err instanceof Error ? err.message : String(err);
-  return new HttpError(500, redactPhysicalRoots(raw, roots));
-}
-
 export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps): void {
   // 产物库：没有会话参数，归属只取可信的 acting 头；缺失即 404（与会话路由同一口径）。
   app.get('/artifacts', async (c) => {
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     if (!acting.orgId || !acting.userId) {
       return c.json(errorBody(notFound('Artifact not found'), []), 404 as never);
     }
@@ -148,14 +97,14 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
         next_cursor: rows.length > limit ? page[page.length - 1]?.artifactId ?? null : null,
       });
     } catch (err) {
-      const mapped = mapError(err, []);
+      const mapped = domainHttpError(err, [], ArtifactError);
       return c.json(errorBody(mapped, []), mapped.status as never);
     }
   });
 
   app.get('/sessions/:sessionId/artifacts', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       // E1：产物面。判据是产物可见性（服务只列 released），不是工作区策略——
@@ -174,14 +123,14 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
       );
       return c.json({ artifacts: artifacts.map(toResponse), total: artifacts.length });
     } catch (err) {
-      const mapped = mapError(err, roots);
+      const mapped = domainHttpError(err, roots, ArtifactError);
       return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
 
   const handleSubmit = async (c: import('hono').Context): Promise<Response> => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       // 写路径（E7 同族）：审核工作区照常允许，产物的可见性由服务按策略定。
@@ -208,16 +157,15 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
       });
       return c.json(toResponse(record), 201 as never);
     } catch (err) {
-      const mapped = mapError(err, roots);
+      const mapped = domainHttpError(err, roots, ArtifactError);
       return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   };
-  app.post('/sessions/:sessionId/artifacts/register', handleSubmit);
   app.post('/sessions/:sessionId/artifacts/submit', handleSubmit);
 
   app.post('/sessions/:sessionId/artifacts/imports', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       // 导入也是写路径：源产物的可见性由服务判（E4），工作区策略不额外拦。
@@ -264,7 +212,7 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
         201 as never,
       );
     } catch (err) {
-      const mapped = mapError(err, roots);
+      const mapped = domainHttpError(err, roots, ArtifactError);
       return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
@@ -272,7 +220,7 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
   app.get('/sessions/:sessionId/artifacts/:artifactId/download', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
     const artifactId = c.req.param('artifactId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       // E2：产物面。非 released 与不存在由服务统一翻成同一个 404。
@@ -293,22 +241,23 @@ export function registerPublicArtifactRoutes(app: Hono, deps: PublicArtifactDeps
         throw notFound('Artifact not found');
       }
 
-      const filename = displayFilename(record);
+      // 文件名/头部编码复用 `mcp/disposition.ts`，与 MCP facade 的下载行为一致：
+      // 显示名没有扩展名时从存储路径借一个（`submit` 的 name 常是无扩展名的标题）。
       const stream = Readable.from(deps.artifactService.openSnapshot(record));
       return new Response(Readable.toWeb(stream) as ReadableStream, {
         status: 200,
         headers: {
           'content-type': downloadMimeType(record.mimeType),
           'content-length': String(record.sizeBytes),
-          'content-disposition': `attachment; filename="${asciiFallback(filename)}"; filename*=UTF-8''${quoteAll(filename)}`,
-          'x-artifact-filename': quoteAll(filename),
+          'content-disposition': artifactContentDisposition(record.name, record.sourcePath),
+          'x-artifact-filename': artifactFilenameHeader(record.name, record.sourcePath),
           'x-artifact-sha256': record.sha256,
           // 即使 content-type 已降级，也要挡住浏览器的类型嗅探。
           'x-content-type-options': 'nosniff',
         },
       });
     } catch (err) {
-      const mapped = mapError(err, roots);
+      const mapped = domainHttpError(err, roots, ArtifactError);
       return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });

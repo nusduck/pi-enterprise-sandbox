@@ -43,7 +43,7 @@ export type WritableRootsFn = typeof writableRoots;
 const DEFAULT_UID = 10001;
 const DEFAULT_GID = 10001;
 
-/** `_HOME_SUBDIRS`（`sandbox/isolation/bubblewrap.py:82-101`）：会话私有 XDG
+/** `_HOME_SUBDIRS`（已退役 Python 执行面的旧 `sandbox/isolation/bubblewrap.py:82-101`，现为本模块）：会话私有 XDG
  * home 的三个子目录，物理上挂在会话 temp 树下的 `.home/` 里，跟着 temp 的
  * 生命周期与配额走，不另开一个存储根（ADR 0004）。这条绑定语义原样保留，
  * 只是从一对 `--bind` 参数变成这里的三条 `Mount`。 */

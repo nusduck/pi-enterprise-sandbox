@@ -1,5 +1,5 @@
 /**
- * 宿主环境变量过滤——移植自 `sandbox/security/safe_env.py`。
+ * 宿主环境变量过滤——移植自已退役的 Python 执行面（旧 `sandbox/security/safe_env.py`，现为本模块）。
  *
  * 这是 W1-C 交回来的缺口（见 `exec/src/isolation/build.ts` 顶部注释）：
  * `buildIsolationProfile()` 刻意不读 `process.env`，只在调用方给的

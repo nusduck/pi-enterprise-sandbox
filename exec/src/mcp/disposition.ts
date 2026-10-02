@@ -1,5 +1,5 @@
 /**
- * ASCII 安全的 `Content-Disposition`（RFC 5987）。移植自 `sandbox/mcp/disposition.py`。
+ * ASCII 安全的 `Content-Disposition`（RFC 5987）。移植自已退役的 Python 执行面（旧 `sandbox/mcp/disposition.py`，现为本模块）。
  *
  * Node 的 `ServerResponse.setHeader` 会拒绝非 latin-1 的头部值（Starlette 是同样
  * 的约束），而用户可见的产物名常含中日韩字符，所以它绝不能原样出现在

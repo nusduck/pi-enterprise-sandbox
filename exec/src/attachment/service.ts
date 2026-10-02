@@ -1,6 +1,6 @@
 /**
- * 附件上传服务——移植自 Python 版
- * `sandbox/services/attachment_manager.py` + `sandbox/routers/files.py` 的
+ * 附件上传服务——移植自已退役的 Python 执行面（旧
+ * `sandbox/services/attachment_manager.py` + `sandbox/routers/files.py`，现为本模块）的
  * `upload_attachment` 路径。
  *
  * 为什么这样设计：附件是用户以 multipart 形式直接上传的二进制，与

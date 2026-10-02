@@ -4,8 +4,8 @@
  * 为什么这份实现放在 contract/、而不是各自在 agent/ 和 exec/ 里各写一份：
  *
  * 在旧架构下（Node Agent + Python Sandbox），这份逻辑必须在两种语言里各写
- * 一遍——`agent/src/infrastructure/sandbox/internal-hmac.js` 与
- * `sandbox/security/internal_auth.py`——靠一份跨语言 golden fixture
+ * 一遍——`agent/src/infrastructure/sandbox/internal-hmac.js` 与已退役 Python
+ * 执行面的旧 `sandbox/security/internal_auth.py`——靠一份跨语言 golden fixture
  * （`tests/fixtures/contracts/agent-sandbox-internal-hmac-hs256-v1.json`）
  * 互相校验字节级签名一致。两侧都改成 TypeScript 之后，这个"两份实现必须
  * 手动保持同步"的风险就该被消掉：这份模块是两侧唯一共用的实现，那份
@@ -16,7 +16,7 @@
  * 混淆、不识别未声明字段、不做数字隐式转换、不认无 kid 回退到"默认密钥"。
  *
  * 关于 jti 与 ADR 0008 D8：D8 决定去掉的是"防重放 jti 的专用 Redis 实例"
- * （原 `sandbox/security/internal_http_auth.py` 里的 `ReplayStore`，按
+ * （已退役 Python 执行面的旧 `sandbox/security/internal_http_auth.py` 里的 `ReplayStore`，按
  * jti 去重、命中即拒绝）。`jti` 这个字段本身仍然签在 claims 里，
  * 是纯熵值 + 唯一性来源，不是被删掉的东西。这份模块从来就不做去重校验
  * ——去重原本就在 HTTP 适配层的另一个模块里，不在这里——所以这里没有
