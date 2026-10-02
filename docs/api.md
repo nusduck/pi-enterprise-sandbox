@@ -65,12 +65,11 @@ Base URL: `http://host:4000`
 
 ```json
 {
-  "runId": "01...",
   "run_id": "01...",
-  "conversationId": "01...",
-  "agentSessionId": "01...",
+  "conversation_id": "01...",
+  "agent_session_id": "01...",
   "status": "ACCEPTED",
-  "eventsUrl": "/api/runs/01.../events"
+  "events_url": "/api/runs/01.../events"
 }
 ```
 

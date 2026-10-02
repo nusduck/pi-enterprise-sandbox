@@ -1,6 +1,6 @@
 /**
  * Capability/diagnostics BFF identity forwarding.
- * Run: node --test api-server/tests/capabilities-identity.test.js
+ * Run: npx tsx --test tests/capabilities-identity.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

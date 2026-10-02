@@ -7,13 +7,7 @@ import type { ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { ensureAgentSession } from '../services/agent-client.js';
 import { resolveTrustedAuth, type ReqWithTrace } from '../application/run-access-service.js';
-
-function json(res: ServerResponse, status: number, body: unknown, traceId?: string | null) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (traceId) headers['X-Trace-Id'] = String(traceId);
-  res.writeHead(status, headers);
-  res.end(JSON.stringify(body));
-}
+import { sendJsonWithTrace } from '../http/response.js';
 
 /**
  * POST /api/sessions/ensure
@@ -36,7 +30,7 @@ export async function handleEnsureSession(
       traceId: String(traceId),
       agentId: body?.agent_id || body?.agentId || null,
     });
-    json(res, 200, {
+    sendJsonWithTrace(res, 200, {
       conversation_id: resolved.conversation_id,
       session_id: resolved.session_id,
       // Opaque workspace id only (never host physical roots or absolute paths)
@@ -46,7 +40,7 @@ export async function handleEnsureSession(
     }, String(traceId));
   } catch (err: any) {
     console.error('[sessions] ensure failed:', err.message);
-    json(res, err.status || 500, {
+    sendJsonWithTrace(res, err.status || 500, {
       error: err.message || 'Failed to ensure session',
       trace_id: traceId,
     }, String(traceId));

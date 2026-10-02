@@ -1,6 +1,6 @@
 /**
  * AUTH_ENABLED / protected path helpers.
- * Run: node --test api-server/tests/auth-config.test.js
+ * Run: npx tsx --test tests/auth-config.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

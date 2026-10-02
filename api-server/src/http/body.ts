@@ -3,11 +3,17 @@ import { HttpError } from './errors.js';
 
 export interface ReadJsonBodyOptions {
   maxBytes?: number;
+  /**
+   * JSON 解析失败时的状态码与错误码。默认 400 + `INVALID_JSON`；
+   * 审核面（reviews）沿用既有契约 422 + `REVIEW_INPUT_INVALID`。
+   */
+  invalidJsonStatus?: number;
+  invalidJsonCode?: string;
 }
 
 export async function readJsonBody(
   req: IncomingMessage,
-  { maxBytes = 1024 * 1024 }: ReadJsonBodyOptions = {},
+  { maxBytes = 1024 * 1024, invalidJsonStatus = 400, invalidJsonCode = 'INVALID_JSON' }: ReadJsonBodyOptions = {},
 ): Promise<any> {
   const declared = Number(req.headers['content-length'] || 0);
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -53,7 +59,7 @@ export async function readJsonBody(
       try {
         resolve(JSON.parse(raw));
       } catch {
-        reject(new HttpError(400, 'INVALID_JSON', 'Request body must be valid JSON'));
+        reject(new HttpError(invalidJsonStatus, invalidJsonCode, 'Request body must be valid JSON'));
       }
     };
     const onError = (error: Error) => fail(error);

@@ -113,7 +113,6 @@ test('presentRunDetail converts Agent epoch-ms timestamps to ISO strings', () =>
       status: 'running',
       ...LIVE_MS,
     },
-    true,
   );
   assert.equal(detail.runtime_available, true);
   assert.equal(detail.created_at, '2026-07-14T11:00:00.000Z');
@@ -133,7 +132,6 @@ test('presentRunDetail nulls unparseable live timestamps', () => {
       created_at: Number.NaN,
       updated_at: 'nope',
     },
-    true,
   );
   assert.equal(detail.runtime_available, true);
   assert.equal(detail.created_at, null);
@@ -147,7 +145,6 @@ test('presentRunDetail maps the durable Agent failure reason to the public error
       status: 'failed',
       status_reason: 'DSH runtime completed with assistant stopReason=error: quota exhausted',
     },
-    true,
   );
   assert.equal(detail.error, 'DSH runtime completed with assistant stopReason=error: quota exhausted');
 });
@@ -159,7 +156,6 @@ test('presentRunDetail does not map parked wait status_reason to error', () => {
       status: 'WAITING_APPROVAL',
       status_reason: 'approval pending',
     },
-    true,
   );
   assert.equal(detail.error, null);
   assert.equal(detail.status, 'WAITING_APPROVAL');
@@ -173,7 +169,6 @@ test('presentRunDetail exposes a completed Agent Run as finished_at', () => {
       started_at: '2026-07-14T10:00:00.000Z',
       completed_at: '2026-07-14T10:01:05.000Z',
     },
-    true,
   );
   assert.equal(detail.started_at, '2026-07-14T10:00:00.000Z');
   assert.equal(detail.completed_at, '2026-07-14T10:01:05.000Z');

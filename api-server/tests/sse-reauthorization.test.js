@@ -1,6 +1,6 @@
 /**
  * Bounded SSE re-authorization: fail-closed close, timer release, no Run cancel.
- * Run: node --test api-server/tests/sse-reauthorization.test.js
+ * Run: npx tsx --test tests/sse-reauthorization.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

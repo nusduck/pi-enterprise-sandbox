@@ -1,6 +1,6 @@
 /**
  * Smoke tests for BFF agent-client + Run relay hooks (no live agent).
- * Run: node --test api-server/tests/agent-run-client.test.js
+ * Run: npx tsx --test tests/agent-run-client.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -195,7 +195,9 @@ describe('thin BFF agent relay', () => {
 
   it('GET Run uses Agent owner scope (no Sandbox status fallback)', () => {
     // PR-04/PR-10: Agent MySQL is fact source; presentRunDetail formats Agent DTO only.
-    assert.match(runsSrc, /presentRunDetail\(live, true\)/);
+    // C5 A7: 恒为 true 的 runtimeAvailable 参数已去掉，字段仍恒为 true。
+    assert.match(runsSrc, /presentRunDetail\(live\)/);
+    assert.match(runsSrc, /runtime_available: true/);
     assert.match(runsSrc, /authorizeRunRequest/);
     assert.match(runsSrc, /getAgentRun/);
     assert.doesNotMatch(runsSrc, /listAgentRuns\(\s*\{\s*runId/);

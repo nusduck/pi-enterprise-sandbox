@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { agentFetch, requestHeaders } from './agent-client.js';
+import { throwAgentError } from './agent-error.js';
 import type { RequestTraceContext } from '../application/trace-context.js';
 
 /**
@@ -72,15 +73,7 @@ async function requestAgentAuth(
     // An explicit upstream status/code (400/401/403/409/422,
     // AUTH_STORE_UNAVAILABLE, …) is authoritative and must pass through
     // unchanged rather than being rewritten as a dependency failure.
-    const payload = (await resp.json().catch(() => ({}))) as { error?: string; code?: string };
-    const error = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent auth request failed (${resp.status})`,
-    ) as Error & { status: number; code?: string };
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Agent auth request failed');
   }
   try {
     return await resp.json();

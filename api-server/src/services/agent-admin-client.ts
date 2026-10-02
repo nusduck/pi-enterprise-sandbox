@@ -5,6 +5,8 @@
  * 这里不做二次判断，也不缓存。单独成文件：`agent-client.ts` 已贴着行数棘轮。
  */
 import { agentFetch, requestHeaders } from './agent-client.js';
+import { throwAgentError } from './agent-error.js';
+import { pickQuery } from '../http/query.js';
 import { config } from '../config.js';
 
 type Opts = { auth?: any; traceId?: string | null };
@@ -17,32 +19,17 @@ async function requestAdminRuns(path: string, query: URLSearchParams | null, { a
   if (query) for (const [k, v] of query) url.searchParams.set(k, v);
   const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(
-      typeof payload.error === 'string' ? payload.error : `Agent admin request failed (${resp.status})`,
-    );
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Agent admin request failed');
   }
   return resp.json();
 }
 
-function pick(source: URLSearchParams, keys: readonly string[]): URLSearchParams {
-  const out = new URLSearchParams();
-  for (const key of keys) {
-    const value = source.get(key);
-    if (value != null && value !== '') out.set(key, value);
-  }
-  return out;
-}
-
 export function listAdminRuns(source: URLSearchParams, opts: Opts = {}): Promise<any> {
-  return requestAdminRuns('', pick(source, LIST_KEYS), opts);
+  return requestAdminRuns('', pickQuery(source, LIST_KEYS), opts);
 }
 
 export function getAdminRunStats(source: URLSearchParams, opts: Opts = {}): Promise<any> {
-  return requestAdminRuns('/stats', pick(source, ['day_start']), opts);
+  return requestAdminRuns('/stats', pickQuery(source, ['day_start']), opts);
 }
 
 export function getAdminRun(runId: string, opts: Opts = {}): Promise<any> {
@@ -77,5 +64,5 @@ export async function listAllAdminRunEvents(runId: string, opts: Opts = {}): Pro
 
 /** `skill` tool calls per Skill over the last `days` days, org-wide (admin). */
 export function getAdminSkillUsage(source: URLSearchParams, opts: Opts = {}): Promise<any> {
-  return requestAdminRuns('', pick(source, ['days']), opts, '/internal/admin/skill-usage');
+  return requestAdminRuns('', pickQuery(source, ['days']), opts, '/internal/admin/skill-usage');
 }

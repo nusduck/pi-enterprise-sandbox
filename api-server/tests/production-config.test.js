@@ -1,6 +1,6 @@
 /**
  * BFF production config fail-fast.
- * Run: node --test api-server/tests/production-config.test.js
+ * Run: npx tsx --test tests/production-config.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

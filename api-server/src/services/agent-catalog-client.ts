@@ -8,6 +8,7 @@
  * 再加一族端点就会把它顶破。
  */
 import { agentFetch, requestHeaders } from './agent-client.js';
+import { throwAgentError } from './agent-error.js';
 import { config } from '../config.js';
 
 async function requestAgentCatalog(
@@ -20,22 +21,11 @@ async function requestAgentCatalog(
     body: body == null ? undefined : JSON.stringify(body),
   });
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent catalog request failed (${resp.status})`,
-    );
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
     // 只放行明确列出的结构化字段：激活冲突要让 UI 看见当前指针，
     // 但 BFF 不能把 agent/ 的任意错误载荷原样转出去。
-    const details: Record<string, unknown> = {};
-    if (Object.hasOwn(payload, 'active_version_id')) {
-      details.active_version_id = payload.active_version_id ?? null;
-    }
-    if (Object.keys(details).length > 0) error.details = details;
-    throw error;
+    await throwAgentError(resp, 'Agent catalog request failed', {
+      detailsKeys: ['active_version_id'],
+    });
   }
   if (resp.status === 204) return null;
   return resp.json();

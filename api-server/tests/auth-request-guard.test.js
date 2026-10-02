@@ -1,6 +1,6 @@
 /**
  * CSRF guard for auth write requests: Origin / Fetch Metadata.
- * Run: node --test api-server/tests/auth-request-guard.test.js
+ * Run: npx tsx --test tests/auth-request-guard.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

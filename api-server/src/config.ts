@@ -8,6 +8,12 @@ import { resolveSsoClientConfig } from './sso-config.js';
 
 const MIN_SECRET_LEN = 32;
 const DEFAULT_DATASET_UPLOAD_MAX_BYTES = 55 * 1024 * 1024;
+/**
+ * 非 Dataset 上传的上限（Skill 归档、附件等，C5 A6 收敛点）。
+ * Dataset 走可配的 `DATASET_UPLOAD_MAX_BYTES`（行为不变）；其他三处原来各写
+ * 一遍 `55 * 1024 * 1024`，现在共用这一个常量，避免上限漂移。
+ */
+export const UPLOAD_MAX_BYTES = 55 * 1024 * 1024;
 const WEAK_SECRET_MARKERS = [
   'change-me',
   'changeme',

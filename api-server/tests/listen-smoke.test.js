@@ -1,6 +1,6 @@
 /**
  * BFF import + listen smoke (Agent/Sandbox may be unreachable → degraded status OK).
- * Run: node --test api-server/tests/listen-smoke.test.js
+ * Run: npx tsx --test tests/listen-smoke.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

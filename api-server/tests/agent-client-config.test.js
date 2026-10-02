@@ -1,15 +1,26 @@
 /**
  * BFF config for independent Agent service.
- * Run: node --test api-server/tests/agent-client-config.test.js
+ * Run: npx tsx --test tests/agent-client-config.test.js
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = join(__dirname, '../..');
+const srcRoot = join(__dirname, '../src');
+const serverFile = join(__dirname, '../server.ts');
+
+function collectTsFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...collectTsFiles(full));
+    else if (full.endsWith('.ts')) out.push(full);
+  }
+  return out;
+}
 
 describe('config exposes Agent base URL', () => {
   it('has AGENT_BASE_URL and no AGENT_RUNTIME', async () => {
@@ -21,9 +32,20 @@ describe('config exposes Agent base URL', () => {
 });
 
 describe('python agent path is gone', () => {
-  it('BFF has no Python Agent proxy', async () => {
+  it('BFF sources reference no Python agent proxy or local process spawn', async () => {
     const runs = await import('../src/routes/runs.js');
     assert.equal(typeof runs.handleCreateRun, 'function');
     assert.equal(typeof runs.handleRunEvents, 'function');
+
+    const files = [...collectTsFiles(srcRoot), serverFile];
+    assert.ok(files.length > 10, 'expected the BFF source tree to be scanned');
+    const offenders = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      for (const marker of [/python/i, /AGENT_RUNTIME/, /child_process/, /spawn\s*\(/]) {
+        if (marker.test(text)) offenders.push(`${file}: ${marker}`);
+      }
+    }
+    assert.deepEqual(offenders, [], 'Python Agent proxy remnants must not come back');
   });
 });
