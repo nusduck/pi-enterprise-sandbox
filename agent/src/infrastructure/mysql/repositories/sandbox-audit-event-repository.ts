@@ -132,19 +132,4 @@ export class SandboxAuditEventRepository {
     }
     return mapSandboxAuditEvent(row);
   }
-
-  async listByOwner(scope: { orgId: string, userId: string }, opts: { eventType?: string, limit?: number, afterCreatedAt?: string } = {}) {
-    const s = requireOwnerScope(scope);
-    let q = applyOwnerScope(this.db('tbl_agsvc_sandbox_audit_events'), s).orderBy(
-      'created_at',
-      'asc',
-    );
-    if (opts.eventType) {
-      q = q.andWhere({ event_type: assertEventType(opts.eventType) });
-    }
-    const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 500);
-    q = q.limit(limit);
-    const rows = await q;
-    return (rows || []).map(mapSandboxAuditEvent);
-  }
 }

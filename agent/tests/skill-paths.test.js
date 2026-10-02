@@ -13,10 +13,6 @@ import {
   writableSkillRoot,
 } from '../src/skills/paths.js';
 import { resolveSkillRoots } from '../src/skills/manager.js';
-import {
-  LOGICAL_SKILL_ROOTS,
-  redactEmbeddedHostPaths,
-} from '../src/lib/text-redaction.js';
 
 const CANONICAL_SKILL_ROOT = '/home/sandbox/skill';
 const CANONICAL_USER_SKILL_ROOT = '/home/sandbox/skill-user';
@@ -29,7 +25,6 @@ test('Skill path policy exposes only the canonical logical roots', () => {
   assert.deepEqual(DEFAULT_SKILL_ROOTS, CANONICAL_ROOTS);
   assert.deepEqual(normalizeSkillRoots(), CANONICAL_ROOTS);
   assert.deepEqual(resolveSkillRoots({}), CANONICAL_ROOTS);
-  assert.deepEqual(LOGICAL_SKILL_ROOTS, CANONICAL_ROOTS);
 
   for (const root of CANONICAL_ROOTS) {
     assert.equal(isUnderSkillRoot(`${root}/pdf/SKILL.md`), true, root);
@@ -80,14 +75,10 @@ test('per-user skill directories are identity-scoped and traversal-proof', () =>
   }
 
   // A per-user directory is still under the canonical user root, so the
-  // existing write guards and host-path redaction keep covering it.
+  // existing write guards keep covering it.
   const mine = userSkillRootFor({ orgId: ORG, userId: USER });
   assert.equal(isUnderSkillRoot(`${mine}/my-skill/SKILL.md`), true);
   assert.equal(commandTouchesSkillRoot(`python ${mine}/my-skill/scripts/x.py`), true);
-  assert.equal(
-    redactEmbeddedHostPaths(`${mine}/my-skill/SKILL.md`),
-    `${mine}/my-skill/SKILL.md`,
-  );
 });
 
 test('only simple Skill scripts are executable through bash/process tools', () => {
@@ -97,18 +88,6 @@ test('only simple Skill scripts are executable through bash/process tools', () =
   assert.equal(isReadonlySkillExecution(`python3 ${CANONICAL_SKILL_ROOT}/pdf/render.py`), false);
   assert.equal(isReadonlySkillExecution(`python3 ${script}; rm -rf /tmp/x`), false);
   assert.equal(isReadonlySkillExecution(`python3 ${script} $(whoami)`), false);
-});
-
-test('host-path redaction preserves only the canonical Skill roots', () => {
-  for (const root of CANONICAL_ROOTS) {
-    const canonical = `${root}/pdf/SKILL.md`;
-    assert.equal(redactEmbeddedHostPaths(canonical), canonical, root);
-  }
-  for (const root of REMOVED_COMPATIBILITY_ROOTS) {
-    const output = redactEmbeddedHostPaths(`${root}/pdf/SKILL.md`);
-    assert.ok(!output.includes(root));
-    assert.match(output, /\[redacted-path\]/);
-  }
 });
 
 test('ADR 0009 D7 / H6.3：草稿根不在发现清单里——进去就等于取消闸门', async () => {

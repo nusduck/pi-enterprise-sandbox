@@ -67,16 +67,4 @@ export class CancelSignal {
     const value = await this.redis.get(this.key(id));
     return value != null && value !== '';
   }
-
-  /**
-   * Remove cancel signal (e.g. after terminal handling). No-op if absent.
-   *
-   * @param runId
-   * @returns {Promise<boolean>} true when a key was deleted
-   */
-  async clear(runId: string) {
-    const id = assertRunId(runId);
-    const n = await this.redis.del(this.key(id));
-    return Number(n) > 0;
-  }
 }

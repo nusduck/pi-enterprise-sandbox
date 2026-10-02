@@ -165,25 +165,6 @@ describe('SkillShareRequestRepository.withdraw', () => {
   });
 });
 
-describe('SkillShareRequestRepository.withdrawAllForRequester', () => {
-  it('成员离开组织时其 pending 全部作废，但**不删行**（轨迹是审计材料）', async () => {
-    const { repo } = makeRepo();
-    const a = await request(repo);
-    const b = await request(repo, { name: 'other-skill' });
-    // 一条已决定的不能被这条操作碰到。
-    const c = await request(repo, { name: 'decided-skill' });
-    await repo.decide({ requestId: c.requestId, status: 'approved', decidedByUserId: ADMIN });
-
-    const affected = await repo.withdrawAllForRequester({ orgId: ORG, requesterUserId: ALICE });
-    assert.equal(affected, 2);
-    assert.equal((await repo.get(a.requestId))?.status, 'withdrawn');
-    assert.equal((await repo.get(b.requestId))?.status, 'withdrawn');
-    assert.equal((await repo.get(c.requestId))?.status, 'approved');
-    // 行还在。
-    assert.equal((await repo.listForRequester({ orgId: ORG, requesterUserId: ALICE })).length, 3);
-  });
-});
-
 describe('SkillShareRequestRepository.listForOrg', () => {
   it('可按状态过滤，按创建时间升序（最早的先处理）', async () => {
     const { repo } = makeRepo();

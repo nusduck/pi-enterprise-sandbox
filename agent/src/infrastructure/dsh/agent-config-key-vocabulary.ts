@@ -54,21 +54,6 @@ export const V1_TOP_LEVEL_KEYS: readonly string[] = Object.freeze([
   'deliveryPolicy',
 ]);
 
-/**
- * 无 `schemaVersion` 的 legacy 记录里，绑定期仍会读取、因而必须认识的顶层键。
- *
- * 这些键在 v1 里已无对应字段（`CONFIG_UNKNOWN_FIELD` / `LEGACY_FIELD_REQUIRES_MIGRATION`），
- * 这里只是让旧记录继续可跑，不是重新承认它们的语义。
- */
-export const LEGACY_RECORD_TOP_LEVEL_KEYS: readonly string[] = Object.freeze([
-  'model',
-  'maxOutputTokens',
-  'temperature',
-  'skills',
-  'extensions',
-  'sandboxPolicy',
-]);
-
 const V1_KEY_SET = new Set(V1_TOP_LEVEL_KEYS);
 
 /**

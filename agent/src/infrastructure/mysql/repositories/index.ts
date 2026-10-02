@@ -146,19 +146,6 @@ export {
   RemoteConversationRepository,
   REMOTE_CONVERSATIONS_TABLE,
 } from './remote-conversation-repository.js';
-export {
-  TaskStateRepository,
-  mapTodo,
-  mapMemory,
-  assertTodoStatus,
-  boundText,
-  TODO_STATUSES,
-  MAX_TODO_ITEMS,
-  MAX_TODO_CONTENT_CHARS,
-  MAX_MEMORY_CONTENT_CHARS,
-  MEMORY_SEARCH_DEFAULT_LIMIT,
-  MEMORY_SEARCH_MAX_LIMIT,
-} from './task-state-repository.js';
 export { mapInteraction } from '../row-mappers.js';
 export {
   CronJobRepository,

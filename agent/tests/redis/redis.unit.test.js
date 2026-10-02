@@ -15,7 +15,6 @@ import {
   RUN_STREAM_MAXLEN,
   CANCEL_SIGNAL_TTL_MS,
   AGENT_RUNS_QUEUE_NAME,
-  OUTBOX_WAKEUP_KEY,
   RUN_JOB_REF_FIELDS,
   RUN_STREAM_PAYLOAD_MAX_BYTES,
   OWNER_TOKEN_MAX_LEN,
@@ -192,7 +191,6 @@ describe('canonical keys and constants', () => {
     assert.equal(runLeaseKey(RUN), `run:lease:${RUN}`);
     assert.equal(runCancelKey(RUN), `run:cancel:${RUN}`);
     assert.equal(runStreamKey(RUN), `run:stream:${RUN}`);
-    assert.equal(OUTBOX_WAKEUP_KEY, 'outbox:wakeup');
     assert.equal(AGENT_RUNS_QUEUE_NAME, 'agent-runs');
     assert.equal(LEASE_TTL_MS, 30_000);
     assert.equal(LEASE_RENEW_INTERVAL_MS, 10_000);
@@ -397,16 +395,13 @@ describe('CancelSignal', () => {
     cancel = new CancelSignal(redis);
   });
 
-  it('request / isRequested / clear with TTL', async () => {
+  it('request / isRequested with TTL', async () => {
     assert.equal(await cancel.isRequested(RUN), false);
     await cancel.request(RUN, { reason: 'user', requestedBy: 'u1' });
     assert.equal(await cancel.isRequested(RUN), true);
     const raw = await redis.get(runCancelKey(RUN));
     assert.ok(raw);
     assert.match(raw, /user/);
-    assert.equal(await cancel.clear(RUN), true);
-    assert.equal(await cancel.isRequested(RUN), false);
-    assert.equal(await cancel.clear(RUN), false);
   });
 
   it('rejects non-ULID runId', async () => {
@@ -418,7 +413,6 @@ describe('CancelSignal', () => {
     const proto = Object.getOwnPropertyNames(CancelSignal.prototype);
     assert.ok(proto.includes('request'));
     assert.ok(proto.includes('isRequested'));
-    assert.ok(proto.includes('clear'));
     assert.equal(proto.includes('updateRun'), false);
     assert.equal(proto.includes('transition'), false);
   });
