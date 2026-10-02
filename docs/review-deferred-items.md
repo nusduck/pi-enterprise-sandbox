@@ -74,7 +74,6 @@ scope was narrowed, in
 | 协作 tab 并发编辑未做浏览器验证 | 智能体设置页「协作」分类复用既有草稿与 409 冲突流程（[设计](design/agent-delegation-config-ui.md)）；2026-09-26 浏览器验证未覆盖双标签页同时修改 | 低：冲突处理代码未改动 | 关闭设计稿 §6 第 5 步 | 开两个标签页修改同一智能体的协作配置并保存，确认后者收到冲突提示且草稿保留 |
 | 远端 A2A 委派只支持一问一答 | `a2a-remote-client.ts` 的 `sendMessage` 不带 `contextId`（每次都是新任务，不续聊），`returnImmediately: true`。远端文件只带回名称和链接，不导入工作区。`INPUT_REQUIRED` / `AUTH_REQUIRED` 按 `A2A_REMOTE_NEEDS_INPUT` 失败（[设计](design/a2a-remote-delegation.md) §2 非目标） | 低：有意划出的范围 | 支持需要追问或返回文件的远端（如 hi-agent） | 接入具体远端后按需求决定补哪几项 |
 | 远端 Agent 凭据加密存储与界面登记（暂不做） | 远端清单与凭据只来自环境变量 `A2A_REMOTE_AGENTS_JSON`；仓库无静态加密设施，凭据入库即明文（[设计 D2](design/a2a-remote-delegation.md)）。2026-09-26 产品决定暂不做 | 无（当前不存储凭据） | 各部门自助登记外部智能体 | 需要时另立设计：信封加密 + 主密钥（K8s Secret / KMS）、按组织的登记表、SSRF 限制，并新增 ADR 取代 D2 |
-| 设置面板身份行不显示审核员角色 | 2026-10-03 截图：reviewer 在设置面板显示「reviewer · 普通用户」，用户菜单里已是「审核员」（[证据](evidence/2026-10-03-integration-live-chain.md) 新发现 3）。身份行按旧的单值 `role` 字段而不是 `roles[]` 取标签 | 低：展示问题 | 角色展示一致 | 设置面板改用与用户菜单相同的角色标签函数 |
 
 | exec `signal` 端点无视信号种类 | `exec/src/shell/job-registry.ts` `signalInternal` 先调用活句柄 `cancel()` 结束整个作业，再补发指定信号；发 `SIGINT` / `SIGUSR1` 这类本意不终止的信号也会结束进程。2026-10-03 真机：`kill`（SIGKILL）与旧的 SIGTERM 都会让忽略 TERM 的进程结束（[证据](evidence/2026-10-03-integration-live-chain.md) 新发现 1） | 低：目前只有终止类用法；但 `signal` 的语义与名字不符，向进程发控制信号（如 SIGUSR1 让其打印状态）不可用 | 能向运行中的进程发非终止信号 | 只对终止类信号走 `cancel()`，其余信号只经 `safeSignalIdentity` 发送，并补测试 |
 
