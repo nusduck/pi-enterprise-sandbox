@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 取消进程后状态停在 stopping
+
+- 进程控制台取消（或 signal 终止类信号）一个很快退出的进程时，作业已结算为 `killed`，随后的 `stopping` 写入把终态覆盖了，
+  `finished_at` 有值而 `status` 停在 `stopping`，界面一直显示运行中。现在非终态写入不会覆盖终态。
+
 ### Fixed — exec `signal` 按信号种类决定语义
 
 - `MySqlJobRegistry.signalInternal` 此前对任何信号都先调活句柄 `cancel()` 结束

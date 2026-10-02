@@ -41,6 +41,11 @@
  */
 export type JobStatus = 'running' | 'stopping' | 'completed' | 'killed' | 'failed';
 
+/** 终态：结算后不可再被非终态（running / stopping）覆盖。 */
+export function isTerminalJobStatus(status: JobStatus): boolean {
+  return status === 'completed' || status === 'killed' || status === 'failed';
+}
+
 // ── 归属 ────────────────────────────────────────────────────────────────
 
 /**
