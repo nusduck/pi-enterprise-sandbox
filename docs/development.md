@@ -146,6 +146,10 @@ scripts/dev/k8s/down.sh dev                                # 删命名空间并�
 
 - `up.sh dev` 会先 `docker compose stop` 掉 Compose 里的 agent / agent-worker / api-server / frontend / sandbox-mcp：
   同一个队列与库不能有两组消费者。
+  反过来也一样：K8s `dsh-dev` 开着时**不要**再 `docker compose up` 这些服务。两套共用 `sandbox` 库与 Redis 队列，
+  K8s 的 worker 会消费 Compose 发起的 Run，恢复扫描也会接管它们——验证跑到的是另一份镜像，接口却照常返回成功。
+  回到 Compose 方式先 `scripts/dev/k8s/down.sh dev`；该脚本最后会执行一次不带 profile / 额外 env 的
+  `docker compose up -d`，用了 `--profile sso-dev` 或 shell 变量覆盖的，之后要按原方式再起一次。
 - 各服务的环境变量取自 `docker compose config`（`.env` + Compose 默认值），与 Compose 方式同一份配置；
   改了 `.env` 重新执行 `up.sh dev`。
 - 端口经 LoadBalancer 映射到宿主 `127.0.0.1`（`k8s.expose_services=false` 时不对局域网开放），端口号取 Compose 的发布端口。
