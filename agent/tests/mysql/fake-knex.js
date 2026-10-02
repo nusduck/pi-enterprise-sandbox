@@ -104,6 +104,7 @@ function createQuery(state, tableName, opts = {}) {
         if (val.op === '>') return left > Number(val.value);
         if (val.op === '>=') return left >= Number(val.value);
         if (val.op === '<') return left < Number(val.value);
+        if (val.op === '<=') return left <= Number(val.value);
         return false;
       }
       return row[col] === val;
@@ -589,6 +590,15 @@ function createQuery(state, tableName, opts = {}) {
     }
 
     if (ctx.limitN != null) rows = rows.slice(0, ctx.limitN);
+    // 仅支持探测用的 (sequence_no, JSON_STORAGE_SIZE(content_json)) 投影；其余 select 仍返回整行。
+    if (ctx.selectCols?.some((c) => c && typeof c === 'object' && c.__fakeContentBytes)) {
+      rows = rows.map((r) => ({
+        sequence_no: r.sequence_no,
+        content_bytes: Buffer.byteLength(
+          typeof r.content_json === 'string' ? r.content_json : JSON.stringify(r.content_json ?? null),
+        ),
+      }));
+    }
     return rows;
   }
 
@@ -637,6 +647,9 @@ export function createFakeKnex(state = createFakeState()) {
     );
     if (forceIndex && typeof bindings[0] === 'string') {
       return { __fakeTable: bindings[0], __forceIndex: bindings[1] ?? null };
+    }
+    if (/^JSON_STORAGE_SIZE\(content_json\) AS content_bytes$/i.test(String(sql).trim())) {
+      return { __fakeContentBytes: true };
     }
     return rawAsync(sql, bindings);
   };

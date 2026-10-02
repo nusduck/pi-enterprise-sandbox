@@ -61,6 +61,13 @@ export const JOURNAL_DEFAULT_PAGE_SIZE = 500;
 /** Hard ceiling for a single page to protect memory. */
 export const JOURNAL_MAX_PAGE_SIZE = 2000;
 
+/**
+ * 单页累计 `content_json` 字节预算（次要上限，行数上限仍然生效）。
+ * 带内联图片的条目约 2.7MB，500 行一页可达 GB 级；超预算时提前截页，
+ * 但至少返回一行，保证翻页一定前进。
+ */
+export const JOURNAL_PAGE_BYTE_BUDGET = 16 * 1024 * 1024;
+
 function requireOwnerUlids(scope: { orgId: string, userId: string }) {
   const s = requireOwnerScope(scope);
   return {
@@ -569,7 +576,7 @@ export class SessionJournalRepository {
    * @param scope
    * @param [opts]
    */
-  async listBySession(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number } = {}) {
+  async listBySession(agentSessionId: string, scope: { orgId: string, userId: string }, opts: { afterSequence?: number, limit?: number, maxBytes?: number } = {}) {
     const s = requireOwnerUlids(scope);
     const sid = assertUlid(agentSessionId, 'agentSessionId');
     await this.#requireOwnedSession(this.db, sid, s);
@@ -597,18 +604,40 @@ export class SessionJournalRepository {
     // persist() re-reads right after appending the entry that just broke it.
     // `ind_agsvc_msg_i1 (agent_session_id, sequence_no)` yields the rows
     // already ordered: no sort, no buffer, and it stops at LIMIT.
-    const rows = await this.db(
-      this.db.raw('?? FORCE INDEX (??)', ['tbl_agsvc_messages', JOURNAL_ORDER_INDEX]),
-    )
-      .where({ agent_session_id: sid })
-      .whereIn('message_type', [
-        JOURNAL_MESSAGE_TYPE.HEADER,
-        JOURNAL_MESSAGE_TYPE.ENTRY,
-      ])
-      .whereNotNull('session_entry_id')
-      .andWhere('sequence_no', '>', after)
-      .orderBy('sequence_no', 'asc')
+    const maxBytes = opts.maxBytes ?? JOURNAL_PAGE_BYTE_BUDGET;
+    if (!Number.isInteger(maxBytes) || maxBytes < 1) {
+      throw new Error('maxBytes must be a positive integer');
+    }
+    const journalRows = () =>
+      this.db(
+        this.db.raw('?? FORCE INDEX (??)', ['tbl_agsvc_messages', JOURNAL_ORDER_INDEX]),
+      )
+        .where({ agent_session_id: sid })
+        .whereIn('message_type', [
+          JOURNAL_MESSAGE_TYPE.HEADER,
+          JOURNAL_MESSAGE_TYPE.ENTRY,
+        ])
+        .whereNotNull('session_entry_id')
+        .andWhere('sequence_no', '>', after)
+        .orderBy('sequence_no', 'asc');
+
+    // 先只取 (sequence_no, 大小) 探测本页要读多少字节，再按预算确定页尾，
+    // 避免一次把几百个图片条目整行拉进 agent 内存。
+    const probe = await journalRows()
+      .select('sequence_no', this.db.raw('JSON_STORAGE_SIZE(content_json) AS content_bytes'))
       .limit(limit);
+    if (probe.length === 0) return [];
+    let used = 0;
+    let keep = 0;
+    for (const row of probe) {
+      const size = Number(row.content_bytes) || 0;
+      if (keep > 0 && used + size > maxBytes) break;
+      used += size;
+      keep += 1;
+    }
+    const lastSequence = Number(probe[keep - 1].sequence_no);
+
+    const rows = await journalRows().andWhere('sequence_no', '<=', lastSequence);
 
     return rows.map(mapMessage);
   }
@@ -635,7 +664,7 @@ export class SessionJournalRepository {
       if (!page.length) break;
       all.push(...page);
       after = page[page.length - 1].sequenceNo;
-      if (page.length < pageSize) break;
+      // 页可能因字节预算提前截断，不能再用「不足一页」判断到头，读到空页为止。
     }
     return all;
   }
