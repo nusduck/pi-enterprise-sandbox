@@ -1245,3 +1245,27 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   真实 MySQL 集成用例 12/12（含并发互相撤销）；镜像重建后在开发 K8s 上跑完 §9 七条与 AGENTS §4 链路
   （真实模型带工具 Run、进程 logs/SIGTERM、跨租户 404）。详见
   [证据](evidence/2026-10-01-rbac-roles-live-chain.md)。
+
+## 2026-10-02 — 清库重建与真机链路复核
+
+- **Why：** 用户要求清空开发数据、用最新代码重建服务，并补做此前未重跑的真机取证。
+- **Action：** `docker compose down -v`（MySQL / Redis / `agent_user_skills` 卷）+ 清 `.runtime/sandbox/*`；
+  重建六个镜像；空库用 `scripts/dev/schema-apply.sh` 建表（清单 `drifts: []`）；注册两个账号后跑一轮带工具的真实 Run。
+  范围比 development-reset runbook 大（同卷其他库与已启用 Skill 一并清掉），为用户明确要求。
+- **STATUS IDs：** E1、E2 `unknown/partial → done`；E3 保持 `partial`（只证了跨用户，未证跨组织）；
+  头部 Tracks / Last audited 与现实对齐。C7、H1、H2、H4 只追加证据，状态不变。
+- **验证：** 六套测试 + 类型检查 + 前端 build 全绿，exec 有 4 个失败在通用 node:22 容器中出现、
+  在 sandbox 镜像 + compose 同款能力配置下复跑相关两个文件 29/29 通过（exec 其余文件未在该环境整套复跑）。
+  过程中 `dshdev-api-nm` 依赖卷过期，`npm ci` 后恢复。详见
+  [证据](evidence/2026-10-02-clean-rebuild-live-chain.md)。
+
+## 2026-10-02 — 验收 gate 补证（A2/A3、C4、H2/H3、F2）与 K8s 恢复
+
+- **Why：** 接上一条清库重建；用户要求把此前只有离线证据的隔离、审批、MCP、A2A 流式等行做真机验收。
+- **Action：** `scripts/dev/k8s/up.sh dev` 恢复 `dsh-dev` 应用层（compose 应用层让位）；真实 Run 走审批停泊→批准→放行一次；
+  agent 容器内用生产 `ExecRpcClient` 对真实 exec/bwrap 跑隔离探针，并另起低阈值 exec 验证配额与重启一致性；
+  A2A `message/stream`；exec 整套在 sandbox 镜像 + compose 同款安全配置下复跑；强杀 Worker 的委派场景。
+- **STATUS IDs：** A2、A3、C4、F2、H2、H3、E3 → `done`（E3 跨组织按用户决定不验收）。C7、H4、A5、C8、H5/H6 不变。
+  `review-deferred-items.md` 的委派 callId 行补入本次结果（部分验证，重放路径仍未测）。
+- **验证：** exec 478/478（0 跳过）；隔离探针 12/12 + 配额 4/4；其余套件结果见上一条。详见
+  [证据](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。更正上一份证据中"`model_id` 不生效"的说法（实际生效，失败来自网关）。
