@@ -41,7 +41,8 @@
     "20261002000002_sso_identities.js",
     "20261002000003_agent_visibility.js",
     "20261003000001_hiagent_remote_conversations.js",
-    "20261003000002_notification_scenarios.js"
+    "20261003000002_notification_scenarios.js",
+    "20261003000003_user_department.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -8997,6 +8998,15 @@
           "extra": "",
           "charset": null,
           "collation": null,
+          "generation": null
+        },
+        "department": {
+          "type": "varchar(255)",
+          "nullable": true,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
           "generation": null
         },
         "display_name": {
