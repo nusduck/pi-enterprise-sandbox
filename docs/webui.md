@@ -210,6 +210,10 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   不关的话发起人能绕过审核读到源文件），隐藏而不解释会让人以为文件丢了。
   其他会话里进程列表**拉取失败显示错误态**（404/5xx 与服务端真的返回空列表是两回事，
   `processPanelState` 的四态判定在 `entities/store.ts`），不会渲染成「这个会话还没有后台进程」。
+- **进程控制台**（`widgets/process-console/`）：从后台任务卡片或资料抽屉「进程」页签打开。
+  打开即加载日志（保留 offset 续读）；进程运行中每 2 秒增量轮询日志并请求 `GET /api/processes/{id}` 刷新状态；
+  进入终态后自动停止轮询，关闭或切换进程时清理定时器。发送 signal / cancel / stdin 之后立即重新查询状态与日志，
+  并将新状态写回实体 store 使对话流与抽屉卡片同步。取消操作采用应用内「确认取消？ 确认 / 返回」内联确认，无原生弹窗；全界面中文。
 - **输入框**（`widgets/composer/`）：见下文「键盘快捷键」；「＋」菜单可上传文件或图片，或引用其他
   会话的产物（对话框基于产物库：默认列出全部会话的产物并可按文件名搜索，左侧选会话只是缩小范围；
   `POST /api/conversations/{id}/artifact-imports`，会话开始后可用）；

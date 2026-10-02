@@ -1,4 +1,5 @@
 import type { ProcessEntity } from '../../../entities';
+import { formatProcessStatus } from '../../process-console/logHelpers';
 import { formatDuration } from '../buildTimeline';
 
 function statusDot(status: string): string {
@@ -51,22 +52,22 @@ export function ProcessCard({
         <span className="rtc-meta">{duration}</span>
       </header>
       <p className="rtc-status-line">
-        {process.status}
-        {process.exitCode != null ? ` · exit ${process.exitCode}` : ''}
+        {formatProcessStatus(process.status)}
+        {process.exitCode != null ? ` · 退出码 ${process.exitCode}` : ''}
       </p>
       <div className="rtc-actions">
         <button
           type="button"
           className="rtc-link-btn"
-          title="Open process console"
-          aria-label={`Open console for ${cmd}`}
+          title="打开进程控制台"
+          aria-label={`打开 ${cmd} 控制台`}
           onClick={(e) => {
             e.stopPropagation();
             if (onOpenConsole) onOpenConsole(process.id);
             else onSelect?.(process.id);
           }}
         >
-          Open Console
+          打开控制台
         </button>
       </div>
     </article>

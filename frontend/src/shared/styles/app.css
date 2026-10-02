@@ -1379,6 +1379,10 @@ body {
 }
 .pc-tool-btn:hover { background: var(--color-bg-hover); color: var(--color-text); }
 .pc-tool-btn:disabled { opacity: 0.5; cursor: default; }
+.pc-tool-btn.danger { color: var(--color-danger); border-color: var(--color-danger-border); }
+.pc-tool-btn.danger:hover { background: var(--color-danger-soft); color: var(--color-danger); }
+.pc-confirm-inline { display: inline-flex; align-items: center; gap: 6px; }
+.pc-confirm-label { font-size: 11.5px; color: var(--color-danger); font-weight: 500; }
 
 .pc-log {
   flex: 1;

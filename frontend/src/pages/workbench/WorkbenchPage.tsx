@@ -17,7 +17,7 @@ import { useWorkbenchSelection } from '../../app/layout/WorkbenchSelectionContex
  * 4. Process console sheet for full log streaming
  */
 export function WorkbenchPage() {
-  const { state, selectConversation, setDropzoneVisible, handleFilesSelected, entityStore } = useChat();
+  const { state, selectConversation, setDropzoneVisible, handleFilesSelected, entityStore, updateProcess } = useChat();
   const { consoleProcessId, closeProcessConsole } = useWorkbenchSelection();
   const { conversationId: routeId } = useParams();
   const navigate = useNavigate();
@@ -93,6 +93,7 @@ export function WorkbenchPage() {
         process={consoleProcess}
         open={Boolean(consoleProcessId)}
         onClose={closeProcessConsole}
+        onUpdateProcess={updateProcess}
       />
     </div>
   );

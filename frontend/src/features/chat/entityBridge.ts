@@ -258,6 +258,8 @@ export type EntityBridge = {
     row: DatasetRow,
     context?: { conversationId?: string | null; sessionId?: string | null },
   ) => DatasetEntity | null;
+  /** Immediately update or insert a process entity in the store. */
+  updateProcess: (entity: ProcessEntity) => void;
 };
 
 /** Convert the Sandbox/BFF Dataset wire row into the single UI entity shape. */
@@ -1026,6 +1028,12 @@ export function createEntityBridge(
     onStoreChange?.(store);
   }
 
+  function updateProcessEntity(entity: ProcessEntity): void {
+    store = upsertProcess(manager.getStore(), entity);
+    manager.setStore(store);
+    onStoreChange?.(store);
+  }
+
   return {
     manager,
     getStore: () => manager.getStore(),
@@ -1046,5 +1054,6 @@ export function createEntityBridge(
     pollReviewDecisions,
     markApproval,
     recordDataset,
+    updateProcess: updateProcessEntity,
   };
 }

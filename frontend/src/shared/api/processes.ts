@@ -62,6 +62,23 @@ export async function listProcesses(
 }
 
 /**
+ * GET /api/processes/{id}?session_id=...
+ */
+export async function getProcess(
+  processId: string,
+  sessionId: string,
+): Promise<ManagedProcess> {
+  const q = new URLSearchParams();
+  q.set('session_id', sessionId);
+  const resp = await fetch(
+    `${BASE}/processes/${encodeURIComponent(processId)}?${q}`,
+    { headers: authHeaders() },
+  );
+  await requireOk(resp, 'Get process failed');
+  return (await resp.json()) as ManagedProcess;
+}
+
+/**
  * GET /api/processes/{id}/logs?offset=&limit=
  */
 export async function getProcessLogs(

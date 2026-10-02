@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SettingsDialog` 账户面板身份行与用户类型行此前硬编码 `isAdmin ? '管理员' : '普通用户'`，审核员（reviewer）
   被误展示为「普通用户」。改用 `primaryRoleLabel`（与侧栏用户菜单保持一致），正确展示为「审核员」。
 
+### Fixed — 进程控制台日志自动刷新、状态收敛与中文国际化
+- 打开控制台即加载日志（`getProcessLogs`，保留 offset 续读）；运行中进程每 2 秒增量拉取日志并调用 `GET /api/processes/{id}` 刷新状态，进入终态后停止轮询，关闭或切换进程时清理定时器。
+- 发送 signal / cancel / stdin 后立即重新查询状态与日志，并将最新状态同步写回实体 store，使对话流中的进程卡片保持最新状态。
+- 控制台与进程卡片界面文案全部改为中文，取消确认由原生 `window.confirm` 改为应用内「确认取消？ 确认 / 返回」内联确认。
 ### Fixed — 共享申请批准的名字占用检查移进名字锁内
 
 - `SkillShareService.approve` 此前先调 `orgSkillOwnerOf` 读名字归属、之后才在

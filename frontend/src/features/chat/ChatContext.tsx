@@ -56,7 +56,7 @@ import type { AuthConfig } from '../../shared/schemas/auth';
 import { projectLoginCapabilities, type LoginCapabilities } from '../../shared/schemas/auth';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import { useReviewResultPolling } from './useReviewResultPolling';
-import type { EntityStore } from '../../entities';
+import type { EntityStore, ProcessEntity } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { projectConversationMessages } from './projections/conversationMessages';
 import { beginConversationRestore, finishConversationRestore, failConversationRestore } from './conversationLoading';
@@ -138,11 +138,7 @@ export type ChatController = {
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  /**
-   * 重新读一次 `me`。角色权威在服务端（BFF 每个请求都重读账本），撤销自己的 admin
-   * 后必须重新拉一次，AdminShell 的 isAdmin 闸门才会立刻变 false。
-   * 返回 false 表示没刷新成功（调用方应提示手动刷新）。
-   */
+  /** 重新读一次 `me`。角色权威在服务端，撤销自己的 admin 后必须重新拉一次。 */
   refreshAuthUser: () => Promise<boolean>;
   /** 登录能力投影（`GET /api/auth/config`）；失败时 UI 显示错误与重试。 */
   authConfig: AuthConfigState;
@@ -157,6 +153,8 @@ export type ChatController = {
   canSend: boolean;
   /** F2 normalized entity store (Conversation / Session / Run hierarchy). */
   entityStore: EntityStore;
+  /** Immediately update or insert a process entity in the store. */
+  updateProcess: (entity: ProcessEntity) => void;
   /** Active run id, derived directly from EntityStore. */
   activeRunId: string | null;
   /** Active Sandbox session, preferring the focused run entity. */
@@ -1355,6 +1353,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     displayMessages,
     canSend,
     entityStore,
+    updateProcess: bridge.updateProcess,
     activeRunId,
     activeSessionId,
     activeTraceId,
