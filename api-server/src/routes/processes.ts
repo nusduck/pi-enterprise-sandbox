@@ -106,8 +106,9 @@ export async function handleProcessAction(
         eof: Boolean(body?.eof),
       });
     } else if (action === 'signal' || action === 'kill') {
+      // `kill` 未指定信号时发 SIGKILL（名实一致）；`signal` 仍默认 SIGTERM。
       result = await client.processAction(workspaceId, processId, 'signal', {
-        signal: body?.signal || 'SIGTERM',
+        signal: body?.signal || (action === 'kill' ? 'SIGKILL' : 'SIGTERM'),
       });
     } else if (action === 'cancel') {
       result = await client.processAction(workspaceId, processId, 'cancel');

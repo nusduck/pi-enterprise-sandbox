@@ -139,6 +139,25 @@ test('BFF preserves log/read cursors and session-scoped control payloads', async
   assert.deepEqual(JSON.parse(signalCall.init.body), { signal: 'SIGKILL' });
 });
 
+test('kill without an explicit signal sends SIGKILL; signal keeps its SIGTERM default', async () => {
+  // 2026-08-26 实测：忽略 TERM 的循环在两次 `kill` 后仍在跑——`kill` 名不副实。
+  const killResponse = responseCapture();
+  await handleProcessAction(PROCESS, 'kill', { session_id: SESSION }, killResponse, request());
+  assert.equal(killResponse.status, 200);
+  const killCall = calls.findLast((item) => item.path.endsWith('/signal'));
+  assert.deepEqual(JSON.parse(killCall.init.body), { signal: 'SIGKILL' });
+
+  const termResponse = responseCapture();
+  await handleProcessAction(PROCESS, 'signal', { session_id: SESSION }, termResponse, request());
+  const termCall = calls.findLast((item) => item.path.endsWith('/signal'));
+  assert.deepEqual(JSON.parse(termCall.init.body), { signal: 'SIGTERM' });
+
+  const explicit = responseCapture();
+  await handleProcessAction(PROCESS, 'kill', { session_id: SESSION, signal: 'SIGINT' }, explicit, request());
+  const explicitCall = calls.findLast((item) => item.path.endsWith('/signal'));
+  assert.deepEqual(JSON.parse(explicitCall.init.body), { signal: 'SIGINT' }, 'an explicit signal still wins');
+});
+
 test('BFF requires session scope and preserves exec owner-scoped 404', async () => {
   const missing = responseCapture();
   await handleGetProcessLogs(
