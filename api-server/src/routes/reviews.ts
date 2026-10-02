@@ -30,6 +30,7 @@ import {
 } from '../services/agent-review-client.js';
 import { discardRequestBody, spillRequestToTempFile } from './files.js';
 import { sendError, sendJson as json } from '../http/response.js';
+import { readJsonBody } from '../http/body.js';
 import { createReadStream } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
@@ -60,38 +61,11 @@ function methodNotAllowed(res: ServerResponse): void {
   json(res, 405, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
 }
 
-function readJsonBody(req: IncomingMessage | null, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    if (!req) return resolve({});
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let settled = false;
-    req.on('data', (chunk: Buffer) => {
-      if (settled) return;
-      bytes += chunk.length;
-      if (bytes > maxBytes) {
-        settled = true;
-        reject(Object.assign(new Error('Request body too large'), { status: 413 }));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (settled) return;
-      const raw = Buffer.concat(chunks).toString('utf8').trim();
-      if (!raw) return resolve({});
-      try {
-        const parsed = JSON.parse(raw);
-        resolve(parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {});
-      } catch {
-        reject(Object.assign(new Error('body must be JSON'), { status: 422, code: 'REVIEW_INPUT_INVALID' }));
-      }
-    });
-    req.on('error', (error) => {
-      if (!settled) reject(error);
-    });
-  });
-}
+/**
+ * 审核写入的 JSON body 上限：64KB（approve/reject 只有几个字段）。
+ * 解析走公共 `http/body.ts`；非法 JSON 沿用本面的 422 + `REVIEW_INPUT_INVALID`。
+ */
+const REVIEW_JSON_BODY_MAX_BYTES = 64 * 1024;
 
 /** 流式转发 agent 的字节响应（背压 + 断连清理，与产物下载同一实现纪律）。 */
 async function proxyBytes(
@@ -193,7 +167,13 @@ export async function handleReviewsRoute(
         tail !== null ? notFound(res) : methodNotAllowed(res);
         return true;
       }
-      const body = await readJsonBody(req);
+      const body = req
+        ? await readJsonBody(req as IncomingMessage, {
+          maxBytes: REVIEW_JSON_BODY_MAX_BYTES,
+          invalidJsonStatus: 422,
+          invalidJsonCode: 'REVIEW_INPUT_INVALID',
+        })
+        : {};
       const baseRevision = Number(body['base_revision']);
       if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) {
         json(res, 422, { error: 'base_revision must be a non-negative integer', code: 'REVIEW_INPUT_INVALID' });

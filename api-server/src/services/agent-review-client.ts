@@ -9,6 +9,8 @@
  * 请求的超时口径不同（15s 的默认 deadline 不够一次 512MiB 的修订上传）。
  */
 import { agentFetch, requestHeaders } from './agent-client.js';
+import { throwAgentError } from './agent-error.js';
+import { pickQuery } from '../http/query.js';
 import { config } from '../config.js';
 
 type Opts = { auth?: any; traceId?: string | null; signal?: AbortSignal | null };
@@ -25,15 +27,6 @@ function agentUrl(path: string, query?: URLSearchParams | null): URL {
   return url;
 }
 
-async function throwAgentError(resp: Response, fallback: string): Promise<never> {
-  const payload: any = await resp.json().catch(() => ({}));
-  const error: any = new Error(
-    typeof payload.error === 'string' ? payload.error : `${fallback} (${resp.status})`,
-  );
-  error.status = resp.status;
-  if (typeof payload.code === 'string') error.code = payload.code;
-  throw error;
-}
 
 async function requestJson(
   path: string,
@@ -55,17 +48,8 @@ async function requestJson(
   return resp.json();
 }
 
-function pick(source: URLSearchParams, keys: readonly string[]): URLSearchParams {
-  const out = new URLSearchParams();
-  for (const key of keys) {
-    const value = source.get(key);
-    if (value != null && value !== '') out.set(key, value);
-  }
-  return out;
-}
-
 export function listReviews(source: URLSearchParams, opts: Opts = {}): Promise<any> {
-  return requestJson('', pick(source, LIST_KEYS), opts);
+  return requestJson('', pickQuery(source, LIST_KEYS), opts);
 }
 
 export function getReview(reviewTaskId: string, opts: Opts = {}): Promise<any> {

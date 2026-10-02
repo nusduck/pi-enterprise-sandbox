@@ -10,11 +10,7 @@ import {
 } from '../application/run-access-service.js';
 import { ensureAgentSession } from '../services/agent-client.js';
 import { resolveOwnerIdentity } from '../services/agent-identity-client.js';
-
-function json(res: ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
-}
+import { sendJson } from '../http/response.js';
 
 
 /** Query keys the library forwards to exec; anything else is dropped. */
@@ -39,11 +35,11 @@ async function listLibrary(parsedUrl: URL, res: ServerResponse, req: ReqWithTrac
       const value = parsedUrl.searchParams.get(key);
       if (value != null && value !== '') query.set(key, value);
     }
-    json(res, 200, await client.listLibraryArtifacts(query));
+    sendJson(res, 200, await client.listLibraryArtifacts(query));
   } catch (err: any) {
     console.error('[artifacts] library:', err.message);
     const status = Number(err?.status) || 500;
-    json(res, status, {
+    sendJson(res, status, {
       error: status >= 500 ? 'Artifact library unavailable' : err.message || 'Failed to list artifacts',
       code: err?.code,
     });
@@ -66,11 +62,11 @@ export async function handleListArtifacts(parsedUrl: URL, res: ServerResponse, r
     });
     const client = createSandboxClient({ auth: sessionAccess.sandboxAuth });
     const data = await client.listArtifacts(requireWorkspaceId(sessionAccess));
-    json(res, 200, data);
+    sendJson(res, 200, data);
   } catch (err: any) {
     console.error('[artifacts] list:', err.message);
     const status = Number(err?.status) || 500;
-    json(res, status, {
+    sendJson(res, status, {
       error: status >= 500 ? 'Artifact list unavailable' : err.message || 'Failed to list artifacts',
       code: err?.code,
     });
@@ -94,14 +90,14 @@ export async function handleImportArtifact(
     targetFilenameRaw == null ? null : String(targetFilenameRaw).trim();
 
   if (!artifactId) {
-    json(res, 400, {
+    sendJson(res, 400, {
       error: 'artifact_id is required',
       code: 'artifact_id_required',
     });
     return;
   }
   if (targetFilenameRaw != null && (!targetFilename || targetFilename.length > 256)) {
-    json(res, 400, {
+    sendJson(res, 400, {
       error: 'target_filename must be between 1 and 256 characters',
       code: 'target_filename_invalid',
     });
@@ -140,7 +136,7 @@ export async function handleImportArtifact(
       artifactId,
       targetFilename,
     );
-    json(res, 201, {
+    sendJson(res, 201, {
       ...data,
       target_conversation_id: data?.target_conversation_id || conversationId,
       // The Sandbox hop is keyed by workspace_id, but the public contract
@@ -150,7 +146,7 @@ export async function handleImportArtifact(
   } catch (err: any) {
     console.error('[artifacts] import:', err.message);
     const status = Number(err?.status) || 500;
-    json(res, status, {
+    sendJson(res, status, {
       error:
         status >= 500
           ? 'Artifact import unavailable'

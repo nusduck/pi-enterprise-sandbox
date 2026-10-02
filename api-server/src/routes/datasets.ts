@@ -8,16 +8,6 @@
  * GET  /api/conversations/:conversationId/datasets?session_id=
  * GET  /api/datasets?session_id=
  */
-/**
- * Dataset streaming proxy (PR-09 / plan §17).
- *
- * POST /api/conversations/:conversationId/datasets?session_id=
- *   Streams multipart body to Sandbox without holding the full file in the
- *   Node heap or writing a BFF-side temp file.
- *
- * GET  /api/conversations/:conversationId/datasets?session_id=
- * GET  /api/datasets?session_id=
- */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Transform } from 'node:stream';
 import { config } from '../config.js';
@@ -35,17 +25,7 @@ import {
   sandboxProxyHeaders,
   UPLOAD_RESPONSE_TIMEOUT_MS,
 } from './files.js';
-
-function writeJson(res: ServerResponse, status: number, body: unknown, traceId?: string | null) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (traceId) headers['X-Trace-Id'] = traceId;
-  const payload =
-    traceId && body && typeof body === 'object' && (body as any).trace_id == null
-      ? { ...(body as any), trace_id: traceId }
-      : body;
-  res.writeHead(status, headers);
-  res.end(JSON.stringify(payload));
-}
+import { sendJsonWithTrace } from '../http/response.js';
 
 
 /** Keep the public dataset contract keyed by sandbox_session_id. */
@@ -156,12 +136,12 @@ export async function handleDatasetUpload(
 
   if (!sessionId) {
     discardRequestBody(req, res);
-    writeJson(res, 400, { error: 'session_id required', code: 'session_required' }, traceId);
+    sendJsonWithTrace(res, 400, { error: 'session_id required', code: 'session_required' }, traceId);
     return;
   }
   if (!conversationId) {
     discardRequestBody(req, res);
-    writeJson(
+    sendJsonWithTrace(
       res,
       400,
       { error: 'conversation_id required', code: 'conversation_required' },
@@ -174,7 +154,7 @@ export async function handleDatasetUpload(
   const idempotencyKey = String(req.headers['idempotency-key'] || '').trim();
   if (!idempotencyKey) {
     discardRequestBody(req, res);
-    writeJson(
+    sendJsonWithTrace(
       res,
       400,
       {
@@ -192,7 +172,7 @@ export async function handleDatasetUpload(
   const declared = declaredRaw == null ? null : Number(declaredRaw);
   if (declared != null && declared > maxBytes) {
     discardRequestBody(req, res);
-    writeJson(
+    sendJsonWithTrace(
       res,
       413,
       { error: 'Payload too large', code: 'dataset_too_large' },
@@ -216,7 +196,7 @@ export async function handleDatasetUpload(
       status >= 500
         ? 'Authentication failed'
         : err?.message || 'Authentication required';
-    writeJson(
+    sendJsonWithTrace(
       res,
       status,
       { error: message, code: err?.code || 'dataset_auth_failed' },
@@ -230,7 +210,7 @@ export async function handleDatasetUpload(
     workspaceId = requireSessionWorkspaceId(sessionAccess);
   } catch (err: any) {
     discardRequestBody(req, res);
-    writeJson(res, err.status || 503, { error: err.message, code: err.code }, traceId);
+    sendJsonWithTrace(res, err.status || 503, { error: err.message, code: err.code }, traceId);
     return;
   }
 
@@ -299,7 +279,7 @@ export async function handleDatasetUpload(
       ) {
         mappedStatus = 413;
       }
-      writeJson(
+      sendJsonWithTrace(
         res,
         mappedStatus,
         mapUploadErrorBody(mappedStatus, data, sandboxTrace),
@@ -316,7 +296,7 @@ export async function handleDatasetUpload(
             trace_id: data.trace_id || sandboxTrace,
           }
         : data;
-    writeJson(
+    sendJsonWithTrace(
       res,
       sanRes.status === 200 ? 201 : sanRes.status || 201,
       successBody,
@@ -327,7 +307,7 @@ export async function handleDatasetUpload(
       req.unpipe?.(bounded.stream);
       req.resume?.();
       if (!res.destroyed && !res.writableEnded) {
-        writeJson(
+        sendJsonWithTrace(
           res,
           413,
           { error: 'Payload too large', code: 'dataset_too_large' },
@@ -339,7 +319,7 @@ export async function handleDatasetUpload(
     if (clientDisconnected || upstreamAbort.signal.aborted) return;
     console.error('[datasets] upload proxy failed:', err);
     if (!res.destroyed && !res.writableEnded) {
-      writeJson(res, 500, { error: err.message || 'Upload failed' }, traceId);
+      sendJsonWithTrace(res, 500, { error: err.message || 'Upload failed' }, traceId);
     }
   } finally {
     req.off?.('aborted', onRequestAborted);
@@ -363,7 +343,7 @@ export async function handleListDatasets(
   const sessionId = parsedUrl.searchParams.get('session_id');
   const traceId = resolveUploadTraceId(req);
   if (!sessionId) {
-    writeJson(res, 400, { error: 'session_id required' }, traceId);
+    sendJsonWithTrace(res, 400, { error: 'session_id required' }, traceId);
     return;
   }
   try {
@@ -391,7 +371,7 @@ export async function handleListDatasets(
     } catch {
       data = { error: text || 'Invalid sandbox response' };
     }
-    writeJson(
+    sendJsonWithTrace(
       res,
       sanRes.status,
       projectDatasetSession(data, sessionId, sessionAccess),
@@ -400,7 +380,7 @@ export async function handleListDatasets(
   } catch (err: any) {
     console.error('[datasets] list:', err.message);
     const status = Number(err?.status) || 500;
-    writeJson(
+    sendJsonWithTrace(
       res,
       status,
       {

@@ -1,5 +1,5 @@
 /**
- * Sandbox HTTP Client — typed wrapper around fetch to the sandbox FastAPI service.
+ * Sandbox HTTP Client — typed wrapper around fetch to the exec Sandbox public surface.
  *
  * Prefer `createSandboxClient({ traceId, traceContext, auth })` for request-scoped usage.
  * Module-level helpers use ephemeral clients so concurrent requests never share
@@ -8,6 +8,10 @@
 import type { IncomingMessage } from 'node:http';
 import { config, AUTH_HEADER } from '../config.js';
 import { readCookie } from '../http/cookies.js';
+import {
+  applyTrustedActingHeaders,
+  stripActingHeaders,
+} from '../http/acting-headers.js';
 import {
   boundRequestTraceContext,
   createTraceId,
@@ -121,14 +125,9 @@ export function createSandboxClient({
   }
 
   function headers(extra: Record<string, string> = {}): Record<string, string> {
-    // Drop any client-supplied acting headers from extra (defense in depth)
-    const safeExtra = { ...extra };
-    delete safeExtra['X-Acting-User-Id'];
-    delete safeExtra['X-Acting-Organization-Id'];
-    delete safeExtra['X-Acting-Role'];
-    delete safeExtra['x-acting-user-id'];
-    delete safeExtra['x-acting-organization-id'];
-    delete safeExtra['x-acting-role'];
+    // Drop any client-supplied acting headers from extra (defense in depth).
+    // 名单见 `http/acting-headers.ts`：大小写不敏感，浏览器变体一律剥掉。
+    const safeExtra = stripActingHeaders({ ...extra });
 
     const h: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -139,11 +138,7 @@ export function createSandboxClient({
       h['Authorization'] = authCtx.authorization;
     }
     // Only server-provided acting context (never from browser extra)
-    if (authCtx.actingUserId && authCtx.actingOrganizationId) {
-      h['X-Acting-User-Id'] = authCtx.actingUserId;
-      h['X-Acting-Organization-Id'] = authCtx.actingOrganizationId;
-      if (authCtx.actingRole) h['X-Acting-Role'] = authCtx.actingRole;
-    }
+    applyTrustedActingHeaders(h, authCtx);
     if (authCtx.requestId) h['X-Request-Id'] = String(authCtx.requestId);
     const tid =
       clientTraceContext?.traceId || clientTraceId || extra['X-Trace-Id'];
@@ -162,18 +157,17 @@ export function createSandboxClient({
     return h;
   }
 
-  async function sbFetch(path: string, opts: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
+  async function sbFetch(path: string, opts: RequestInit = {}): Promise<Response> {
     const url = `${BASE}${path}`;
     const {
       headers: extraHeaders,
       signal: externalSignal,
-      timeoutMs,
       ...rest
     } = opts;
-    const deadlineMs =
-      Number.isFinite(timeoutMs) && (timeoutMs as number) > 0
-        ? (timeoutMs as number)
-        : config.SANDBOX_REQUEST_TIMEOUT_MS;
+    // 超时统一走 `config.SANDBOX_REQUEST_TIMEOUT_MS`：此前暴露的 `timeoutMs`
+    // 参数没有任何内部调用者传值，分支恒走配置侧，删掉只是删不可达配置面，
+    // 超时本身保留。
+    const deadlineMs = config.SANDBOX_REQUEST_TIMEOUT_MS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), deadlineMs);
     const onAbort = () => controller.abort();

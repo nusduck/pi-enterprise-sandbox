@@ -4,6 +4,8 @@
  */
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
+import { pickListQuery } from '../http/query.js';
+import { throwAgentError } from './agent-error.js';
 import { probeReadiness, type DownstreamReadiness } from './downstream-readiness.js';
 import {
   boundRequestTraceContext,
@@ -61,24 +63,14 @@ function internalHeaders(extra: Record<string, string> = {}): Record<string, str
 
 /**
  * Query keys the Agent list endpoints accept (design §2.4). Everything else a
- * browser sends stays here — same discipline as `agent-admin-client.pick()`.
+ * browser sends stays here — same discipline as the other agent clients, now
+ * sharing `http/query.ts pickListQuery`.
  * `limit`/`cursor` are forwarded verbatim on purpose: range checks and cursor
  * decoding are `agent/`'s call, so `limit=999` must reach it and come back 400.
  */
 const CONVERSATION_LIST_KEYS = ['limit', 'cursor', 'q'] as const;
 const APPROVAL_LIST_KEYS = ['status', 'limit', 'cursor'] as const;
 const CRON_JOB_LIST_KEYS = ['limit', 'cursor'] as const;
-
-/** Whitelisted `?a=b` suffix, or `''` when nothing survives. Empty values drop out. */
-function pickListQuery(source: URLSearchParams | null, keys: readonly string[]): string {
-  if (!source) return '';
-  const picked = new URLSearchParams();
-  for (const key of keys) {
-    const value = source.get(key);
-    if (value != null && value !== '') picked.set(key, value);
-  }
-  return picked.size ? `?${picked}` : '';
-}
 
 
 /**
@@ -187,21 +179,7 @@ export async function createAgentRun(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    let body = null;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      // Preserve the raw response text for non-JSON Agent failures.
-    }
-    const message =
-      typeof body?.error === 'string'
-        ? body.error
-        : `Agent create run failed (${resp.status}): ${text}`;
-    const err = new Error(message) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    if (typeof body?.code === 'string' && body.code) err.code = body.code;
-    throw err;
+    await throwAgentError(resp, 'Agent create run failed');
   }
   return resp.json();
 }
@@ -214,10 +192,7 @@ export async function getAgentExtensionDiagnostics(
   url.searchParams.set('profile_id', profileId);
   const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const error = new Error(`Agent diagnostics failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    error.status = resp.status;
-    throw error;
+    await throwAgentError(resp, 'Agent diagnostics failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -238,15 +213,7 @@ export async function mutateAgentSkill(
     },
   );
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent Skill mutation failed (${resp.status})`,
-    );
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Agent Skill mutation failed');
   }
   return resp.json();
 }
@@ -276,15 +243,7 @@ export async function uploadAgentSkillDraft(
     fetchOpts,
   );
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent Skill draft upload failed (${resp.status})`,
-    );
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Agent Skill draft upload failed');
   }
   return resp.json();
 }
@@ -302,15 +261,7 @@ async function requestAgentA2aAdmin(
     },
   );
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const err: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent A2A admin request failed (${resp.status})`,
-    );
-    err.status = resp.status;
-    if (typeof payload.code === 'string') err.code = payload.code;
-    throw err;
+    await throwAgentError(resp, 'Agent A2A admin request failed');
   }
   return resp.json();
 }
@@ -372,15 +323,7 @@ async function requestAgentConversation(
     },
   );
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const err: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent conversation request failed (${resp.status})`,
-    );
-    err.status = resp.status;
-    if (typeof payload.code === 'string') err.code = payload.code;
-    throw err;
+    await throwAgentError(resp, 'Agent conversation request failed');
   }
   if (resp.status === 204) return null;
   return resp.json();
@@ -446,15 +389,7 @@ export async function ensureAgentSession(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const err: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent session ensure failed (${resp.status})`,
-    );
-    err.status = resp.status;
-    if (typeof payload.code === 'string') err.code = payload.code;
-    throw err;
+    await throwAgentError(resp, 'Agent session ensure failed');
   }
   return resp.json();
 }
@@ -472,15 +407,7 @@ export async function resolveAgentSandboxSession(
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const err: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent session access failed (${resp.status})`,
-    );
-    err.status = resp.status;
-    if (typeof payload.code === 'string') err.code = payload.code;
-    throw err;
+    await throwAgentError(resp, 'Agent session access failed');
   }
   return resp.json();
 }
@@ -504,10 +431,7 @@ export async function listAgentRuns(
     headers: requestHeaders({ auth, traceId }),
   });
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent list runs failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent list runs failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -525,15 +449,7 @@ async function requestAgentCron(
     },
   );
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent cron request failed (${resp.status})`,
-    );
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Agent cron request failed');
   }
   if (resp.status === 204) return null;
   return resp.json();
@@ -612,10 +528,7 @@ export async function cancelAgentRun(
     },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent cancel failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent cancel failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -639,10 +552,7 @@ export async function steerAgentRun(
     },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent steer failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent steer failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -666,12 +576,7 @@ export async function createConversationFollowUp(
     },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err: any = new Error(
-      `Agent conversation follow-up failed (${resp.status}): ${text}`,
-    );
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent conversation follow-up failed', { parse: 'text' });
   }
 
   return resp.json();
@@ -697,10 +602,7 @@ export async function resumeAgentRunApproval(
     },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent resume-approval failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent resume-approval failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -722,10 +624,7 @@ export async function respondAgentInteraction(
     },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent interaction response failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent interaction response failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -750,10 +649,7 @@ export async function decideAgentApproval(
     },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent approval decide failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent approval decide failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -767,15 +663,7 @@ async function requestAgentApproval(
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const err: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent approval request failed (${resp.status})`,
-    );
-    err.status = resp.status;
-    if (typeof payload.code === 'string') err.code = payload.code;
-    throw err;
+    await throwAgentError(resp, 'Agent approval request failed');
   }
   return resp.json();
 }
@@ -808,10 +696,7 @@ export async function getAgentRun(runId: string, { auth = null, traceId = null }
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent get run failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent get run failed', { parse: 'text' });
   }
   return resp.json();
 }
@@ -832,15 +717,7 @@ export async function getAgentRunTrace(
     headers: requestHeaders({ auth, traceId }),
   });
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const err: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent trace request failed (${resp.status})`,
-    );
-    err.status = resp.status;
-    if (typeof payload.code === 'string') err.code = payload.code;
-    throw err;
+    await throwAgentError(resp, 'Agent trace request failed');
   }
   return resp.json();
 }
@@ -859,19 +736,14 @@ export async function listAgentToolExecutions(
     { headers: requestHeaders({ auth, traceId }) },
   );
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err: any = new Error(
-      `Agent list tool executions failed (${resp.status}): ${text}`,
-    );
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent list tool executions failed', { parse: 'text' });
   }
   return resp.json();
 }
 
 /**
  * List historical run events as JSON (Agent MySQL authority).
- * Uses GET .../events?format=json — not Sandbox agent_runs dual path.
+ * Uses GET .../events?format=json — the Sandbox Run ledger is deleted, no dual path.
  *
  * @param {string} runId
  * @param {{ afterSequence?: number, limit?: number }} [query]
@@ -900,10 +772,7 @@ export async function listAgentEvents(
   url.searchParams.set('limit', String(limit));
   const resp = await agentFetch(url, { headers: requestHeaders({ auth, traceId }) });
   if (!resp.ok) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent list events failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent list events failed', { parse: 'text' });
   }
   const page: any = await resp.json();
   // Normalize to array for timeline consumers (page.events or raw array).
@@ -953,10 +822,7 @@ export async function openAgentRunEvents(
   const resp = await fetch(url, { headers, signal });
 
   if (!resp.ok || !resp.body) {
-    const text = await resp.text().catch(() => resp.statusText);
-    const err = new Error(`Agent events failed (${resp.status}): ${text}`) as Error & { status?: number; code?: string };
-    err.status = resp.status;
-    throw err;
+    await throwAgentError(resp, 'Agent events failed', { parse: 'text' });
   }
   return resp;
 }

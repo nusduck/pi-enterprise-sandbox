@@ -3,6 +3,7 @@
  * （目前是产物库）。会话作用域的请求仍走 `authorizeSandboxSession`。
  */
 import { agentFetch, requestHeaders } from './agent-client.js';
+import { throwAgentError } from './agent-error.js';
 import { config } from '../config.js';
 
 export async function resolveOwnerIdentity(
@@ -12,11 +13,7 @@ export async function resolveOwnerIdentity(
     headers: requestHeaders({ auth, traceId }),
   });
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(typeof payload.error === 'string' ? payload.error : `Owner lookup failed (${resp.status})`);
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Owner lookup failed');
   }
   const body: any = await resp.json();
   const orgId = String(body?.org_id || '').trim();

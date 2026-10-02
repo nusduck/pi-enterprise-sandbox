@@ -56,6 +56,7 @@ const request = (method, extra = {}) => ({
   headers: { authorization: 'Bearer browser-token', ...extra },
   requestId: 'req-1',
   on() {},
+  off() {},
   removeListener() {},
   resume() {},
 });
@@ -69,6 +70,7 @@ const jsonRequest = (method, body, extra = {}) => ({
     if (event === 'data') fn(Buffer.from(JSON.stringify(body), 'utf8'));
     if (event === 'end') fn();
   },
+  off() {},
   removeListener() {},
   resume() {},
 });

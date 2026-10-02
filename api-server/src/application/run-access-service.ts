@@ -48,18 +48,33 @@ export type ReqWithTrace = IncomingMessage & {
 
 
 /**
+ * `getDurableRun` 的第一参有两种形状（C5 A22 显式化，原来靠鸭子类型分流）：
+ * 生产传 `TrustedAuthContext`，测试传带 `getAgentRun(runId)` 的 loader。
+ * 不是两种鉴权路径——loader 形状只在测试里出现，生产永远走 auth 上下文。
+ */
+export type DurableRunLoader =
+  | TrustedAuthContext
+  | { getAgentRun(runId: string): Promise<any> };
+
+function isRunLoader(value: DurableRunLoader | null | undefined): value is { getAgentRun(runId: string): Promise<any> } {
+  return (
+    value != null &&
+    typeof (value as { getAgentRun?: unknown }).getAgentRun === 'function'
+  );
+}
+
+/**
  * Read the durable run from **Agent MySQL** (owner-scoped).
- * Sandbox agent_runs is no longer the status/ownership fact source.
+ * The Sandbox Run ledger is deleted; Agent MySQL is the sole status/ownership fact source.
  */
 export async function getDurableRun(
-  authOrClient: any,
+  authOrClient: DurableRunLoader,
   runId: string,
   traceId: string | null = null,
 ): Promise<any> {
-  const load =
-    authOrClient && typeof authOrClient.getAgentRun === 'function'
-      ? () => authOrClient.getAgentRun(runId)
-      : () => getAgentRun(runId, { auth: authOrClient, traceId });
+  const load = isRunLoader(authOrClient)
+    ? () => authOrClient.getAgentRun(runId)
+    : () => getAgentRun(runId, { auth: authOrClient, traceId });
 
   for (let attempt = 0; ; attempt += 1) {
     try {

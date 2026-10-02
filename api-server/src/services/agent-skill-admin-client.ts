@@ -11,7 +11,8 @@
  * 预算，新的转发逻辑从这里开始守 1000 行上限。
  */
 import { agentFetch, requestHeaders } from './agent-client.js';
-import { config } from '../config.js';
+import { throwAgentError } from './agent-error.js';
+import { config, UPLOAD_MAX_BYTES } from '../config.js';
 
 type Opts = { auth?: any; traceId?: string | null };
 
@@ -57,15 +58,7 @@ async function requestAgentSkill(
   if (isStream) (fetchOpts as any).duplex = 'half';
   const resp = await agentFetch(url, fetchOpts);
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent Skill request failed (${resp.status})`,
-    );
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Agent Skill request failed');
   }
   return resp.json();
 }
@@ -146,7 +139,7 @@ export function uploadAdminOrgSkill(
     query,
     body,
     extraHeaders: { 'Content-Type': 'application/octet-stream' },
-    maxBytes: 55 * 1024 * 1024,
+    maxBytes: UPLOAD_MAX_BYTES,
     ...opts,
   });
 }

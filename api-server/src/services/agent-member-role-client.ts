@@ -9,6 +9,8 @@
  * 单独成文件：`agent-client.ts` 与 `agent-admin-client.ts` 都贴着行数棘轮。
  */
 import { agentFetch, requestHeaders } from './agent-client.js';
+import { pickQuery } from '../http/query.js';
+import { throwAgentError } from './agent-error.js';
 import { config } from '../config.js';
 
 type Opts = { auth?: any; traceId?: string | null };
@@ -29,30 +31,13 @@ async function requestAgentMembers(
     headers: requestHeaders({ auth, traceId }),
   });
   if (!resp.ok) {
-    const payload: any = await resp.json().catch(() => ({}));
-    const error: any = new Error(
-      typeof payload.error === 'string'
-        ? payload.error
-        : `Agent member request failed (${resp.status})`,
-    );
-    error.status = resp.status;
-    if (typeof payload.code === 'string') error.code = payload.code;
-    throw error;
+    await throwAgentError(resp, 'Agent member request failed');
   }
   return resp.json();
 }
 
-function pick(source: URLSearchParams, keys: readonly string[]): URLSearchParams {
-  const out = new URLSearchParams();
-  for (const key of keys) {
-    const value = source.get(key);
-    if (value != null && value !== '') out.set(key, value);
-  }
-  return out;
-}
-
 export function listAdminMembers(source: URLSearchParams, opts: Opts = {}): Promise<any> {
-  return requestAgentMembers('', pick(source, LIST_KEYS), opts);
+  return requestAgentMembers('', pickQuery(source, LIST_KEYS), opts);
 }
 
 export function grantAdminMemberRole(
@@ -88,7 +73,7 @@ export function listAdminMemberRoleEvents(
 ): Promise<any> {
   return requestAgentMembers(
     `/${encodeURIComponent(userId)}/role-events`,
-    pick(source, ['limit']),
+    pickQuery(source, ['limit']),
     opts,
   );
 }

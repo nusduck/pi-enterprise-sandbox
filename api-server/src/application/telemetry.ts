@@ -31,8 +31,6 @@ const DEFAULT_MAX_QUEUE_SIZE = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE = 512;
 
 export interface TelemetryHandle {
-  readonly enabled: boolean;
-  readonly endpoint?: string | null;
   shutdown(): Promise<void>;
 }
 
@@ -63,7 +61,7 @@ export async function startTelemetry(
   const endpoint = configuredEndpoint(env);
   propagation.setGlobalPropagator(new W3CTraceContextPropagator());
   if (String(env.OTEL_SDK_DISABLED || '').toLowerCase() === 'true') {
-    telemetry = Object.freeze({ enabled: false, async shutdown() {} });
+    telemetry = Object.freeze({ async shutdown() {} });
     return telemetry;
   }
 
@@ -119,8 +117,6 @@ export async function startTelemetry(
   sdk.start();
   let stopped = false;
   telemetry = Object.freeze({
-    enabled: Boolean(endpoint),
-    endpoint,
     async shutdown() {
       if (stopped) return;
       stopped = true;

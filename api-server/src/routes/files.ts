@@ -10,7 +10,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as sb from '../services/sandbox-client.js';
-import { config, AUTH_HEADER } from '../config.js';
+import { config, AUTH_HEADER, UPLOAD_MAX_BYTES } from '../config.js';
 import {
   authorizeSandboxSession,
   requireSessionWorkspaceId,
@@ -22,6 +22,11 @@ import {
   resolveRequestTraceContext,
   traceCarrierHeaders,
 } from '../application/trace-context.js';
+import {
+  applyTrustedActingHeaders,
+  stripActingHeaders,
+} from '../http/acting-headers.js';
+import { sendJsonWithTrace } from '../http/response.js';
 
 /**
  * Upload streams the request body up before Sandbox answers, so its deadline
@@ -95,18 +100,9 @@ export function sandboxProxyHeaders(
 ): Record<string, string> {
   // Never copy acting headers from the browser. The optional third argument is
   // populated only after BFF-side identity resolution and is therefore safe to
-  // use for Sandbox's owner-scoped public adapters.
-  const safeExtra = { ...extra };
-  for (const key of [
-    'X-Acting-User-Id',
-    'X-Acting-Organization-Id',
-    'X-Acting-Role',
-    'x-acting-user-id',
-    'x-acting-organization-id',
-    'x-acting-role',
-  ]) {
-    delete safeExtra[key];
-  }
+  // use for Sandbox's owner-scoped public adapters. 剥离名单见
+  // `http/acting-headers.ts`（与 sandbox-client 同一份，大小写不敏感）。
+  const safeExtra = stripActingHeaders({ ...extra });
   const h: Record<string, string> = { ...AUTH_HEADER, ...safeExtra };
   // Once Agent has resolved the formal owner, use only the service token plus
   // acting headers. Forwarding a browser JWT here would take precedence in
@@ -118,9 +114,7 @@ export function sandboxProxyHeaders(
       'sandboxProxyHeaders requires a resolved trustedAuth (actingUserId + actingOrganizationId)',
     );
   }
-  h['X-Acting-User-Id'] = String(trustedAuth.actingUserId);
-  h['X-Acting-Organization-Id'] = String(trustedAuth.actingOrganizationId);
-  if (trustedAuth.actingRole) h['X-Acting-Role'] = String(trustedAuth.actingRole);
+  applyTrustedActingHeaders(h, trustedAuth);
   // Forward the BFF's current W3C span, including opaque tracestate. Direct
   // route-unit callers get a fresh valid context instead of a UUID-shaped id.
   const context =
@@ -205,20 +199,6 @@ export function discardRequestBody(req: IncomingMessage | null | undefined, res:
   }
   res.once('finish', destroy);
   res.once('close', destroy);
-}
-
-/**
- * Write a JSON response with X-Trace-Id for upload correlation.
- */
-function writeUploadJson(res: ServerResponse, status: number, body: unknown, traceId?: string | null): void {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (traceId) headers['X-Trace-Id'] = traceId;
-  const payload =
-    traceId && body && typeof body === 'object' && (body as any).trace_id == null
-      ? { ...(body as any), trace_id: traceId }
-      : body;
-  res.writeHead(status, headers);
-  res.end(JSON.stringify(payload));
 }
 
 /**
@@ -526,7 +506,7 @@ export async function handleFileUpload(
 
   if (!sessionId) {
     discardRequestBody(req, res);
-    writeUploadJson(res, 400, { error: 'session_id required' }, traceId);
+    sendJsonWithTrace(res, 400, { error: 'session_id required' }, traceId);
     return;
   }
 
@@ -535,12 +515,12 @@ export async function handleFileUpload(
     req.headers['idempotency-key'] || req.headers['Idempotency-Key'] || null;
 
   // Prefer Content-Length based limit (~50MB file + multipart overhead)
-  const maxBytes = 55 * 1024 * 1024;
+  const maxBytes = UPLOAD_MAX_BYTES;
   const declared = parseInt(String(req.headers['content-length'] || '0'), 10);
   if (declared > maxBytes) {
     // Drain/destroy so the client is not stuck sending a rejected body.
     discardRequestBody(req, res);
-    writeUploadJson(
+    sendJsonWithTrace(
       res,
       413,
       { error: 'Payload too large', code: 'attachment_too_large' },
@@ -557,7 +537,7 @@ export async function handleFileUpload(
   } catch (err: any) {
     discardRequestBody(req, res);
     const status = Number(err?.status) || 500;
-    writeUploadJson(
+    sendJsonWithTrace(
       res,
       status,
       {
@@ -575,7 +555,7 @@ export async function handleFileUpload(
     spill = await spillRequestToTempFile(req, maxBytes);
   } catch (err: any) {
     if (err && (err.status === 413 || err.code === 'attachment_too_large')) {
-      writeUploadJson(
+      sendJsonWithTrace(
         res,
         413,
         {
@@ -587,7 +567,7 @@ export async function handleFileUpload(
       return;
     }
     console.error('[files] upload spill failed:', err);
-    writeUploadJson(res, 500, { error: 'Upload failed' }, traceId);
+    sendJsonWithTrace(res, 500, { error: 'Upload failed' }, traceId);
     return;
   }
 
@@ -644,7 +624,7 @@ export async function handleFileUpload(
       ) {
         mappedStatus = 413;
       }
-      writeUploadJson(
+      sendJsonWithTrace(
         res,
         mappedStatus,
         mapUploadErrorBody(mappedStatus, data, sandboxTrace),
@@ -658,10 +638,10 @@ export async function handleFileUpload(
       data && typeof data === 'object'
         ? { ...data, trace_id: data.trace_id || sandboxTrace }
         : data;
-    writeUploadJson(res, status === 200 ? 201 : status, successBody, sandboxTrace);
+    sendJsonWithTrace(res, status === 200 ? 201 : status, successBody, sandboxTrace);
   } catch (err: any) {
     console.error('[files] upload proxy failed:', err);
-    writeUploadJson(
+    sendJsonWithTrace(
       res,
       500,
       { error: err.message || 'Upload failed' },

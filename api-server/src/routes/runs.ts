@@ -61,11 +61,13 @@ export function toIsoTimestamp(value: unknown): string | null {
  * Ensures created_at / updated_at are always ISO strings or null so the
  * frontend RunDetailSchema never sees Agent epoch-ms numbers.
  */
-export function presentRunDetail(live: any, runtimeAvailable: boolean): any {
+export function presentRunDetail(live: any): any {
   const liveObj = live && typeof live === 'object' ? live : null;
+  // `runtime_available` 是纯前端兼容字段：Agent MySQL 是唯一的 Run 事实源，
+  // 已删运行面回退不存在了，恒为 true（前端仍有 `=== false` 分支，见 C5 A7）。
   const body: Record<string, any> = liveObj
-    ? { ...liveObj, runtime_available: runtimeAvailable }
-    : { runtime_available: runtimeAvailable };
+    ? { ...liveObj, runtime_available: true }
+    : { runtime_available: true };
   body['created_at'] = toIsoTimestamp(liveObj?.created_at);
   body['updated_at'] = toIsoTimestamp(liveObj?.updated_at);
   body['started_at'] = toIsoTimestamp(liveObj?.started_at);
@@ -210,7 +212,7 @@ export async function handleListRuns(parsedUrl: URL, res: ServerResponse, req: R
   const conversationId = parsedUrl.searchParams.get('conversation_id') || undefined;
   const status = parsedUrl.searchParams.get('status') || undefined;
   try {
-    // Agent MySQL owner-scoped list — Sandbox agent_runs is not the fact source.
+    // Agent MySQL owner-scoped list — the Sandbox Run ledger is deleted; Agent MySQL is the sole fact source.
     const auth = await resolveTrustedAuth(req);
     const result = await listAgentRuns(
       { conversationId, status },
@@ -554,7 +556,7 @@ export async function handleGetRun(
   try {
     const { auth } = await authorizeRunRequest(runId, req);
     const live = await getAgentRun(runId, { auth, traceId: req?.traceId });
-    json(res, 200, presentRunDetail(live, true));
+    json(res, 200, presentRunDetail(live));
   } catch (err: any) {
     console.error('[runs] get:', err.message);
     sendError(res, err, req?.traceId);

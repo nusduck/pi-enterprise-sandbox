@@ -12,7 +12,6 @@ const MAX_TIMEOUT_MS = 30_000;
 const DEFAULT_TRANSACTION_TTL_SECONDS = 600;
 
 export interface SsoClientConfig {
-  readonly enabled: boolean;
   readonly available: boolean;
   readonly issuer: string;
   readonly clientId: string;
@@ -62,7 +61,6 @@ export function resolveSsoClientConfig(
     validUrl(issuer, allowInsecureHttp) &&
     validUrl(redirectUri, allowInsecureHttp);
   return {
-    enabled,
     available,
     issuer,
     clientId,
