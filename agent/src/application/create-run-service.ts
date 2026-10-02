@@ -40,7 +40,7 @@ import { projectAcceptedToQueued } from './run-queued-projection.js';
 import { normalizeW3cTracestate } from '../infrastructure/sandbox/trace-context.js';
 import { formatStoredTraceCarrier } from '../infrastructure/telemetry.js';
 import {
-  conversationTitleFromMessages,
+  ensureDerivedConversationTitle,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
 import {
@@ -518,7 +518,7 @@ export class CreateRunService {
         await repos.conversations.updateMeta(
           parents.conversationId,
           scope,
-          { title: conversationTitleFromMessages(ctx.messages) },
+          { title: ensureDerivedConversationTitle(conversation?.title, ctx.messages) },
         );
       }
 

@@ -10,8 +10,7 @@
  */
 
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
-import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
-import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
+import { OwnerScopedNotFoundError, ValidationError, assertDomainRunId } from './errors.js';
 import { RUN_STATUS } from '../domain/run/run-status.js';
 import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js';
 
@@ -64,22 +63,8 @@ export class GetRunService {
     if (typeof input.runId !== 'string' || !input.runId.trim()) {
       throw new ValidationError('runId is required');
     }
-    if (isLegacyOrUuidIdentity(input.runId)) {
-      // External/legacy ids are never domain run ids — owner-scoped not found.
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: input.runId,
-      });
-    }
-    let runId;
-    try {
-      runId = assertUlid(input.runId, 'runId');
-    } catch {
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: input.runId,
-      });
-    }
+    // External/legacy ids are never domain run ids — owner-scoped not found.
+    const runId = assertDomainRunId(input.runId);
     if (!input.auth) {
       throw new ValidationError('auth (trusted external subjects) is required');
     }

@@ -674,12 +674,16 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
     );
     const {
       authSubjectsFromRequest,
-      resolveRequestTraceId,
-      resolveRequestTraceContext,
       readBody,
       json,
     } = await import(
-      './create-http-server.js'
+      '../presentation/http/request-response.js'
+    );
+    const {
+      resolveRequestTraceId,
+      resolveRequestTraceContext,
+    } = await import(
+      '../presentation/http/trace-context.js'
     );
     const internalKeyring = String(
       env.SANDBOX_INTERNAL_HMAC_KEYRING || '',

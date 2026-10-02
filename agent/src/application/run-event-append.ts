@@ -7,7 +7,7 @@
 
 import { assertUlid } from '../domain/shared/ulid.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
-import { buildCanonicalEnvelope, redactEventData } from './fenced-run-event-recorder.js';
+import { buildCanonicalEnvelope, redactEventData } from './event-envelope.js';
 
 export async function appendEventInTxn({
   repos,

@@ -8,7 +8,7 @@
  */
 
 import { RUN_STATUS } from '../domain/run/index.js';
-import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
+import { assertUlid } from '../domain/shared/ulid.js';
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import { hashCanonical } from './canonical-json.js';
@@ -17,6 +17,7 @@ import {
   IdempotencyInProgressError,
   OwnerScopedNotFoundError,
   ValidationError,
+  assertDomainRunId,
 } from './errors.js';
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 
@@ -30,20 +31,14 @@ export const DEFAULT_STEER_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_STEER_TEXT_CHARS = 64 * 1024;
 
 function requireRunId(value) {
-  if (typeof value !== 'string' || !value.trim() || isLegacyOrUuidIdentity(value)) {
+  // 空值也走 404（与其它 Run 面守卫的空值 400 不同，这里是历史语义，保持不变）。
+  if (typeof value !== 'string' || !value.trim()) {
     throw new OwnerScopedNotFoundError('Run not found', {
       resource: 'runs',
       id: String(value ?? ''),
     });
   }
-  try {
-    return assertUlid(value.trim(), 'runId');
-  } catch {
-    throw new OwnerScopedNotFoundError('Run not found', {
-      resource: 'runs',
-      id: String(value),
-    });
-  }
+  return assertDomainRunId(value.trim(), { id: String(value) });
 }
 
 function requireText(value) {

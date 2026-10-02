@@ -75,11 +75,7 @@ import {
 } from './dsh-run-input.js';
 
 export { createPromiseTail } from './promise-tail.js';
-export {
-  FencedRunEventRecorder,
-  buildCanonicalEnvelope,
-  redactEventData,
-} from './fenced-run-event-recorder.js';
+export { FencedRunEventRecorder } from './fenced-run-event-recorder.js';
 export {
   FencedToolGovernanceRecorder,
   DurablePolicyConflictError,

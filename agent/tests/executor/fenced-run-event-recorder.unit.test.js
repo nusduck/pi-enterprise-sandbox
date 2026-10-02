@@ -7,11 +7,11 @@ import assert from 'node:assert/strict';
 import { createFakeKnex, createFakeState } from '../mysql/fake-knex.js';
 import { createRepositoryBundle } from '../../src/bootstrap/container.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
+import { FencedRunEventRecorder } from '../../src/application/fenced-run-event-recorder.js';
 import {
-  FencedRunEventRecorder,
   buildCanonicalEnvelope,
   redactEventData,
-} from '../../src/application/fenced-run-event-recorder.js';
+} from '../../src/application/event-envelope.js';
 import { SessionFenceConflictError } from '../../src/domain/session/errors.js';
 
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';

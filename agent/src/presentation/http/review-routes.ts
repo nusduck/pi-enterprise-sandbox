@@ -21,7 +21,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  authSubjectsFromRequest,
+  requireAuthSubjects,
   json,
   readBody,
   type AuthSubjects,
@@ -169,14 +169,8 @@ export async function handleReviewRoute(input: ReviewRouteInput): Promise<boolea
     json(res, 503, { error: 'Review plane unavailable', code: 'DEPENDENCY' });
     return true;
   }
-  const auth = authSubjectsFromRequest(req);
-  if (!auth) {
-    json(res, 400, {
-      error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-      code: 'AUTH_CONTEXT_REQUIRED',
-    });
-    return true;
-  }
+  const auth = requireAuthSubjects(req, res);
+  if (!auth) return true;
   const qs = parsedUrl.searchParams;
   try {
     if (path === PREFIX) {

@@ -123,3 +123,64 @@ export function json(res: ResponseLike, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
 }
+
+/**
+ * 缺鉴权上下文时的统一 400 体（F01/F02 收敛）。
+ *
+ * `create-http-server.ts` 19 处与各路由的同构检查都走这里：文案与 code 唯一，
+ * 状态保持 400。调用方只判返回值 null 即返回（热点文件里是 `return`，
+ * 路由模块里是 `return true`），不再各写一遍 body。
+ */
+export const AUTH_CONTEXT_REQUIRED_BODY = Object.freeze({
+  error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
+  code: 'AUTH_CONTEXT_REQUIRED',
+});
+
+export function requireAuthSubjects(
+  req: RequestLike,
+  res: ResponseLike,
+): AuthSubjects | null {
+  const auth = authSubjectsFromRequest(req);
+  if (!auth) {
+    json(res, 400, AUTH_CONTEXT_REQUIRED_BODY);
+    return null;
+  }
+  return auth;
+}
+
+/**
+ * SSE/JSON 列表共用的游标解析（F06 收敛）。
+ *
+ * 语义与原内联代码逐字一致：`after_sequence` / `after` 取整，`afterSequence` /
+ * `after_sequence` 数字才参与取 max，数字 `Last-Event-ID`（legacy）同样取 max；
+ * 原始 `Last-Event-ID` 头一并返回，给 Redis 直播分支（ULID 形式由 SSE 服务解析）。
+ * `?limit=` 与 fallback 轮询的上限（500 / 100）是分页行为，不收敛。
+ */
+export function parseSseCursor(
+  parsedUrl: URL,
+  req: RequestLike,
+): { after: number, lastEventId: string | null } {
+  let after =
+    parseInt(
+      parsedUrl.searchParams.get('after_sequence') ||
+        parsedUrl.searchParams.get('after') ||
+        '0',
+      10,
+    ) || 0;
+  const afterSeqParam =
+    parsedUrl.searchParams.get('afterSequence') ||
+    parsedUrl.searchParams.get('after_sequence');
+  if (afterSeqParam && /^\d+$/.test(afterSeqParam)) {
+    after = Math.max(after, parseInt(afterSeqParam, 10));
+  }
+  const lastEventIdHeader = req.headers['last-event-id'];
+  const lastEventId =
+    typeof lastEventIdHeader === 'string' && lastEventIdHeader.trim()
+      ? lastEventIdHeader.trim()
+      : null;
+  // Numeric Last-Event-ID is still accepted as sequence (legacy).
+  if (lastEventId && /^\d+$/.test(lastEventId)) {
+    after = Math.max(after, parseInt(lastEventId, 10));
+  }
+  return { after, lastEventId };
+}

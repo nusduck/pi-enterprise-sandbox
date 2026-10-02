@@ -12,7 +12,7 @@
  * 返回 `true` 表示请求归这里处理（无论成败）。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { authSubjectsFromRequest, json, type AuthSubjects } from './request-response.js';
+import { requireAuthSubjects, json, type AuthSubjects } from './request-response.js';
 import { mapErrorToHttp } from './error-mapper.js';
 import { presentToolExecutionResponse } from './run-presenters.js';
 
@@ -47,11 +47,8 @@ export async function handleAdminRunRoute(input: AdminRunRouteInput): Promise<bo
     json(res, 503, { error: 'Admin run queries unavailable', code: 'DEPENDENCY' });
     return true;
   }
-  const auth = authSubjectsFromRequest(req);
-  if (!auth) {
-    json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
-    return true;
-  }
+  const auth = requireAuthSubjects(req, res);
+  if (!auth) return true;
   const qs = parsedUrl.searchParams;
   const param = (name: string) => qs.get(name);
   try {

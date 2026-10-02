@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { authSubjectsFromRequest, json } from './request-response.js';
+import { authSubjectsFromRequest, requireAuthSubjects, json } from './request-response.js';
 import { mapErrorToHttp } from './error-mapper.js';
 
 type Loose = any;
@@ -104,11 +104,8 @@ export async function handleSkillRoute(input: {
       json(res, 501, { error: 'Skill draft upload not configured', code: 'NOT_IMPLEMENTED' });
       return true;
     }
-    const auth = authSubjectsFromRequest(req);
-    if (!auth) {
-      json(res, 400, { error: 'Trusted acting identity required', code: 'AUTH_CONTEXT_REQUIRED' });
-      return true;
-    }
+    const auth = requireAuthSubjects(req, res);
+    if (!auth) return true;
     const rawFilename = req.headers['x-filename'] || parsedUrl.searchParams.get('filename') || 'skill.zip';
     const filename = Array.isArray(rawFilename) ? rawFilename[0] : rawFilename;
     try {
@@ -139,11 +136,8 @@ export async function handleSkillRoute(input: {
       json(res, 501, { error: 'Skill sharing is not configured', code: 'NOT_IMPLEMENTED' });
       return true;
     }
-    const auth = authSubjectsFromRequest(req);
-    if (!auth) {
-      json(res, 400, { error: 'Trusted acting identity required', code: 'AUTH_CONTEXT_REQUIRED' });
-      return true;
-    }
+    const auth = requireAuthSubjects(req, res);
+    if (!auth) return true;
     try {
       const result = await input.skillShare({
         method: req.method,
@@ -170,11 +164,8 @@ export async function handleSkillRoute(input: {
       json(res, 501, { error: 'Org skill administration not configured', code: 'NOT_IMPLEMENTED' });
       return true;
     }
-    const auth = authSubjectsFromRequest(req);
-    if (!auth) {
-      json(res, 400, { error: 'Trusted acting identity required', code: 'AUTH_CONTEXT_REQUIRED' });
-      return true;
-    }
+    const auth = requireAuthSubjects(req, res);
+    if (!auth) return true;
     try {
       const result = await input.orgSkillAdmin({
         method: req.method,
@@ -199,11 +190,8 @@ export async function handleSkillRoute(input: {
     json(res, 501, { error: 'Skill enablement not configured', code: 'NOT_IMPLEMENTED' });
     return true;
   }
-  const auth = authSubjectsFromRequest(req);
-  if (!auth) {
-    json(res, 400, { error: 'Trusted acting identity required', code: 'AUTH_CONTEXT_REQUIRED' });
-    return true;
-  }
+  const auth = requireAuthSubjects(req, res);
+  if (!auth) return true;
   try {
     const name = decodeURIComponent(match[1] as string);
     json(res, 200, await input.mutateSkill({ action: match[2], name, auth }));

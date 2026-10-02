@@ -9,11 +9,7 @@ import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js'
 import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
 import { InteractionResponseValidationError } from '../domain/interaction/response-validation.js';
 import { ConflictError, NotFoundError } from '../infrastructure/mysql/errors.js';
-import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
-import {
-  buildCanonicalEnvelope,
-  redactEventData,
-} from './fenced-run-event-recorder.js';
+import { appendEventInTxn } from './run-event-append.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
@@ -21,61 +17,6 @@ type Loose = any;
 function requiredUlid(value, field) {
   if (!isUlid(value)) throw new ValidationError(`${field} must be a ULID`);
   return assertUlid(value, field);
-}
-
-async function appendEventInTxn({ repos, run, eventType, data, generateId, now }) {
-  const timestamp = now();
-  const eventId = assertUlid(generateId(), 'eventId');
-  const outboxId = assertUlid(generateId(), 'outboxId');
-  const cleanData = redactEventData(data ?? {});
-  const context = {
-    orgId: run.orgId,
-    userId: run.userId,
-    conversationId: run.conversationId,
-    agentSessionId: run.agentSessionId,
-    runId: run.runId,
-    traceId: run.traceId,
-    spanId: null,
-  };
-  const stored = await repos.runEvents.append({
-    eventId,
-    runId: run.runId,
-    orgId: run.orgId,
-    userId: run.userId,
-    eventType,
-    eventVersion: 1,
-    payloadJson: { context, data: cleanData },
-    traceId: run.traceId,
-    spanId: null,
-    createdAt: timestamp,
-  });
-  const envelope = buildCanonicalEnvelope({
-    eventId: stored.eventId,
-    sequence: stored.sequenceNo,
-    type: eventType,
-    timestamp,
-    context,
-    data: cleanData,
-    eventVersion: 1,
-  });
-  await repos.outbox.insert({
-    outboxId,
-    aggregateType: AGGREGATE_TYPE_RUN,
-    aggregateId: run.runId,
-    eventType,
-    payloadJson: {
-      eventId: envelope.eventId,
-      eventVersion: envelope.eventVersion,
-      sequence: envelope.sequence,
-      type: envelope.type,
-      timestamp: envelope.timestamp,
-      context: envelope.context,
-      data: envelope.data,
-      runId: run.runId,
-      orgId: run.orgId,
-      userId: run.userId,
-    },
-  });
 }
 
 export class InteractionResponseService {

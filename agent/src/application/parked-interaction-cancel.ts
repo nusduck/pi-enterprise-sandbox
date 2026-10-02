@@ -19,12 +19,7 @@ import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { RUN_STATUS, runStateMachine } from '../domain/run/index.js';
 import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js';
 import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
-import { assertUlid } from '../domain/shared/ulid.js';
-import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
-import {
-  buildCanonicalEnvelope,
-  redactEventData,
-} from './fenced-run-event-recorder.js';
+import { appendEventInTxn } from './run-event-append.js';
 import {
   applyRunTransitionInTxn,
   type RunTransitionRepos,
@@ -56,65 +51,6 @@ export const PARKED_TOOL_CANCELLABLE_STATUSES = new Set([
  *   now: () => Date,
  * }} args
  */
-async function appendEventInTxn({ repos, run, eventType, data, generateId, now }: {
-  repos: RunTransitionRepos;
-  [key: string]: any;
-}) {
-  const timestamp = now();
-  const eventId = assertUlid(generateId(), 'eventId');
-  const outboxId = assertUlid(generateId(), 'outboxId');
-  const context = {
-    orgId: run.orgId,
-    userId: run.userId,
-    conversationId: run.conversationId,
-    agentSessionId: run.agentSessionId,
-    runId: run.runId,
-    traceId: run.traceId,
-    spanId: null,
-  };
-  const cleanData = redactEventData(data ?? {});
-  const stored = await repos.runEvents.append({
-    eventId,
-    runId: run.runId,
-    orgId: run.orgId,
-    userId: run.userId,
-    eventType,
-    eventVersion: 1,
-    payloadJson: { context, data: cleanData },
-    traceId: run.traceId,
-    spanId: null,
-    createdAt: timestamp,
-  });
-  const envelope = buildCanonicalEnvelope({
-    eventId: stored.eventId,
-    sequence: stored.sequenceNo,
-    type: eventType,
-    eventVersion: 1,
-    timestamp,
-    context,
-    data: cleanData,
-  });
-  await repos.outbox.insert({
-    outboxId,
-    aggregateType: AGGREGATE_TYPE_RUN,
-    aggregateId: run.runId,
-    eventType,
-    payloadJson: {
-      eventId: envelope.eventId,
-      sequence: envelope.sequence,
-      type: envelope.type,
-      eventVersion: envelope.eventVersion,
-      timestamp: envelope.timestamp,
-      context: envelope.context,
-      data: envelope.data,
-      runId: run.runId,
-      orgId: run.orgId,
-      userId: run.userId,
-    },
-  });
-  return stored;
-}
-
 /**
  * Terminalise one WAITING_INPUT Run whose cancel intent is already durable.
  *

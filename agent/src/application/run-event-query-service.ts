@@ -7,8 +7,8 @@
  */
 
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
-import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
-import { assertUlid, isLegacyOrUuidIdentity, isUlid } from '../domain/shared/ulid.js';
+import { OwnerScopedNotFoundError, ValidationError, assertDomainRunId, requireAuth } from './errors.js';
+import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import { isTerminalRunStatus } from '../domain/run/run-status.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
@@ -84,20 +84,7 @@ export class RunEventQueryService {
     if (typeof runIdRaw !== 'string' || !runIdRaw.trim()) {
       throw new ValidationError('runId is required');
     }
-    if (isLegacyOrUuidIdentity(runIdRaw)) {
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: runIdRaw,
-      });
-    }
-    try {
-      return assertUlid(runIdRaw, 'runId');
-    } catch {
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: runIdRaw,
-      });
-    }
+    return assertDomainRunId(runIdRaw);
   }
 
   /**
@@ -109,7 +96,7 @@ export class RunEventQueryService {
    * @returns {Promise<{ run: object, scope: { orgId: string, userId: string }, repos: object }>}
    */
   async #loadOwnedRun(runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }) {
-    if (!auth) throw new ValidationError('auth is required');
+    requireAuth(auth);
     const repos = this.createRepositories(this.db);
     const resolver = new ExternalIdentityResolver(
       {
@@ -155,7 +142,7 @@ export class RunEventQueryService {
    * @returns {Promise<number|null>}
    */
   async resolveEventSequence(input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, eventId: string, }) {
-    if (!input?.auth) throw new ValidationError('auth is required');
+    requireAuth(input?.auth);
     const runId = this.#requireRunUlid(input.runId);
     if (typeof input.eventId !== 'string' || !isUlid(input.eventId)) {
       return null;
@@ -181,7 +168,7 @@ export class RunEventQueryService {
    * }} input
    */
   async listEvents(input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, afterSequence?: number, limit?: number, }) {
-    if (!input?.auth) throw new ValidationError('auth is required');
+    requireAuth(input?.auth);
     const runId = this.#requireRunUlid(input.runId);
     const { run, scope, repos } = await this.#loadOwnedRun(runId, input.auth);
 

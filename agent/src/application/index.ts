@@ -122,8 +122,6 @@ export {
   createPromiseTail,
   FencedRunEventRecorder,
   FencedToolGovernanceRecorder,
-  buildCanonicalEnvelope,
-  redactEventData,
 } from './dsh-run-executor.js';
 
 export {

@@ -3,6 +3,8 @@
  * Map to HTTP at presentation boundaries; services stay transport-agnostic.
  */
 
+import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
+
 /** 错误附带的结构化上下文。允许 null：多数子类不传。 */
 export type ErrorDetails = Record<string, unknown> | null | undefined;
 
@@ -145,5 +147,55 @@ export class CanonicalJsonError extends ApplicationError {
       details,
     });
     this.name = 'CanonicalJsonError';
+  }
+}
+
+/**
+ * 鉴权上下文空值守卫：缺 trusted BFF subjects 即 400。
+ *
+ * 收敛 `trace-query-service` / `run-event-query-service` 里 5 处逐字相同的
+ * `if (!auth) throw new ValidationError('auth is required')`。字面量不同的
+ * 站点（`get-run` 的 `auth (trusted external subjects) is required`、
+ * parent 层的 `auth context is required…`）各有各的调用者契约，不收敛。
+ */
+export function requireAuth<T>(auth: T): T {
+  if (!auth) throw new ValidationError('auth is required');
+  return auth;
+}
+
+/**
+ * Run 面 ULID 守卫：legacy `arun_…`/UUID 与非法 ULID 一律 404。
+ *
+ * 收敛 `get-run` / `cancel-run` / `run-event-query` / `trace-query` /
+ * `steer-run` 里形状相同的守卫：先拦 legacy 形状，再 `assertUlid`，两条失败
+ * 路径都抛 `OwnerScopedNotFoundError`（跨租户一律 404，存在性不泄漏）。
+ * `resource` / `message` / `id` 由调用方传入，保持各站点的错误资源名不变
+ * （trace 面是 `trace_spans` / `Trace not found`，其余是 `runs`）。
+ *
+ * parent 层的两处 `isLegacyOrUuidIdentity`（`assertNotExternalInUlidSlot`、
+ * `#newUlid`）抛的是 `ValidationError`（防外部串进内部槽位，不是 404 面），
+ * 语义不同，不收敛。
+ */
+export function assertDomainRunId(
+  value: unknown,
+  opts: { field?: string, resource?: string, message?: string, id?: unknown } = {},
+): string {
+  const field = opts.field ?? 'runId';
+  const resource = opts.resource ?? 'runs';
+  const message = opts.message ?? 'Run not found';
+  const id = opts.id !== undefined ? opts.id : value;
+  if (isLegacyOrUuidIdentity(value)) {
+    throw new OwnerScopedNotFoundError(message, {
+      resource,
+      id: id as string,
+    });
+  }
+  try {
+    return assertUlid(value, field);
+  } catch {
+    throw new OwnerScopedNotFoundError(message, {
+      resource,
+      id: id as string,
+    });
   }
 }

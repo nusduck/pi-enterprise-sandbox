@@ -14,7 +14,7 @@
  * provisioning 的账号（design §10）。BFF 对外暴露成 `/api/admin/users`（design §5）。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { authSubjectsFromRequest, json, type AuthSubjects } from './request-response.js';
+import { requireAuthSubjects, json, type AuthSubjects } from './request-response.js';
 import { MemberRoleError } from '../../application/member-role-service.js';
 
 /**
@@ -68,14 +68,8 @@ export async function handleMemberRoleRoute(input: MemberRoleRouteInput): Promis
     json(res, 503, { error: 'Member role management unavailable', code: 'DEPENDENCY' });
     return true;
   }
-  const auth = authSubjectsFromRequest(req);
-  if (!auth) {
-    json(res, 400, {
-      error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-      code: 'AUTH_CONTEXT_REQUIRED',
-    });
-    return true;
-  }
+  const auth = requireAuthSubjects(req, res);
+  if (!auth) return true;
   const qs = parsedUrl.searchParams;
   try {
     if (path === PREFIX) {

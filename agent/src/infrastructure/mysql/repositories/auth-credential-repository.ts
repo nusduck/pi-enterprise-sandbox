@@ -1,4 +1,5 @@
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
+import { NO_ROLE } from '../../../domain/identity/roles.js';
 
 type Loose = any;
 
@@ -10,7 +11,7 @@ function mapCredential(row: Record<string, unknown> | undefined) {
     passwordHash: String(row.password_hash),
     email: row.email == null ? null : String(row.email),
     displayName: row.display_name == null ? null : String(row.display_name),
-    role: String(row.role || 'user'),
+    role: String(row.role || NO_ROLE),
     organizationId: String(row.external_org_id || 'org_bootstrap'),
     isActive: Boolean(row.is_active),
     createdAt: formatDateTime(row.created_at),
