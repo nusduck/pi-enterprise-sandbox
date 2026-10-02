@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   未结束的工具行收尾：执行中的记为 `UNKNOWN`（错误码 `RUN_CANCELLED_OUTCOME_UNKNOWN`，结果不明），
   未开始的记为 `CANCELLED`，并各追加一条 `tool.execution.failed` 事件。其他终态不受影响。
 
+### Fixed — exec 单实例护栏接线
+
+- exec 启动时执行单实例断言：`EXEC_CONCURRENCY` 大于 1 而未显式设置 `EXEC_ALLOW_MULTI_INSTANCE=true`，或
+  `EXEC_CONCURRENCY` 不是正整数时拒绝启动。断言此前已实现但从未被启动入口调用，部署说明里的「exec 会拒绝多实例」
+  并未生效。
+
 ### Fixed — 分页每页条数选择器 UI 修复
 
 - 分页组件（`Pager`）的每页条数选择从原生 `<select>` 改为自定义可访问下拉菜单（`role="listbox"` / `role="option"`，基于 Portal 浮层定位并自适应翻转），消除 macOS 下原生弹出菜单与左侧文案重叠、缺少单位标识与系统暗黑模式毛玻璃遮挡的问题，并统一暗色/亮色视觉与键盘交互。

@@ -7,10 +7,9 @@
  * HTTP worker），今天 Python 版有 `SANDBOX_UVICORN_WORKERS` 这个隐患——
  * 有人悄悄把它调大，锁语义在多 worker 之间不成立，会静默丢写。
  *
- * 这里提供的是断言本身；**调用它**是服务启动入口（`exec/src/main.ts`，
- * 不在本任务范围）的职责，这里不做 side effect（不读 `process.env` 之外
- * 的任何东西、不自己退出进程）——调用方决定断言失败后是 `process.exit`
- * 还是抛给上层框架处理。
+ * 这里提供的是断言本身；**调用它**的是服务启动入口 `exec/src/main.ts`（取密与 listen
+ * 之前）。这里不做 side effect（不读 `process.env` 之外的任何东西、不自己退出进程）——
+ * 调用方决定断言失败后是 `process.exit` 还是抛给上层框架处理。
  */
 
 export class SingleInstanceViolationError extends Error {
