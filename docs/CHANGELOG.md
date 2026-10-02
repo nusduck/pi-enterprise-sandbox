@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   远端会话 ID，需要全新对话时传 `new_conversation: true`。远端会话失效时删绑定、新建、只重试一次。
 - 开发联调可用 `node scripts/dev/fake-hiagent.mjs` 起本地假 HiAgent 服务（用法见 `docs/development.md`）。
 
+### Added — 邮件通知场景扩展（待我审核、定时任务完成、定时任务等待处理）
+
+- 新增三类邮件通知（设计 `docs/design/notification-scenarios.md`）：审核任务建立时发给组织内
+  reviewer（排除发起人，每人一封，受 `notify_review_pending` 控制，默认开）；定时任务触发的
+  Run 进入终态时按任务的 `notify_policy`（不通知 / 仅失败时（默认）/ 每次）发给任务所有者；
+  定时任务触发的 Run 停在审批或提问时发给所有者（受 `notify_run_waiting` 控制，默认开，
+  同一次停住只发一封）。「运行完成」开关不再覆盖定时任务触发的 Run，审核结果通知改由
+  `notify_review_result` 控制（迁移时沿用旧开关的值）。
+- 两个通知消费者合并为一个分发器（`run_notification` 与 `review_notification` 都认领，
+  按 `event_type` 路由到四个处理器）；投递账改按 `dedupe_key` 去重，既有投递继续有效。
+- 账户设置「邮件通知」小节改为四个开关（待我审核只对 reviewer 显示）；定时任务新建 / 编辑表单
+  新增「完成后通知」下拉。`GET/PATCH /api/auth/profile` 与定时任务接口同步新增字段。
+
 ### Fixed — 分页每页条数选择器 UI 修复
 
 - 分页组件（`Pager`）的每页条数选择从原生 `<select>` 改为自定义可访问下拉菜单（`role="listbox"` / `role="option"`，基于 Portal 浮层定位并自适应翻转），消除 macOS 下原生弹出菜单与左侧文案重叠、缺少单位标识与系统暗黑模式毛玻璃遮挡的问题，并统一暗色/亮色视觉与键盘交互。

@@ -124,6 +124,8 @@
 .field input[aria-invalid='true'] { border-color: var(--color-danger-text); }
 .field input:disabled { opacity: 0.6; }
 .field .fieldError { color: var(--color-danger-text); }
+fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; gap: 10px; }
+fieldset.field > legend { padding: 0; margin-bottom: 8px; font-weight: 500; }
 .check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; font-weight: 500; }
 .check input { margin: 2px 0 0; }
 .check input:disabled { opacity: 0.6; }

@@ -2,6 +2,8 @@ import { ApiError, authHeaders } from './client';
 
 const BASE = '/api/cron-jobs';
 
+export type CronNotifyPolicy = 'never' | 'failure' | 'always';
+
 export type CronJob = {
   cron_job_id: string;
   name: string;
@@ -16,6 +18,8 @@ export type CronJob = {
   last_run_at: string | null;
   misfire_policy: 'skip' | 'fire_once';
   concurrency_policy: 'forbid' | 'allow';
+  /** 完成后通知：缺字段的旧服务端按 `failure` 处理。 */
+  notify_policy?: CronNotifyPolicy | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -42,6 +46,7 @@ export type CronJobInput = {
   enabled?: boolean;
   misfire_policy?: 'skip' | 'fire_once';
   concurrency_policy?: 'forbid' | 'allow';
+  notify_policy?: CronNotifyPolicy;
 };
 
 async function errorBody(resp: Response): Promise<Record<string, unknown>> {

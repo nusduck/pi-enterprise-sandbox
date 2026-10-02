@@ -13,7 +13,7 @@ import { usePreference, type Preferences } from '../../shared/ui/preferences';
 import { getProfile, updateProfile, type Profile } from '../../shared/api/account';
 import { ApiError } from '../../shared/api/client';
 import { loginMethodLabel } from '../../shared/schemas/auth';
-import { hasAdminRole } from '../../shared/security/roles';
+import { hasAdminRole, hasReviewerRole } from '../../shared/security/roles';
 import {
   buildProfilePatch,
   draftFromProfile,
@@ -22,6 +22,7 @@ import {
   isDirty,
   type AccountDraft,
   type AccountErrors,
+  type NotifySwitchField,
 } from './accountDraft';
 import s from './settings.module.css';
 
@@ -73,7 +74,14 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
   const fallback = state.authUser;
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<AccountDraft>({ display_name: '', email: '', notify_run_complete: false });
+  const [draft, setDraft] = useState<AccountDraft>({
+    display_name: '',
+    email: '',
+    notify_run_complete: false,
+    notify_review_result: false,
+    notify_review_pending: false,
+    notify_run_waiting: false,
+  });
   const [fieldError, setFieldError] = useState<AccountErrors>({});
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -110,13 +118,41 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
   const username = profile?.username || String(fallback?.username || '');
   // 两个来源任一为 admin 即 admin：profile 是权威读，fallback 是已加载的 me。
   const isAdmin = hasAdminRole(profile) || hasAdminRole(fallback);
+  const isReviewer = hasReviewerRole(profile) || hasReviewerRole(fallback);
   const name = (profile?.display_name || '') || username;
   const editable = new Set(profile?.editable_fields || []);
   const dirty = isDirty(profile, draft);
   const mail = emailNotification(profile);
   // 已经打开的开关总能关掉，即使部署后来撤掉了邮件配置。
-  const canToggleNotify = Boolean(profile) && editable.has('notify_run_complete')
-    && (mail.available || profile?.notify_run_complete === true);
+  const canToggle = (field: NotifySwitchField) => Boolean(profile) && editable.has(field)
+    && (mail.available || profile?.[field] === true);
+
+  /** 四个邮件通知开关的展示顺序与文案；待我审核只对 reviewer 显示。 */
+  const notifySwitches: Array<{ field: NotifySwitchField; title: string; hint: string; hidden?: boolean }> = [
+    {
+      field: 'notify_run_complete',
+      title: '运行完成',
+      hint: mail.available
+        ? `运行超过 ${mail.threshold ?? '0 秒'}的任务结束（完成、失败或取消）时发邮件到上面的邮箱`
+        : '部署未配置邮件发送，暂不可用',
+    },
+    {
+      field: 'notify_review_result',
+      title: '审核结果',
+      hint: mail.available ? '我发起的交付物通过或没通过人工审核时发邮件' : '部署未配置邮件发送，暂不可用',
+    },
+    {
+      field: 'notify_run_waiting',
+      title: '定时任务等待处理',
+      hint: mail.available ? '我的定时任务停下来等审批或等回答时发邮件' : '部署未配置邮件发送，暂不可用',
+    },
+    {
+      field: 'notify_review_pending',
+      title: '待我审核',
+      hint: mail.available ? '有新的交付物待我审核时发邮件' : '部署未配置邮件发送，暂不可用',
+      hidden: !isReviewer,
+    },
+  ];
 
   async function save() {
     if (!profile) return;
@@ -131,7 +167,7 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
       setNotice('已保存。侧栏里的名称在下次打开页面时更新。');
     } catch (err) {
       // The server re-validates; keep the draft so nothing typed is lost.
-      const fieldErrors = err instanceof ApiError ? fieldErrorForProfileCode(err.code) : null;
+      const fieldErrors = err instanceof ApiError ? fieldErrorForProfileCode(err.code, err.message) : null;
       if (fieldErrors) setFieldError(fieldErrors);
       else setNotice((err as Error).message || '保存失败');
     } finally {
@@ -172,32 +208,33 @@ function AccountPane({ active, onLogout }: { active: boolean; onLogout: () => vo
             type="email"
             value={draft.email}
             maxLength={320}
-            placeholder="用于运行完成通知"
+            placeholder="用于邮件通知"
             disabled={!profile || !editable.has('email') || saving}
             onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
             aria-invalid={Boolean(fieldError.email)}
           />
           {fieldError.email ? <small className={s.fieldError}>{fieldError.email}</small> : <small>留空表示不设置</small>}
         </label>
-        <label className={s.check}>
-          <input
-            type="checkbox"
-            checked={draft.notify_run_complete}
-            disabled={!canToggleNotify || saving}
-            onChange={(e) => setDraft((d) => ({ ...d, notify_run_complete: e.target.checked }))}
-            aria-invalid={Boolean(fieldError.notify_run_complete)}
-          />
-          <span>
-            长任务完成邮件通知
-            {fieldError.notify_run_complete
-              ? <small className={s.fieldError}>{fieldError.notify_run_complete}</small>
-              : <small>{!profile
-                ? '—'
-                : mail.available
-                  ? `运行超过 ${mail.threshold ?? '0 秒'}的任务结束（完成、失败或取消）时发邮件到上面的邮箱`
-                  : '部署未配置邮件发送，暂不可用'}</small>}
-          </span>
-        </label>
+        <fieldset className={s.field}>
+          <legend>邮件通知</legend>
+          {notifySwitches.filter((item) => !item.hidden).map((item) => (
+            <label className={s.check} key={item.field}>
+              <input
+                type="checkbox"
+                checked={draft[item.field]}
+                disabled={!canToggle(item.field) || saving}
+                onChange={(e) => setDraft((d) => ({ ...d, [item.field]: e.target.checked }))}
+                aria-invalid={Boolean(fieldError[item.field])}
+              />
+              <span>
+                {item.title}
+                {fieldError[item.field]
+                  ? <small className={s.fieldError}>{fieldError[item.field]}</small>
+                  : <small>{!profile ? '—' : item.hint}</small>}
+              </span>
+            </label>
+          ))}
+        </fieldset>
         <div className={s.formActions}>
           {notice ? <span className={s.muted} role="status">{notice}</span> : null}
           <span className={s.sp} />

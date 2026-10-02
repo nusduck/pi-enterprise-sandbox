@@ -60,7 +60,7 @@ export function buildReviewDecisionEmail(input: {
         '',
         `你可以在会话里查看反馈并重新发起。查看：${input.conversationUrl}`,
       ];
-  lines.push('', '这封邮件在审核结束时自动发送。可以在「账户设置」里关闭「长任务完成邮件通知」。');
+  lines.push('', '这封邮件在审核结束时自动发送。可以在「账户设置」里关闭「审核结果」通知。');
   return {
     to: input.to,
     subject: input.approved

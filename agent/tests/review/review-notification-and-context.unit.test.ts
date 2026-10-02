@@ -9,11 +9,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY,
   REVIEW_NOTIFICATION_CLAIM_ELIGIBILITY,
   RUN_NOTIFICATION_CLAIM_ELIGIBILITY,
   rowMatchesEligibility,
 } from '../../src/infrastructure/outbox/eligibility.js';
-import { ReviewNotificationPublisher } from '../../src/infrastructure/notification/review-notification-publisher.js';
+import { NotificationDispatcher } from '../../src/infrastructure/notification/notification-dispatcher.js';
 import { buildReviewDecisionEmail, safeReviewFeedback } from '../../src/infrastructure/notification/review-notification-email.js';
 import { buildReviewContextInjection } from '../../src/application/review-context-injection.js';
 import { buildTriggeringPrompt, prependPlatformText } from '../../src/application/run-prompt-build.js';
@@ -24,13 +25,18 @@ const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const REQUESTER = '01K0G2PAV8FPMVC9QHJG7JPN50';
 
 describe('审核结果通知', () => {
-  it('聚合类型与 Run 终态通知互不认领', () => {
+  it('聚合类型与 Run 终态通知互不认领，分发器两种都认领', () => {
     const row = { aggregate_type: 'review_notification', payload_json: { reviewTaskId: TASK } };
     assert.equal(rowMatchesEligibility(row, REVIEW_NOTIFICATION_CLAIM_ELIGIBILITY), true);
     assert.equal(rowMatchesEligibility(row, RUN_NOTIFICATION_CLAIM_ELIGIBILITY), false);
     assert.equal(
       rowMatchesEligibility({ aggregate_type: 'run_notification' }, REVIEW_NOTIFICATION_CLAIM_ELIGIBILITY),
       false,
+    );
+    assert.equal(rowMatchesEligibility(row, NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY), true);
+    assert.equal(
+      rowMatchesEligibility({ aggregate_type: 'run_notification' }, NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY),
+      true,
     );
   });
 
@@ -54,7 +60,7 @@ describe('审核结果通知', () => {
       },
     };
     const outbox = {
-      async claimBatch() { return [{ outboxId: 'ob_1', claimToken: 'ct_1', aggregateId: TASK, attempts: 0, payloadJson: { reviewTaskId: TASK, orgId: ORG, requesterUserId: REQUESTER } }]; },
+      async claimBatch() { return [{ outboxId: 'ob_1', claimToken: 'ct_1', aggregateId: TASK, eventType: 'notification.review_decided', attempts: 0, payloadJson: { reviewTaskId: TASK, orgId: ORG, requesterUserId: REQUESTER } }]; },
       async markPublished(id: string) { state.published.push(id); },
       async markFailed(id: string) { state.published.push(`failed:${id}`); },
       async markPendingForRetry() { return 'pending'; },
@@ -67,8 +73,13 @@ describe('审核结果通知', () => {
           displayName: '发起人',
           email: options.email === undefined ? 'requester@example.com' : options.email,
           notifyRunComplete: options.notify !== false,
+          notifyReviewResult: options.notify !== false,
+          notifyReviewPending: true,
+          notifyRunWaiting: true,
         };
       },
+      async loadCronRun() { return null; },
+      now: () => new Date('2026-10-03T00:00:00.000Z'),
       async begin(input: any) {
         state.deliveries.push(input);
         return { created: true, delivery: { deliveryId: input.deliveryId, status: input.status, attempts: 0 } };
@@ -76,7 +87,7 @@ describe('审核结果通知', () => {
       async markSent(id: string) { state.deliveries.push({ sent: id }); },
       async recordFailure() {},
     };
-    const publisher = new ReviewNotificationPublisher({
+    const publisher = new NotificationDispatcher({
       outbox,
       store: store as any,
       createRepositories: (db: unknown) => {
@@ -111,7 +122,7 @@ describe('审核结果通知', () => {
     assert.match(state.sent[0].text, /数据来源不完整/);
   });
 
-  it('用户关掉了通知开关 → 结清、不发信（与终态邮件同一口径）', async () => {
+  it('用户关掉了审核结果开关 → 结清、不发信（不再读长任务完成开关）', async () => {
     const { publisher, state } = harness({ notify: false });
     const { outcomes } = await publisher.publishOnce();
     assert.deepEqual(outcomes, ['opted_out']);

@@ -3,6 +3,10 @@
 状态：**已实施**（2026-09-28，阶段 0–2、4–6；阶段 3 `notify_me` 工具未做）。真实链路证据见
 [evidence/run-completion-email-live-2026-09-28.md](../evidence/run-completion-email-live-2026-09-28.md)。部署变量见
 [deployment.md](../deployment.md)「长任务完成邮件通知」，接口见 [api.md](../api.md) `/api/auth/profile`。
+后续场景（待我审核、定时任务完成、定时任务等待处理）见
+[notification-scenarios.md](notification-scenarios.md)：本文的「运行完成」开关语义不变，
+但不再覆盖定时任务触发的 Run（由任务的 `notify_policy` 接管），审核结果通知改由
+`notify_review_result` 控制。
 
 决策（2026-09-28）：T2 开关放在**用户偏好**（`users.notify_run_complete`，默认关）+ 部署级时长阈值
 `NOTIFY_MIN_RUN_DURATION_MS`（从 `runs.created_at` 起算，含排队时间）；T3 **直连 SMTP**（nodemailer，

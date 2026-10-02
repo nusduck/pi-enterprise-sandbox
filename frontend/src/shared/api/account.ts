@@ -1,6 +1,6 @@
 /**
  * 本人账户资料（`/api/auth/profile`）。可改的字段由 Agent 决定（目前是显示名称、邮箱与
- * 长任务完成邮件开关），其余字段只读；提交不可改的字段会得到 422 `PROFILE_FIELD_NOT_EDITABLE`。
+ * 四个邮件通知开关），其余字段只读；提交不可改的字段会得到 422 `PROFILE_FIELD_NOT_EDITABLE`。
  * 邮件通知是否可用由服务端在 `notifications.email` 里给出，前端不自行判断。
  * `login_method` / `identity_provider` 是只读来源字段：本地账号为 local / null，公司 SSO
  * 账号为 sso / issuer；缺字段时显示「—」而不是猜成账号密码。
@@ -27,6 +27,9 @@ const ProfileSchema = z
     last_login_at: z.string().nullable().optional(),
     editable_fields: z.array(z.string()).default([]),
     notify_run_complete: z.boolean().optional(),
+    notify_review_result: z.boolean().optional(),
+    notify_review_pending: z.boolean().optional(),
+    notify_run_waiting: z.boolean().optional(),
     notifications: z
       .object({
         email: z
@@ -66,6 +69,9 @@ export function updateProfile(patch: {
   display_name?: string;
   email?: string | null;
   notify_run_complete?: boolean;
+  notify_review_result?: boolean;
+  notify_review_pending?: boolean;
+  notify_run_waiting?: boolean;
 }): Promise<Profile> {
   return request('PATCH', patch);
 }

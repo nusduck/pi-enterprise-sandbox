@@ -58,11 +58,10 @@ import {
 } from '../domain/interaction/interaction-status.js';
 import { terminalizeParallelToolsForPark } from './parallel-tool-park.js';
 import { bindDispatchedSandboxRequest } from './tool-dispatch-binding.js';
+import { enqueueRunWaitingNotificationInTxn } from './run-waiting-notification.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
+/** 过渡期宽松类型（纯判定已拆到 durable-policy-replay.ts，再导出只为兼容既有导入路径）。 */
 type Loose = any;
-// 纯判定拆到 `durable-policy-replay.ts`。这里保留再导出：既有调用方
-// （`dsh-run-executor.ts`、`application/index.ts`）的导入路径不必改动。
 export {
   DurablePolicyConflictError,
   assertCompatiblePolicyReplay,
@@ -130,10 +129,7 @@ export class FencedToolGovernanceRecorder {
     // 缺省 direct —— 漏传只会更保守，不会凭空打开审核。
     this.deliveryMode = deps.deliveryMode === 'review' ? 'review' : 'direct';
     this._tail = createPromiseTail();
-    /**
-     * In-process concurrent claim only (same instance). Not restart authority.
-     * @type {Map<string, Promise<any>>}
-     */
+    // 同实例并发串行化；重启权威不在这里。
     this._inflight = new Map();
   }
 
@@ -649,6 +645,7 @@ export class FencedToolGovernanceRecorder {
               toolExecutionId: toolExecution.toolExecutionId,
             },
           });
+          await enqueueRunWaitingNotificationInTxn({ repos, runId: this.context.runId, scope, status: RUN_STATUS.WAITING_APPROVAL, waitKind: 'approval', waitId: approval.approvalId, generateId: this.generateId });
         }
 
         out = {
@@ -847,6 +844,7 @@ export class FencedToolGovernanceRecorder {
               options,
             },
           }).then((envelope) => envelopes.push(envelope));
+          await enqueueRunWaitingNotificationInTxn({ repos, runId: this.context.runId, scope, status: RUN_STATUS.WAITING_INPUT, waitKind: 'input', waitId: interaction.interactionId, generateId: this.generateId });
         }
         out = {
           interaction,

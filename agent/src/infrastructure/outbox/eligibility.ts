@@ -47,6 +47,15 @@ export const REVIEW_NOTIFICATION_CLAIM_ELIGIBILITY = Object.freeze({
 });
 
 /**
+ * 合并后的通知分发器认领两种通知聚合（design `notification-scenarios.md` §4），
+ * 再按 `event_type` 路由到四个处理器。上面两个单聚合条件保留：它们是既有单测的
+ * 断言对象，也是分发器条件是其超集的证明。
+ */
+export const NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY = Object.freeze({
+  aggregateTypes: Object.freeze(['run_notification', 'review_notification']),
+});
+
+/**
  * Normalize and validate an eligibility object.
  * Empty / omitted filters mean "no eligibility restriction" (claim any due row).
  *

@@ -64,4 +64,55 @@ describe('account draft', () => {
     assert.ok(fieldErrorForProfileCode('NOTIFICATION_UNAVAILABLE')?.notify_run_complete);
     assert.equal(fieldErrorForProfileCode('AUTH_STORE_UNAVAILABLE'), null);
   });
+
+  it('tracks the three new switches without touching old-server profiles', () => {
+    const p = profile() as any;
+    // 旧服务端缺字段 → 草稿全关，不产生多余补丁。
+    assert.deepEqual(draftFromProfile(p), {
+      display_name: '多拉',
+      email: 'dora@example.com',
+      notify_run_complete: false,
+      notify_review_result: false,
+      notify_review_pending: false,
+      notify_run_waiting: false,
+    });
+    assert.equal(isDirty(p, draftFromProfile(p)), false);
+
+    const full = profile({
+      notify_review_result: true,
+      notify_review_pending: false,
+      notify_run_waiting: true,
+    }) as any;
+    const d = { ...draftFromProfile(full), notify_review_pending: true, notify_run_waiting: false };
+    assert.equal(isDirty(full, d), true);
+    assert.deepEqual(buildProfilePatch(full, d), {
+      patch: { notify_review_pending: true, notify_run_waiting: false },
+      errors: {},
+    });
+  });
+
+  it('requires the capability and an address for any new switch', () => {
+    const off = profile({ notifications: { email: { available: false, min_run_duration_ms: null } } }) as any;
+    const errors = buildProfilePatch(off, { ...draftFromProfile(off), notify_review_pending: true }).errors;
+    assert.equal(errors.notify_review_pending, '部署未配置邮件发送，暂不可用');
+
+    const p = profile() as any;
+    const noMail = buildProfilePatch(p, { ...draftFromProfile(p), email: '', notify_run_waiting: true }).errors;
+    assert.equal(noMail.notify_run_waiting, '打开通知时必须保留邮箱');
+
+    // 三个默认开关开着时清空邮箱不报错；只有运行完成开关开着才报错。
+    const on = profile({ notify_review_result: true }) as any;
+    assert.deepEqual(buildProfilePatch(on, { ...draftFromProfile(on), email: '' }).errors, {});
+    const runComplete = profile({ notify_run_complete: true }) as any;
+    const clearedRun = buildProfilePatch(runComplete, { ...draftFromProfile(runComplete), email: '' }).errors;
+    assert.ok(clearedRun.notify_run_complete);
+    assert.equal(clearedRun.notify_review_result, undefined);
+  });
+
+  it('maps field-level AUTH_INPUT_INVALID onto the named switch', () => {
+    assert.ok(fieldErrorForProfileCode('AUTH_INPUT_INVALID', 'notify_review_result must be a boolean')?.notify_review_result);
+    assert.ok(fieldErrorForProfileCode('AUTH_INPUT_INVALID', 'notify_run_waiting must be a boolean')?.notify_run_waiting);
+    assert.equal(fieldErrorForProfileCode('AUTH_INPUT_INVALID', 'email is not a valid address'), null);
+    assert.equal(fieldErrorForProfileCode('VALIDATION_ERROR', 'notify_review_result must be a boolean'), null);
+  });
 });
