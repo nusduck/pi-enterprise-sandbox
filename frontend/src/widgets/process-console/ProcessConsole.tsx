@@ -14,6 +14,7 @@ import {
 import type { ProcessEntity } from '../../entities';
 import {
   cancelProcess,
+  getProcess,
   getProcessLogs,
   signalProcess,
   writeProcessStdin,
@@ -21,22 +22,32 @@ import {
 import { formatDuration } from '../runtime-timeline/buildTimeline';
 import {
   buildLogLines,
+  createProcessPoller,
   filterLogLines,
   formatLogsForDownload,
+  formatProcessStatus,
   isProcessInteractive,
   PROCESS_SIGNALS,
   type LogStream,
   type ProcessSignal,
 } from './logHelpers';
 
+const STREAM_LABELS: Record<LogStream, string> = {
+  both: '全部',
+  stdout: '标准输出',
+  stderr: '标准错误',
+};
+
 export function ProcessConsole({
   process,
   open,
   onClose,
+  onUpdateProcess,
 }: {
   process: ProcessEntity | null;
   open: boolean;
   onClose: () => void;
+  onUpdateProcess?: (process: ProcessEntity) => void;
 }) {
   const [streamFilter, setStreamFilter] = useState<LogStream>('both');
   const [search, setSearch] = useState('');
@@ -46,20 +57,65 @@ export function ProcessConsole({
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [historyStdout, setHistoryStdout] = useState('');
   const [historyStderr, setHistoryStderr] = useState('');
-  const [historyOffset, setHistoryOffset] = useState(0);
+  const [, setHistoryOffset] = useState(0);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [liveProcess, setLiveProcess] = useState<ProcessEntity | null>(process);
   const logRef = useRef<HTMLPreElement>(null);
+  const onUpdateProcessRef = useRef(onUpdateProcess);
+  onUpdateProcessRef.current = onUpdateProcess;
 
-  // Reset local state when process changes
+  const activeProcess = liveProcess ?? process;
+
+  // Reset local state when process changes or sheet toggles
   useEffect(() => {
     setStreamFilter('both');
     setSearch('');
     setAutoScroll(true);
     setStdinText('');
     setStatusMsg(null);
+    setConfirmingCancel(false);
     setHistoryStdout('');
     setHistoryStderr('');
     setHistoryOffset(0);
-  }, [process?.id]);
+    setLiveProcess(process);
+  }, [process?.id, open]);
+
+  const pollerRef = useRef<ReturnType<typeof createProcessPoller> | null>(null);
+  if (!pollerRef.current) {
+    pollerRef.current = createProcessPoller({
+      getProcessLogs,
+      getProcess,
+      onLogs: (logs, offset) => {
+        setHistoryOffset(logs.next_offset);
+        setHistoryStdout((prev) => (offset === 0 ? logs.stdout : prev + logs.stdout));
+        setHistoryStderr((prev) => (offset === 0 ? logs.stderr : prev + logs.stderr));
+      },
+      onProcess: (entity) => {
+        setLiveProcess(entity);
+        onUpdateProcessRef.current?.(entity);
+      },
+    });
+  }
+  const poller = pollerRef.current;
+
+  // Auto-start polling on open / process change; clean up on close
+  useEffect(() => {
+    if (!open || !process?.id || !process?.sessionId) {
+      poller.stop();
+      return;
+    }
+    poller.resetOffset();
+    poller.start(process.id, process.sessionId, process);
+    return () => {
+      poller.stop();
+    };
+  }, [open, process?.id, process?.sessionId]);
+
+  useEffect(() => {
+    if (activeProcess && !isProcessInteractive(activeProcess.status)) {
+      poller.stop();
+    }
+  }, [activeProcess?.status]);
 
   // Logs come from GET /api/processes/{id}/logs; the stream carries no process output.
   const stdout = historyStdout;
@@ -89,7 +145,7 @@ export function ProcessConsole({
     if (atBottom && !autoScroll) setAutoScroll(true);
   }, [autoScroll]);
 
-  const interactive = isProcessInteractive(process?.status);
+  const interactive = isProcessInteractive(activeProcess?.status);
 
   const flash = (msg: string) => {
     setStatusMsg(msg);
@@ -99,125 +155,129 @@ export function ProcessConsole({
   };
 
   const loadHistory = async () => {
-    if (!process?.sessionId) return;
+    if (!activeProcess?.sessionId) return;
     setBusy(true);
     try {
-      const logs = await getProcessLogs(process.id, {
-        sessionId: process.sessionId,
-        offset: historyOffset,
+      const currentOffset = poller.getOffset();
+      const logs = await getProcessLogs(activeProcess.id, {
+        sessionId: activeProcess.sessionId,
+        offset: currentOffset,
         limit: 50_000,
       });
+      poller.setOffset(logs.next_offset);
+      setHistoryOffset(logs.next_offset);
       setHistoryStdout((prev) =>
-        historyOffset === 0 ? logs.stdout : prev + logs.stdout,
+        currentOffset === 0 ? logs.stdout : prev + logs.stdout,
       );
       setHistoryStderr((prev) =>
-        historyOffset === 0 ? logs.stderr : prev + logs.stderr,
+        currentOffset === 0 ? logs.stderr : prev + logs.stderr,
       );
-      setHistoryOffset(logs.next_offset);
       flash(
         logs.truncated
-          ? `Loaded history (truncated · offset ${logs.next_offset})`
-          : `Loaded history · offset ${logs.next_offset}`,
+          ? `已加载历史日志（已截断 · 偏移量 ${logs.next_offset}）`
+          : `已加载历史日志 · 偏移量 ${logs.next_offset}`,
       );
     } catch (err) {
-      flash((err as Error).message || 'Failed to load history');
+      flash((err as Error).message || '加载历史日志失败');
     } finally {
       setBusy(false);
     }
   };
 
   const sendStdin = async (eof = false) => {
-    if (!process?.sessionId) return;
+    if (!activeProcess?.sessionId) return;
     const data = stdinText;
     if (!data && !eof) return;
     setBusy(true);
     try {
-      const r = await writeProcessStdin(process.id, process.sessionId, data, eof);
+      const r = await writeProcessStdin(activeProcess.id, activeProcess.sessionId, data, eof);
       if (!r.ok) {
-        flash(r.error || 'stdin failed');
+        flash(r.error || '标准输入写入失败');
         return;
       }
       setStdinText('');
-      flash(eof ? 'EOF sent' : 'stdin written');
+      flash(eof ? '已发送 EOF' : '已写入标准输入');
+      await poller.pollOnce(activeProcess.id, activeProcess.sessionId, activeProcess);
     } finally {
       setBusy(false);
     }
   };
 
   const sendSignal = async (sig: ProcessSignal) => {
-    if (!process?.sessionId) return;
-    if (sig === 'SIGKILL' && !confirm(`Send ${sig} to process?`)) return;
+    if (!activeProcess?.sessionId) return;
     setBusy(true);
     try {
-      const r = await signalProcess(process.id, process.sessionId, sig);
-      flash(r.ok ? `Sent ${sig}` : r.error || `${sig} failed`);
+      const r = await signalProcess(activeProcess.id, activeProcess.sessionId, sig);
+      flash(r.ok ? `已发送 ${sig}` : r.error || `发送 ${sig} 失败`);
+      await poller.pollOnce(activeProcess.id, activeProcess.sessionId, activeProcess);
     } finally {
       setBusy(false);
     }
   };
 
   const doCancel = async () => {
-    if (!process?.sessionId) return;
-    if (!confirm('Cancel this process?')) return;
+    if (!activeProcess?.sessionId) return;
     setBusy(true);
     try {
-      const r = await cancelProcess(process.id, process.sessionId);
-      flash(r.ok ? 'Cancel requested' : r.error || 'Cancel failed');
+      const r = await cancelProcess(activeProcess.id, activeProcess.sessionId);
+      flash(r.ok ? '已请求取消进程' : r.error || '取消进程失败');
+      await poller.pollOnce(activeProcess.id, activeProcess.sessionId, activeProcess);
     } finally {
       setBusy(false);
+      setConfirmingCancel(false);
     }
   };
 
   const downloadLogs = () => {
     const text = formatLogsForDownload(stdout, stderr);
-    const blob = new Blob([text || '(empty)'], { type: 'text/plain' });
+    const blob = new Blob([text || '(空)'], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `process-${process?.id || 'log'}.txt`;
+    a.download = `process-${activeProcess?.id || 'log'}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  if (!open || !process) return null;
+  if (!open || !activeProcess) return null;
 
-  const duration = formatDuration(process.startedAt, process.finishedAt);
+  const duration = formatDuration(activeProcess.startedAt, activeProcess.finishedAt);
 
   return (
     <div
       className="process-console-overlay"
       role="dialog"
       aria-modal="true"
-      aria-label="Process console"
+      aria-label="进程控制台"
     >
       <div className="process-console-backdrop" onClick={onClose} />
       <div className="process-console-sheet">
         <header className="pc-head">
           <div className="pc-title-block">
-            <h2 className="pc-title">Process Console</h2>
-            <p className="pc-cmd mono" title={process.command || process.id}>
-              {process.command || process.id}
+            <h2 className="pc-title">进程控制台</h2>
+            <p className="pc-cmd mono" title={activeProcess.command || activeProcess.id}>
+              {activeProcess.command || activeProcess.id}
             </p>
           </div>
           <div className="pc-meta">
-            <span className={`pc-badge status-${process.status}`}>
-              {process.status}
+            <span className={`pc-badge status-${activeProcess.status}`}>
+              {formatProcessStatus(activeProcess.status)}
             </span>
-            {process.exitCode != null ? (
-              <span className="pc-badge">exit {process.exitCode}</span>
+            {activeProcess.exitCode != null ? (
+              <span className="pc-badge">退出码 {activeProcess.exitCode}</span>
             ) : null}
             <span className="pc-badge muted">{duration}</span>
-            <span className="pc-badge mono muted" title={process.id}>
-              {process.id.length > 16
-                ? `${process.id.slice(0, 14)}…`
-                : process.id}
+            <span className="pc-badge mono muted" title={activeProcess.id}>
+              {activeProcess.id.length > 16
+                ? `${activeProcess.id.slice(0, 14)}…`
+                : activeProcess.id}
             </span>
           </div>
           <button
             type="button"
             className="btn-icon pc-close"
-            title="Close console"
-            aria-label="Close process console"
+            title="关闭控制台"
+            aria-label="关闭控制台"
             onClick={onClose}
           >
             ✕
@@ -225,7 +285,7 @@ export function ProcessConsole({
         </header>
 
         <div className="pc-toolbar">
-          <div className="pc-filters" role="group" aria-label="Stream filter">
+          <div className="pc-filters" role="group" aria-label="输出流筛选">
             {(['both', 'stdout', 'stderr'] as LogStream[]).map((s) => (
               <button
                 key={s}
@@ -233,17 +293,17 @@ export function ProcessConsole({
                 className={`pc-chip${streamFilter === s ? ' active' : ''}`}
                 onClick={() => setStreamFilter(s)}
               >
-                {s}
+                {STREAM_LABELS[s]}
               </button>
             ))}
           </div>
           <input
             type="search"
             className="pc-search"
-            placeholder="Search logs…"
+            placeholder="搜索日志…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            aria-label="Search logs"
+            aria-label="搜索日志"
           />
           <label className="pc-autoscroll">
             <input
@@ -251,24 +311,24 @@ export function ProcessConsole({
               checked={autoScroll}
               onChange={(e) => setAutoScroll(e.target.checked)}
             />
-            Auto-scroll
+            自动滚动
           </label>
           <button
             type="button"
             className="pc-tool-btn"
             disabled={busy}
             onClick={() => void loadHistory()}
-            title="Load logs from offset (history API)"
+            title="从偏移量加载日志（历史 API）"
           >
-            Load history
+            加载历史
           </button>
           <button
             type="button"
             className="pc-tool-btn"
             onClick={downloadLogs}
-            title="Download full log"
+            title="下载完整日志"
           >
-            Download
+            下载日志
           </button>
         </div>
 
@@ -280,8 +340,8 @@ export function ProcessConsole({
         >
           {lines.length === 0 ? (
             <span className="pc-log-empty">
-              No log output yet
-              {process.status === 'running' ? ' — waiting for stdout/stderr…' : ''}
+              暂无日志输出
+              {activeProcess.status === 'running' ? ' — 等待标准输出/标准错误…' : ''}
             </span>
           ) : (
             lines.map((ln) => (
@@ -305,8 +365,8 @@ export function ProcessConsole({
               className="pc-stdin"
               placeholder={
                 interactive
-                  ? 'Write to stdin… (Enter to send)'
-                  : 'Process is not interactive'
+                  ? '写入标准输入… (按 Enter 发送)'
+                  : '进程未在交互状态'
               }
               value={stdinText}
               disabled={!interactive || busy}
@@ -324,16 +384,16 @@ export function ProcessConsole({
               disabled={!interactive || busy || !stdinText}
               onClick={() => void sendStdin(false)}
             >
-              Stdin
+              标准输入
             </button>
             <button
               type="button"
               className="pc-tool-btn"
               disabled={!interactive || busy}
               onClick={() => void sendStdin(true)}
-              title="Send EOF"
+              title="发送 EOF"
             >
-              EOF
+              发送 EOF
             </button>
           </div>
           <div className="pc-actions">
@@ -348,14 +408,36 @@ export function ProcessConsole({
                 {sig}
               </button>
             ))}
-            <button
-              type="button"
-              className="pc-tool-btn danger"
-              disabled={!interactive || busy}
-              onClick={() => void doCancel()}
-            >
-              Cancel process
-            </button>
+            {confirmingCancel ? (
+              <span className="pc-confirm-inline" role="group" aria-label="确认取消操作">
+                <span className="pc-confirm-label">确认取消？</span>
+                <button
+                  type="button"
+                  className="pc-tool-btn danger"
+                  disabled={busy}
+                  onClick={() => void doCancel()}
+                >
+                  确认
+                </button>
+                <button
+                  type="button"
+                  className="pc-tool-btn"
+                  disabled={busy}
+                  onClick={() => setConfirmingCancel(false)}
+                >
+                  返回
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="pc-tool-btn danger"
+                disabled={!interactive || busy}
+                onClick={() => setConfirmingCancel(true)}
+              >
+                取消进程
+              </button>
+            )}
           </div>
           {statusMsg ? (
             <p className="pc-status" role="status">
@@ -367,4 +449,3 @@ export function ProcessConsole({
     </div>
   );
 }
-
