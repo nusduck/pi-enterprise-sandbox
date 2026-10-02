@@ -2,7 +2,7 @@
  * Exec HTTP 入口。Wave 6 起取代 Python sandbox 服务进程。
  * 挂载内部 HMAC 面与公共会话面；健康检查保持 /health 与 /ready。
  *
- * 启动顺序（design §9.2）：取密（UPDRDB + 数据源）→ 装配（建池）→ schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen。任何一步失败都退出，
+ * 启动顺序（design §9.2）：单实例断言 → 取密（UPDRDB + 数据源）→ 装配（建池）→ schema 核对 → 存储与 bwrap 预检 → 孤儿回收 → listen。任何一步失败都退出，
  * 不先对外提供服务。
  */
 import { createExecAppFromEnv, readExecDbConfigFromSandboxEnv } from './http/app.js';
@@ -10,8 +10,18 @@ import { listenHono } from './http/node-listener.js';
 import { resolveExecDbPassword } from './startup-credentials.js';
 import { readDataSourceCatalog } from './datasource/catalog.js';
 import { fetchDataSourcePasswords } from './datasource/service.js';
+import { assertSingleInstance, readSingleInstanceConfig } from './workspace/single-instance.js';
 
 const port = Number.parseInt(process.env['EXEC_PORT'] ?? process.env['SANDBOX_PORT'] ?? '8081', 10);
+
+// 单实例断言排在一切之前（ADR 0008 D5）：工作区锁只在进程内有效，悄悄多开实例会静默丢写。
+try {
+  assertSingleInstance(readSingleInstanceConfig(process.env));
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`exec single-instance check failed, refusing to start: ${message}\n`);
+  process.exit(1);
+}
 
 let dbPassword: string | undefined;
 try {
