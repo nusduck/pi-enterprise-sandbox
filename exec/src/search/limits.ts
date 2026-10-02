@@ -1,5 +1,5 @@
 /**
- * 搜索的硬上限。移植自 `sandbox/services/file_search.py` 的常量段。
+ * 搜索的硬上限。移植自已退役的 Python 执行面（旧 `sandbox/services/file_search.py`，现为本模块）的常量段。
  *
  * **调用方只能收紧，不能放宽**——`clampInt` 无条件把入参夹到 [lo, hi]，
  * 所以一个 `limit: 10^9` 的请求不会变成一次无界扫描，而是被静默夹到上限。

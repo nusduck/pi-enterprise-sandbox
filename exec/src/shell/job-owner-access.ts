@@ -1,5 +1,5 @@
 /**
- * 归属校验——移植自 Python 版 `sandbox/services/process_owner_access.py`
+ * 归属校验——移植自已退役的 Python 执行面（旧 `sandbox/services/process_owner_access.py`，现为本模块）
  * 的核心不变量："不是你的"和"不存在"必须是同一个答案。
  *
  * 这是什么：一个薄封装，不是新逻辑。真正的 owner 过滤已经在

@@ -28,16 +28,6 @@ export interface WorkspacePolicyRecord {
   readonly createdAt: Date;
 }
 
-export const EXEC_WORKSPACE_POLICIES_DDL = `
-CREATE TABLE tbl_agsvc_exec_workspace_policies (
-  workspace_id VARCHAR(191)  NOT NULL,
-  org_id       CHAR(26)      NOT NULL,
-  delivery     CHAR(16)      NOT NULL DEFAULT 'review',
-  created_at   DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (workspace_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-`.trim();
-
 export interface WorkspacePolicyStore {
   /** 记录这个工作区需要审核。已存在即无操作（只能设置、不能撤销）。 */
   rememberReview(workspaceId: string, orgId: string): Promise<void>;

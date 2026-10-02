@@ -14,8 +14,9 @@
  * - 窄接口 `QuotaStore` / `WorkspaceLock` 的定义仍在各自文件中，本文件只转交，便于 W3-D 按
  *   “窄接口 → mysql2 实现 + 内存实现，不写迁移” 的约定接手。
  *
- * 参考：`sandbox/services/workspace_manager.py`、`workspace_quota_ledger.py`、`child_workspace_quota.py`、
- * `sandbox/paths.py`、`sandbox/isolation/bubblewrap.py:82-101`（XDG 绑定已由 `isolation/build.ts` 落实）。
+ * 参考（已退役的 Python 执行面旧路径，现为本目录各模块）：
+ * 旧 `sandbox/services/workspace_manager.py`、`workspace_quota_ledger.py`、`child_workspace_quota.py`、
+ * 旧 `sandbox/paths.py`、旧 `sandbox/isolation/bubblewrap.py:82-101`（XDG 绑定已由 `isolation/build.ts` 落实）。
  */
 
 // 生命周期（稳定工作区 + 配对持久 temp）

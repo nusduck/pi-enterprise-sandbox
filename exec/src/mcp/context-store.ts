@@ -1,6 +1,6 @@
 /**
  * 外部 MCP `context_id` → Sandbox 身份的 Redis 权威表。
- * 移植自 `sandbox/mcp/context_store.py`。
+ * 移植自已退役的 Python 执行面（旧 `sandbox/mcp/context_store.py`，现为本模块）。
  *
  * 映射是持久的；首次使用时的开通走一把短 Redis 锁，避免同一个 `context_id`
  * 并发首用时开出两个工作区。

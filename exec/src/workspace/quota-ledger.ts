@@ -1,6 +1,6 @@
 /**
- * 控制面工作区配额账本——移植自 Python 版
- * `sandbox/services/workspace_quota_ledger.py::WorkspaceQuotaLedger`。
+ * 控制面工作区配额账本——移植自已退役的 Python 执行面（旧
+ * `sandbox/services/workspace_quota_ledger.py::WorkspaceQuotaLedger`，现为本模块）。
  *
  * **设计意图（必须保留，来自任务说明，不是我自己加的）**：预留记录必须存在
  * **工作区外面**。不可信子进程（`bash`/`python` 这些直接绑进工作区、只受

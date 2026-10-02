@@ -1,6 +1,6 @@
 /**
- * 递归统计一棵物理目录树的字节数——移植自 Python 版
- * `sandbox/services/file_manager.py::workspace_size_bytes()`，配额账本
+ * 递归统计一棵物理目录树的字节数——移植自已退役的 Python 执行面（旧
+ * `sandbox/services/file_manager.py::workspace_size_bytes()`，现为本模块），配额账本
  * （`quota-ledger.ts`）与子进程配额监控（`child-quota.ts`）共用。
  *
  * 移植时发现的 Python bug（写进主控要的报告，这里也记一笔）：原函数的循环体是

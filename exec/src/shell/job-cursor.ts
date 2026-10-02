@@ -1,5 +1,5 @@
 /**
- * 单调增量读游标——移植自 Python 版 `sandbox/services/process_cursor.py`。
+ * 单调增量读游标——移植自已退役的 Python 执行面（旧 `sandbox/services/process_cursor.py`，现为本模块）。
  *
  * 这是什么：一个按 UTF-8 **字节**寻址的环形缓冲区，配一个
  * `{generation}-{offset}` 形式的游标。ADR 0008 §5.5 明确点名"这个模型和

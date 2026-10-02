@@ -2,7 +2,7 @@
  * exec/src/db/client.ts 单测——配置解析、连接池创建与错误脱敏。
  *
  * 没有对应的 Python 用例需要改写：这是 exec 侧新增的 DB 底座，
- * Python 版的等价物是 `sandbox/app/persistence/database.py` 的
+ * 已退役 Python 执行面的等价物是旧 `sandbox/app/persistence/database.py` 的
  * `create_engine()`，但那一层直接把 DSN 拼进错误文本，本测试
  * 验证"不泄漏 DSN/物理根"是新增的硬约束。
  *

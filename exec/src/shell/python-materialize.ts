@@ -1,5 +1,5 @@
 /**
- * Python 代码物化——移植自 `sandbox/services/python_materialize.py`。
+ * Python 代码物化——移植自已退役的 Python 执行面（旧 `sandbox/services/python_materialize.py`，现为本模块）。
  *
  * 规则不变：
  * - 短单行代码（无换行、UTF-8 字节数 ≤ 阈值）走 `python3 -c <code>`；

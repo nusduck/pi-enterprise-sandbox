@@ -1,7 +1,7 @@
 /**
- * 公共面错误映射——逐字节对齐 Python sandbox 的 HTTP 语义。
+ * 公共面错误映射——逐字节对齐已退役的 Python 执行面的 HTTP 语义。
  *
- * 为什么单独一层：`sandbox/routers/files.py` 的 `_search_http_error` 区分
+ * 为什么单独一层：旧 `sandbox/routers/files.py` 的 `_search_http_error` 区分
  * PermissionError→403、ValueError→400，其它 400；`sanitize_path_error`
  * 无条件脱敏物理路径。这里把同一条纪律搬到 TS——任何离开公共面的错误
  * 文本都必须经 `redactPhysicalRoots`，且 status 必须与 Python 完全一致，
@@ -55,4 +55,24 @@ export function conflict(message: string): HttpError {
 
 export function payloadTooLarge(message: string, code: string): HttpError {
   return new HttpError(413, message, code);
+}
+
+/**
+ * 业务错误 → HTTP 错误的通用映射（F19 合并 `mapError` / `datasetHttpError`）。
+ *
+ * 三段逻辑两处完全一致：`HttpError` 原样透出；业务错误类（`ArtifactError` /
+ * `DatasetError`，都有 `{ status, code, message }`）脱敏后按自带 status 映射；
+ * 其余兜底 500 并脱敏。调用方显式传业务错误类，行为与合并前一致。
+ */
+export function domainHttpError(
+  err: unknown,
+  roots: readonly string[],
+  DomainError: new (...args: never[]) => Error & { status: number; code: string },
+): HttpError {
+  if (err instanceof HttpError) return err;
+  if (err instanceof DomainError) {
+    return new HttpError(err.status, redactPhysicalRoots(err.message, roots), err.code);
+  }
+  const raw = err instanceof Error ? err.message : String(err);
+  return new HttpError(500, redactPhysicalRoots(raw, roots));
 }

@@ -3,8 +3,8 @@
  *
  * 为什么单独一层：`job-store-mysql.ts` 与 `quota-store.ts` 各自直接拿池
  * 是可行的，但 `exec/src/db/` 作为后续 W3-A/B/C（内部端点、产物/数据集）
- * 共用的持久化底座，需要一个统一的创建/关闭/脱敏入口——这正是 Python 版
- * `sandbox/app/persistence/database.py` 里 `create_engine()` + `DATABASE_URL`
+ * 共用的持久化底座，需要一个统一的创建/关闭/脱敏入口——这正是已退役的
+ * Python 执行面（旧 `sandbox/app/persistence/database.py`，现为本模块）里 `create_engine()` + `DATABASE_URL`
  * 那一坨的 TS 等价物。隔离点只有一个：**失败时必须 fail-closed 且不泄漏
  * DSN/密码**（硬约束 #1），调用方没配库就应直接起不来，而不是悄悄用内存
  * 回退——这会让生产环境在不知情的情况下丢数据。
@@ -59,7 +59,7 @@ export function sqlLimit(limit: number, max = 1000): string {
 }
 
 /**
- * 从环境变量解析配置。读取的键与 Python 版 `sandbox/config.py` 的
+ * 从环境变量解析配置。读取的键与已退役 Python 执行面的旧 `sandbox/config.py` 的
  * `DATABASE_URL` / `MYSQL_*` 保持概念一致，但**不复用 `DATABASE_URL` 的
  * DSN 解析**——那一串正则容易在 TS 侧抄错，且生产环境更倾向用拆开的
  * `EXEC_DB_*` 逐项注入（便于 K8s Secret）。两者都读：优先 `DATABASE_URL`，

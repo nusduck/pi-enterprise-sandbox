@@ -1,6 +1,6 @@
 /**
  * facade 业务逻辑：上下文路由、桥调用、产物 URL 签名。
- * 移植自 `sandbox/mcp/service.py`。
+ * 移植自已退役的 Python 执行面（旧 `sandbox/mcp/service.py`，现为本模块）。
  *
  * ## Model Experience
  * 每个工具结果都以 `context_id` 开头回显，模型据此把后续调用绑到同一个工作区

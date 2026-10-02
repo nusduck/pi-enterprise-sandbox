@@ -1035,7 +1035,6 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 |------|------|------|
 | `GET` | `/artifacts` | 产物库：同一 owner 跨会话的产物（见下） |
 | `GET` | `/sessions/{id}/artifacts` | 列举本工作区的产物 |
-| `POST` | `/sessions/{id}/artifacts/register` | 注册产物（旧端点） |
 | **`POST`** | **`/sessions/{id}/artifacts/submit`** | **显式提交产物（推荐）** |
 | `POST` | `/sessions/{id}/artifacts/imports` | 将 owner-scoped Artifact 导入本 Session workspace（BFF 上游兼容端点） |
 | `GET` | `/sessions/{id}/artifacts/{aid}/download` | 下载产物 |
@@ -1086,20 +1085,6 @@ metadata，也不触发 `artifact.ready/file_ready`。目标会话如需正式�
   "size": 11234,
   "created_at": "2026-07-04T10:00:00Z"
 }
-```
-
-#### `POST /sessions/{id}/artifacts/register` — 注册产物（旧端点）
-
-```json
-// Request
-{
-  "name": "report.pdf",
-  "path": "output/report.pdf",
-  "mime_type": "application/pdf",
-  "source_execution_id": "exec_abc123"
-}
-
-// Response (201) — 同 submit
 ```
 
 ---

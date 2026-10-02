@@ -6,8 +6,8 @@
  * 不走 HMAC（HMAC 仅内部面，见 dsh-rebuild 5.7），因此这里不挂 HMAC/CIDR 中间件。
  *
  * 对 BFF 逐字节不变的含义：挂载后的路径、status、header、body 形状与
- * Python `sandbox/routers/{files,artifact/api/public,datasets,session_processes}`
- * 完全一致，api-server 的 `sandbox-client` 与 `routes/{files,artifacts,datasets,processes}.js`
+ * 已退役的 Python 执行面（旧 `sandbox/routers/{files,artifact/api/public,datasets,session_processes}`，
+ * 现为本目录各路由模块）完全一致，api-server 的 `sandbox-client` 与 `routes/{files,artifacts,datasets,processes}.js`
  * 无需改动即可切到 exec。
  */
 

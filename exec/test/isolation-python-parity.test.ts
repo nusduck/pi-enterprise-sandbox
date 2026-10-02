@@ -1,22 +1,22 @@
 /**
- * 逐条对照 `tests/test_bubblewrap_isolation.py`（Python 版隔离层测试）的场景。
- * 每个 test 名字前缀 `[py: <原函数名>]` 标出对应的 Python 用例，方便审阅时
- * 交叉核对"一条不减"这件事本身。
+ * 隔离层行为测试——钉住当前 TS 实现（`exec/src/isolation/`）的 argv 渲染与挂载策略。
  *
- * 两条 Python 用例没有直接搬过来，原因写在各自该在的地方而不是这里省略：
+ * 覆盖：profile 构建（工作区/temp 绑定、skill 分层只读挂载、命名空间 flag、
+ * 环境变量隔离、XDG home、cwd 作用域、ulimit 包装、die-with-parent/as-pid-1）、
+ * preflight 探针渲染、runner 层挂载探测与降级（缺失/不可读挂载的摘除与报错、
+ * setpriv 剥离）。
  *
- * - `test_process_manager_disables_die_with_parent_for_durable_handle`：测的是
- *   `ProcessManager`（谁在什么时候把 `die_with_parent=False`/`as_pid_1=True`
- *   传给隔离层），不是隔离层自己的行为——这是 W2（`exec/src/shell/`）的范围，
- *   不在 `exec/src/isolation/` 里。隔离层这边"给定这两个字段，argv 该长什么
- *   样"的行为，被下面的
- *   `[py: test_bwrap_durable_process_can_outlive_api_parent / ...pid_namespace_init]`
- *   两条覆盖到了。
- * - `test_bwrap_preflight_uses_private_proc`：这条测的是"读 Python 源码文本，
- *   断言字符串 `--proc` 出现、`--bind /proc` 不出现"——这是给"两份手写 argv
- *   列表不会偷偷退回共享 /proc"上的一个防线。新架构下 `preflight()` 根本不再
- *   手写任何列表（`toPreflightProfile()` 是从同一个 profile 过滤出来的），
- *   这条防线的意义已经被结构本身取代；等价的结构断言在
+ * 用例名前的 `[isolation/<area>]` 标的是当前行为所在的层次（profile /
+ * preflight / runner），不是外部引用。
+ *
+ * 两条历史用例没有单独成条，原因写在这里而不是省略：
+ *
+ * - "谁在什么时候把 `dieWithParent=false`/`asPid1=true` 传给隔离层"测的是
+ *   调用方（`exec/src/shell/`），不是隔离层自己的行为；隔离层"给定这两个
+ *   字段，argv 该长什么样"由下面的 durable/as-pid-1 两条覆盖到了。
+ * - "两份手写 argv 列表不会偷偷退回共享 /proc"这条防线：新架构下
+ *   `preflight()` 根本不再手写任何列表（`toPreflightProfile()` 是从同一个
+ *   profile 过滤出来的），意义已被结构本身取代；等价的结构断言在
  *   `isolation-preflight.test.ts` 的
  *   "keeps every static mount build.ts produces" 里，用 `proc` 这个 mount kind
  *   本身来断言，而不是找字符串。
@@ -52,7 +52,7 @@ function pairs(argv: readonly string[], flag: string): [string, string][] {
   return out;
 }
 
-test('[py: test_bwrap_maps_workspace_temp_and_readonly_skills] workspace/temp bound, system skill read-only, no outer /proc bind, unshare flags present, env override passes through', async () => {
+test('[isolation/profile] workspace/temp bound, system skill read-only, no outer /proc bind, unshare flags present, env override passes through', async () => {
   const ws = await makeTestWorkspace({ systemSkillNames: ['pdf'] });
   try {
     const profile = buildIsolationProfile({
@@ -94,7 +94,7 @@ test('[py: test_bwrap_maps_workspace_temp_and_readonly_skills] workspace/temp bo
   }
 });
 
-test('[py: test_bwrap_durable_process_can_outlive_api_parent] die_with_parent=false omits --die-with-parent, keeps --new-session', async () => {
+test('[isolation/profile] die_with_parent=false omits --die-with-parent, keeps --new-session', async () => {
   const ws = await makeTestWorkspace();
   try {
     const profile = buildIsolationProfile({
@@ -111,7 +111,7 @@ test('[py: test_bwrap_durable_process_can_outlive_api_parent] die_with_parent=fa
   }
 });
 
-test('[py: test_bwrap_durable_process_can_make_command_pid_namespace_init] as_pid_1=true emits --as-pid-1', async () => {
+test('[isolation/profile] as_pid_1=true emits --as-pid-1', async () => {
   const ws = await makeTestWorkspace();
   try {
     const profile = buildIsolationProfile({
@@ -127,7 +127,7 @@ test('[py: test_bwrap_durable_process_can_make_command_pid_namespace_init] as_pi
   }
 });
 
-test('[py: test_bwrap_drops_trusted_service_capabilities_before_exec] setpriv prefix precedes the bwrap executable', async () => {
+test('[isolation/runner] setpriv prefix precedes the bwrap executable', async () => {
   const ws = await makeTestWorkspace();
   try {
     const profile = buildIsolationProfile({ context: ws.context, mode: 'workspace-write', command: ['true'] });
@@ -147,7 +147,7 @@ test('[py: test_bwrap_drops_trusted_service_capabilities_before_exec] setpriv pr
   }
 });
 
-test('[py: test_bwrap_defers_nproc_until_after_user_namespace] max_process_count wraps the command in an in-namespace ulimit wrapper', async () => {
+test('[isolation/profile] max_process_count wraps the command in an in-namespace ulimit wrapper', async () => {
   const ws = await makeTestWorkspace();
   try {
     const profile = buildIsolationProfile({
@@ -167,7 +167,7 @@ test('[py: test_bwrap_defers_nproc_until_after_user_namespace] max_process_count
   }
 });
 
-test('[py: test_bwrap_does_not_add_nproc_wrapper_when_unrequested] no wrapper when max_process_count is unset', async () => {
+test('[isolation/profile] no wrapper when max_process_count is unset', async () => {
   const ws = await makeTestWorkspace();
   try {
     const profile = buildIsolationProfile({
@@ -182,7 +182,7 @@ test('[py: test_bwrap_does_not_add_nproc_wrapper_when_unrequested] no wrapper wh
   }
 });
 
-test('[py: test_bwrap_preflight_exercises_launch_namespace_policy] preflight rendering exercises the full namespace policy with the configured uid/gid', async () => {
+test('[isolation/preflight] preflight rendering exercises the full namespace policy with the configured uid/gid', async () => {
   const ws = await makeTestWorkspace();
   try {
     const preflight = buildPreflightProfile({
@@ -206,7 +206,7 @@ test('[py: test_bwrap_preflight_exercises_launch_namespace_policy] preflight ren
     assert.equal(argv[argv.indexOf('--uid') + 1], '12345');
     assert.equal(argv[argv.indexOf('--gid') + 1], '12346');
     assert.equal(argv[argv.indexOf('--cap-drop') + 1], 'ALL');
-    // 探针不带系统名单：系统根整树只读绑定（design §6.4 / §8），与 Python 版一致。
+    // 探针不带系统名单：系统根整树只读绑定（design §6.4 / §8）。
     assert.ok(
       pairs(argv, '--ro-bind').some(
         ([s, d]) => s === ws.context.systemSkillRoot && d === '/home/sandbox/skill',
@@ -217,7 +217,7 @@ test('[py: test_bwrap_preflight_exercises_launch_namespace_policy] preflight ren
   }
 });
 
-test('[py: test_bwrap_can_start_process_in_persistent_temp] relative cwd in the temp scope resolves under /tmp', async () => {
+test('[isolation/profile] relative cwd in the temp scope resolves under /tmp', async () => {
   const ws = await makeTestWorkspace();
   try {
     const profile = buildIsolationProfile({
@@ -234,7 +234,7 @@ test('[py: test_bwrap_can_start_process_in_persistent_temp] relative cwd in the 
   }
 });
 
-test('[py: test_bwrap_never_inherits_host_secret_environment] build.ts never autonomously pulls process.env into the profile (see report: the allowlist/denylist gate itself is a W2 gap)', async () => {
+test('[isolation/profile] build.ts never autonomously pulls process.env into the profile (see report: the allowlist/denylist gate itself is a W2 gap)', async () => {
   const ws = await makeTestWorkspace();
   const previous = process.env['SANDBOX_API_TOKEN'];
   process.env['SANDBOX_API_TOKEN'] = 'host-secret-that-must-not-cross';
@@ -254,7 +254,7 @@ test('[py: test_bwrap_never_inherits_host_secret_environment] build.ts never aut
   }
 });
 
-test('[py: test_bwrap_binds_only_the_callers_own_user_skill_dir] (reframed for D4) only this contexts enabled packages are bound, at their given absolute path, always read-only', async () => {
+test('[isolation/profile] (reframed for D4) only this contexts enabled packages are bound, at their given absolute path, always read-only', async () => {
   const ws = await makeTestWorkspace({ enabledPackages: ['pkg-mine'] });
   try {
     const profile = buildIsolationProfile({
@@ -277,7 +277,7 @@ test('[py: test_bwrap_binds_only_the_callers_own_user_skill_dir] (reframed for D
   }
 });
 
-test('[py: test_bwrap_omits_user_skill_tier_without_identity] (reframed for D4) no enabled packages means no skill-user mounts; the named system package is still bound', async () => {
+test('[isolation/profile] (reframed for D4) no enabled packages means no skill-user mounts; the named system package is still bound', async () => {
   const ws = await makeTestWorkspace({ systemSkillNames: ['pdf'] });
   try {
     const profile = buildIsolationProfile({
@@ -297,7 +297,7 @@ test('[py: test_bwrap_omits_user_skill_tier_without_identity] (reframed for D4) 
   }
 });
 
-test('[py: test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch] (relocated to the runner layer) a missing system package fails before bwrap runs, naming the path and the mount', async () => {
+test('[isolation/runner] (relocated to the runner layer) a missing system package fails before bwrap runs, naming the path and the mount', async () => {
   const missingRoot = neverExists('skills-that-were-never-mounted');
   const profile = buildIsolationProfile({
     context: {
@@ -326,7 +326,7 @@ test('[py: test_bwrap_names_the_missing_skill_root_instead_of_failing_at_launch]
   );
 });
 
-test('[py: test_bwrap_still_launches_when_only_the_user_skill_tier_is_absent] a user with an enabled-but-not-yet-installed package still gets bash/pwd', async () => {
+test('[isolation/runner] a user with an enabled-but-not-yet-installed package still gets bash/pwd', async () => {
   const ws = await makeTestWorkspace();
   const missingPackageSource = join(ws.root, 'user-skills', 'not-installed-yet');
   const profile = buildIsolationProfile({
@@ -344,7 +344,7 @@ test('[py: test_bwrap_still_launches_when_only_the_user_skill_tier_is_absent] a 
   }
 });
 
-test('[py: test_bwrap_degrades_to_system_tier_when_user_skill_root_is_unreadable] one users broken package mount does not cost that user bash/python (only if not root)', async (t) => {
+test('[isolation/runner] one users broken package mount does not cost that user bash/python (only if not root)', async (t) => {
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
     t.skip('running as root: chmod-based EACCES cannot be exercised');
     return;
@@ -377,7 +377,7 @@ test('[py: test_bwrap_degrades_to_system_tier_when_user_skill_root_is_unreadable
   }
 });
 
-test('[py: test_bwrap_gives_the_session_a_persistent_xdg_home] HOME/XDG_* env vars and the three home binds are present', async () => {
+test('[isolation/profile] HOME/XDG_* env vars and the three home binds are present', async () => {
   const ws = await makeTestWorkspace();
   try {
     const profile = buildIsolationProfile({
@@ -406,7 +406,7 @@ test('[py: test_bwrap_gives_the_session_a_persistent_xdg_home] HOME/XDG_* env va
   }
 });
 
-test('[py: test_persistent_home_is_per_session_not_shared] two sessions never share a physical XDG home', async () => {
+test('[isolation/profile] two sessions never share a physical XDG home', async () => {
   const a = await makeTestWorkspace();
   const b = await makeTestWorkspace();
   try {

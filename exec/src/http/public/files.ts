@@ -1,7 +1,7 @@
 /**
  * 公共面文件路由——对 BFF 的 `/sessions/:id/files/*` 逐字节不变的 TS 移植。
  *
- * 逐字节不变指：`status/header/body/错误码` 与 Python `sandbox/routers/files.py`
+ * 逐字节不变指：`status/header/body/错误码` 与已退役的 Python 执行面（旧 `sandbox/routers/files.py`，现为本模块）
  * 完全一致，api-server 的 `sandbox-client` 与 `routes/files.js` 不用改一行。
  * 因此：
  * - `GET /sessions/:id/files?path=.` → 200 {files,total}
@@ -21,7 +21,7 @@ import { stat, readdir, readFile, rm, mkdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { badRequest, forbidden, notFound, payloadTooLarge, errorBody, HttpError } from './errors.js';
-import { parseActingHeaders, requireOwnedSession } from './ownership.js';
+import { actingHeadersFrom, parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import { joinContained } from '../../workspace/ids.js';
@@ -41,14 +41,8 @@ export interface PublicFilesDeps {
 const DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024;
 const UPLOAD_MAX_BYTES = 55 * 1024 * 1024;
 
-function actingFrom(c: import('hono').Context): Record<string, string | undefined> {
-  const h: Record<string, string | undefined> = {};
-  for (const k of ['x-acting-organization-id', 'x-acting-user-id', 'x-acting-role']) {
-    const v = c.req.header(k);
-    if (v !== undefined) h[k] = v;
-  }
-  return h;
-}
+/** 本路由采集的 acting 头（带 role，见 `ownership.ts` 的 `actingHeadersFrom`）。 */
+const ACTING_KEYS = ['x-acting-organization-id', 'x-acting-user-id', 'x-acting-role'] as const;
 
 function sanitizeFilename(name: string): string {
   const base = path.basename(String(name || 'upload')).trim() || 'upload';
@@ -76,7 +70,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
   // GET /sessions/:sessionId/files?path=.
   app.get('/sessions/:sessionId/files', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -100,7 +94,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
   // POST /sessions/:sessionId/files/read  {path, offset, limit}
   app.post('/sessions/:sessionId/files/read', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -124,7 +118,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
   // GET /sessions/:sessionId/files/read?path=&offset=&limit=
   app.get('/sessions/:sessionId/files/read', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -148,7 +142,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
   // GET /sessions/:sessionId/files/preview?path=
   app.get('/sessions/:sessionId/files/preview', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -174,7 +168,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
   // GET /sessions/:sessionId/files/download?path=
   app.get('/sessions/:sessionId/files/download', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -206,7 +200,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
   // POST /sessions/:sessionId/files/upload?path= (multipart file)
   app.post('/sessions/:sessionId/files/upload', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       // E7：审核工作区**照常允许上传**——发起人要能提供材料，而写进去的东西
@@ -258,7 +252,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
   // DELETE /sessions/:sessionId/files?path=
   app.delete('/sessions/:sessionId/files', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -306,7 +300,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
 
   app.post('/sessions/:sessionId/files/ls', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -330,7 +324,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
 
   app.post('/sessions/:sessionId/files/find', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
@@ -358,7 +352,7 @@ export function registerPublicFilesRoutes(app: Hono, deps: PublicFilesDeps): voi
 
   app.post('/sessions/:sessionId/files/grep', async (c) => {
     const sessionId = c.req.param('sessionId') ?? '';
-    const acting = parseActingHeaders(actingFrom(c));
+    const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
     let roots: readonly string[] = [];
     try {
       const own = await requireOwnedSession(sessionId, deps, acting, roots);

@@ -1,6 +1,6 @@
 /**
  * MCP facade 专用的**窄桥**：`/internal/mcp/v1/*` 八条路由。
- * 移植自 `sandbox/routers/mcp_internal.py` + `sandbox/mcp/runtime.py`。
+ * 移植自已退役的 Python 执行面（旧 `sandbox/routers/mcp_internal.py` + `sandbox/mcp/runtime.py`，现为本模块）。
  *
  * **这条桥为什么单独存在**：facade（`exec/src/mcp/`）是整个系统里唯一对外
  * 暴露的进程。它持有的 `SANDBOX_MCP_INTERNAL_TOKEN` 只够走这八条路由，

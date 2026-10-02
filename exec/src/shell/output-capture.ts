@@ -1,7 +1,8 @@
 /**
- * 输出上限——移植自 `sandbox/utils/resource_limits.py` 的 `BoundedTextCapture`。
+ * 输出上限——移植自已退役的 Python 执行面（旧 `sandbox/utils/resource_limits.py`，
+ * 现为本模块）的 `BoundedTextCapture`。
  *
- * 语义（与现有 Python 版逐字对齐，见 `sandbox/services/execution_manager.py`
+ * 语义（与已退役 Python 版逐字对齐，旧 `sandbox/services/execution_manager.py`
  * 里 `settings.max_output_chars` 的用法）：每个流（stdout / stderr）保留
  * **前缀**——一旦累计保留字符数达到上限，后续文本只计数、不保留、不转发。
  * 这不是"保留尾部"（tail），是"保留头部"（prefix）：与 Node 的 `Buffer`

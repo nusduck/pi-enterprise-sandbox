@@ -70,7 +70,7 @@ export interface WireError {
 }
 
 /**
- * 硬编码的物理根前缀兜底——移植自 `sandbox/paths.py` 的
+ * 硬编码的物理根前缀兜底——移植自已退役的 Python 执行面（旧 `sandbox/paths.py`，现为本模块）的
  * `_DEFAULT_PHYSICAL_PREFIXES`。这是最后一道安全网：即使调用方传的
  * `physicalRoots` 不全（配置漂移、漏传某个根），这两个前缀也一定会被
  * 脱敏。它们**永远**参与替换，不需要、也不能由调用方关闭。
@@ -90,7 +90,7 @@ const DEFAULT_PHYSICAL_PREFIXES: readonly string[] = Object.freeze([
  * fail-open，此处必须 fail-closed。TypeScript strict 下漏传这个参数会
  * 直接编译不过，而不是运行时悄悄放行。
  *
- * 处理顺序（对齐 `sandbox/paths.py:219-271` 的 `sanitize_path_error`，
+ * 处理顺序（对齐已退役 Python 执行面的旧 `sandbox/paths.py:219-271` 的 `sanitize_path_error`，
  * `LEGACY_AGENT_WORKSPACE_PATH` 那条 旧引擎时代兼容逻辑本次不迁移）：
  * 1. 把调用方传入的 roots 与 {@link DEFAULT_PHYSICAL_PREFIXES} 合并；
  * 2. 每个 root 去掉尾部 `/` 再去重——否则带尾斜杠的 root 匹配不上
@@ -170,7 +170,7 @@ export interface ToWireErrorOptions {
 }
 
 /**
- * 把任意抛出物映射成可以放进 `RpcResult` 的线上错误对象，并脱敏物理路径。
+ * 把任意抛出物映射成可以放进失败响应的线上错误对象（`WireError`），并脱敏物理路径。
  *
  * 分类顺序：`ContractError`（传输层）> `FsError`（dsh-fs 结构化错误）>
  * 普通 `Error` > 其它任意抛出物（兜底成 `INTERNAL_ERROR`，用 `String()`

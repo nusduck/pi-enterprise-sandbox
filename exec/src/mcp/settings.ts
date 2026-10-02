@@ -1,5 +1,5 @@
 /**
- * `sandbox-mcp` 进程自己的配置。移植自 `sandbox/mcp/settings.py`。
+ * `sandbox-mcp` 进程自己的配置。移植自已退役的 Python 执行面（旧 `sandbox/mcp/settings.py`，现为本模块）。
  *
  * facade 的凭据与 Sandbox API、Agent 的凭据分开：它是唯一对外暴露的面，
  * 泄漏一个 token 不应该顺带交出内部面。

@@ -1,5 +1,5 @@
 /**
- * CIDR 白名单——移植自 `sandbox/security/cidr.py` 的入站 IP 校验。
+ * CIDR 白名单——移植自已退役的 Python 执行面（旧 `sandbox/security/cidr.py`，现为本模块）的入站 IP 校验。
  *
  * 为什么需要它：exec 的内部面只对 Agent 容器开放，不对外。即使 HMAC 已验，
  * 仍需在网络层再挡一次非预期来源（比如误把 exec 暴露到 0.0.0.0 时，任何能

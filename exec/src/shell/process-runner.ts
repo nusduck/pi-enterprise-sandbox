@@ -6,7 +6,7 @@
  * `isolation/bubblewrap.ts` 的 `spawnLaunch()`，其它任何想要执行命令的
  * 代码都必须经过这个模块，没有第二条路。
  *
- * 相对 `sandbox/utils/resource_limits.py` 的 `run_with_timeout()`，这里做了
+ * 相对已退役的 Python 执行面（旧 `sandbox/utils/resource_limits.py`，现为本模块）的 `run_with_timeout()`，这里做了
  * 大量简化——不是漏做，是 Node 的事件循环替我们免费拿到了 Python 版专门
  * 起线程池才能做到的事：
  *

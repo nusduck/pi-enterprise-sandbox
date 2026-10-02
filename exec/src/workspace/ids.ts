@@ -1,6 +1,7 @@
 /**
- * 工作区标识与物理路径拼接的纯函数——移植自 Python 版 `sandbox/paths.py` 的
- * `temp_id_for_workspace_id()` 与 `sandbox/services/workspace_manager.py` 里
+ * 工作区标识与物理路径拼接的纯函数——移植自已退役的 Python 执行面
+ * （旧 `sandbox/paths.py`，现为本模块）的 `temp_id_for_workspace_id()`，
+ * 与旧 `sandbox/services/workspace_manager.py` 里
  * `physical_path_for_workspace_id()` / `physical_temp_path_for_workspace_id()`
  * 的路径拼接 + containment 校验部分。
  *

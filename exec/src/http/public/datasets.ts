@@ -11,8 +11,8 @@
  */
 
 import { Hono } from 'hono';
-import { badRequest, errorBody, HttpError, payloadTooLarge } from './errors.js';
-import { parseActingHeaders, requireOwnedSession } from './ownership.js';
+import { badRequest, domainHttpError, errorBody, HttpError, payloadTooLarge } from './errors.js';
+import { actingHeadersFrom, parseActingHeaders, requireOwnedSession } from './ownership.js';
 import { redactPhysicalRoots } from '../../fs/redact.js';
 import type { WorkspaceManager } from '../../workspace/manager.js';
 import { createReadStream } from 'node:fs';
@@ -58,14 +58,8 @@ function toResponse(r: ExecDatasetRecord): Record<string, unknown> {
 
 const DEFAULT_DATASET_MAX = 100 * 1024 * 1024;
 
-function actingFrom(c: import('hono').Context): Record<string, string | undefined> {
-  const h: Record<string, string | undefined> = {};
-  for (const k of ['x-acting-organization-id', 'x-acting-user-id', 'x-conversation-id']) {
-    const v = c.req.header(k);
-    if (v !== undefined) h[k] = v;
-  }
-  return h;
-}
+/** 本路由采集的 acting 头（conversation 头只用于路由参数解析，见 helper 注释）。 */
+const ACTING_KEYS = ['x-acting-organization-id', 'x-acting-user-id', 'x-conversation-id'] as const;
 
 function traceIdFrom(c: import('hono').Context): string {
   return c.req.header('x-trace-id') ?? c.req.header('X-Trace-Id') ?? `tr_${Date.now()}`;
@@ -89,7 +83,7 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
       const declaredRaw = c.req.header('content-length');
       const declared = declaredRaw != null ? Number(declaredRaw) : null;
       if (declared !== null && declared > maxBytes) throw payloadTooLarge('Payload too large', 'dataset_too_large');
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       // E7：数据集上传也是「提供材料」，审核工作区照常允许（读取仍然 404）。
       const own = await requireOwnedSession(sessionId, deps, acting, roots, 'upload');
       roots = own.physicalRoots;
@@ -146,7 +140,7 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
     let roots: readonly string[] = [];
     try {
       if (!sessionId) throw badRequest('session_id required', 'session_required');
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const datasets = await deps.datasetService.list(sessionId, {
@@ -176,7 +170,7 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
     const datasetId = c.req.param('datasetId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const record = await deps.datasetService.get(datasetId, {
@@ -188,7 +182,7 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
       }
       return c.json(toResponse(record));
     } catch (err) {
-      const mapped = datasetHttpError(err, roots);
+      const mapped = domainHttpError(err, roots, DatasetError);
       return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
@@ -198,7 +192,7 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
     const datasetId = c.req.param('datasetId') ?? '';
     let roots: readonly string[] = [];
     try {
-      const acting = parseActingHeaders(actingFrom(c));
+      const acting = parseActingHeaders(actingHeadersFrom(c, ACTING_KEYS));
       const own = await requireOwnedSession(sessionId, deps, acting, roots);
       roots = own.physicalRoots;
       const record = await deps.datasetService.get(datasetId, {
@@ -220,17 +214,8 @@ export function registerPublicDatasetRoutes(app: Hono, deps: PublicDatasetDeps):
         },
       });
     } catch (err) {
-      const mapped = datasetHttpError(err, roots);
+      const mapped = domainHttpError(err, roots, DatasetError);
       return c.json(errorBody(mapped, roots), mapped.status as never);
     }
   });
-}
-
-function datasetHttpError(err: unknown, roots: readonly string[]): HttpError {
-  if (err instanceof HttpError) return err;
-  if (err instanceof DatasetError) {
-    return new HttpError(err.status, redactPhysicalRoots(err.message, roots), err.code);
-  }
-  const raw = err instanceof Error ? err.message : String(err);
-  return new HttpError(500, redactPhysicalRoots(raw, roots));
 }

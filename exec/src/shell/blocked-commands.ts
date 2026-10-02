@@ -1,6 +1,6 @@
 /**
- * 危险命令硬拒——移植自 `sandbox/services/policy_checker.py` 的
- * `ToolPolicyChecker.is_blocked_command()`（连同它依赖的 `_shell_segments()`
+ * 危险命令硬拒——移植自已退役的 Python 执行面（旧 `sandbox/services/policy_checker.py`，
+ * 现为本模块）的 `ToolPolicyChecker.is_blocked_command()`（连同它依赖的 `_shell_segments()`
  * 小型 shell 解析器与一批常量集合）。
  *
  * 为什么要在 exec 侧而不是只留在 Agent 侧策略层：ADR 0007 D11 —— Bubblewrap /

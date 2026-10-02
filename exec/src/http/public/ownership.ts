@@ -1,5 +1,5 @@
 /**
- * 公共面会话归属校验——对应 Python `sandbox/security/ownership.py` 的 `require_owned_session`。
+ * 公共面会话归属校验——对应已退役的 Python 执行面（旧 `sandbox/security/ownership.py`，现为本模块）的 `require_owned_session`。
  *
  * 为什么这样做：公共面是"会话作用域"（dsh-rebuild 5.7），浏览器带着的
  * `Authorization: Bearer <jwt>` 或 HttpOnly cookie 会被 api-server 换成
@@ -107,6 +107,27 @@ export function parseActingHeaders(headers: Record<string, string | undefined>):
   const userId = headers['x-acting-user-id'] ?? headers['X-Acting-User-Id'];
   const role = headers['x-acting-role'] ?? headers['X-Acting-Role'];
   return { orgId, userId, role };
+}
+
+/**
+ * 四个公共路由共用的 acting 头采集（F17 合并）。
+ *
+ * 各路由显式传自己需要的 key 列表，行为与合并前各写一份时逐字节一致：
+ * - artifacts / processes：org + user
+ * - files：org + user + role
+ * - datasets：org + user + conversation（conversation 头只用于路由参数解析，
+ *   `parseActingHeaders` 本来就不读它）
+ */
+export function actingHeadersFrom(
+  c: import('hono').Context,
+  keys: readonly string[],
+): Record<string, string | undefined> {
+  const h: Record<string, string | undefined> = {};
+  for (const k of keys) {
+    const v = c.req.header(k);
+    if (v !== undefined) h[k] = v;
+  }
+  return h;
 }
 
 export async function requireOwnedSession(

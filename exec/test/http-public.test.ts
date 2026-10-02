@@ -1,5 +1,6 @@
 /**
- * 公共面逐字节不变的合约测试——对应 Python `sandbox/routers/{files,artifact/api/public,datasets,session_processes}`。
+ * 公共面逐字节不变的合约测试——对应已退役的 Python 执行面
+ * （旧 `sandbox/routers/{files,artifact/api/public,datasets,session_processes}`，现为 `exec/src/http/public/` 各路由模块）。
  *
  * 为什么需要它：api-server 的 `routes/files.js`/`artifacts.js`/`datasets.js`/`processes.js` 把
  * 调用原样透传给 sandbox，期望 status/header/body/错误码与 Python 版逐字节一致，
@@ -178,10 +179,10 @@ describe('public: byte-identical contract vs Python', () => {
     assert.deepEqual(body, { artifacts: [], total: 0 });
   });
 
-  test('POST /artifacts/register — missing path → 400 path_required', async () => {
+  test('POST /artifacts/submit — missing path → 400 path_required', async () => {
     const id = 'pub_art_2';
     await initSession(id);
-    const res = await app.request(`/sessions/${id}/artifacts/register`, {
+    const res = await app.request(`/sessions/${id}/artifacts/submit`, {
       method: 'POST',
       headers: { ...acting, 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -189,6 +190,17 @@ describe('public: byte-identical contract vs Python', () => {
     assert.equal(res.status, 400);
     const body = await res.json() as { code: string };
     assert.equal(body.code, 'path_required');
+  });
+
+  test('POST /artifacts/register — removed alias → 404', async () => {
+    const id = 'pub_art_2b';
+    await initSession(id);
+    const res = await app.request(`/sessions/${id}/artifacts/register`, {
+      method: 'POST',
+      headers: { ...acting, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 404);
   });
 
   test('POST /artifacts/imports — missing artifact_id → 400', async () => {
