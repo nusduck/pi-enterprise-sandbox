@@ -1,5 +1,5 @@
 /**
- * RunRecoveryService / requeue (PR-04 T3 + severe recovery follow-up).
+ * RunRecoveryService / requeue — worker-side recovery scan and requeue.
  *
  * Scans MySQL non-terminal runs (system-worker API — not owner API) and
  * re-enqueues ref-only jobs. Does **not** treat Redis as fact source.

@@ -1,5 +1,5 @@
 /**
- * A2A application surface (PR-12 / plan §20).
+ * A2A application surface (plan §20).
  */
 
 export {

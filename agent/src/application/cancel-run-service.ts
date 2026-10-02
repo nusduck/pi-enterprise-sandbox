@@ -1,5 +1,5 @@
 /**
- * CancelRunService (PR-04 T2) — durable cancel intent + optional signal.
+ * CancelRunService — durable cancel intent + optional signal.
  *
  * Under one MySQL transaction:
  * 1. Resolve trusted external auth → owner.

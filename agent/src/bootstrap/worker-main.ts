@@ -1,5 +1,5 @@
 /**
- * Agent Worker process entry (PR-04 T3/T4).
+ * Agent Worker process entry.
  *
  * Separate from HTTP. Binds BullMQ consumer → ExecuteRunService, runs bounded
  * recovery scan (failure is logged; consumer still required), OutboxPublisher
@@ -8,7 +8,8 @@
  * BullMQ consumer creation failure is fatal: cleanup started resources and throw.
  * Initial recovery failure is degraded (logged) but process continues.
  *
- * Does not import agent/server.js or process-local RunManager.
+ * Run state lives in MySQL + Redis; this process keeps no process-local Run
+ * authority.
  * Production wires real DSH RunExecutor via container.createWorkerServices →
  * ensureWorkerRunExecutorFactory. Stub only with AGENT_ALLOW_STUB_EXECUTOR=true
  * in non-production (never production).

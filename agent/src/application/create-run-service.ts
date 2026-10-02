@@ -1,5 +1,5 @@
 /**
- * CreateRunService (PR-04 T2) — durable create path, offline DI.
+ * CreateRunService — durable create path, offline DI.
  *
  * Order of truth:
  * 1. Resolve/provision parents + begin idempotency under internal ULID owner

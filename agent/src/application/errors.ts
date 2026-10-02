@@ -1,5 +1,5 @@
 /**
- * Application-layer typed errors for Run services (PR-04 T2).
+ * Application-layer typed errors for Run services.
  * Map to HTTP at presentation boundaries; services stay transport-agnostic.
  */
 

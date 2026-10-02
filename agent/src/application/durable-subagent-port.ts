@@ -1,20 +1,10 @@
 /**
- * 把 runtime 侧的子 Agent 队列/存储抽象接到 `SubagentSpawnService`
- * （ADR 0009 D6 / 计划 H5）。
+ * 把 runtime 侧的子 Agent 队列/存储抽象接到 `SubagentSpawnService`。
  *
- * ## 这里补的是第二条断掉的链
- *
- * `SubagentSpawnService` 做的是真正 durable 的事：一个事务里锁住父 Run、
- * 数活着的兄弟、建子 Run、入 BullMQ。而 2026-08-31 之前它挂在
- * `container-run-executor.ts` 的 `subagentSpawnPort` 上，而那个 port
- * **只喂给 `extensionBundleFactory`**——那条链早已终止在一个被
- * `runtime-factory.create()` 忽略的参数上（该文件自己的注释里就写着）。
- *
- * 与此同时 `durable-subagent.ts` 的 provider 用的是
- * `InMemoryDurableSubagentQueue` / `InMemoryDurableSubagentStore`：
- * Worker 一重启，子 Run 全丢——正是那个 provider 的文件头说要避免的事。
- *
- * 本模块把两端接上。
+ * 本模块是两者之间的适配器：队列 `add()` 转成一次 durable `spawn()`（父 Run
+ * 加锁、子 Run 建档、入 BullMQ），结果读子 Run 终态。每 Run 一个队列实例，
+ * jobId → childRunId 映射只活在进程里；Worker 重启后的续跑依据 MySQL 里的
+ * 父子谱系（`listChildren`），不依赖该映射。
  */
 import type {
   DurableSubagentJobSpec,
@@ -89,8 +79,8 @@ export class SpawnServiceSubagentStore implements DurableSubagentStore {
 
   async putResult(): Promise<void> {
     // 结果由子 Run 自己的 executor 写进 MySQL，父这边只读。
-    // 留空实现而不是抛错：provider 的契约里有这个方法，但在 durable 形态下
-    // 父进程没有写结果的权限，写了反而会和子 Run 的终态打架。
+    // 空实现：durable 形态下父进程没有写结果的权限，写了反而会和子 Run
+    // 的终态打架，所以保留空方法满足 provider 契约。
   }
 
   async getResult(jobId: string): Promise<never | null> {
@@ -115,10 +105,8 @@ export class SpawnServiceSubagentStore implements DurableSubagentStore {
 function promptToTask(prompt: readonly unknown[]): string {
   const parts: string[] = [];
   for (const message of prompt) {
-    // dsh-tool-subagent supplies content blocks directly, while the durable
-    // Run input seam historically supplied chat messages containing a
-    // `content` array. Accept both wire shapes at this boundary; treating a
-    // content block as a chat message silently produced an empty task.
+    // 接受两种输入形状：直接的内容块数组/字符串，或包着 `content` 数组的
+    // 聊天消息。把内容块当成聊天消息会静默产出空任务，所以在此边界同时接受。
     const value = message as { content?: unknown; text?: unknown };
     const content = Array.isArray(value?.content) || typeof value?.content === 'string'
       ? value.content

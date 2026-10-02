@@ -1,17 +1,13 @@
 /**
- * 把「平台层 + 租户层」两张风险表合成一个**按 Run 的解析函数**，交给策略装配
- * （ADR 0009 D3「`toolPolicy` → 闸门的过滤」/ 计划 H8）。
+ * 把「平台层 + 租户层」两张风险表合成一个**按 Run 的解析函数**，交给策略装配。
  *
- * ## 这里补的是第三条断掉的链
+ * ## 两层输入
  *
- * 两处都断着，症状都是「配了没用，且没有人报错」：
- *
- * 1. **平台层**：`container-run-executor.ts` 把 `resolveToolRiskPolicy(env)` 的
- *    结果放进 **executor 工厂**的 `riskOverrides`，而 `runtime-factory` 读的是
- *    **它自己的** `opts.riskOverrides`——两个不同的对象。于是
- *    `config/agent/tool-risk.json` 与 `TOOL_RISK_POLICY_*` 零效果。
+ * 1. **平台层**：`resolveToolRiskPolicy(env)` 解析 `config/agent/tool-risk.json`
+ *    与 `TOOL_RISK_POLICY_*`，经 executor 工厂的 `riskOverrides` 进入；
+ *    每 Run 与租户层合并后传给 runtime 装配。
  * 2. **租户层**：`buildAgentVersionToolRiskBindings(agentVersion)` 算出来的
- *    `agentVersionToolRiskPolicy` 现在直接合入本 Run 的风险解析函数，随策略
+ *    `agentVersionToolRiskPolicy` 直接合入本 Run 的风险解析函数，随策略
  *    装配一起生效。
  *
  * ## 分层不变量

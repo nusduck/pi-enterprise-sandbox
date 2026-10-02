@@ -1,5 +1,5 @@
 /**
- * DshRunExecutor (PR-05 slice B) — recoverable RunExecutor backed by DSH.
+ * DshRunExecutor — recoverable RunExecutor backed by DSH.
  *
  * Lifecycle ownership:
  * - DshRunExecutor owns Session Lock + MySQL execution fence for the job.
@@ -9,7 +9,7 @@
  *
  * Event ownership:
  * - DshRunExecutor is the sole durable projector of DSH → RunEvent+Outbox for
- *   the run. PR-06 observability must call into this recorder rather than
+ *   the run. Observability must call into this recorder rather than
  *   double-writing. The RunExecutorContext.emit seam is optional; when omitted,
  *   all persistence stays encapsulated here (no process-local Map authority).
  *

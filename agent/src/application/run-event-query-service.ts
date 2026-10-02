@@ -1,8 +1,8 @@
 /**
- * Durable RunEvent history query (PR-04 T4 + PR-10 Last-Event-ID).
+ * Durable RunEvent history query (MySQL history + Last-Event-ID resume).
  *
  * MySQL is the fact source. Redis live gap-free cutover lives in
- * {@link RunEventSseService} (PR-10). Browser disconnect must only stop
+ * {@link RunEventSseService}. Browser disconnect must only stop
  * polling / SSE subscription — never cancel the Run.
  */
 

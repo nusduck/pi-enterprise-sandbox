@@ -1,20 +1,21 @@
 /**
- * RunExecutor / RuntimeAdapter seam (PR-04 T3 → PR-05 DSH Factory).
+ * RunExecutor / RuntimeAdapter seam.
  *
- * T3 defines the injectable interface and a no-op / stub executor only.
- * PR-05 slice B implements {@link import('./dsh-run-executor.js').DshRunExecutor}
- * behind this contract (not production default — inject via factory).
+ * This module defines the injectable executor interface plus a no-op / stub
+ * executor for tests and offline wiring only.
+ * {@link import('./dsh-run-executor.js').DshRunExecutor} implements this
+ * contract (not production default — inject via factory).
  *
  * ## emit seam
  * `RunExecutorContext.emit` exists for optional observability hooks, but
  * {@link import('./execute-run-service.js').ExecuteRunService} does **not**
  * pass it. Durable DSH → RunEvent+Outbox projection is owned solely by
- * DshRunExecutor's internal fenced event recorder. PR-06 observability must
+ * DshRunExecutor's internal fenced event recorder. Observability must
  * call into that recorder (or subscribe after projection) — never double-write
  * and never use a process-local Map as authority.
  *
- * Outcomes use plan §10 statuses (or legacy strings routed solely through
- * {@link mapLegacyRuntimeOutcome}).
+ * Outcomes use domain Run statuses (or previous-generation strings routed
+ * solely through {@link mapLegacyRuntimeOutcome}).
  */
 
 import { mapLegacyRuntimeOutcome } from '../domain/run/legacy-status.js';

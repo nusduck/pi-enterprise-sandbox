@@ -1,5 +1,5 @@
 /**
- * Session recovery + atomic checkpoint (PR-05 slice B).
+ * Session recovery + atomic checkpoint.
  *
  * Truth: Messages (session JSONL journal) + Run Events.
  * Acceleration: agent_session_snapshots pointed by agent_sessions.session_version.

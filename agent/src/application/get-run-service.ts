@@ -1,5 +1,5 @@
 /**
- * GetRunService (PR-04 T2) — read MySQL Run under owner scope only.
+ * GetRunService — read MySQL Run under owner scope only.
  *
  * Resolves trusted external auth → internal owner ULIDs, then loads the Run
  * from MySQL. Unknown/foreign runs return owner-scoped not found (no leak).

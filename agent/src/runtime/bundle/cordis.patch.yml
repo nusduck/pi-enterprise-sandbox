@@ -1,6 +1,6 @@
 # 我们的组合层——叠在 dsh-base 之上。
 #
-# ⚠️ **这个文件是生成的，不要手改。** 事实源是 `src/plugins/manifest.ts`；
+# ⚠️ **这个文件是生成的，不要手改。** 事实源是 `agent/src/runtime/plugins/manifest.ts`；
 #    改完跑 `npm run gen:patch`，`plugins.test.ts` 会断言两者一致。
 #
 # 为什么要生成而不是手写：patch 能静默写错，而写错时没有任何人报错——插件装不上
