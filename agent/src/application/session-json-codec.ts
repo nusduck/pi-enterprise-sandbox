@@ -1,5 +1,5 @@
 /**
- * Shared session JSONL v3 codec (PR-05).
+ * Shared session JSONL v3 codec.
  *
  * Single source of truth for materialization + checksum used by:
  * - AgentSessionSnapshotRepository
@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto';
 import { DshSessionAdapterError } from '../infrastructure/dsh/errors.js';
 
-/** Session JSONL format version (header `version`). Inherited from the legacy engine; frozen for stored sessions. */
+/** Session JSONL format version (header `version`). Fixed at 3; stored sessions keep this version. */
 export const SESSION_JSONL_VERSION = 3;
 
 /**
@@ -456,7 +456,7 @@ export function buildSessionHeader(opts: { id: string, cwd: string, timestamp?: 
 
 /**
  * Capture a session JSONL snapshot from SessionManager, awaiting a thenable adapter.
- * A null/Promise adapter (Wave 6 stub) must fall through to getHeader, not throw
+ * A null/Promise adapter must fall through to getHeader, not throw
  * "snapshot header is required" on the Promise object.
  *
  * @param {{

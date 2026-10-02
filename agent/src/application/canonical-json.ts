@@ -1,5 +1,5 @@
 /**
- * Dependency-free stable canonical JSON + SHA-256 (PR-04 T2).
+ * Dependency-free stable canonical JSON + SHA-256.
  *
  * Used for idempotency request hashing. Rejects unsupported types, circular
  * references, and non-finite numbers. Bounds serialized size.

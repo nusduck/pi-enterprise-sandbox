@@ -1,5 +1,5 @@
 /**
- * SandboxRequestBinder (PR-07B batch 2B).
+ * SandboxRequestBinder.
  *
  * Binds an immutable request-hash contract to an existing RUNNING sandbox
  * ToolExecution ledger row inside the Agent transaction abstraction, before

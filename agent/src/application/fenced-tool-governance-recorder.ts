@@ -1,5 +1,5 @@
 /**
- * FencedToolGovernanceRecorder (PR-06 B2).
+ * FencedToolGovernanceRecorder.
  *
  * Atomic under ACTIVE session executionFenceToken:
  * ledger mutations + run_events + outbox in one transaction.
@@ -13,7 +13,7 @@
  * In-process pending Map only serializes concurrent calls on the same instance;
  * it is not the authority for replay across restarts.
  *
- * Approval resolution/resume is NOT claimed (PR-09).
+ * Approval resolution/resume is NOT claimed here (owned by the resume path).
  */
 
 import { assertUlid } from '../domain/shared/ulid.js';

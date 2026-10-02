@@ -1,5 +1,5 @@
 /**
- * Run Worker bootstrap (PR-04 T3) — process separate from HTTP server.
+ * Run Worker bootstrap — process separate from HTTP server.
  *
  * Does **not** start connections on import. Call {@link createRunWorkerRuntime}
  * then {@link startRunWorkerRuntime} explicitly. Shutdown is exactly-once.
@@ -8,9 +8,8 @@
  * leaves started=false so a later start may retry. onStart runs before
  * started flips true.
  *
- * Does not depend on agent/server.js or process-local Run Maps.
- *
- * Live BullMQ/Redis/MySQL wiring of production URLs is deferred to PR-04 T4.
+ * Run state lives in MySQL + Redis; this worker keeps no process-local Run
+ * authority. Production BullMQ/Redis/MySQL wiring is injected by the caller.
  */
 
 import {

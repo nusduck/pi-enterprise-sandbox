@@ -1,8 +1,9 @@
 /**
- * Agent HTTP server factory (PR-04 T4).
+ * Agent HTTP server factory.
  *
  * No listen/exit on import. Production entry injects Create/Get/Cancel services.
- * Does **not** import the legacy process-local Run manager module.
+ * Run state lives in MySQL + Redis; this server keeps no process-local Run
+ * authority.
  *
  * Endpoints (compatible paths):
  *   POST/GET /internal/agent-runs
@@ -11,7 +12,7 @@
  *   POST /internal/sessions/ensure
  *   GET/POST /internal/agents  +  /:id/versions  +  /:id/active-version
  *   GET  /internal/agent-runs/:id
- *   GET  /internal/agent-runs/:id/events  (MySQL history + Redis live SSE, PR-10)
+ *   GET  /internal/agent-runs/:id/events  (MySQL history + Redis live SSE)
  *   POST /internal/agent-runs/:id/cancel
  *   durable steer and conversation-scoped follow-up
  */

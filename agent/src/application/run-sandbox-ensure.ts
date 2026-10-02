@@ -1,9 +1,6 @@
 /**
- * Run 启动前的沙箱会话确保。
- *
- * 从 `dsh-run-executor.ts` 拆出：那个文件在行数棘轮上有预算（AGENTS.md §4），
- * 而「组装 ensure 入参 → 把**绑定版本**的交付策略传下去 → 把失败收敛成一句可
- * 记录的 statusReason」本来就是一件事。
+ * Run 启动前的沙箱会话确保（独立模块：保持 `dsh-run-executor.ts` 行数预算内，
+ * 合并回去会超预算；职责见下）。
  *
  * 交付策略那一路见 design `agent-output-review.md` §3.1 / ADR 0016 D3：审核策略
  * 随 AgentVersion 固定，exec 侧是 `INSERT IGNORE`（只能设置、不能撤销），所以
@@ -11,7 +8,7 @@
  */
 
 export interface RunSandboxEnsureInput {
-  /** 不配置时（单测/本地）整体跳过，与调用方原来的 `if (this.x)` 同义。 */
+  /** 不配置时（单测/本地）整体跳过。 */
   readonly provisioner: { ensure: (input: Record<string, unknown>) => Promise<unknown> } | null | undefined;
   readonly scope: { readonly orgId: string; readonly userId: string };
   readonly conversationId: string;

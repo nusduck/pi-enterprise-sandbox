@@ -1,3 +1,13 @@
+/**
+ * Run 作用域的用户问答 plumbing：`InteractionRequester` 接口 +
+ * ALS（`runWithInteractionRequester` / `currentInteractionRequester`），以及
+ * DSH question service 到当前 Run 的桥接（`installUserQuestionBridge`）。
+ *
+ * 消歧：本文件只管**调用 plumbing**（工具执行时从 ALS 取到本 Run 的
+ * requester）；落库实现是 `application/interaction-requester.ts` 的
+ * `createInteractionRequester`（写 WAITING_INPUT 行），由 `dsh-run-executor`
+ * 装配后注入 ALS。
+ */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentToolExecutionContext } from './tool-execution-context.js';
 

@@ -163,7 +163,7 @@ export function assertUlid(value: unknown, field: string = 'id') {
       'ULID_INVALID',
     );
   }
-  // Explicitly reject legacy runtime shapes that may look id-like.
+  // Explicitly reject previous-generation run id shapes that may look id-like.
   if (String(value).startsWith('arun_')) {
     throw new UlidError(
       `Invalid ULID for ${field}: arun_ prefix is not a plan §5 ULID`,
@@ -174,8 +174,8 @@ export function assertUlid(value: unknown, field: string = 'id') {
 }
 
 /**
- * True when value is a legacy runtime run id (`arun_…`) or a UUID string.
- * These must never be stored in plan CHAR(26) columns.
+ * True when value is a previous-generation run id (`arun_…`) or a UUID string.
+ * These must never be stored in CHAR(26) ULID columns.
  * @param value
  */
 export function isLegacyOrUuidIdentity(value: unknown) {

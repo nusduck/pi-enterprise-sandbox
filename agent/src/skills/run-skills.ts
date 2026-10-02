@@ -381,7 +381,7 @@ export function effectiveSystemSkills(values: readonly unknown[]): {
   const { systemEntries } = splitRunSkillPaths(values);
   const filtered = systemEntries.find((entry) => entry.filtered);
   if (filtered) return Object.freeze({ root: filtered.root, names: filtered.names });
-  const legacy = systemEntries[0];
-  if (legacy) return Object.freeze({ root: legacy.root, names: null });
+  const unfiltered = systemEntries[0];
+  if (unfiltered) return Object.freeze({ root: unfiltered.root, names: null });
   return Object.freeze({ root: null, names: null });
 }

@@ -1,5 +1,5 @@
 /**
- * ExecuteRunService (PR-04 T3) — worker-side run execution core.
+ * ExecuteRunService — worker-side run execution core.
  *
  * Input: ref-only job { runId, orgId, traceId } + workerId.
  *

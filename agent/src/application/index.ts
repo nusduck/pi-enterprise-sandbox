@@ -1,6 +1,7 @@
 /**
- * Application services (plan §12.1) — PR-04 T2 Create/Get/Cancel + T3 Execute/Recovery.
- * No live HTTP/worker wiring on import; consumers inject repositories + queue/signal/lease.
+ * Application services — Run create/get/cancel, execution/recovery, and
+ * supporting use-cases. No live HTTP/worker wiring on import; consumers
+ * inject repositories + queue/signal/lease.
  */
 
 export {

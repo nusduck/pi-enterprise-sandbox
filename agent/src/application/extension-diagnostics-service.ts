@@ -290,9 +290,9 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
     enabled: true,
     status: 'configured',
     category: toolCategory(name),
-    // 2026-08-31（计划 H8.5）：来源不再是那批已删除的旧引擎 Extension。
-    // 这批名字来自 `runtime/policy/tool-names.ts` 的唯一事实源，
-    // 与 boot 之后 `ctx.tools.schemas()` 的集合由 boot.test.ts 断言恰好相等。
+    // Tool names come from the single source of truth in
+    // `runtime/policy/tool-names.ts`, asserted equal to the post-boot
+    // `ctx.tools.schemas()` set by boot.test.ts.
     source: 'dsh-host-tools',
     ...describeRisk(name, { class: 'local_low' }),
     dynamic: false,
@@ -313,8 +313,8 @@ export function getExtensionDiagnostics(options: { profileId?: string, skillRoot
       })),
     ),
   );
-  // Compatibility field retained for existing clients. The legacy engine
-  // Extension registry was deleted; DSH host tools are reported in `tools`.
+  // Compatibility field retained for existing clients. Host tools are reported
+  // in `tools`; `extensions` stays empty.
   const extensions = [];
 
   return {

@@ -1,5 +1,5 @@
 /**
- * 派发边界上的 sandbox 请求绑定（2026-09-17，STATUS G2）。
+ * 派发边界上的 sandbox 请求绑定。
  *
  * `FencedToolGovernanceRecorder.recordToolStarted` 在 DSH 下就是派发边界：
  * `tools/pre-execute` 放行之后、调用执行面之前。账本在那一刻推进到 RUNNING，
@@ -7,8 +7,8 @@
  * 与审计据此区分「派发了什么、是哪个 fence 派发的」。
  *
  * 复用 `ToolExecutionRepository.bindSandboxRequest`（ACTIVE session、fence、会话 /
- * 沙箱会话一致、仅 RUNNING、NULL→set CAS 或完全相同幂等）。它此前没有调用方：
- * 旧引擎时代由沙箱桥在派发前调用，换 DSH 后这条接线断了。
+ * 沙箱会话一致、仅 RUNNING、NULL→set CAS 或完全相同幂等）。调用方是
+ * `FencedToolGovernanceRecorder.recordToolStarted`（派发边界）。
  */
 
 import { computeSandboxToolRequestHash } from './sandbox-request-binder.js';

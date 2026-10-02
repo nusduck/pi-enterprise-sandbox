@@ -1,4 +1,14 @@
-/** Turn a DSH ask_user request into one durable WAITING_INPUT suspension. */
+/**
+ * Application 层的 ask_user 持久化工厂：把一次 DSH ask_user 请求写成一条
+ * durable WAITING_INPUT 悬挂（经 recorder.requestInteraction 落库），再抛
+ * `DurableInteractionPendingError` 让 executor 停下来等人工回答。
+ *
+ * 消歧：`runtime/providers/user-questions.ts` 的 `InteractionRequester` 接口 +
+ * ALS（`runWithInteractionRequester` / `currentInteractionRequester`）是 Run
+ * 作用域的**调用 plumbing**（工具执行时从 ALS 取到本 Run 的 requester）；
+ * 本文件的 `createInteractionRequester` 是该接口的**落库实现**，由
+ * `dsh-run-executor` 装配后注入 ALS。
+ */
 import { DurableInteractionPendingError } from '../runtime/providers/user-questions.js';
 
 type Loose = any;

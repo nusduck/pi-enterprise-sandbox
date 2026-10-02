@@ -1,5 +1,5 @@
 /**
- * Hybrid Run Event SSE gateway (PR-10 / plan §18.4).
+ * Hybrid Run Event SSE gateway (plan §18.4).
  *
  * Authority:
  *   MySQL run_events  = complete durable journal (history + recovery)

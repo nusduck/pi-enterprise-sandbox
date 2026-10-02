@@ -1,7 +1,7 @@
 /**
  * A2A Task service (plan §20) — SendMessage / GetTask / CancelTask.
  *
- * Severe guarantees (PR-12 follow-up):
+ * Durability guarantees:
  * - messageId or Idempotency-Key required (no random keys → no duplicate Runs)
  * - Deterministic task id per (org, client, run); mapping failure → durable cancel
  *   compensate (fail-closed), never orphan Run without mapping

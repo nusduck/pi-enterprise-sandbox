@@ -120,12 +120,6 @@ export interface InstallPolicyOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly now?: () => number;
   /**
-   * 运维可配的工具风险覆盖（`TOOL_RISK_POLICY_JSON` / `TOOL_RISK_POLICY_PATH`
-   * 经 `agent/config.js` 的 `resolveToolRiskPolicy` 解析）。
-   * **不传等于把这个配置面静默丢掉**——它以前就是这么丢的：解析出来喂给了一个
-   * 返回 [] 的 extension bundle。
-   */
-  /**
    * 本 Run 允许模型**看见**的工具（ADR 0009 D9 §4 / 计划 H7.7）。
    *
    * 省略 = 不收窄。给了就调 `ctx.tools.restrict({ allow })`，把 scope 继承来的
@@ -149,6 +143,12 @@ export interface InstallPolicyOptions {
     toolName: string,
     args: Record<string, unknown>,
   ) => PolicyDecision;
+  /**
+   * 运维可配的工具风险覆盖（`TOOL_RISK_POLICY_JSON` / `TOOL_RISK_POLICY_PATH`
+   * 经 `agent/config.js` 的 `resolveToolRiskPolicy` 解析）。
+   * **不传等于把这个配置面静默丢掉**——它以前就是这么丢的：解析出来喂给了一个
+   * 返回 [] 的 extension bundle。
+   */
   readonly riskOverrides?:
     | Readonly<Record<string, 'low' | 'medium' | 'high' | 'critical'>>
     | ((toolName: string) => 'low' | 'medium' | 'high' | 'critical' | undefined);
