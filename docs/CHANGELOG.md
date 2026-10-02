@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 共享申请批准的名字占用检查移进名字锁内
+
+- `SkillShareService.approve` 此前先调 `orgSkillOwnerOf` 读名字归属、之后才在
+  `OrgSkillRepository.publishVersion` 里加名字锁：两位作者同名申请被同时批准时，
+  第二个也能发布并静默接管这个名字。现在判定在 `publishVersion` 锁住名字行之后、
+  同一事务内重做（`expectedOriginUserId`），冲突时仍返回 `409 SKILL_ORG_NAME_TAKEN`，
+  申请退回 `pending`。管理员直传（不带该参数）不受限。
+
+### Added — `run.started` 事件携带 Skill 排除诊断
+
+- Run 绑定的 Skill 未生效的原因（`revoked` / `missing` / `mismatch` /
+  `user_version_unusable` / `not_in_release` / `name_conflict` / `policy_denied`）
+  此前只写 Worker 日志。现在 `run.started` 事件 payload 新增
+  `skillDiagnostics: [{ name, reason }]`（只放 Skill 名与原因码，无排除项时为空数组，
+  见 `docs/api.md` 运行事件族）。管理端 Run 详情页目前没有 `run.started` payload 的
+  渲染点，暂只做后端与文档，未加「未生效的 Skill」UI 列表。
+
+### Fixed — SSO 首次登录记录最近登录时间
+
+- 首次经 SSO 登录（JIT 建号）的账号，成员页「最近登录」为空：`SsoLoginService`
+  的已有账号路径会调凭据的 `touchLogin`，建号路径没有。现在建号成功、建立会话
+  之前补一次 `touchLogin`（含认领残留凭据的并发收敛路径），失败处理与已有路径
+  一致（存储不可用）。
+
 ### Fixed — 取消没有活 Worker 的 Run 时工具账本行永不结束
 
 - Worker 被强杀后，恢复扫描会因为账本里有执行中的工具（副作用未知）而转人工；此时用户取消 Run，

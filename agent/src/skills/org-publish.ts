@@ -154,6 +154,11 @@ export async function publishOrgSkillFromPublishedVersion(
     readonly originRequestId: string;
     readonly publishedByUserId: string;
     readonly setCurrent?: boolean;
+    /**
+     * 批准的是谁的申请就传谁：`publishVersion` 在名字锁内判定来源一致，
+     * 两位作者同名申请被同时批准时第二个被拒（`SKILL_ORG_NAME_TAKEN`）。
+     */
+    readonly expectedOriginUserId?: string;
   },
 ): Promise<PublishOrgSkillResult> {
   const resolved = await deps.resolvePublishedPackageDir({
@@ -196,6 +201,9 @@ export async function publishOrgSkillFromPublishedVersion(
     originRequestId: input.originRequestId,
     publishedByUserId: input.publishedByUserId,
     ...(input.setCurrent !== undefined ? { setCurrent: input.setCurrent } : {}),
+    ...(input.expectedOriginUserId !== undefined
+      ? { expectedOriginUserId: input.expectedOriginUserId }
+      : {}),
   });
   return { version, reused: published.reused, publishedPath: published.publishedPath };
 }

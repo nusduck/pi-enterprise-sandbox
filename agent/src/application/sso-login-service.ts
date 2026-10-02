@@ -212,6 +212,14 @@ export class SsoLoginService {
       if (!isDuplicate(error)) throw browserAuthStoreUnavailable();
       return this.#afterRace(issuer, subject, employeeId, username);
     }
+    // 首次登录（JIT 建号）也要记最近登录：已有账号路径在 `#existingCredential`
+    // 里调 `touchLogin`，建号路径缺了它，成员页「最近登录」首次为空。失败处理与
+    // 已有路径一致（存储不可用）。
+    try {
+      await this.credentials.touchLogin(entry.id);
+    } catch {
+      throw browserAuthStoreUnavailable();
+    }
     return entry;
   }
 
@@ -259,6 +267,13 @@ export class SsoLoginService {
       });
       if (!again) throw bindingConflict();
       return this.#existingCredential(again, employeeId);
+    }
+    // 认领的是上次「凭据写成、关联没写成」的残留：那次建号没走到 touchLogin，
+    // 这里补上（失败处理与已有路径一致），否则首次登录仍记不上时间。
+    try {
+      await this.credentials.touchLogin(orphan.id);
+    } catch {
+      throw browserAuthStoreUnavailable();
     }
     return orphan;
   }

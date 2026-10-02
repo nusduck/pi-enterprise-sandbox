@@ -398,11 +398,12 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
   /**
    * 共享申请与审批（ADR 0015 §7.2/§7.3）。
    *
-   * 三个依赖各自对应流程里的一步事实，都不是顺手能算出来的：
+   * 两个依赖各自对应流程里的一步事实，都不是顺手能算出来的：
    * - `enabledVersionOf`：申请的是**已启用（已发布）**的摘要，不是草稿。草稿模型可写，
    *   批准一个会变的目录等于批准移动目标；
-   * - `orgSkillOwnerOf`：一个名字在 org 层首次发布后只能由同一作者续版（design §7.1）；
    * - `publishFromPublished`：复制字节到 org 层并在内部重算摘要，不一致即拒绝。
+   *   名字占用（design §7.1，一个名字只能由同一作者续版）由 `publishVersion`
+   *   在名字锁内判定，不在这里先读。
    */
   const skillShare = httpServices && resolveOwner
     ? createSkillShareHandler(new SkillShareService({
@@ -413,12 +414,6 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
         const row = await httpServices.createRepositories(httpServices.knex)
           .skillEnablements.get(name, { orgId, userId });
         return row ? { contentDigest: row.contentDigest } : null;
-      },
-      orgSkillOwnerOf: async ({ orgId, name }) => {
-        const versions = await httpServices.createRepositories(httpServices.knex)
-          .orgSkills.listBindableVersions({ orgId });
-        const [first] = versions.filter((entry) => entry.name === name);
-        return first ? { originUserId: first.originUserId } : null;
       },
       publishFromPublished: async (input) => publishOrgSkillFromPublishedVersion(
         {
@@ -440,6 +435,10 @@ export async function startHttpMain(env: NodeJS.ProcessEnv = process.env) {
           originRequestId: input.originRequestId,
           publishedByUserId: input.publishedByUserId,
           ...(input.setCurrent !== undefined ? { setCurrent: input.setCurrent } : {}),
+          // 名字来源判定在 publishVersion 的锁内：批准谁的申请就带谁。
+          ...(input.expectedOriginUserId !== undefined
+            ? { expectedOriginUserId: input.expectedOriginUserId }
+            : {}),
         },
       ).then((published) => ({ contentDigest: published.version.contentDigest })),
       manifestOfRequestedVersion: async ({ orgId, requesterUserId, name, contentDigest }) => {

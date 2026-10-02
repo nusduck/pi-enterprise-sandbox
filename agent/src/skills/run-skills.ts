@@ -343,9 +343,9 @@ export async function resolveRunSkills(input: {
   }
 
   const published = [...winners.values()].sort((a, b) => a.name.localeCompare(b.name));
-  // 诊断随返回值交给调用方，并写 Worker 日志。**目前只有日志是持久可见的**：
-  // `resolveRunSkillPaths` 只取 `discoverable`，诊断还没有进 Run 的持久记录
-  // （见 `docs/review-deferred-items.md` 的 ADR 0015 条目）。
+  // 诊断随返回值交给调用方，并写 Worker 日志。`resolveRunSkillPaths` 只取
+  // `discoverable`；持久可见的是 `run.started` 事件 payload 的 `skillDiagnostics`
+  //（`ExecuteRunService` 在写 `run.started` 之前与这里共用同一份解析再算一次）。
   for (const entry of diagnostics) {
     logger.warn(
       `[skills] excluded ${entry.scope} skill "${entry.name}" (${entry.code}): ${entry.message}`,

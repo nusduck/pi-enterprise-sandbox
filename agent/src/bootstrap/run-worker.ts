@@ -88,6 +88,8 @@ export interface RunWorkerDeps {
   readonly now?: () => Date;
   readonly cancelPollIntervalMs?: number;
   readonly leaseRenewIntervalMs?: number;
+  /** run.started 诊断的来源（可选）：透传给 ExecuteRunService。 */
+  readonly resolveSkillDiagnostics?: Loose;
   readonly onStart?: (runtime: object) => Promise<void> | void;
   readonly onShutdown?: (runtime: object) => Promise<void> | void;
 }
@@ -144,6 +146,9 @@ export function createRunWorkerRuntime(deps: RunWorkerDeps) {
     now: deps.now,
     cancelPollIntervalMs: deps.cancelPollIntervalMs,
     leaseRenewIntervalMs: deps.leaseRenewIntervalMs,
+    ...(deps.resolveSkillDiagnostics !== undefined
+      ? { resolveSkillDiagnostics: deps.resolveSkillDiagnostics }
+      : {}),
   });
 
   const recoveryService = new RunRecoveryService({

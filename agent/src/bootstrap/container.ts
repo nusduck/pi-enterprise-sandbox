@@ -44,6 +44,7 @@ import {
 } from './container-env.js';
 import {
   buildDshRunExecutorFactory,
+  createRunSkillDiagnosticsResolver,
 } from './container-run-executor.js';
 import { buildSkillManagerFactory } from './container-skill-manager.js';
 import {
@@ -925,6 +926,7 @@ export class ServiceContainer {
       now: this.now,
       leaseRenewIntervalMs:
         Number(this.env.AGENT_RUN_LEASE_RENEW_INTERVAL_MS) || undefined,
+      resolveSkillDiagnostics: createRunSkillDiagnosticsResolver(this),
     });
 
     const recoveryService = new RunRecoveryService({
@@ -947,6 +949,7 @@ export class ServiceContainer {
       now: this.now,
       leaseRenewIntervalMs:
         Number(this.env.AGENT_RUN_LEASE_RENEW_INTERVAL_MS) || undefined,
+      resolveSkillDiagnostics: createRunSkillDiagnosticsResolver(this),
     });
 
     const cronCreateRunService = new CreateRunService({
