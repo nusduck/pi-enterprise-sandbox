@@ -16,12 +16,12 @@
   border-radius: 8px;
   background: var(--color-bg-hover);
 }
-.figure figcaption { display: flex; align-items: center; gap: 8px; color: #fff; font-size: 13px; max-width: 100%; }
+.figure figcaption { display: flex; align-items: center; gap: 8px; color: var(--color-text-inverse); font-size: 13px; max-width: 100%; }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
 .btn {
   border: 1px solid rgba(255, 255, 255, 0.35);
   background: rgba(255, 255, 255, 0.08);
-  color: #fff;
+  color: var(--color-text-inverse);
   border-radius: 7px;
   padding: 4px 12px;
   font-size: 13px;

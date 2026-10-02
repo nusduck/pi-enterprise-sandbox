@@ -129,6 +129,7 @@ export function abortStream(state: ChatState, patch: Partial<ChatState> = {}): C
 
 /**
  * Record a stream-level transport error. Runtime error data lives in EntityStore.
+ * @visibleForTesting Retained for testing.
  */
 export function errorStream(state: ChatState, patch: Partial<ChatState> = {}): ChatState {
   return update(state, {
@@ -140,6 +141,7 @@ export function errorStream(state: ChatState, patch: Partial<ChatState> = {}): C
 
 /**
  * Clear ephemeral non-runtime UI state.
+ * @visibleForTesting Retained for testing.
  */
 export function clearEphemeral(state: ChatState, patch: Partial<ChatState> = {}): ChatState {
   return update(state, {

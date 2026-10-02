@@ -13,7 +13,7 @@ import {
   type RunTraceResponse,
 } from '../schemas/events';
 import { parseApiStrict } from '../schemas/api';
-import { authHeaders, ApiError } from './client';
+import { authHeaders, ApiError, errorBody, throwApiError } from './client';
 import type { SSEEvent } from '../sse/parser';
 import { readSSEStream } from '../sse/parser';
 import { isTerminalRunStatus as isTerminalEntityRunStatus } from '../../entities/store';
@@ -52,10 +52,6 @@ function createIdempotencyKey(prefix: string): string {
     : `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
-async function errorBody(resp: Response): Promise<Record<string, unknown>> {
-  return (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-}
-
 /**
  * POST /runs — create a run and return run_id.
  */
@@ -76,14 +72,7 @@ export async function createRun(body: {
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || err.detail || `Create run failed: ${resp.status}`),
-        {
-          status: resp.status,
-          traceId: (err.trace_id as string) || resp.headers.get('x-trace-id'),
-        },
-      );
+      await throwApiError(resp, 'Create run failed');
     }
     return parseApiStrict(CreateRunResponseSchema, await resp.json(), 'createRun');
   } catch (err) {
@@ -101,11 +90,7 @@ export async function getRun(runId: string): Promise<RunDetail> {
       headers: authHeaders(),
     });
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || `Get run failed: ${resp.status}`),
-        { status: resp.status },
-      );
+      await throwApiError(resp, 'Get run failed');
     }
     return parseApiStrict(RunDetailSchema, await resp.json(), 'getRun');
   } catch (err) {
@@ -147,11 +132,7 @@ export async function listRunTools(runId: string): Promise<ToolExecutionSnapshot
       headers: authHeaders(),
     });
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || `List run tools failed: ${resp.status}`),
-        { status: resp.status },
-      );
+      await throwApiError(resp, 'List run tools failed');
     }
     const data = await resp.json();
     const rows: unknown[] = Array.isArray(data)
@@ -198,11 +179,7 @@ export async function getRunTraceSpans(
       },
     );
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || `Get run trace failed: ${resp.status}`),
-        { status: resp.status, traceId: resp.headers.get('x-trace-id') },
-      );
+      await throwApiError(resp, 'Get run trace failed');
     }
     return parseApiStrict(
       RunTraceResponseSchema,
@@ -240,11 +217,7 @@ export async function cancelRun(runId: string): Promise<CancelRunResult> {
       },
     );
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || `Cancel run failed: ${resp.status}`),
-        { status: resp.status },
-      );
+      await throwApiError(resp, 'Cancel run failed');
     }
     // A malformed or empty success body must not turn a completed cancel into
     // a thrown error: the Run is already stopping either way.
@@ -393,11 +366,7 @@ export async function listRuns(opts: {
     headers: authHeaders(),
   });
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new ApiError(String(err.error || `List runs failed: ${resp.status}`), {
-      status: resp.status,
-      traceId: resp.headers.get('x-trace-id'),
-    });
+    await throwApiError(resp, 'List runs failed');
   }
   const data = (await resp.json()) as unknown;
   const list = Array.isArray(data)
@@ -431,11 +400,7 @@ export async function steerRun(
       },
     );
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || err.detail || `Steer failed: ${resp.status}`),
-        { status: resp.status },
-      );
+      await throwApiError(resp, 'Steer failed');
     }
     return { ok: true, data: await resp.json().catch(() => ({})) };
   } catch (err) {
@@ -467,11 +432,7 @@ export async function followUpRun(
       },
     );
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || err.detail || `Follow-up failed: ${resp.status}`),
-        { status: resp.status },
-      );
+      await throwApiError(resp, 'Follow-up failed');
     }
     return parseApiStrict(
       CreateRunResponseSchema,
@@ -502,11 +463,7 @@ export async function resumeApproval(
       },
     );
     if (!resp.ok) {
-      const err = await errorBody(resp);
-      throw new ApiError(
-        String(err.error || err.detail || `Resume failed: ${resp.status}`),
-        { status: resp.status },
-      );
+      await throwApiError(resp, 'Resume failed');
     }
     return { ok: true, data: await resp.json().catch(() => ({})) };
   } catch (err) {
@@ -530,10 +487,7 @@ export async function respondInteraction(
     },
   );
   if (!resp.ok) {
-    const err = await errorBody(resp);
-    throw new ApiError(String(err.error || `Interaction failed: ${resp.status}`), {
-      status: resp.status,
-    });
+    await throwApiError(resp, 'Interaction failed');
   }
   return { ok: true, data: await resp.json().catch(() => ({})) };
 }

@@ -20,7 +20,7 @@ const src = (relative: string) => readFileSync(join(__dirname, '..', relative), 
 
 import { createEntityStore, processPanelState, setProcessListState } from '../src/entities/index.ts';
 import { createArtifact, createRun } from '../src/entities/store.ts';
-import { reducePlatformEvent } from '../src/shared/state/runReducer.ts';
+import { reduceRuntimeEvent } from '../src/shared/state/runReducer.ts';
 import { normalizeToRuntimeEvent } from '../src/shared/state/platformEventNormalize.ts';
 import { deliveryBadge, deliveryHint, artifactView, artifactDownloadId, listedNotShownAsCards } from '../src/widgets/turn-stream/artifactView.ts';
 import {
@@ -87,7 +87,7 @@ const ARTIFACT = 'art_0123456789abcdef';
 function apply(store: ReturnType<typeof createEntityStore>, event: ReturnType<typeof platformEvent>) {
   const runtime = normalizeToRuntimeEvent(event);
   assert.ok(runtime, `event ${event.type} must normalize`);
-  return reducePlatformEvent(store, runtime!).store;
+  return reduceRuntimeEvent(store, runtime!).store;
 }
 
 function storeWithArtifact(reviewStatus: 'pending' | 'released' | 'rejected' | null) {

@@ -6,9 +6,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityStore } from '../src/entities/index.ts';
 import {
-  reducePlatformEvent,
-  reducePlatformEventBatch,
   reduceRuntimeEvent,
+  reduceRuntimeEventBatch,
   rehydrateRun,
   rehydrateToolExecutions,
 } from '../src/shared/state/runReducer.ts';
@@ -94,7 +93,7 @@ describe('normalizeToRuntimeEvent', () => {
   it('does not replace streamed assistant text with a truncated completion preview', () => {
     const runId = 'run_truncated_preview';
     const fullText = 'a'.repeat(900);
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({ eventId: 'preview_1', sequence: 1, type: 'run.started', runId }),
       platform({
         eventId: 'preview_3',
@@ -126,7 +125,7 @@ describe('normalizeToRuntimeEvent', () => {
 
   it('does not copy reasoning blocks into the assistant bubble on message.completed', () => {
     const runId = 'run_reason_leak';
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({ eventId: 'leak_1', sequence: 1, type: 'run.started', runId }),
       platform({
         eventId: 'leak_2',
@@ -168,7 +167,7 @@ describe('normalizeToRuntimeEvent', () => {
 
   it('streams provider thinking separately from final answer text', () => {
     const runId = 'run_thinking';
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({ eventId: 'think_1', sequence: 1, type: 'run.started', runId }),
       platform({
         eventId: 'think_2',
@@ -217,7 +216,7 @@ describe('normalizeToRuntimeEvent', () => {
 
   it('marks streaming thought complete when the run succeeds without thinking.completed', () => {
     const runId = 'run_thought_hang';
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({ eventId: 'hang_1', sequence: 1, type: 'run.started', runId }),
       platform({
         eventId: 'hang_2',
@@ -245,7 +244,7 @@ describe('normalizeToRuntimeEvent', () => {
 describe('unified platform reducer', () => {
   it('applies platform tool/approval/artifact chain', () => {
     const runId = '01HZRUN0000000000000000001';
-    const { store, applied } = reducePlatformEventBatch(createEntityStore(), [
+    const { store, applied } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({
         eventId: '01HZEVT0000000000000000010',
         sequence: 1,
@@ -332,15 +331,15 @@ describe('unified platform reducer', () => {
       }),
     ];
     // Historical replay
-    s = reducePlatformEventBatch(s, events, { seenEventIds: seen }).store;
+    s = reduceRuntimeEventBatch(s, events, { seenEventIds: seen }).store;
     // Live re-delivery of same events (SSE catch-up overlap)
-    const live = reducePlatformEventBatch(s, events, { seenEventIds: seen });
+    const live = reduceRuntimeEventBatch(s, events, { seenEventIds: seen });
     assert.equal(live.applied, 0);
     assert.equal(live.skipped, 3);
     assert.equal(s.toolExecutionsById.t1.status, 'completed');
 
     // Gap: do NOT apply, cursor stays at 3
-    const gap = reducePlatformEvent(
+    const gap = reduceRuntimeEvent(
       live.store,
       makeRuntimeEvent({
         event_id: 'e5',
@@ -358,7 +357,7 @@ describe('unified platform reducer', () => {
     assert.equal(gap.store.messagesById.m1, undefined);
 
     // Next contiguous event still applies after gap was skipped
-    const next = reducePlatformEvent(
+    const next = reduceRuntimeEvent(
       gap.store,
       makeRuntimeEvent({
         event_id: 'e4',
@@ -377,7 +376,7 @@ describe('unified platform reducer', () => {
   it('sequence order 1,3,2: gap at 3 leaves cursor at 1; then 2 and 3 apply', () => {
     const runId = 'run_gap_order';
     let s = createEntityStore();
-    s = reducePlatformEvent(
+    s = reduceRuntimeEvent(
       s,
       makeRuntimeEvent({
         event_id: 'g1',
@@ -388,7 +387,7 @@ describe('unified platform reducer', () => {
     ).store;
     assert.equal(s.runsById[runId].lastSequence, 1);
 
-    const g3 = reducePlatformEvent(
+    const g3 = reduceRuntimeEvent(
       s,
       makeRuntimeEvent({
         event_id: 'g3',
@@ -402,7 +401,7 @@ describe('unified platform reducer', () => {
     assert.equal(g3.store.runsById[runId].lastSequence, 1);
     assert.equal(g3.store.messagesById.m, undefined);
 
-    const g2 = reducePlatformEvent(
+    const g2 = reduceRuntimeEvent(
       g3.store,
       makeRuntimeEvent({
         event_id: 'g2',
@@ -416,7 +415,7 @@ describe('unified platform reducer', () => {
     assert.equal(g2.store.runsById[runId].lastSequence, 2);
     assert.equal(g2.store.messagesById.m.text, 'two');
 
-    const g3b = reducePlatformEvent(
+    const g3b = reduceRuntimeEvent(
       g2.store,
       makeRuntimeEvent({
         event_id: 'g3',
@@ -433,7 +432,7 @@ describe('unified platform reducer', () => {
 
   it('new run with sequence > 1 is a gap; batch only applies contiguous prefix', () => {
     const runId = 'run_new_gap';
-    const cold = reducePlatformEvent(
+    const cold = reduceRuntimeEvent(
       createEntityStore(),
       makeRuntimeEvent({
         event_id: 'n5',
@@ -446,7 +445,7 @@ describe('unified platform reducer', () => {
     assert.equal(cold.store.runsById[runId], undefined);
 
     // Unsorted hole: 1,2,4,5 → only 1,2 apply after sort
-    const batch = reducePlatformEventBatch(createEntityStore(), [
+    const batch = reduceRuntimeEventBatch(createEntityStore(), [
       makeRuntimeEvent({
         event_id: 'b4',
         sequence: 4,
@@ -484,7 +483,7 @@ describe('unified platform reducer', () => {
   it('missing durable artifact_id does not create downloadable Artifact; cursor still advances', () => {
     const runId = 'run_art_nodurable';
     let s = createEntityStore();
-    s = reducePlatformEvent(
+    s = reduceRuntimeEvent(
       s,
       makeRuntimeEvent({
         event_id: 'a1',
@@ -494,7 +493,7 @@ describe('unified platform reducer', () => {
       }),
     ).store;
     // Path-only event: no durable artifact_id, so nothing downloadable
-    s = reducePlatformEvent(
+    s = reduceRuntimeEvent(
       s,
       makeRuntimeEvent({
         event_id: 'a2',
@@ -512,7 +511,7 @@ describe('unified platform reducer', () => {
     assert.deepEqual(s.runsById[runId].artifactIds, []);
 
     // Missing id entirely
-    s = reducePlatformEvent(
+    s = reduceRuntimeEvent(
       s,
       makeRuntimeEvent({
         event_id: 'a3',
@@ -526,7 +525,7 @@ describe('unified platform reducer', () => {
     assert.equal(Object.keys(s.artifactsById).length, 0);
 
     // Explicit server artifact_id is fine
-    s = reducePlatformEvent(
+    s = reduceRuntimeEvent(
       s,
       makeRuntimeEvent({
         event_id: 'a4',
@@ -544,7 +543,7 @@ describe('unified platform reducer', () => {
 
 describe('permission / display boundaries', () => {
   it('ordinary bash tool start/complete does not create approval', () => {
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       makeRuntimeEvent({
         event_id: 'b1',
         sequence: 1,
@@ -572,7 +571,7 @@ describe('permission / display boundaries', () => {
   });
 
   it('write tool result does not create artifact; submit_artifact does', () => {
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       makeRuntimeEvent({
         event_id: 'w1',
         sequence: 1,
@@ -635,7 +634,7 @@ describe('approval.resolved tool/run status', () => {
   it('reject marks tool failed and keeps run waiting_approval', () => {
     const runId = 'run_appr_reject';
     let store = createEntityStore();
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'e1',
@@ -645,7 +644,7 @@ describe('approval.resolved tool/run status', () => {
         data: { status: 'WAITING_APPROVAL' },
       }),
     ).store;
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'e2',
@@ -659,7 +658,7 @@ describe('approval.resolved tool/run status', () => {
         },
       }),
     ).store;
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'e3',
@@ -679,7 +678,7 @@ describe('approval.resolved tool/run status', () => {
     assert.equal(store.approvalsById.ap1.status, 'pending');
     assert.equal(store.toolExecutionsById.tc_risk.status, 'waiting_approval');
 
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'e4',
@@ -705,7 +704,7 @@ describe('approval.resolved tool/run status', () => {
   it('approve marks tool running and resumes run when no other pending', () => {
     const runId = 'run_appr_ok';
     let store = createEntityStore();
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'a1',
@@ -715,7 +714,7 @@ describe('approval.resolved tool/run status', () => {
         data: { status: 'WAITING_APPROVAL' },
       }),
     ).store;
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'a2',
@@ -725,7 +724,7 @@ describe('approval.resolved tool/run status', () => {
         data: { toolCallId: 'tc_ok', toolName: 'bash', args: { command: 'ls' } },
       }),
     ).store;
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'a3',
@@ -741,7 +740,7 @@ describe('approval.resolved tool/run status', () => {
         },
       }),
     ).store;
-    store = reducePlatformEvent(
+    store = reduceRuntimeEvent(
       store,
       platform({
         eventId: 'a4',
@@ -775,7 +774,7 @@ describe('refresh recovery', () => {
       session_id: 'sess1',
     });
     // The snapshot does not move the cursor; the missed events replay from 1.
-    s = reducePlatformEventBatch(s, [
+    s = reduceRuntimeEventBatch(s, [
       makeRuntimeEvent({ event_id: 'e1', sequence: 1, run_id: 'run_rh', type: 'run.started', payload: {} }),
       makeRuntimeEvent({ event_id: 'e2', sequence: 2, run_id: 'run_rh', type: 'message.delta', payload: { text: 'hi' } }),
       makeRuntimeEvent({
@@ -802,7 +801,7 @@ describe('refresh recovery', () => {
 
   it('replays WAITING_INPUT details after refresh with camelCase payload fields', () => {
     const runId = 'run_waiting_input';
-    const result = reducePlatformEvent(
+    const result = reduceRuntimeEvent(
       createEntityStore(),
       platform({
         eventId: 'evt_waiting_input',
@@ -895,7 +894,7 @@ describe('process handle on tool completion', () => {
   const runId = '01HZRUN0000000000000000000';
 
   it('links a completed process_start to its console via process_id', () => {
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({
         eventId: '01HZPROC000000000000000001',
         sequence: 1,
@@ -923,7 +922,7 @@ describe('process handle on tool completion', () => {
 
   it('does not clear a known process id when a later event omits it', () => {
     let store = createEntityStore();
-    ({ store } = reducePlatformEventBatch(store, [
+    ({ store } = reduceRuntimeEventBatch(store, [
       platform({
         eventId: '01HZPROC000000000000000003',
         sequence: 1,
@@ -936,7 +935,7 @@ describe('process handle on tool completion', () => {
         },
       }),
     ]));
-    ({ store } = reducePlatformEventBatch(store, [
+    ({ store } = reduceRuntimeEventBatch(store, [
       platform({
         eventId: '01HZPROC000000000000000004',
         sequence: 2,
@@ -952,7 +951,7 @@ describe('process handle on tool completion', () => {
   });
 
   it('leaves an ordinary tool without a process id', () => {
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({
         eventId: '01HZPROC000000000000000005',
         sequence: 1,
@@ -1006,7 +1005,7 @@ describe('model identity on the run', () => {
   // The runs table has no model column, so the provider call event is the only
   // statement of which model served the turn.
   it('records the model id from a provider call', () => {
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({
         eventId: '01HZMODEL00000000000000001',
         sequence: 1,
@@ -1019,7 +1018,7 @@ describe('model identity on the run', () => {
   });
 
   it('does not clear the model when a later event omits it', () => {
-    const { store } = reducePlatformEventBatch(createEntityStore(), [
+    const { store } = reduceRuntimeEventBatch(createEntityStore(), [
       platform({
         eventId: '01HZMODEL00000000000000002',
         sequence: 1,

@@ -3,7 +3,7 @@
  * envelopes to the normalized EntityStore.
  * Pure: no I/O or DOM mutation (F2 / ADR 0003 §13–15).
  *
- * Live SSE and historical replay share this path (reducePlatformEvent alias).
+ * Live SSE and historical replay share this path.
  */
 import type {
   EntityStore,
@@ -854,16 +854,6 @@ export function reduceRuntimeEvent(
   };
 }
 
-/**
- * Plan §19.3 public name — live and historical events share this reducer.
- */
-export function reducePlatformEvent(
-  store: EntityStore,
-  raw: unknown,
-  opts: { seenEventIds?: Set<string>; applyOutOfOrder?: boolean } = {},
-): ReduceResult {
-  return reduceRuntimeEvent(store, raw, opts);
-}
 
 /**
  * Apply a batch of events in sequence order (sorts first).
@@ -900,8 +890,6 @@ export function reduceRuntimeEventBatch(
 
   return { store: next, applied, skipped, gaps };
 }
-
-export const reducePlatformEventBatch = reduceRuntimeEventBatch;
 
 /**
  * Rehydrate an in-progress run from API detail + optional missed events.
