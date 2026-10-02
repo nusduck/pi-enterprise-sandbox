@@ -21,6 +21,9 @@
  * design §7.1：一个名字在 org 层首次发布后，其后续版本必须来自**同一作者**的申请，
  * 或管理员直传。所以批准时要检查名字是否已被别的作者占用（`SKILL_ORG_NAME_TAKEN`）——
  * 否则两个用户各自申请同名，先被批准的会静默挡住后来者，而后来者看不到原因。
+ *
+ * 这个判定在 `OrgSkillRepository.publishVersion` 的名字锁内进行（同一事务、锁住
+ * 名字行之后再判）：锁外先读再进锁，两位作者同名申请被同时批准时第二个也能发布。
  */
 import { OrgSkillPublishError } from '../skills/org-publish.js';
 import type { OrgSkillRepository } from '../infrastructure/mysql/repositories/org-skill-repository.js';
@@ -83,11 +86,6 @@ export interface ShareFlowDeps {
     userId: string;
     name: string;
   }): Promise<{ readonly contentDigest: string } | null>;
-  /** 本 org 里已经存在（非吊销）的 org 层名字 → 作者。用于名字占用判定。 */
-  orgSkillOwnerOf(input: {
-    orgId: string;
-    name: string;
-  }): Promise<{ readonly originUserId: string } | null>;
   /** 把作者的已发布版本发布到 org 层；实现见 `skills/org-publish.ts`。 */
   publishFromPublished(input: {
     orgId: string;
@@ -97,6 +95,11 @@ export interface ShareFlowDeps {
     originRequestId: string;
     publishedByUserId: string;
     setCurrent?: boolean;
+    /**
+     * 本次批准的是谁的申请：`publishVersion` 在名字锁内判定来源一致，
+     * 与本次申请不一致 → `SKILL_ORG_NAME_TAKEN`（409）。
+     */
+    expectedOriginUserId?: string;
   }): Promise<{ readonly contentDigest: string }>;
   /**
    * 被申请那一版的文件清单与截断的 `SKILL.md`（管理员审阅用）。
@@ -327,20 +330,13 @@ export class SkillShareService {
     const actor = await this.#actor(requireDecider(input.actor));
     const request = await this.#requirePendingInOrg(input.requestId, actor.externalOrgId);
 
-    // 名字占用：一个名字在 org 层首次发布后，后续版本必须来自同一作者（design §7.1）。
-    const owner = await this.deps.orgSkillOwnerOf({ orgId: actor.externalOrgId, name: request.name });
-    if (owner && owner.originUserId !== request.requesterUserId) {
-      throw new ShareFlowError(
-        `org skill "${request.name}" was published by another author and cannot be taken over by this request`,
-        'SKILL_ORG_NAME_TAKEN',
-        409,
-      );
-    }
-
     // 先在行锁里迁到 approved，再发字节。反过来（先字节后状态）时，发布过程中作者
     // 撤回会成功，随后 decide 失败——作者撤回了同意，他的 Skill 却已经进了 org 层
     // （setCurrent 时还是推荐版本）。先迁状态让撤回与批准互斥；字节失败时退回 pending，
     // 所以也不会留下「已批准但 org 层没有这个版本」。
+    //
+    // 名字占用（design §7.1）不在这里先读：判定在 `publishVersion` 的名字锁内，
+    // 锁外先读会被两位作者同名申请的同时批准绕过。
     let decided: ShareRequestRow;
     try {
       decided = await this.deps.requests.decide({
@@ -364,6 +360,7 @@ export class SkillShareService {
         originRequestId: request.requestId,
         publishedByUserId: actor.externalUserId,
         ...(input.setCurrent !== undefined ? { setCurrent: input.setCurrent } : {}),
+        expectedOriginUserId: request.requesterUserId,
       });
     } catch (error) {
       await this.deps.requests.reopenApproval({
@@ -376,6 +373,16 @@ export class SkillShareService {
         name: request.name, contentDigest: request.contentDigest,
         requestId: request.requestId, reason: (error as Error)?.message,
       });
+      // 名字锁内的来源冲突：沿用锁外检查时的行为与错误码（409 SKILL_ORG_NAME_TAKEN），
+      // 而不是落到默认的 SKILL_SHARE_OPERATION_FAILED。
+      if ((error as { code?: unknown })?.code === 'SKILL_ORG_NAME_TAKEN') {
+        throw new ShareFlowError(
+          (error as Error)?.message
+            || `org skill "${request.name}" was published by another author and cannot be taken over by this request`,
+          'SKILL_ORG_NAME_TAKEN',
+          409,
+        );
+      }
       throw error;
     }
 

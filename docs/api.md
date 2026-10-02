@@ -31,7 +31,7 @@ data: {"sequence":18,"event":{"type":"tool.execution.completed","event_id":"01K.
 
 | 族 | 事件 | 说明 |
 |----|------|------|
-| Run 生命周期 | `run.accepted` / `run.queued` / `run.started` / `run.status.changed` / `run.completed` / `run.failed` / `run.cancelled` | 状态机迁移，`status` 为大写状态机值 |
+| Run 生命周期 | `run.accepted` / `run.queued` / `run.started` / `run.status.changed` / `run.completed` / `run.failed` / `run.cancelled` | 状态机迁移，`status` 为大写状态机值；`run.started` 另带 `skillDiagnostics: [{ name, reason }]`（本 Run 未生效 Skill 的排除原因码，无排除项时为空数组） |
 | 消息 | `message.delta` / `message.completed`、`thinking.*` | 文本与思考增量；用户回合以 `message.completed`（`role: "user"`）落库 |
 | 工具 | `tool.call.proposed` / `tool.execution.started` / `tool.execution.progress` / `tool.execution.completed` / `tool.execution.failed` | 以 `toolCallId` 关联，`toolName` / `args` / `result` / `isError` |
 | 审批与交互 | `approval.requested` / `approval.resolved`、`interaction.*` | 高风险工具等待人工审批；同一 key 只产生一个 durable approval |

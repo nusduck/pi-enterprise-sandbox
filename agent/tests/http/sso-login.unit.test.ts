@@ -548,3 +548,34 @@ describe('SSO department reservation claim', () => {
   });
 });
 
+
+describe('SSO first login records last login', () => {
+  it('touches the credential on JIT provisioning (member page shows first login)', async () => {
+    discoveryOverride = null;
+    const stack = makeStack();
+    const touched: string[] = [];
+    const orig = stack.credentials.touchLogin.bind(stack.credentials);
+    stack.credentials.touchLogin = async (id: string) => {
+      touched.push(id);
+      return orig(id);
+    };
+    const first: any = await stack.auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001' }),
+      nonce: NONCE,
+    });
+    assert.deepEqual(touched, [first.user.id]);
+  });
+
+  it('a touchLogin failure during provisioning surfaces as store unavailable (same as the existing path)', async () => {
+    discoveryOverride = null;
+    const stack = makeStack();
+    stack.credentials.touchLogin = async () => {
+      throw new Error('db down');
+    };
+    await rejectsWith(
+      stack.auth.ssoExchange({ id_token: await idToken({ employee_id: 'E1001' }), nonce: NONCE }),
+      503,
+      'AUTH_STORE_UNAVAILABLE',
+    );
+  });
+});

@@ -102,6 +102,9 @@ function buildExecute(world, lease, opts = {}) {
     now: () => new Date('2026-07-18T06:00:00.000Z'),
     leaseRenewIntervalMs: opts.leaseRenewIntervalMs ?? 10_000,
     cancelPollIntervalMs: opts.cancelPollIntervalMs ?? 20,
+    ...(opts.resolveSkillDiagnostics !== undefined
+      ? { resolveSkillDiagnostics: opts.resolveSkillDiagnostics }
+      : {}),
   });
 }
 
@@ -1191,5 +1194,71 @@ describe('ExecuteRunService severe re-entry / recovery', () => {
     });
     assert.equal(action.action, 'skipped');
     assert.equal(world.tables.tbl_agsvc_runs[0].status, RUN_STATUS.RUNNING);
+  });
+});
+
+describe('ExecuteRunService run.started skillDiagnostics', () => {
+  /** @type {ReturnType<typeof createFakeRunWorld>} */
+  let world;
+  /** @type {ReturnType<typeof createFakeLease>} */
+  let lease;
+  /** @type {CreateRunService} */
+  let create;
+
+  beforeEach(() => {
+    world = createFakeRunWorld();
+    lease = createFakeLease();
+    create = buildCreate(world);
+  });
+
+  function startedPayload() {
+    const row = world.tables.tbl_agsvc_run_events.find((e) => e.event_type === 'run.started');
+    assert.ok(row, 'run.started must be recorded');
+    return JSON.parse(row.payload_json);
+  }
+
+  async function runToCompletion(key, resolveSkillDiagnostics) {
+    const created = await create.execute({
+      messages: MESSAGES,
+      auth: FIXED_AUTH,
+      traceId: TRACE,
+      idempotencyKey: key,
+    });
+    const orgId = String(world.tables.tbl_agsvc_runs[0].org_id);
+    const exec = buildExecute(world, lease, {
+      runExecutorFactory: () => createStubRunExecutor(),
+      ...(resolveSkillDiagnostics !== undefined ? { resolveSkillDiagnostics } : {}),
+    });
+    const result = await exec.execute({
+      runId: created.runId,
+      orgId,
+      traceId: TRACE,
+      workerId: 'w1',
+    });
+    assert.equal(result.status, RUN_STATUS.SUCCEEDED);
+    return startedPayload();
+  }
+
+  it('有排除项时 run.started 带 skillDiagnostics（只含 name 与 reason）', async () => {
+    const payload = await runToCompletion('ex-skill-diag', async () => [
+      { name: 'old-shared', reason: 'revoked', packageDir: '/must/not/leak' },
+      { name: 'renamed', reason: 'name_conflict' },
+    ]);
+    assert.deepEqual(payload.skillDiagnostics, [
+      { name: 'old-shared', reason: 'revoked' },
+      { name: 'renamed', reason: 'name_conflict' },
+    ]);
+  });
+
+  it('无排除项时 skillDiagnostics 为空数组（字段稳定出现）', async () => {
+    const payload = await runToCompletion('ex-skill-diag-empty', async () => []);
+    assert.deepEqual(payload.skillDiagnostics, []);
+  });
+
+  it('诊断解析失败不挡 Run 启动（记空数组；执行期仍按原逻辑处理）', async () => {
+    const payload = await runToCompletion('ex-skill-diag-fail', async () => {
+      throw new Error('skill ledger down');
+    });
+    assert.deepEqual(payload.skillDiagnostics, []);
   });
 });

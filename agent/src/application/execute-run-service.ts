@@ -45,6 +45,7 @@ import {
 } from '../domain/interaction/interaction-status.js';
 import { terminalizeParkedWaitingApprovalInTxn } from './parked-approval-cancel.js';
 import { createSerialTimeoutLoop } from './serial-timeout-loop.js';
+import { collectStartSkillDiagnostics } from './run-skill-diagnostics.js';
 
 // Re-exported: callers and tests import the loop from here.
 export { createSerialTimeoutLoop };
@@ -97,6 +98,7 @@ export class ExecuteRunService {
   stateMachine: Loose;
   leaseRenewIntervalMs: Loose;
   cancelPollIntervalMs: Loose;
+  resolveSkillDiagnostics: Loose; // run.started 诊断来源（可选；缺省/失败记空数组）。
 
   /**
    * @param {{
@@ -120,7 +122,7 @@ export class ExecuteRunService {
    *   cancelPollIntervalMs?: number,
    * }} deps
    */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => { runs: any, runEvents: any, outbox: any, approvals: any, toolExecutions: any, interactions: any, }, leaseManager: { acquire: (runId: string, ownerToken: string) => Promise<boolean>, renew: (runId: string, ownerToken: string) => Promise<boolean>, release: (runId: string, ownerToken: string) => Promise<boolean>, renewIntervalMs?: number, }, cancelSignal?: { isRequested: (runId: string) => Promise<boolean> } | null, runExecutor?: import('./run-executor.js').RunExecutor, runExecutorFactory?: (job: { runId: string, orgId: string, workerId: string }) => import('./run-executor.js').RunExecutor | Promise<import('./run-executor.js').RunExecutor>, generateId: () => string, now?: () => Date, runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine, leaseRenewIntervalMs?: number, cancelPollIntervalMs?: number, }) {
+  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => { runs: any, runEvents: any, outbox: any, approvals: any, toolExecutions: any, interactions: any, }, leaseManager: { acquire: (runId: string, ownerToken: string) => Promise<boolean>, renew: (runId: string, ownerToken: string) => Promise<boolean>, release: (runId: string, ownerToken: string) => Promise<boolean>, renewIntervalMs?: number, }, cancelSignal?: { isRequested: (runId: string) => Promise<boolean> } | null, runExecutor?: import('./run-executor.js').RunExecutor, runExecutorFactory?: (job: { runId: string, orgId: string, workerId: string }) => import('./run-executor.js').RunExecutor | Promise<import('./run-executor.js').RunExecutor>, generateId: () => string, now?: () => Date, runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine, leaseRenewIntervalMs?: number, cancelPollIntervalMs?: number, resolveSkillDiagnostics?: (input: { run: unknown, scope: { orgId: string, userId: string } }) => Promise<unknown>, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('ExecuteRunService requires transactionManager.run');
     }
@@ -149,12 +151,10 @@ export class ExecuteRunService {
       LEASE_RENEW_INTERVAL_MS;
     this.cancelPollIntervalMs =
       deps.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS;
+    this.resolveSkillDiagnostics = deps.resolveSkillDiagnostics ?? null;
   }
 
-  /**
-   * Resolve per-job executor. Factory preferred for concurrency safety.
-   * @param job
-   */
+  /** Resolve per-job executor (factory preferred for concurrency safety). */
   async #resolveExecutor(job: { runId: string, orgId: string, workerId: string }) {
     if (typeof this.runExecutorFactory === 'function') {
       return this.runExecutorFactory(job);
@@ -426,13 +426,15 @@ export class ExecuteRunService {
         return this.#cancelBeforeRuntime(run, scope, traceId);
       }
       const attempt = Number(run.attempt || 0) + 1;
+      // 起跑前算一次 Skill 排除诊断，进 run.started payload（缺省/失败记空数组，不挡启动）。
+      const skillDiagnostics = await collectStartSkillDiagnostics(this.resolveSkillDiagnostics, run, scope);
       const t = await this.#transition(runId, scope, traceId, {
         from: RUN_STATUS.QUEUED,
         to: RUN_STATUS.STARTING,
         eventType: 'run.started',
         attempt,
         startedAt: this.now(),
-        payloadExtra: { attempt },
+        payloadExtra: { attempt, skillDiagnostics },
       });
       if (t.ok) run = t.run;
       else if (t.current) run = t.current;

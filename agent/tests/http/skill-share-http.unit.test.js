@@ -40,7 +40,6 @@ describe('共享申请路由 (/internal/skills/share-requests*)', () => {
       requests,
       orgSkills: {},
       enabledVersionOf: async ({ name }) => (name === 'enabled-skill' ? { contentDigest: DIGEST } : null),
-      orgSkillOwnerOf: async () => null,
       publishFromPublished: async () => ({ contentDigest: DIGEST }),
       manifestOfRequestedVersion: async () => ({
         files: [{ path: 'SKILL.md', bytes: 42 }],

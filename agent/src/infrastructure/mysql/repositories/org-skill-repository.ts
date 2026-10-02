@@ -224,10 +224,32 @@ export class OrgSkillRepository {
     originRequestId?: string;
     publishedByUserId: string;
     setCurrent?: boolean;
+    /**
+     * 共享申请批准时传申请人（design §7.1）：一个名字在 org 层首次发布后，后续
+     * 版本必须来自同一作者。判定在**锁住名字行之后、同一事务内**进行——锁外先
+     * 读再进锁，两位作者同名申请被同时批准时第二个也能发布。已存在（非撤销）
+     * 版本的来源与它不一致 → `SKILL_ORG_NAME_TAKEN`。省略即不判（管理员直传不受限）。
+     */
+    expectedOriginUserId?: string;
   }): Promise<OrgSkillVersionRow> {
     const orgId = requireOrgId(input);
     return this.db.transaction(async (trx: Loose) => {
       await this.lockName(trx, orgId, input.name);
+      if (input.expectedOriginUserId !== undefined) {
+        const taken: Loose[] = await trx(VERSIONS).where({
+          org_id: orgId,
+          skill_name: input.name,
+        }).whereNotIn('status', ['revoked']);
+        const conflict = taken.some(
+          (row) => String(row.origin_user_id ?? '') !== String(input.expectedOriginUserId),
+        );
+        if (conflict) {
+          throw new OrgSkillError(
+            `org skill "${input.name}" was published by another author and cannot be taken over by this request`,
+            'SKILL_ORG_NAME_TAKEN',
+          );
+        }
+      }
       const existing: Loose = await trx(VERSIONS).where({
         org_id: orgId,
         skill_name: input.name,

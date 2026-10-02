@@ -10,7 +10,10 @@
 
 import {
   assertWorkerSandboxServiceToken,
+  publishedSkillBase,
   resolveRunSkillPaths,
+  resolveSkillRootsForRun,
+  systemSkillCatalog,
 } from './container-env.js';
 import {
   createDshRunExecutorFactory,
@@ -18,6 +21,12 @@ import {
 import {
   resolveDshRunToolBudget,
 } from '../application/dsh-run-tool-budget.js';
+import { bindAgentVersionConfig } from '../infrastructure/dsh/agent-version-bindings.js';
+import { resolveRunSkills } from '../skills/run-skills.js';
+import {
+  projectSkillDiagnostics,
+  type RunSkillDiagnostic,
+} from '../application/run-skill-diagnostics.js';
 
 /** 过渡期宽松类型：容器与应用服务仍是 JS。 */
 type Loose = any;
@@ -280,5 +289,54 @@ export async function buildDshRunExecutorFactory(
     eventProjectionMode: opts.eventProjectionMode,
   };
   return createDshRunExecutorFactory(factoryOpts);
+}
+
+/**
+ * `run.started` 诊断的生产来源：给 `ExecuteRunService` 的 `resolveSkillDiagnostics`。
+ *
+ * 在写 `run.started` 之前、与执行期共用 `resolveRunSkills` 算一次（同一份绑定
+ * policy、同一批账本与文件核对），只把 `{ name, reason }` 投影出去。算不出
+ * （版本不存在、账本/文件失败）时返回空数组——诊断是可观测性，不改变执行期
+ * fail-closed 的 Run 失败语义（执行器自己还会再算一次并按原逻辑处理）。
+ */
+export function createRunSkillDiagnosticsResolver(container: Loose): (
+  input: { run: Loose; scope: { orgId: string; userId: string } },
+) => Promise<RunSkillDiagnostic[]> {
+  return async ({ run, scope }) => {
+    try {
+      const repos = container.createRepositories(container.knex);
+      const agentVersionId = run?.agentVersionId ? String(run.agentVersionId) : '';
+      if (!agentVersionId) return [];
+      const agentVersion = await repos.catalog.getVersionById(agentVersionId);
+      if (!agentVersion) return [];
+      const bound = bindAgentVersionConfig(agentVersion);
+      const identity = { orgId: scope.orgId, userId: scope.userId };
+      const roots = resolveSkillRootsForRun(container.env, identity);
+      const systemRoot = roots[0];
+      if (!systemRoot) return [];
+      const base = publishedSkillBase(container.env);
+      const resolved = await resolveRunSkills({
+        orgId: String(scope.orgId),
+        userId: String(scope.userId),
+        userPhysicalBase: base,
+        orgPhysicalBase: base,
+        systemRoot,
+        allSystemNames: await systemSkillCatalog(container.env).names(),
+        policy: (bound.skillPolicy ?? null) as never,
+        deps: {
+          listEnabled: (owner) => repos.skillEnablements.listForOwner(owner),
+          readOrgVersion: (input) =>
+            repos.orgSkills.getVersion({
+              orgId: input.orgId,
+              name: input.name,
+              contentDigest: input.contentDigest,
+            }).then((row) => (row ? { status: row.status } : undefined)),
+        },
+      });
+      return [...projectSkillDiagnostics(resolved.diagnostics)];
+    } catch {
+      return [];
+    }
+  };
 }
 

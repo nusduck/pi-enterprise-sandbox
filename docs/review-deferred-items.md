@@ -25,8 +25,6 @@ scope was narrowed, in
 
 | Item | Evidence | Risk | Benefit | Decision needed |
 | --- | --- | --- | --- | --- |
-| ADR 0015 Run 的 Skill 排除诊断只进 Worker 日志 | `agent/src/skills/run-skills.ts` 产出 `diagnostics`（revoked / missing / mismatch / name_conflict / not_in_release / policy_denied），`bootstrap/container-env.ts` `resolveRunSkillPaths` 只取 `discoverable`，诊断只写 `[skills] excluded …` 日志 | 低：不影响隔离；管理员在 UI 里看不到「绑定的 Skill 为什么没生效」，要去翻 Worker 日志 | 可在 Run 详情/管理页直接看到排除原因 | 决定落点：`run.started` 事件 payload（须同步 `api.md` 事件族，ADR 0014）或独立字段 |
-| ADR 0015 org 名占用检查在名字锁之外 | `skill-share-service.ts` `approve` 的 `orgSkillOwnerOf` 先读、后在 `publishVersion` 里加名字锁 | 低：两位作者同名申请被同时批准时，第二个也能发布 | 名字来源唯一 | 把来源判定移进 `OrgSkillRepository.publishVersion` 的锁内 |
 | Child quota residual inter-sample race **(live gate)** | Bounded monitor only; hard isolation is operator-asserted volume/project quota. Compose defaults `SANDBOX_WORKSPACE_QUOTA_HARD_BACKEND_ASSERTED` to false | Residual until a live gate sets the hard backend | True hard multi-tenant disk | Provision XFS/project/volume quota, then set `SANDBOX_WORKSPACE_QUOTA_HARD_BACKEND_ASSERTED=true` |
 | Bubblewrap `--unshare-cgroup` | plan §16.4 lists it; `exec/src/isolation` prepare/preflight still omit it | Low until cgroup escape is shown in this container profile; unverified flag can break launch | Stronger cgroup isolation when runtime guarantees support | Confirm host/container `bwrap` + cgroup ns policy, then enable with preflight |
 | Historical naming (`workspace_path` DB column) | Column still on the session snapshot schema after lease/symlink removal | None for security | Cleaner schema naming | Hygiene PR only |

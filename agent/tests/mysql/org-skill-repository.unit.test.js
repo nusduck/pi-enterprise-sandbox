@@ -18,6 +18,7 @@ import {
 
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
 const USER = '01K0G2PAV8FPMVC9QHJG7JPN50';
+const OTHER_USER = '01K0G2PAV8FPMVC9QHJG7JPN51';
 const DIGEST_A = 'a'.repeat(64);
 const DIGEST_B = 'b'.repeat(64);
 
@@ -102,6 +103,54 @@ describe('OrgSkillRepository.publishVersion', () => {
   it('空 orgId 一律拒绝（不能靠 where org_id = "" 静默命中零行）', async () => {
     const { repo } = makeRepo();
     await assert.rejects(() => publish(repo, { orgId: '' }), /non-empty orgId/);
+  });
+
+  it('带 expectedOriginUserId 时：名字已被别的作者占用 → 锁内拒绝 SKILL_ORG_NAME_TAKEN', async () => {
+    // 两位作者同名申请被同时批准：先赢者在锁内写下版本，后到者在**同一事务、
+    // 锁住名字行之后**再判来源，而不是靠锁外的一次先读。
+    const { repo } = makeRepo();
+    await publish(repo, { originUserId: USER });
+    await assert.rejects(
+      () => publish(repo, {
+        contentDigest: DIGEST_B,
+        originUserId: OTHER_USER,
+        expectedOriginUserId: OTHER_USER,
+      }),
+      (err) => err instanceof OrgSkillError && err.code === 'SKILL_ORG_NAME_TAKEN',
+    );
+  });
+
+  it('带 expectedOriginUserId 时：同一作者续版放行（继续迭代）', async () => {
+    const { repo } = makeRepo();
+    await publish(repo, { originUserId: USER });
+    const row = await publish(repo, {
+      contentDigest: DIGEST_B,
+      originUserId: USER,
+      expectedOriginUserId: USER,
+    });
+    assert.equal(row.contentDigest, DIGEST_B);
+  });
+
+  it('带 expectedOriginUserId 时：旧版本全被撤销后名字不再被占', async () => {
+    const { repo } = makeRepo();
+    await publish(repo, { originUserId: USER });
+    await repo.setStatus({
+      orgId: ORG, name: 'sales-weekly', contentDigest: DIGEST_A,
+      status: 'revoked', reason: '误发布', changedByUserId: USER,
+    });
+    const row = await publish(repo, {
+      contentDigest: DIGEST_B,
+      originUserId: OTHER_USER,
+      expectedOriginUserId: OTHER_USER,
+    });
+    assert.equal(row.originUserId, OTHER_USER);
+  });
+
+  it('不带 expectedOriginUserId 时不判来源（管理员直传不受限）', async () => {
+    const { repo } = makeRepo();
+    await publish(repo, { originUserId: USER });
+    const row = await publish(repo, { contentDigest: DIGEST_B, originUserId: OTHER_USER });
+    assert.equal(row.contentDigest, DIGEST_B);
   });
 });
 

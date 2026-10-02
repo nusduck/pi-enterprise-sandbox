@@ -20,6 +20,7 @@ import {
 } from '../../src/application/skill-share-service.js';
 import { OrgSkillPublishError } from '../../src/skills/org-publish.js';
 import { SkillShareRequestRepository } from '../../src/infrastructure/mysql/repositories/skill-share-request-repository.js';
+import { OrgSkillRepository } from '../../src/infrastructure/mysql/repositories/org-skill-repository.js';
 import { createFakeKnex, createFakeState } from './fake-knex.js';
 
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';
@@ -46,7 +47,6 @@ function makeService(overrides = {}) {
     requests,
     orgSkills: {},
     enabledVersionOf: async () => ({ contentDigest: DIGEST }),
-    orgSkillOwnerOf: async () => null,
     publishFromPublished: async () => ({ contentDigest: DIGEST }),
     audit: (event) => audits.push(event),
     ...overrides,
@@ -56,6 +56,38 @@ function makeService(overrides = {}) {
 
 async function pendingRequest(service) {
   return service.requestShare({ actor: ALICE_ACTOR, name: 'sales-weekly' });
+}
+
+/**
+ * 真账本（fake-knex 上的 `OrgSkillRepository`）接在 `publishFromPublished` 后面：
+ * 字节拷贝用假实现，名字锁内的来源判定走真实现。
+ */
+function makeLedgerOrgSkills() {
+  let n = 0;
+  return new OrgSkillRepository(createFakeKnex(createFakeState()), {
+    generateId: () => `01K0G2PAV8FPMVC9QHJG7JPN${String(70 + n++).slice(-2)}`,
+  });
+}
+
+function ledgerPublishFromPublished(orgSkills) {
+  return async (input) => {
+    const row = await orgSkills.publishVersion({
+      orgId: input.orgId,
+      name: input.name,
+      contentDigest: input.contentDigest,
+      fileCount: 1,
+      totalBytes: 10,
+      description: '',
+      originKind: 'share_request',
+      originUserId: input.requesterUserId,
+      originRequestId: input.originRequestId,
+      publishedByUserId: input.publishedByUserId,
+      ...(input.expectedOriginUserId
+        ? { expectedOriginUserId: input.expectedOriginUserId }
+        : {}),
+    });
+    return { contentDigest: row.contentDigest };
+  };
 }
 
 describe('SkillShareService.requestShare', () => {
@@ -220,13 +252,15 @@ describe('SkillShareService.approve', () => {
     assert.equal((await requests.get(row.requestId))?.status, 'pending');
   });
 
-  it('名字已被别的作者占用 → 409 SKILL_ORG_NAME_TAKEN，且不发布', async () => {
-    let published = 0;
-    const { service } = makeService({
-      orgSkillOwnerOf: async () => ({ originUserId: BOB }),
+  it('名字已被别的作者占用 → 409 SKILL_ORG_NAME_TAKEN（锁内判定，沿用旧码）', async () => {
+    // 判定已移进 publishVersion 的名字锁内：这里模拟锁内抛出的来源冲突，
+    // 断言 approve 仍按旧行为返回 409 同码，且申请退回 pending。
+    const { service, requests } = makeService({
       publishFromPublished: async () => {
-        published += 1;
-        return { contentDigest: DIGEST };
+        throw new OrgSkillPublishError(
+          'org skill "sales-weekly" was published by another author and cannot be taken over by this request',
+          'SKILL_ORG_NAME_TAKEN',
+        );
       },
     });
     const row = await pendingRequest(service);
@@ -239,11 +273,26 @@ describe('SkillShareService.approve', () => {
         return true;
       },
     );
-    assert.equal(published, 0, 'must not publish when the name belongs to another author');
+    assert.equal((await requests.get(row.requestId))?.status, 'pending');
   });
 
-  it('同一个作者再次申请同名新版本是允许的（继续迭代）', async () => {
-    const { service } = makeService({ orgSkillOwnerOf: async () => ({ originUserId: ALICE }) });
+  it('同一个作者再次申请同名新版本是允许的（继续迭代，走锁内判定）', async () => {
+    const orgSkills = makeLedgerOrgSkills();
+    await orgSkills.publishVersion({
+      orgId: ORG,
+      name: 'sales-weekly',
+      contentDigest: DIGEST,
+      fileCount: 1,
+      totalBytes: 10,
+      description: '',
+      originKind: 'share_request',
+      originUserId: ALICE,
+      originRequestId: 'req-alice-v1',
+      publishedByUserId: ADMIN,
+    });
+    const { service } = makeService({
+      publishFromPublished: ledgerPublishFromPublished(orgSkills),
+    });
     const row = await pendingRequest(service);
     const result = await service.approve({ actor: ADMIN_ACTOR, requestId: row.requestId });
     assert.equal(result.request.status, 'approved');
@@ -312,6 +361,47 @@ describe('SkillShareService.approve 与撤回的竞态（2026-09-30 复审）', 
       (err) => statusForShareError(err).code === 'SKILL_SHARE_REQUEST_DECIDED',
     );
     assert.equal(published, 0);
+  });
+
+  it('两次批准交错：先赢者已发布时，后到者在锁内被 409 SKILL_ORG_NAME_TAKEN 拒绝', async () => {
+    // 名字归属判定在 publishVersion 的名字锁内：即使检查时刻名字空闲、进锁时已
+    // 被另一位作者发布，第二次发布也会被拒，而不会静默接管这个名字。
+    const orgSkills = makeLedgerOrgSkills();
+    // 先赢者（ALICE）的批准已落账：同名已有她的版本。
+    await orgSkills.publishVersion({
+      orgId: ORG,
+      name: 'sales-weekly',
+      contentDigest: DIGEST,
+      fileCount: 1,
+      totalBytes: 10,
+      description: '',
+      originKind: 'share_request',
+      originUserId: ALICE,
+      originRequestId: 'req-alice',
+      publishedByUserId: ADMIN,
+    });
+    const { service, requests } = makeService({
+      publishFromPublished: ledgerPublishFromPublished(orgSkills),
+    });
+    const row = await service.requestShare({
+      actor: { externalOrgId: ORG, externalUserId: BOB },
+      name: 'sales-weekly',
+    });
+    await assert.rejects(
+      () => service.approve({ actor: ADMIN_ACTOR, requestId: row.requestId }),
+      (err) => {
+        assert.ok(err instanceof ShareFlowError);
+        assert.equal(err.code, 'SKILL_ORG_NAME_TAKEN');
+        assert.equal(statusForShareError(err).status, 409);
+        return true;
+      },
+    );
+    // 与字节失败同一条纪律：申请退回 pending，org 层仍只有先赢者的版本。
+    assert.equal((await requests.get(row.requestId))?.status, 'pending');
+    const versions = await orgSkills.listForOrg({ orgId: ORG });
+    assert.equal(versions.length, 1);
+    assert.equal(versions[0].versions.length, 1);
+    assert.equal(versions[0].versions[0].originUserId, ALICE);
   });
 });
 
