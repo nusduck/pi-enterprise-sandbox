@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 分页每页条数选择器 UI 修复
+
+- 分页组件（`Pager`）的每页条数选择从原生 `<select>` 改为自定义可访问下拉菜单（`role="listbox"` / `role="option"`，基于 Portal 浮层定位并自适应翻转），消除 macOS 下原生弹出菜单与左侧文案重叠、缺少单位标识与系统暗黑模式毛玻璃遮挡的问题，并统一暗色/亮色视觉与键盘交互。
+
 ### Changed — UI 打磨：独立登录页、智能体选择、统一版式与列表分页
 
 - 新增独立登录页 `/login`：未登录访问任何页面跳转登录并在登录后回到原路径（`return_to` 只接受站内路径）；

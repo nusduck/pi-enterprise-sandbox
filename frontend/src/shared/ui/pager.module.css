@@ -32,11 +32,12 @@
   gap: var(--space-2);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+  user-select: none;
 }
 
-.pageSizeSelect {
+.pageSizeTrigger {
   height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-2) 0 var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xs);
   background: var(--color-bg-card);
@@ -44,11 +45,100 @@
   font-family: inherit;
   font-size: var(--font-size-sm);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: border-color var(--duration-fast), background var(--duration-fast);
 }
 
-.pageSizeSelect:focus-visible {
+.pageSizeTrigger:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-hover);
+}
+
+.pageSizeTrigger:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.pageSizeTrigger:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
+}
+
+.pageSizeTrigger[aria-expanded='true'] {
+  border-color: var(--color-primary);
+  background: var(--color-bg-hover);
+}
+
+.chevron {
+  color: var(--color-text-muted);
+  transition: transform var(--duration-fast) var(--ease-out);
+  flex-shrink: 0;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+  color: var(--color-primary);
+}
+
+.pageSizeMenu {
+  position: fixed;
+  z-index: var(--z-sheet, 80);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 8px);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-sizing: border-box;
+}
+
+.optionItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--duration-fast), color var(--duration-fast);
+  width: 100%;
+}
+
+.optionItem:hover {
+  background: var(--color-bg-hover);
+}
+
+.optionItem:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+  background: var(--color-bg-hover);
+}
+
+.optionSelected {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.optionSelected:hover {
+  background: var(--color-primary-soft);
+}
+
+.checkIcon {
+  color: var(--color-primary);
+  flex-shrink: 0;
 }
 
 .buttons {
