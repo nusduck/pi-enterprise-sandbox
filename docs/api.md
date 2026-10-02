@@ -591,7 +591,10 @@ exec 公共适配器查询或控制；返回给浏览器时仍投影原 `session
 跨租户访问统一返回 404。`logs` 返回 `next_offset`、`completed`、`truncated`、
 `log_total`；进程详情含 `process_id`、`run_id`、`status`、`command` 和时间字段。
 `kill` 未指定信号时发送 `SIGKILL`（立即终止），`signal` 未指定时发送 `SIGTERM`；
-两者都可以在 body 传 `signal` 指定信号。需要「先 TERM、超时再 KILL」的升级语义使用 `cancel`。Agent 不提供
+两者都可以在 body 传 `signal` 指定信号（允许 `SIGTERM` / `SIGKILL` / `SIGINT` /
+`SIGHUP`）。只有终止类信号（`SIGTERM` / `SIGKILL`）会结束作业并转 `stopping`；
+`SIGINT` / `SIGHUP` 只按 pid / pgid / 启动身份校验后投递给进程组（可被进程
+trap 捕获处理），不结束作业、不改状态。需要「先 TERM、超时再 KILL」的升级语义使用 `cancel`。Agent 不提供
 `/internal/processes*` 路由。
 
 `me` 与登录响应里的 **`roles: string[]`** 是角色的权威投影（按字典序，只含白名单值）；

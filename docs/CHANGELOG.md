@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — exec `signal` 按信号种类决定语义
+
+- `MySqlJobRegistry.signalInternal` 此前对任何信号都先调活句柄 `cancel()` 结束
+  整个作业：发 `SIGINT` / `SIGHUP` 这类本意不终止的信号也会结束进程并写成
+  `stopping`。现在只有终止类信号（`SIGTERM` / `SIGKILL` / `SIGQUIT`）走
+  `cancel()` + 身份校验补发 + `stopping`；其他允许信号只经 `safeSignalIdentity`
+  （按 pid / pgid / 启动身份校验，防 PID 复用）发给进程组，不结束作业、不改状态。
+  公共路由允许集（`SIGTERM` / `SIGKILL` / `SIGINT` / `SIGHUP`）不变。
+
 ### Fixed — 共享申请批准的名字占用检查移进名字锁内
 
 - `SkillShareService.approve` 此前先调 `orgSkillOwnerOf` 读名字归属、之后才在

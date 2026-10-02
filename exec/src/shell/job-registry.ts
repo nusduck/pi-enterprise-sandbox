@@ -103,6 +103,18 @@ function chunkToText(chunk: JobProcessChunk | undefined): string {
   return chunk.delta ?? '';
 }
 
+/**
+ * 终止类信号：语义是结束作业，走活句柄 `cancel()` + `stopping`。
+ * 非终止信号（允许集里的 SIGINT / SIGHUP 等）只经 `safeSignalIdentity`
+ * 投递，不结束作业、不改状态。允许集由公共路由的 `ALLOWED_SIGNALS`
+ * 限定，这里不扩大它，只按种类决定行为。
+ */
+const TERMINATING_SIGNALS: ReadonlySet<string> = new Set(['SIGTERM', 'SIGKILL', 'SIGQUIT']);
+
+function isTerminatingSignal(signal: NodeJS.Signals): boolean {
+  return TERMINATING_SIGNALS.has(signal);
+}
+
 // ── live 状态：内存里那一半 ──────────────────────────────────────────
 
 interface LiveEntry {
@@ -463,6 +475,19 @@ export class MySqlJobRegistry {
       throw new JobNotFoundError(id);
     }
     const physicalRoots = live.physicalRoots;
+
+    if (!isTerminatingSignal(signal)) {
+      // 非终止信号：只经按身份验证的安全信号（防 PID 复用）发给进程组，
+      // 不调用活句柄 `cancel()`、不改作业状态。没有活句柄时的
+      // `JobControlUnavailableError` 已在函数入口处理，与原来一致。
+      const rec = await this.store.getById(id, scope);
+      if (rec?.pid) {
+        await safeSignalIdentity({ pid: rec.pid, pgid: rec.pgid, startIdentity: rec.startIdentity, signal }).catch(() => {});
+      }
+      const current = await this.store.getById(id, scope);
+      if (!current) throw new JobNotFoundError(id);
+      return toSnapshot(current);
+    }
 
     // 有活句柄时优先走句柄自己的 cancel（它懂自己是怎么起的——bwrap 进程组、
     // namespace init 等），这与 Python 版 `Popen.terminate()` + 进程组语义
