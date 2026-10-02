@@ -383,7 +383,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/auth/sso/login` | 公司 SSO 入口（顶层导航）：302 到 IdP，写加密事务 Cookie；`?return_to=` 仅站内路径 |
 | `GET` | `/api/auth/sso/callback` | IdP 回调：换票 → Agent 验签兑换 → 写会话 Cookie，303 回站内路径；失败 303 `/?sso_error=<码>` |
 | `GET` | `/api/auth/me` | 当前用户 |
-| `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称、邮箱与长任务完成邮件开关 |
+| `GET` `PATCH` | `/api/auth/profile` | 本人账户资料；`PATCH` 只能改显示名称、邮箱与四个邮件通知开关（字段与校验见下文 `/api/auth/profile` 段） |
 | `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation；列表带 `limit` / `cursor` / `q`，返回 `{ conversations, next_cursor }`（见「列表分页」） |
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
 | `GET` | `/api/conversations/{id}/events` | 会话完整时间线（**一次性 JSON，不是 SSE**，见下） |
