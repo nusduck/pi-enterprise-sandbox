@@ -332,14 +332,17 @@ Server（例如可能崩溃循环的 stdio 子进程）在该条目里显式写
 
 ### 远端 A2A Agent（出站委派）
 
-设计见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md)。`A2A_REMOTE_AGENTS_JSON`
+设计见 [design/a2a-remote-delegation.md](design/a2a-remote-delegation.md) 与
+[design/hiagent-remote-delegation.md](design/hiagent-remote-delegation.md)。`A2A_REMOTE_AGENTS_JSON`
 是 JSON 数组，每项：
 
 | 键 | 必填 | 说明 |
 |---|---|---|
 | `id` | ✅ | `[A-Za-z0-9_-]{1,32}`，AgentVersion 的 `delegation.remoteAgents` 引用它 |
-| `cardUrl` | ✅ | 远端 Agent Card 的绝对地址；**生产必须 https**。卡片声明的端点必须与它同源，否则拒绝调用 |
-| `authTokenRef` | ✅ | 存放 Bearer 凭据的**环境变量名**；该变量必须非空 |
+| `protocol` |  | `"a2a"`（缺省）或 `"hiagent"`；存量条目不用改 |
+| `cardUrl` | ✅（a2a） | 远端 Agent Card 的绝对地址；**生产必须 https**。卡片声明的端点必须与它同源，否则拒绝调用；hiagent 条目不写 |
+| `baseUrl` | ✅（hiagent） | HiAgent 应用 API 根地址（`POST {baseUrl}/create_conversation` / `chat_query_v2`）；**生产必须 https**；a2a 条目不写 |
+| `authTokenRef` | ✅ | 存放远端凭据的**环境变量名**；该变量必须非空（a2a 是 Bearer，hiagent 是 AppKey） |
 | `name` / `description` |  | 进系统提示给模型看 |
 | `timeoutMs` |  | 单次委派总时限，默认 600000，范围 1000–3600000 |
 | `enabled` |  | `false` 时跳过（仍参与 id 去重） |
@@ -347,12 +350,20 @@ Server（例如可能崩溃循环的 stdio 子进程）在该条目里显式写
 - 进程启动时解析，任何不合法（未知键、重复 id、变量未设置、生产用 http）都**拒绝启动**；修改后重启
   `agent` 与 `agent-worker`，不支持热加载。
 - 远端**不参与** `/ready`：按需调用，一台远端宕机不让 Agent 下线；失败以工具错误
-  （`A2A_REMOTE_UNAVAILABLE` / `A2A_REMOTE_TIMEOUT` / `A2A_REMOTE_FAILED` / `A2A_REMOTE_NEEDS_INPUT`）返回给模型。
-- 出站请求单次 30 s 超时、响应体上限 1 MiB、不跟随重定向，凭据只发往 `cardUrl` 同源。
+  （a2a：`A2A_REMOTE_UNAVAILABLE` / `A2A_REMOTE_TIMEOUT` / `A2A_REMOTE_FAILED` / `A2A_REMOTE_NEEDS_INPUT`；
+  hiagent：`HIAGENT_UNAVAILABLE` / `HIAGENT_FAILED`）返回给模型。
+- 出站请求有超时（a2a 单次 30 s、`timeoutMs` 总时限；hiagent 按条目 `timeoutMs`）、响应体上限 1 MiB、
+  不跟随重定向；凭据只发往登记地址（a2a 限 `cardUrl` 同源，hiagent 限 `baseUrl`）。
 - 工具风险为 `external_high`，平台风险表默认 `high → require_approval`；只有改平台风险表
   （`config/agent/tool-risk.json`）才能免审批，AgentVersion 只能再收紧。
 - 远端可以是本部署自己的 A2A 面：在「A2A Access」签发凭据，`cardUrl` 填
   `<A2A_PUBLIC_BASE_URL>/a2a/agents/<agent_id>/.well-known/agent-card.json`。
+- `protocol: "hiagent"` 的条目走火山引擎应用对话 API（阻塞模式）：`baseUrl` 由部署提供
+  （各项目域名不同），`authTokenRef` 指向存放 AppKey 的环境变量。同一平台会话里连续委派
+  默认续用上一次的远端会话（绑定在 `tbl_agsvc_remote_conversations`，凭据不落库）。
+  开发联调可用 `node scripts/dev/fake-hiagent.mjs --port 8787 --key <占位key>` 起假服务端
+  （用法见 [development.md](development.md)），登记示例：
+  `{"id":"hi-helper","protocol":"hiagent","baseUrl":"http://hiagent:8787","authTokenRef":"HIAGENT_APP_KEY"}`。
 
 ### Execution policy profile
 

@@ -27,7 +27,7 @@ import {
   JsonRpcTransportFactory,
   type Client,
 } from '@a2a-js/sdk/client';
-import type { RemoteAgentEntry } from './a2a-remote-registry.js';
+import type { A2aRemoteAgentEntry } from './a2a-remote-registry.js';
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 export const CARD_REQUEST_TIMEOUT_MS = 10_000;
@@ -173,7 +173,7 @@ export class RemoteA2aClient {
   }
 
   /** 该远端专用的 fetch：同源、带凭据、不跟重定向、有超时、有大小上限。 */
-  #boundedFetch(entry: RemoteAgentEntry, timeoutMs = this.#requestTimeoutMs): typeof fetch {
+  #boundedFetch(entry: A2aRemoteAgentEntry, timeoutMs = this.#requestTimeoutMs): typeof fetch {
     const origin = new URL(entry.cardUrl).origin;
     return async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -216,7 +216,7 @@ export class RemoteA2aClient {
     };
   }
 
-  async #card(entry: RemoteAgentEntry): Promise<AgentCard> {
+  async #card(entry: A2aRemoteAgentEntry): Promise<AgentCard> {
     const cached = this.#cards.get(entry.id);
     if (cached && cached.expiresAt > this.#now()) return cached.card;
     const resolver = new DefaultAgentCardResolver({
@@ -242,7 +242,7 @@ export class RemoteA2aClient {
     return card;
   }
 
-  async #client(entry: RemoteAgentEntry): Promise<Client> {
+  async #client(entry: A2aRemoteAgentEntry): Promise<Client> {
     const card = await this.#card(entry);
     const factory = new ClientFactory({
       transports: [
@@ -263,7 +263,7 @@ export class RemoteA2aClient {
    * 发一个任务并等到终态（或被打断）。超时与取消都会尽力给远端发一次 cancel。
    */
   async delegate(input: {
-    entry: RemoteAgentEntry;
+    entry: A2aRemoteAgentEntry;
     prompt: string;
     messageId: string;
     signal?: AbortSignal;
@@ -376,7 +376,7 @@ export class RemoteA2aClient {
   }
 
   #finish(
-    entry: RemoteAgentEntry,
+    entry: A2aRemoteAgentEntry,
     started: number,
     r: { taskId: string | null; state: string; texts: string[]; artifacts: RemoteArtifactRef[] },
   ): RemoteDelegationResult {

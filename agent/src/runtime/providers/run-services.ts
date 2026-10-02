@@ -33,15 +33,37 @@ export interface RunServices {
    */
   readonly delegation?: RunDelegationServices;
   /**
-   * 远端 A2A 委派（docs/design/a2a-remote-delegation.md）。缺省 = 本 Agent 不可调用远端。
-   * 清单与客户端是进程级的（插件持有），这里只给本 Run 的白名单与 runId。
+   * 远端委派（docs/design/a2a-remote-delegation.md 与 hiagent-remote-delegation.md）。
+   * 缺省 = 本 Agent 不可调用远端。清单与客户端是进程级的（插件持有），
+   * 这里只给本 Run 的白名单、runId，以及 hiagent 续聊用的作用域与绑定端口。
    */
   readonly remoteDelegation?: {
     /** `configJson.delegation.remoteAgents`。 */
     readonly agents: readonly string[];
     /** 派生出站 messageId 用（与 callId 一起），同一次调用重试时远端可去重。 */
     readonly runId: string;
+    /**
+     * 本 Run 的租户作用域（hiagent 续聊用：绑定查询一律带 org/user，见 H3）。
+     * 缺省时 hiagent 分支 fail-closed（`DELEGATION_CONTEXT_MISSING`），A2A 不受影响。
+     */
+    readonly scope?: {
+      readonly orgId: string;
+      readonly userId: string;
+      readonly conversationId: string;
+    };
+    /** 远端会话绑定存取（hiagent 用；模型拿不到也传不进远端会话 ID）。 */
+    readonly bindings?: RemoteConversationBindings;
   };
+}
+
+/**
+ * 远端会话绑定的按 Run 端口（docs/design/hiagent-remote-delegation.md H3）。
+ * 作用域在装配时绑定，调用方只给远端 id——模型永远接触不到远端会话 ID。
+ */
+export interface RemoteConversationBindings {
+  getBinding(remoteAgentId: string): Promise<string | null>;
+  setBinding(remoteAgentId: string, remoteConversationId: string): Promise<void>;
+  clearBinding(remoteAgentId: string): Promise<void>;
 }
 
 export interface DelegatedChildStatus {

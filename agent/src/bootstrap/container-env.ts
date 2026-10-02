@@ -22,6 +22,7 @@ import { IdempotencyRepository } from '../infrastructure/mysql/repositories/idem
 import { ToolExecutionRepository } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 import { ApprovalRepository } from '../infrastructure/mysql/repositories/approval-repository.js';
 import { InteractionRepository } from '../infrastructure/mysql/repositories/interaction-repository.js';
+import { RemoteConversationRepository } from '../infrastructure/mysql/repositories/remote-conversation-repository.js';
 import { TaskStateRepository } from '../infrastructure/mysql/repositories/task-state-repository.js';
 import { SandboxAuditEventRepository } from '../infrastructure/mysql/repositories/sandbox-audit-event-repository.js';
 import { A2aCredentialRepository } from '../infrastructure/mysql/repositories/a2a-credential-repository.js';
@@ -324,6 +325,10 @@ export function createRepositoryBundle(
     memberRoles: new MemberRoleRepository(db, { now }),
     /** 审核账本（design agent-output-review §5.1）：任务 / 交付物 / 材料 / 审计。 */
     reviews: new ReviewRepository(db, { now }),
+    /** HiAgent 远端会话绑定（design hiagent-remote-delegation §3）：续聊用，不存凭据。 */
+    remoteConversations: new RemoteConversationRepository(db, {
+      generateId: opts.generateId,
+    }),
   };
 }
 

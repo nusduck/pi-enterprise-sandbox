@@ -84,6 +84,30 @@ node --test scripts/smoke-skill-admin-ui.mjs
 空闲关闭、焦点限制、完整 1001 条影响面的分页搜索，以及 `SKILL.md` 截断提示。
 它不验证服务端鉴权、持久化或真实模型链路，不能代替运行栈验收。
 
+### 假 HiAgent 服务（远端委派联调，生产禁用）
+
+`scripts/dev/fake-hiagent.mjs` 是单文件、无依赖的假火山应用 API（阻塞模式），实现
+`POST /create_conversation` 与 `POST /chat_query_v2`：校验 `Apikey` 头，`answer` 里回显
+收到的 `Query` 与该会话的轮次（`echo[<round>]: <Query>`）。未知会话的 chat 返回
+`ConversationNotFound` 错误体，可验证「删绑定 → 新建 → 只重试一次」路径。
+`DEPLOYMENT_ENV=production` 时拒绝启动；里面没有任何真实凭据。
+
+```bash
+# 1. 起假服务（端口/期望 key 可配，默认 127.0.0.1:8787 / dev-hiagent-key）
+node scripts/dev/fake-hiagent.mjs --port 8787 --key dev-hiagent-key
+
+# 2. 登记一个 hiagent 远端（与 agent 同网；开发 Compose 允许 http）
+export HIAGENT_APP_KEY=dev-hiagent-key
+export A2A_REMOTE_AGENTS_JSON='[{"id":"hi-helper","protocol":"hiagent","name":"火山助手","description":"通用问答","baseUrl":"http://hiagent:8787","authTokenRef":"HIAGENT_APP_KEY"}]'
+
+# 3. 在智能体配置里授权：configJson.delegation.remoteAgents 加 "hi-helper"；
+#    重建 agent / agent-worker 后建会话跑两轮委派：第二轮应续聊（answer 里 round=2），
+#    工具账本与审批与 A2A 远端一致。
+```
+
+连真实 HiAgent 时把 `baseUrl` 换成部署提供的应用地址、`HIAGENT_APP_KEY` 换成
+HiAgent 平台发放的 AppKey（`.env` 不提交，见上文「环境模板」）。
+
 ### 本地运行态目录
 
 宿主机生成的运行态统一位于 `.runtime/`，不得再在仓库根目录新增

@@ -1,5 +1,8 @@
 # 远端 A2A 委派：让 Agent 调用其他部署的 A2A Agent（设计与实施计划）
 
+> 同一登记表、同一工具的第二种协议见 [远端委派接入火山引擎 HiAgent](hiagent-remote-delegation.md)：
+> 登记条目写 `protocol: "hiagent"`，工具按协议选择客户端（HiAgent 无 A2A 面，走其应用对话 API）。
+
 本文档约束「出站 A2A」能力：**Run 执行中，模型通过一个工具把自包含任务发给运维登记过的
 远端 A2A Agent（其他团队、其他部署，也可以是本部署自己的 A2A 面），等待结果**。
 
