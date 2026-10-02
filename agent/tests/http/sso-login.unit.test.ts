@@ -263,13 +263,14 @@ function makeStack(options: { pinned?: string[]; sso?: SsoConfig | null } = {}) 
         verifier: new OidcIdTokenVerifier(sso),
         identities,
         credentials,
+        users: identity.organizations,
         auth,
         reservedUsernames: options.pinned ?? ['admin'],
         generateId,
       })
     : null;
   auth.ssoLogin = login;
-  return { auth, login, credentials, identities, memberRoles, sessions };
+  return { auth, login, credentials, identities, memberRoles, sessions, identity };
 }
 
 describe('SSO login exchange', () => {
@@ -434,3 +435,116 @@ describe('BrowserAuthService in SSO mode', () => {
     await rejectsWith(auth.ssoExchange({ id_token: 'x', nonce: NONCE }), 503, 'SSO_CONFIG_UNAVAILABLE');
   });
 });
+
+describe('SSO department reservation claim', () => {
+  it('writes department on first login when claim is configured and present', async () => {
+    discoveryOverride = null;
+    const sso = config({ SSO_DEPARTMENT_CLAIM: 'department' });
+    const { auth, identity } = makeStack({ sso });
+    const first: any = await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: '工程部' }),
+      nonce: NONCE,
+    });
+    const user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, '工程部');
+  });
+
+  it('updates department on subsequent login when claim changes', async () => {
+    discoveryOverride = null;
+    const sso = config({ SSO_DEPARTMENT_CLAIM: 'department' });
+    const { auth, identity } = makeStack({ sso });
+    const first: any = await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: '工程部' }),
+      nonce: NONCE,
+    });
+    const second: any = await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: '产品部' }),
+      nonce: NONCE,
+    });
+    assert.equal(second.user.id, first.user.id);
+    const user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, '产品部');
+  });
+
+  it('keeps previous department unchanged when claim is missing, empty, or non-string', async () => {
+    discoveryOverride = null;
+    const sso = config({ SSO_DEPARTMENT_CLAIM: 'department' });
+    const { auth, identity } = makeStack({ sso });
+    const first: any = await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: '工程部' }),
+      nonce: NONCE,
+    });
+
+    // 缺失 claim：保持原值
+    await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001' }),
+      nonce: NONCE,
+    });
+    let user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, '工程部');
+
+    // 空字符串 / 纯空白：保持原值
+    await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: '   ' }),
+      nonce: NONCE,
+    });
+    user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, '工程部');
+
+    // 非字符串类型：保持原值
+    await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: 12345 }),
+      nonce: NONCE,
+    });
+    user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, '工程部');
+  });
+
+  it('a failed department write does not fail the login (display-only field)', async () => {
+    discoveryOverride = null;
+    const sso = config({ SSO_DEPARTMENT_CLAIM: 'department' });
+    const { auth, identity } = makeStack({ sso });
+    identity.organizations.setDepartmentByExternalSubject = async () => {
+      throw new Error('db down');
+    };
+    const login: any = await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: '工程部' }),
+      nonce: NONCE,
+    });
+    assert.ok(login.user.id, 'session is still established');
+  });
+
+  it('does not write department when claim is not configured', async () => {
+    discoveryOverride = null;
+    const sso = config(); // SSO_DEPARTMENT_CLAIM 未配置（空）
+    const { auth, identity } = makeStack({ sso });
+    const first: any = await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', department: '工程部' }),
+      nonce: NONCE,
+    });
+    const user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, null);
+  });
+
+  it('trims whitespace and enforces 255 character limit', async () => {
+    discoveryOverride = null;
+    const sso = config({ SSO_DEPARTMENT_CLAIM: 'dept' });
+    const { auth, identity } = makeStack({ sso });
+    const first: any = await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', dept: '  基础架构组  ' }),
+      nonce: NONCE,
+    });
+    let user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, '基础架构组');
+
+    // 超过 255 字符忽略，保持原值
+    const tooLong = 'a'.repeat(256);
+    await auth.ssoExchange({
+      id_token: await idToken({ employee_id: 'E1001', dept: tooLong }),
+      nonce: NONCE,
+    });
+    user = await identity.organizations.getUserByExternalSubject(`bff:${first.user.id}`);
+    assert.equal(user?.department, '基础架构组');
+  });
+});
+

@@ -12,7 +12,7 @@
 import type { BrowserAuthService, CredentialStore } from '../application/browser-auth-service.js';
 import { OidcIdTokenVerifier } from '../application/oidc-id-token-verifier.js';
 import { resolveSsoConfig } from '../application/sso-config.js';
-import { SsoLoginService, type SsoIdentityStore } from '../application/sso-login-service.js';
+import { SsoLoginService, type SsoIdentityStore, type SsoUserStore } from '../application/sso-login-service.js';
 
 function adminUsernames(env: NodeJS.ProcessEnv): string[] {
   return String(env.SANDBOX_AUTH_ADMIN_USERNAMES || '')
@@ -33,7 +33,7 @@ export const createSsoLogin = {
   /** SSO 打开时的兑换服务；未打开返回 null（兑换 503，config 投影 disabled）。 */
   service(input: {
     env: NodeJS.ProcessEnv;
-    repos: { authCredentials: CredentialStore; ssoIdentities: SsoIdentityStore };
+    repos: { authCredentials: CredentialStore; ssoIdentities: SsoIdentityStore; organizations?: SsoUserStore };
     auth: BrowserAuthService;
     generateId?: () => string;
   }): SsoLoginService | null {
@@ -44,6 +44,7 @@ export const createSsoLogin = {
       verifier: new OidcIdTokenVerifier(config),
       identities: input.repos.ssoIdentities,
       credentials: input.repos.authCredentials,
+      users: input.repos.organizations,
       auth: input.auth,
       reservedUsernames: adminUsernames(input.env),
       ...(input.generateId ? { generateId: input.generateId } : {}),

@@ -113,10 +113,17 @@ export function memoryIdentity(options: {
         userId: input.userId,
         externalSubject: input.externalSubject,
         status: input.status,
+        department: input.department ?? null,
       };
       usersBySubject.set(input.externalSubject, user);
       usersById.set(input.userId, user);
       return { userId: input.userId };
+    },
+    async setDepartmentByExternalSubject(subject: string, department: string) {
+      const user = usersBySubject.get(subject);
+      if (user) {
+        user.department = department;
+      }
     },
     async addMembershipIfAbsent(input: Loose) {
       counters.membershipWrites += 1;

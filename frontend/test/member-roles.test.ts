@@ -20,6 +20,7 @@ import {
   NO_LOGIN_RECORD_TOOLTIP,
   ROLE_LABEL_ZH,
   ROLE_PINNED_TOOLTIP,
+  formatMemberDepartment,
   formatMemberTimestamp,
   isRolePinned,
   isSelfMember,
@@ -35,6 +36,7 @@ import {
   withRole,
 } from '../src/pages/settings/memberRoles.ts';
 import {
+  AdminMemberSchema,
   grantAdminMemberRole,
   listAdminMemberRoleEvents,
   listAdminMembers,
@@ -181,6 +183,15 @@ describe('成员与角色页的错误提示映射', () => {
     assert.equal(isSelfMember({ username: 'bob' }, { username: 'alice' }), false);
     assert.equal(isSelfMember({ user_id: 'u1' }, null), false);
   });
+
+  it('工具函数：部门空值格式化为「—」，有效字符串展示原值', () => {
+    assert.equal(formatMemberDepartment('工程部'), '工程部');
+    assert.equal(formatMemberDepartment('  产品研发部  '), '产品研发部');
+    assert.equal(formatMemberDepartment(null), '—');
+    assert.equal(formatMemberDepartment(undefined), '—');
+    assert.equal(formatMemberDepartment(''), '—');
+    assert.equal(formatMemberDepartment('   '), '—');
+  });
 });
 
 describe('成员与角色的界面信息设计（§3.1）', () => {
@@ -204,6 +215,16 @@ describe('成员与角色的界面信息设计（§3.1）', () => {
     // 需要时在悬停提示里给出代码。
     assert.match(page, /角色代码：admin/);
     assert.match(page, /角色代码：reviewer/);
+  });
+
+  it('表格与卡片包含「部门」列并使用 formatMemberDepartment 渲染', () => {
+    const page = src('src/pages/settings/MembersPage.tsx');
+    assert.match(page, /<th>部门<\/th>/, '表格应包含「部门」列头');
+    assert.equal(
+      (page.match(/formatMemberDepartment\(member\.department\)/g) || []).length,
+      2,
+      '表格与卡片各一处渲染部门',
+    );
   });
 
   it('开关与同一行的文字垂直居中：表格与卡片共用同一个行容器', () => {
@@ -383,6 +404,15 @@ describe('adminMembers 客户端：请求形状与错误码保真', () => {
   it('列表响应缺 members 时抛错（契约漂移不能被当成空列表）', async (t) => {
     t.after(stubFetch(async () => jsonResponse(200, { members: [{ username: 'no-id' }] })));
     await assert.rejects(listAdminMembers(), /contract mismatch/);
+  });
+
+  it('AdminMemberSchema 兼容 department（字符串、null 或缺失）', () => {
+    const withDept = AdminMemberSchema.parse({ ...member(), department: '工程部' });
+    assert.equal(withDept.department, '工程部');
+    const withNull = AdminMemberSchema.parse({ ...member(), department: null });
+    assert.equal(withNull.department, null);
+    const withoutDept = AdminMemberSchema.parse({ ...member() });
+    assert.equal(withoutDept.department, undefined);
   });
 });
 

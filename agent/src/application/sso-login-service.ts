@@ -27,9 +27,14 @@ import {
 import { ssoConfigUnavailable, type OidcIdTokenVerifier } from './oidc-id-token-verifier.js';
 import type { SsoConfig } from './sso-config.js';
 import type { SsoIdentityRecord } from '../infrastructure/mysql/repositories/sso-identity-repository.js';
+import { formatUserExternalSubject } from '../infrastructure/mysql/repositories/organization-repository.js';
 
 /** 不可能通过 `verifyPassword`（算法前缀不是 pbkdf2_sha256）的占位哈希。 */
 export const SSO_PASSWORD_PLACEHOLDER = 'sso$no-local-password';
+
+export interface SsoUserStore {
+  setDepartmentByExternalSubject(externalSubject: string, department: string): Promise<void>;
+}
 
 export interface SsoIdentityStore {
   getBySubject(issuer: string, subject: string): Promise<SsoIdentityRecord | null>;
@@ -49,6 +54,7 @@ export interface SsoLoginServiceDeps {
   readonly identities: SsoIdentityStore;
   readonly credentials: CredentialStore;
   readonly auth: BrowserAuthService;
+  readonly users?: SsoUserStore;
   /** 部署管理员名单：SSO 用户不得以这些用户名建号（会与应急本地账号混淆）。 */
   readonly reservedUsernames?: readonly string[];
   readonly generateId?: () => string;
@@ -80,6 +86,7 @@ export class SsoLoginService {
   readonly identities: SsoIdentityStore;
   readonly credentials: CredentialStore;
   readonly auth: BrowserAuthService;
+  readonly users?: SsoUserStore;
   readonly reserved: ReadonlySet<string>;
   readonly generateId: () => string;
 
@@ -89,6 +96,7 @@ export class SsoLoginService {
     this.identities = deps.identities;
     this.credentials = deps.credentials;
     this.auth = deps.auth;
+    this.users = deps.users;
     this.reserved = new Set(
       (deps.reservedUsernames ?? []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean),
     );
@@ -114,7 +122,27 @@ export class SsoLoginService {
       ? await this.#existingCredential(identity, employeeId)
       : await this.#provision(verified.issuer, verified.subject, employeeId, claims);
     if (!entry.isActive) throw accessUnavailable();
-    return this.auth.establishSsoSession(entry, verified.issuer);
+    const session = await this.auth.establishSsoSession(entry, verified.issuer);
+    await this.#recordDepartment(entry.id, claims);
+    return session;
+  }
+
+  async #recordDepartment(externalUserId: string, claims: Record<string, unknown>): Promise<void> {
+    if (!this.config.departmentClaim) return;
+    const raw = claims[this.config.departmentClaim];
+    if (typeof raw !== 'string') return;
+    const department = raw.trim();
+    if (!department || department.length > 255) return;
+    if (!this.users?.setDepartmentByExternalSubject) return;
+    try {
+      await this.users.setDepartmentByExternalSubject(
+        formatUserExternalSubject('bff', externalUserId),
+        department,
+      );
+    } catch (error) {
+      // 部门只用于展示，会话此时已建立：写入失败不能让登录失败，下次登录会再写。
+      console.warn(`[sso-login] department not recorded: ${(error as Error)?.message ?? String(error)}`);
+    }
   }
 
   async #existingCredential(identity: SsoIdentityRecord, employeeId: string | null): Promise<Credential> {

@@ -1171,7 +1171,7 @@ api-server 与 frontend。回退时保留表与列不 drop；旧版本不读这�
 | `SSO_REDIRECT_URI` | 仅 BFF | 公司 IdP 登记的回调：`<站点 origin>/api/auth/sso/callback` |
 | `SSO_TRANSACTION_SECRET` | **仅 BFF** | ≥32 字符，加密登录事务 Cookie |
 | `SSO_SCOPES` / `SSO_TRANSACTION_TTL_SECONDS` | 仅 BFF | 默认 `openid profile` / 600 |
-| `SSO_EMPLOYEE_ID_CLAIM` / `SSO_ORG_ID` | 仅 Agent | 工号 claim 名（默认 `employee_id`）；SSO 用户统一落入的外部 org |
+| `SSO_EMPLOYEE_ID_CLAIM` / `SSO_DEPARTMENT_CLAIM` / `SSO_ORG_ID` | 仅 Agent | 工号 claim 名（默认 `employee_id`）；部门 claim 名（默认空 = 不读部门）；SSO 用户统一落入的外部 org |
 | `SSO_JWKS_URI` / `SSO_LABEL` | 仅 Agent | JWKS 非 issuer 同源时显式配置；按钮文案 |
 | `SSO_REQUEST_TIMEOUT_MS` | BFF + Agent | discovery / 换票 / JWKS 出站超时，默认 5000，上限 30000 |
 | `SSO_ALLOW_INSECURE_HTTP` | BFF + Agent | 仅开发替身；生产 false |

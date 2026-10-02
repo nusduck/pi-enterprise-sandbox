@@ -20,7 +20,7 @@ function stubService() {
     calls,
     async listMembers(actor, query) {
       calls.push({ op: 'list', actor, query });
-      return { members: [{ user_id: USER, username: 'alice', roles: ['admin'], pinned_roles: [] }], next_cursor: null };
+      return { members: [{ user_id: USER, username: 'alice', department: '工程部', roles: ['admin'], pinned_roles: [] }], next_cursor: null };
     },
     async grantRole(actor, userId, role) {
       calls.push({ op: 'grant', actor, userId, role });
@@ -83,7 +83,9 @@ describe('平台角色管理路由 (/internal/admin/members*)', () => {
       { headers: acting('admin,reviewer') },
     );
     assert.equal(response.status, 200);
-    assert.deepEqual((await response.json()).members[0].username, 'alice');
+    const body = await response.json();
+    assert.deepEqual(body.members[0].username, 'alice');
+    assert.equal(body.members[0].department, '工程部');
     const call = service.calls.at(-1);
     assert.equal(call.op, 'list');
     // 身份来自服务端写入的 `X-Acting-*`，角色集合原样保留（`requestId` 由服务端生成，

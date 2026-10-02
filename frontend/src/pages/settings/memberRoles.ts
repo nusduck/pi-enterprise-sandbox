@@ -50,6 +50,12 @@ export function roleLabel(role: unknown): string {
   return ROLE_LABEL_ZH[key] || key || '—';
 }
 
+/** 部门展示：空值返回「—」。 */
+export function formatMemberDepartment(department?: string | null): string {
+  const text = typeof department === 'string' ? department.trim() : '';
+  return text || '—';
+}
+
 /**
  * 「最近登录」为空的说明。
  *
