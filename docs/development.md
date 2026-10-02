@@ -93,11 +93,15 @@ node --test scripts/smoke-skill-admin-ui.mjs
 `DEPLOYMENT_ENV=production` 时拒绝启动；里面没有任何真实凭据。
 
 ```bash
-# 1. 起假服务（端口/期望 key 可配，默认 127.0.0.1:8787 / dev-hiagent-key）
-node scripts/dev/fake-hiagent.mjs --port 8787 --key dev-hiagent-key
+# 1. 起假服务，接入后端内部网络，别名 hiagent（端口/期望 key 可配）
+docker run -d --name dsh-fake-hiagent --network pi-enterprise-sandbox-backend-internal --network-alias hiagent \
+  -v "$PWD/scripts/dev/fake-hiagent.mjs:/app/fake-hiagent.mjs:ro" --user 1000:1000 node:22-slim \
+  node /app/fake-hiagent.mjs --host 0.0.0.0 --port 8787 --key dev-hiagent-key
 
-# 2. 登记一个 hiagent 远端（与 agent 同网；开发 Compose 允许 http）
-export HIAGENT_APP_KEY=dev-hiagent-key
+# 2. 登记一个 hiagent 远端（与 agent 同网；开发 Compose 允许 http）。
+#    AppKey 写进 .env（env_file 注入 agent / agent-worker）；compose 不会透传任意 shell 变量，
+#    只 export 是进不了容器的。登记表本身可以用 shell 变量传。
+echo 'HIAGENT_APP_KEY=dev-hiagent-key' >> .env
 export A2A_REMOTE_AGENTS_JSON='[{"id":"hi-helper","protocol":"hiagent","name":"火山助手","description":"通用问答","baseUrl":"http://hiagent:8787","authTokenRef":"HIAGENT_APP_KEY"}]'
 
 # 3. 在智能体配置里授权：configJson.delegation.remoteAgents 加 "hi-helper"；
