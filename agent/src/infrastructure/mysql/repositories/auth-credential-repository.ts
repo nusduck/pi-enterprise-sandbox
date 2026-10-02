@@ -83,7 +83,7 @@ export class AuthCredentialRepository {
   }
 
   /**
-   * 修改本人的显示名称 / 邮箱 / 长任务完成邮件开关。显示名称与邮箱在
+   * 修改本人的显示名称 / 邮箱 / 四个邮件通知开关。显示名称与邮箱在
    * `auth_credentials` 与 `users` 各存一份（后者是运行账本与通知收件人的来源），
    * 开关只在 `users`。同一事务里一起改，不留下一半的状态。`patch` 里没出现的键保持不变。
    *
@@ -92,7 +92,14 @@ export class AuthCredentialRepository {
   async updateProfile(
     externalUserId: string,
     userExternalSubject: string,
-    patch: { displayName?: string; email?: string | null; notifyRunComplete?: boolean },
+    patch: {
+      displayName?: string;
+      email?: string | null;
+      notifyRunComplete?: boolean;
+      notifyReviewResult?: boolean;
+      notifyReviewPending?: boolean;
+      notifyRunWaiting?: boolean;
+    },
   ) {
     const now = toMysqlDateTime(this.now());
     const fields: Record<string, unknown> = {};
@@ -100,6 +107,13 @@ export class AuthCredentialRepository {
     if (patch.email !== undefined) fields.email = patch.email;
     const userFields: Record<string, unknown> = { ...fields };
     if (patch.notifyRunComplete !== undefined) userFields.notify_run_complete = patch.notifyRunComplete;
+    if (patch.notifyReviewResult !== undefined) userFields.notify_review_result = patch.notifyReviewResult;
+    if (patch.notifyReviewPending !== undefined) userFields.notify_review_pending = patch.notifyReviewPending;
+    if (patch.notifyRunWaiting !== undefined) userFields.notify_run_waiting = patch.notifyRunWaiting;
+    const touchesSwitch = userFields.notify_run_complete !== undefined
+      || userFields.notify_review_result !== undefined
+      || userFields.notify_review_pending !== undefined
+      || userFields.notify_run_waiting !== undefined;
     if (Object.keys(userFields).length) {
       await this.db.transaction(async (trx: Loose) => {
         if (Object.keys(fields).length) {
@@ -110,7 +124,7 @@ export class AuthCredentialRepository {
         const updated = await trx('tbl_agsvc_users')
           .where({ external_subject: userExternalSubject })
           .update({ ...userFields, updated_at: now });
-        if (patch.notifyRunComplete !== undefined && Number(updated) === 0) {
+        if (touchesSwitch && Number(updated) === 0) {
           throw new Error('user row missing for notification preference');
         }
       });
@@ -123,5 +137,44 @@ export class AuthCredentialRepository {
       .where({ external_subject: userExternalSubject })
       .first('notify_run_complete');
     return Boolean(Number(row?.notify_run_complete ?? 0));
+  }
+
+  /**
+   * 四个邮件通知开关。迁移前的库没有后三列时按新用户默认值（全开）回落，
+   * 不因为缺列把 profile 读成 500。
+   */
+  async getNotificationPrefs(userExternalSubject: string) {
+    const prefs = {
+      notifyRunComplete: false,
+      notifyReviewResult: true,
+      notifyReviewPending: true,
+      notifyRunWaiting: true,
+    };
+    let row: Record<string, unknown> | undefined;
+    try {
+      row = await this.db('tbl_agsvc_users')
+        .where({ external_subject: userExternalSubject })
+        .first(
+          'notify_run_complete',
+          'notify_review_result',
+          'notify_review_pending',
+          'notify_run_waiting',
+        );
+    } catch (err) {
+      // 迁移前的库没有后三列：只读旧列（ER_BAD_FIELD_ERROR），其他错误照常抛出。
+      const code = (err as { code?: string; errno?: number } | null)?.code;
+      const errno = (err as { code?: string; errno?: number } | null)?.errno;
+      if (code !== 'ER_BAD_FIELD_ERROR' && errno !== 1054) throw err;
+      row = await this.db('tbl_agsvc_users')
+        .where({ external_subject: userExternalSubject })
+        .first('notify_run_complete');
+    }
+    if (!row) return prefs;
+    return {
+      notifyRunComplete: Boolean(Number(row.notify_run_complete ?? 0)),
+      notifyReviewResult: row.notify_review_result == null ? true : Boolean(Number(row.notify_review_result)),
+      notifyReviewPending: row.notify_review_pending == null ? true : Boolean(Number(row.notify_review_pending)),
+      notifyRunWaiting: row.notify_run_waiting == null ? true : Boolean(Number(row.notify_run_waiting)),
+    };
   }
 }

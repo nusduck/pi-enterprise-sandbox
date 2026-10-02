@@ -27,6 +27,8 @@
 
 import {
   AGGREGATE_TYPE_REVIEW,
+  AGGREGATE_TYPE_REVIEW_NOTIFICATION,
+  EVENT_TYPE_REVIEW_PENDING_NOTIFICATION,
   EVENT_TYPE_REVIEW_SNAPSHOT,
 } from '../infrastructure/outbox/outbox-status.js';
 import { assertUlid } from '../domain/shared/ulid.js';
@@ -131,6 +133,17 @@ export async function ensureReviewTaskForTerminalRun(
       payloadJson: { reviewTaskId, orgId: run.orgId, requesterUserId: run.userId },
     });
   }
+
+  // 待我审核（design `notification-scenarios.md` §3.2）：与建任务同事务写一行
+  // `review_notification`，收件人由分发器按该 org 的 reviewer 账本推导。
+  // 只在新建时写：重放撞唯一键的上面已直接返回，不重复写通知请求。
+  await repos.outbox.insert({
+    outboxId: assertUlid(input.generateId(), 'reviewPendingNotificationOutboxId'),
+    aggregateType: AGGREGATE_TYPE_REVIEW_NOTIFICATION,
+    aggregateId: reviewTaskId,
+    eventType: EVENT_TYPE_REVIEW_PENDING_NOTIFICATION,
+    payloadJson: { reviewTaskId, orgId: run.orgId, requesterUserId: run.userId },
+  });
 
   return { reviewTaskId, itemCount: artifacts.length, materialCount: materials.length };
 }

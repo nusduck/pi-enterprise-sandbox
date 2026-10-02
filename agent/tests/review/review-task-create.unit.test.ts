@@ -15,13 +15,14 @@ import { describe, it } from 'node:test';
 
 import { applyRunTransitionInTxn } from '../../src/application/run-transition.js';
 import {
+  NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY,
   REVIEW_JOB_CLAIM_ELIGIBILITY,
   REVIEW_NOTIFICATION_CLAIM_ELIGIBILITY,
   RUN_NOTIFICATION_CLAIM_ELIGIBILITY,
   RUN_STREAM_CLAIM_ELIGIBILITY,
   rowMatchesEligibility,
 } from '../../src/infrastructure/outbox/eligibility.js';
-import { AGGREGATE_TYPE_REVIEW, EVENT_TYPE_REVIEW_SNAPSHOT } from '../../src/infrastructure/outbox/outbox-status.js';
+import { AGGREGATE_TYPE_REVIEW, AGGREGATE_TYPE_REVIEW_NOTIFICATION, EVENT_TYPE_REVIEW_PENDING_NOTIFICATION, EVENT_TYPE_REVIEW_SNAPSHOT } from '../../src/infrastructure/outbox/outbox-status.js';
 
 const RUN = {
   runId: '01M1RUN00000000000000000000',
@@ -130,11 +131,20 @@ describe('Run 终态建审核任务', () => {
     assert.ok(draft.materials[0].materialId);
     assert.equal(draft.materials[0].materialId.length, 26);
 
-    // 终态本身仍然写 run 事件与 run_notification，审核快照是第三行。
-    assert.equal(inserted.length, 3);
+    // 终态本身仍然写 run 事件与 run_notification，审核快照是第三行，待我审核通知是第四行。
+    assert.equal(inserted.length, 4);
     assert.equal(inserted[2].aggregateType, AGGREGATE_TYPE_REVIEW);
     assert.equal(inserted[2].eventType, EVENT_TYPE_REVIEW_SNAPSHOT);
     assert.equal(inserted[2].aggregateId, draft.reviewTaskId);
+    assert.equal(inserted[3].aggregateType, AGGREGATE_TYPE_REVIEW_NOTIFICATION);
+    assert.equal(inserted[3].eventType, EVENT_TYPE_REVIEW_PENDING_NOTIFICATION);
+    assert.equal(inserted[3].aggregateId, draft.reviewTaskId);
+    assert.deepEqual(inserted[3].payloadJson, {
+      reviewTaskId: draft.reviewTaskId,
+      orgId: RUN.orgId,
+      requesterUserId: RUN.userId,
+    });
+    assert.ok(!('runId' in inserted[3].payloadJson) && !('run_id' in inserted[3].payloadJson));
   });
 
   it('没有 review_status 的 artifact.ready（direct 会话）不建任务', async () => {
@@ -236,6 +246,21 @@ describe('Run 终态建审核任务', () => {
     );
     assert.equal(
       rowMatchesEligibility({ aggregate_type: 'run_notification' }, REVIEW_NOTIFICATION_CLAIM_ELIGIBILITY),
+      false,
+    );
+    // 待我审核行（review_notification 聚合）只被分发器认领，不会被工作队列抢走。
+    assert.equal(
+      rowMatchesEligibility(
+        { aggregate_type: 'review_notification', event_type: 'review.pending.notification' },
+        NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY,
+      ),
+      true,
+    );
+    assert.equal(
+      rowMatchesEligibility(
+        { aggregate_type: 'review_notification', event_type: 'review.pending.notification' },
+        REVIEW_JOB_CLAIM_ELIGIBILITY,
+      ),
       false,
     );
   });

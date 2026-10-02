@@ -100,6 +100,8 @@ export type CredentialStore = {
   ): Promise<Credential | null>;
   /** 长任务完成邮件开关，存在 users 行上（通知消费者从那里读）。 */
   getNotifyRunComplete?(userExternalSubject: string): Promise<boolean>;
+  /** 四个邮件通知开关；没有实现时按「旧开关照读、新开关默认开」回落。 */
+  getNotificationPrefs?(userExternalSubject: string): Promise<NotificationPrefs>;
   setRole(id: string, role: string): Promise<void>;
   touchLogin(id: string): Promise<void>;
 };
@@ -123,7 +125,38 @@ type MemberRolePort = {
   }): Promise<void>;
 };
 
-type ProfilePatch = { displayName?: string; email?: string | null; notifyRunComplete?: boolean };
+type ProfilePatch = {
+  displayName?: string;
+  email?: string | null;
+  notifyRunComplete?: boolean;
+  notifyReviewResult?: boolean;
+  notifyReviewPending?: boolean;
+  notifyRunWaiting?: boolean;
+};
+
+/** 四个邮件通知开关的服务端快照（`presentProfile` 与 `updateProfile` 共用）。 */
+export type NotificationPrefs = {
+  notifyRunComplete: boolean;
+  notifyReviewResult: boolean;
+  notifyReviewPending: boolean;
+  notifyRunWaiting: boolean;
+};
+
+const NOTIFY_SWITCH_FIELDS = [
+  'notify_run_complete',
+  'notify_review_result',
+  'notify_review_pending',
+  'notify_run_waiting',
+] as const;
+
+type NotifySwitchField = (typeof NOTIFY_SWITCH_FIELDS)[number];
+
+const NOTIFY_SWITCH_PATCH_KEYS: Record<NotifySwitchField, keyof ProfilePatch> = {
+  notify_run_complete: 'notifyRunComplete',
+  notify_review_result: 'notifyReviewResult',
+  notify_review_pending: 'notifyReviewPending',
+  notify_run_waiting: 'notifyRunWaiting',
+};
 
 /** 服务端算出的邮件通知能力；前端据此禁用开关，不自行猜测。 */
 export type NotificationCapability = {
@@ -140,7 +173,14 @@ export const AUTH_MODE_SSO = 'sso';
 export const LOGIN_METHOD_SSO = 'sso';
 const SSO_LABEL = '公司 SSO';
 
-const EDITABLE_PROFILE_FIELDS = ['display_name', 'email', 'notify_run_complete'];
+const EDITABLE_PROFILE_FIELDS = [
+  'display_name',
+  'email',
+  'notify_run_complete',
+  'notify_review_result',
+  'notify_review_pending',
+  'notify_run_waiting',
+];
 
 function safeText(value: unknown, field: string, max: number): string | null {
   if (value == null || value === '') return null;
@@ -662,10 +702,23 @@ export class BrowserAuthService {
     } catch {
       organizationName = null;
     }
-    let notifyRunComplete = false;
-    if (this.credentials.getNotifyRunComplete) {
+    let prefs: NotificationPrefs = {
+      notifyRunComplete: false,
+      notifyReviewResult: true,
+      notifyReviewPending: true,
+      notifyRunWaiting: true,
+    };
+    if (this.credentials.getNotificationPrefs) {
       try {
-        notifyRunComplete = await this.credentials.getNotifyRunComplete(
+        prefs = await this.credentials.getNotificationPrefs(
+          formatUserExternalSubject('bff', entry.id),
+        );
+      } catch {
+        throw browserAuthStoreUnavailable();
+      }
+    } else if (this.credentials.getNotifyRunComplete) {
+      try {
+        prefs.notifyRunComplete = await this.credentials.getNotifyRunComplete(
           formatUserExternalSubject('bff', entry.id),
         );
       } catch {
@@ -678,20 +731,26 @@ export class BrowserAuthService {
       status: entry.isActive ? 'active' : 'disabled',
       created_at: entry.createdAt ?? null,
       last_login_at: entry.lastLoginAt ?? null,
-      notify_run_complete: notifyRunComplete,
+      notify_run_complete: prefs.notifyRunComplete,
+      notify_review_result: prefs.notifyReviewResult,
+      notify_review_pending: prefs.notifyReviewPending,
+      notify_run_waiting: prefs.notifyRunWaiting,
       notifications: { email: this.notificationCapability },
       editable_fields: EDITABLE_PROFILE_FIELDS,
     };
   }
 
   /**
-   * Self-service edit: the display name, the email and the run-completion email
-   * switch. Username, role, organisation and status belong to the deployment /
-   * an administrator, so any other key is refused rather than silently ignored.
+   * Self-service edit: the display name, the email and the four email
+   * notification switches. Username, role, organisation and status belong to the
+   * deployment / an administrator, so any other key is refused rather than
+   * silently ignored.
    *
-   * Turning the switch on needs the capability to be configured and an email
+   * Turning any switch on needs the capability to be configured and an email
    * address to send to; otherwise it is refused (422) instead of "saved" while
-   * no mail would ever go out.
+   * no mail would ever go out. A non-boolean switch value of any of the four
+   * switches is refused with 422 AUTH_INPUT_INVALID
+   * (design `notification-scenarios.md` §5.1).
    */
   async updateProfile(authorization: string | undefined, body: Record<string, unknown>) {
     const { entry, roles, session } = await this.authenticated(authorization);
@@ -733,23 +792,63 @@ export class BrowserAuthService {
       }
       patch.notifyRunComplete = value;
     }
-    // 开关开着就必须有地址：清空邮箱而不同时关掉开关会让通知静默落空。
-    if (patch.email === null && patch.notifyRunComplete === undefined && this.credentials.getNotifyRunComplete) {
-      let enabled: boolean;
-      try {
-        enabled = await this.credentials.getNotifyRunComplete(formatUserExternalSubject('bff', entry.id));
-      } catch {
-        throw browserAuthStoreUnavailable();
+    // 新增的三个开关（design `notification-scenarios.md` §5.1）：类型不是布尔
+    // → 422 AUTH_INPUT_INVALID（字段级：消息里带字段名，与旧开关一致）。打开时的已有校验
+    // （NOTIFICATION_UNAVAILABLE / NOTIFY_EMAIL_REQUIRED）与旧开关一视同仁。
+    for (const field of NOTIFY_SWITCH_FIELDS.slice(1)) {
+      if (!Object.hasOwn(body, field)) continue;
+      const value = (body as Record<string, unknown>)[field];
+      if (typeof value !== 'boolean') {
+        throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', `${field} must be a boolean`);
       }
-      if (enabled) {
-        throw new BrowserAuthError(422, 'NOTIFY_EMAIL_REQUIRED', 'Turn off email notification before clearing the email address');
+      if (value && !this.notificationCapability.available) {
+        throw new BrowserAuthError(422, 'NOTIFICATION_UNAVAILABLE', 'Email notification is not configured on this deployment');
+      }
+      const email = patch.email !== undefined ? patch.email : entry.email;
+      if (value && !email) {
+        throw new BrowserAuthError(422, 'NOTIFY_EMAIL_REQUIRED', 'Set an email address before turning on email notification');
+      }
+      // 联合键写入会收窄成 never：三个字段逐个赋值。
+      if (field === 'notify_review_result') patch.notifyReviewResult = value;
+      else if (field === 'notify_review_pending') patch.notifyReviewPending = value;
+      else patch.notifyRunWaiting = value;
+    }
+    // 「运行完成」开关开着就必须有地址：清空邮箱时只按它的合并有效偏好
+    // （库里存的 + 本次改的）判定，同一请求里一并关掉即可清空。其余三个开关
+    // 默认就是开的，不拦清空——没有邮箱时照常保存，投递时记 skipped（no_email）。
+    if (patch.email === null) {
+      let prefs: NotificationPrefs | null = null;
+      if (this.credentials.getNotificationPrefs) {
+        try {
+          prefs = await this.credentials.getNotificationPrefs(formatUserExternalSubject('bff', entry.id));
+        } catch {
+          throw browserAuthStoreUnavailable();
+        }
+      } else if (this.credentials.getNotifyRunComplete) {
+        try {
+          const enabled = await this.credentials.getNotifyRunComplete(formatUserExternalSubject('bff', entry.id));
+          prefs = { notifyRunComplete: enabled, notifyReviewResult: false, notifyReviewPending: false, notifyRunWaiting: false };
+        } catch {
+          throw browserAuthStoreUnavailable();
+        }
+      }
+      if (prefs) {
+        let runComplete = prefs.notifyRunComplete;
+        if (Object.hasOwn(body, 'notify_run_complete')) {
+          runComplete = (body as Record<string, unknown>).notify_run_complete === true;
+        }
+        if (runComplete) {
+          throw new BrowserAuthError(422, 'NOTIFY_EMAIL_REQUIRED', 'Turn off email notification before clearing the email address');
+        }
       }
     }
     if (!Object.keys(patch).length) {
       throw new BrowserAuthError(422, 'AUTH_INPUT_INVALID', 'Nothing to update');
     }
     // 开关只存在 users 行上：先确保这一行存在，否则更新会落空。
-    if (patch.notifyRunComplete !== undefined) await this.ensureUserProvisioned(entry);
+    if (NOTIFY_SWITCH_FIELDS.some((field) => patch[NOTIFY_SWITCH_PATCH_KEYS[field]] !== undefined)) {
+      await this.ensureUserProvisioned(entry);
+    }
     if (!this.credentials.updateProfile) {
       throw browserAuthStoreUnavailable();
     }

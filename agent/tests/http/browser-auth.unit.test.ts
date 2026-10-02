@@ -44,6 +44,7 @@ function memoryCredentials() {
     async touchLogin() {},
     profileWrites: [] as any[],
     notify: new Map<string, boolean>(),
+    prefs: new Map<string, any>(),
     async updateProfile(id: string, subject: string, patch: any) {
       this.profileWrites.push({ id, subject, patch });
       const row = [...rows.values()].find((candidate) => candidate.id === id);
@@ -52,10 +53,25 @@ function memoryCredentials() {
         if (patch.email !== undefined) row.email = patch.email;
       }
       if (patch.notifyRunComplete !== undefined) this.notify.set(subject, patch.notifyRunComplete);
+      const prev = this.prefs.get(subject) ?? {};
+      const next = { ...prev };
+      for (const key of ['notifyRunComplete', 'notifyReviewResult', 'notifyReviewPending', 'notifyRunWaiting']) {
+        if (patch[key] !== undefined) next[key] = patch[key];
+      }
+      this.prefs.set(subject, next);
       return row || null;
     },
     async getNotifyRunComplete(subject: string) {
       return this.notify.get(subject) ?? false;
+    },
+    async getNotificationPrefs(subject: string) {
+      const stored = this.prefs.get(subject) ?? {};
+      return {
+        notifyRunComplete: this.notify.get(subject) ?? false,
+        notifyReviewResult: stored.notifyReviewResult ?? true,
+        notifyReviewPending: stored.notifyReviewPending ?? true,
+        notifyRunWaiting: stored.notifyRunWaiting ?? true,
+      };
     },
   };
 }
@@ -366,8 +382,19 @@ describe('BrowserAuthService — own profile', () => {
     assert.equal(profile.status, 'active');
     assert.equal(profile.login_method, 'local');
     assert.equal(profile.identity_provider, null);
-    assert.deepEqual(profile.editable_fields, ['display_name', 'email', 'notify_run_complete']);
+    assert.deepEqual(profile.editable_fields, [
+      'display_name',
+      'email',
+      'notify_run_complete',
+      'notify_review_result',
+      'notify_review_pending',
+      'notify_run_waiting',
+    ]);
     assert.equal(profile.notify_run_complete, false);
+    // 新开关默认开（与迁移回填一致），旧开关默认关。
+    assert.equal(profile.notify_review_result, true);
+    assert.equal(profile.notify_review_pending, true);
+    assert.equal(profile.notify_run_waiting, true);
     assert.deepEqual(profile.notifications, { email: { available: false, min_run_duration_ms: null } });
   });
 
@@ -385,9 +412,15 @@ describe('BrowserAuthService — own profile', () => {
     const off: any = await service.updateProfile(auth, { notify_run_complete: false });
     assert.equal(off.notify_run_complete, false);
     assert.equal((await service.profile(auth) as any).notify_run_complete, false);
-    // Clearing both in one request is fine.
+    // Clearing in one request is fine when run_complete goes off in the same request.
     await service.updateProfile(auth, { notify_run_complete: true });
-    const cleared: any = await service.updateProfile(auth, { email: '', notify_run_complete: false });
+    const cleared: any = await service.updateProfile(auth, {
+      email: '',
+      notify_run_complete: false,
+      notify_review_result: false,
+      notify_review_pending: false,
+      notify_run_waiting: false,
+    });
     assert.equal(cleared.email, null);
     assert.equal(cleared.notify_run_complete, false);
   });
@@ -419,6 +452,69 @@ describe('BrowserAuthService — own profile', () => {
     assert.equal(noEmail.credentials.profileWrites.length, 0, 'nothing is written on a refused request');
   });
 
+  it('turns the three new notification switches on and off with the same guards', async () => {
+    const status = (s: number, c: string) => (error: any) =>
+      error instanceof BrowserAuthError && error.status === s && error.code === c;
+    const { service, credentials, auth } = await setup({ available: true, min_run_duration_ms: 0 });
+    const on: any = await service.updateProfile(auth, {
+      email: 'dora@example.com',
+      notify_review_result: true,
+      notify_review_pending: false,
+      notify_run_waiting: true,
+    });
+    assert.equal(on.notify_review_result, true);
+    assert.equal(on.notify_review_pending, false);
+    assert.equal(on.notify_run_waiting, true);
+    assert.deepEqual(credentials.profileWrites[0].patch, {
+      email: 'dora@example.com',
+      notifyReviewResult: true,
+      notifyReviewPending: false,
+      notifyRunWaiting: true,
+    });
+    // 四个开关类型不是布尔一律 → 422 AUTH_INPUT_INVALID（消息里带字段名）。
+    await assert.rejects(
+      service.updateProfile(auth, { notify_review_result: 'yes' }),
+      status(422, 'AUTH_INPUT_INVALID'),
+    );
+    await assert.rejects(
+      service.updateProfile(auth, { notify_run_waiting: 1 }),
+      status(422, 'AUTH_INPUT_INVALID'),
+    );
+    // 三个默认开关为开时清空邮箱成功：只拦 notify_run_complete。
+    await service.updateProfile(auth, { notify_review_result: true });
+    const clearedNew: any = await service.updateProfile(auth, { email: '' });
+    assert.equal(clearedNew.email, null);
+    // 对照：notify_run_complete 为开时清空邮箱仍 422。
+    await service.updateProfile(auth, { email: 'dora@example.com', notify_run_complete: true });
+    await assert.rejects(
+      service.updateProfile(auth, { email: '' }),
+      status(422, 'NOTIFY_EMAIL_REQUIRED'),
+    );
+    const cleared: any = await service.updateProfile(auth, {
+      email: '',
+      notify_run_complete: false,
+    });
+    assert.equal(cleared.email, null);
+    assert.equal(cleared.notify_run_complete, false);
+  });
+
+  it('refuses the new switches when mail is unavailable or the address is missing', async () => {
+    const code = (c: string) => (error: any) => error instanceof BrowserAuthError && error.code === c;
+    const unavailable = await setup();
+    await unavailable.service.updateProfile(unavailable.auth, { email: 'dora@example.com' });
+    await assert.rejects(
+      unavailable.service.updateProfile(unavailable.auth, { notify_review_pending: true }),
+      code('NOTIFICATION_UNAVAILABLE'),
+    );
+    await unavailable.service.updateProfile(unavailable.auth, { notify_review_pending: false });
+
+    const noEmail = await setup({ available: true, min_run_duration_ms: 0 });
+    await assert.rejects(
+      noEmail.service.updateProfile(noEmail.auth, { notify_run_waiting: true }),
+      code('NOTIFY_EMAIL_REQUIRED'),
+    );
+  });
+
   it('updates display name and email in both identity stores', async () => {
     const { service, credentials, auth } = await setup();
     const updated: any = await service.updateProfile(auth, { display_name: '  多拉 ', email: 'dora@example.com' });
@@ -427,7 +523,7 @@ describe('BrowserAuthService — own profile', () => {
     const [write] = credentials.profileWrites;
     assert.equal(write.subject, `bff:${write.id}`, 'users row is addressed by its external subject');
     assert.deepEqual(write.patch, { displayName: '多拉', email: 'dora@example.com' });
-    // Clearing the email is allowed; the other field stays untouched.
+    // 三个新开关默认开也不拦清空（只看 notify_run_complete，默认关）；其他字段不受影响。
     const cleared: any = await service.updateProfile(auth, { email: '' });
     assert.equal(cleared.email, null);
     assert.equal(cleared.display_name, '多拉');

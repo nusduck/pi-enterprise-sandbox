@@ -49,6 +49,8 @@ function mapCronJob(row) {
     lastRunAt: formatDateTime(row.last_run_at),
     misfirePolicy: String(row.misfire_policy),
     concurrencyPolicy: String(row.concurrency_policy),
+    // 迁移前的行没有这一列：读成 null，服务层按默认 'failure' 处理。
+    notifyPolicy: row.notify_policy == null ? null : String(row.notify_policy),
     authProvider: String(row.auth_provider),
     externalOrgId: String(row.external_org_id),
     externalUserId: String(row.external_user_id),
@@ -113,6 +115,7 @@ export class CronJobRepository {
       last_run_at: input.lastRunAt == null ? null : toMysqlDateTime(input.lastRunAt),
       misfire_policy: input.misfirePolicy,
       concurrency_policy: input.concurrencyPolicy,
+      notify_policy: input.notifyPolicy ?? 'failure',
       auth_provider: input.authProvider,
       external_org_id: input.externalOrgId,
       external_user_id: input.externalUserId,
@@ -196,6 +199,7 @@ export class CronJobRepository {
       lastRunAt: 'last_run_at',
       misfirePolicy: 'misfire_policy',
       concurrencyPolicy: 'concurrency_policy',
+      notifyPolicy: 'notify_policy',
       agentId: 'agent_id',
     };
     for (const [key, column] of Object.entries(fields)) {

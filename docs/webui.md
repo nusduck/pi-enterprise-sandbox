@@ -225,7 +225,8 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   「运行」tab 列出所有任务的执行记录，可打开该次运行产生的会话。新建 / 编辑对话框用频率构造器
   （仅一次 / 每天 / 每周 / 每月 / 自定义 cron）拼出表达式，按任务自己的时区实时预览接下来 3 次
   触发；预览与 Agent 的 cron 语义一致（`scheduleModel.ts`，测试直接对照 Agent 的 `nextCronOccurrence`）。
-  一次性任务按所选时区换算成带偏移的 `run_at`。
+  一次性任务按所选时区换算成带偏移的 `run_at`。新建 / 编辑表单另有「完成后通知」下拉
+  （不通知 / 仅失败时（默认）/ 每次，对应 `notify_policy`），发到任务所有者的邮箱；列表与卡片上不展示该字段。
 
 - **产物库**（`/artifacts`，`pages/artifact-library/`，侧栏「产物库」）：本人所有会话的产物按今天 / 本周 / 本月 /
   更早分组排成网格，「全部 / 文档 / 图片 / 数据」与文件名搜索在服务端过滤（`GET /api/artifacts` 不带
@@ -233,9 +234,10 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
   产物按其记录的沙箱会话 ID 对应到会话标题；MCP facade 提交的产物记录的是 workspace ID，对不上会话时显示
   「其他会话」，下载也可能不可用。
 
-- **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：显示名称、邮箱与「长任务完成邮件通知」
-  开关可编辑（`/api/auth/profile`，校验在 `widgets/settings/accountDraft.ts`，前端先校验、服务端为准，失败时保留草稿；
-  服务端 `notifications.email.available` 为假时开关禁用并提示「部署未配置邮件发送」，已打开的仍可关掉；打开时必须保留邮箱，
+- **设置弹窗**（`widgets/settings/SettingsDialog.tsx`）：个人设置，三个分类。账户：显示名称、邮箱与「邮件通知」
+  小节的四个开关（运行完成、审核结果、定时任务等待处理、待我审核——最后一个只对持有 reviewer 角色的用户显示）
+  可编辑（`/api/auth/profile`，校验在 `widgets/settings/accountDraft.ts`，前端先校验、服务端为准，失败时保留草稿；
+  服务端 `notifications.email.available` 为假时开关禁用并提示「部署未配置邮件发送」，已打开的仍可关掉；打开任一开关必须保留邮箱，
   服务端的 `NOTIFY_EMAIL_REQUIRED` / `NOTIFICATION_UNAVAILABLE` 显示在开关下方），用户名、机构、用户类型、登录方式、账户状态、注册时间、
   最近登录只读；另有退出登录。保存后侧栏里的名称要到下次加载页面才更新（`ChatContext` 已贴着行数预算，
   没有加刷新 `authUser` 的入口）。通用：外观（浅色 / 深色 / 跟随系统）、对话显示

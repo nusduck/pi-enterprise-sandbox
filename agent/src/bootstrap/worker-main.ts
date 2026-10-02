@@ -214,6 +214,7 @@ async function runWorkerMain(
     notificationLoop = (hooks.startNotificationLoop || startNotificationLoop)({
       knex: container.knex,
       env,
+      createRepositories: container.createRepositories,
       generateId: container.generateId ?? ulid,
       now: container.now,
     });

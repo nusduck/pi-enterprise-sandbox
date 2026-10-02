@@ -31,6 +31,12 @@ export const CRON_JOB_LIST_DEFAULT_PAGE_LIMIT = 50;
 export const CRON_MISFIRE_POLICIES = Object.freeze(['skip', 'fire_once']);
 export const CRON_CONCURRENCY_POLICIES = Object.freeze(['forbid', 'allow']);
 export const CRON_SCHEDULE_TYPES = Object.freeze(['cron', 'once']);
+/**
+ * 完成后通知策略（design `notification-scenarios.md` D2）：`never` 从不发；
+ * `failure`（默认）只在终态为 FAILED / CANCELLED 时发；`always` 每次都发。
+ * 只影响定时任务触发的 Run 的完成通知，不走「运行完成」开关与时长阈值。
+ */
+export const CRON_NOTIFY_POLICIES = Object.freeze(['never', 'failure', 'always']);
 export const DEFAULT_CRON_MISFIRE_GRACE_MS = 60_000;
 export const DEFAULT_CRON_CLAIM_RETRY_MS = 120_000;
 
@@ -89,6 +95,7 @@ export function presentCronJob(job) {
     last_run_at: toScheduleIso(job.lastRunAt),
     misfire_policy: job.misfirePolicy,
     concurrency_policy: job.concurrencyPolicy,
+    notify_policy: job.notifyPolicy ?? 'failure',
     created_at: toScheduleIso(job.createdAt),
     updated_at: toScheduleIso(job.updatedAt),
   };
@@ -205,6 +212,12 @@ export class CronJobService {
       CRON_CONCURRENCY_POLICIES,
       'forbid',
     );
+    const notifyPolicy = requireChoice(
+      input.notifyPolicy ?? input.notify_policy ?? existing?.notifyPolicy,
+      'notifyPolicy',
+      CRON_NOTIFY_POLICIES,
+      'failure',
+    );
     const enabled = input.enabled == null ? existing?.enabled ?? true : Boolean(input.enabled);
     const agentId = optionalUlid(
       input.agentId ?? input.agent_id ?? existing?.agentId,
@@ -241,6 +254,7 @@ export class CronJobService {
       nextRunAt,
       misfirePolicy,
       concurrencyPolicy,
+      notifyPolicy,
       agentId,
     };
   }

@@ -33,6 +33,13 @@ export const AGGREGATE_TYPE_RUN = 'run';
  */
 export const AGGREGATE_TYPE_RUN_NOTIFICATION = 'run_notification';
 export const EVENT_TYPE_RUN_TERMINAL_NOTIFICATION = 'notification.run_terminal';
+/**
+ * 定时任务触发的 Run 停在 WAITING_APPROVAL / WAITING_INPUT 时的通知请求
+ *（design `notification-scenarios.md` §3.2）。payload `{ status, orgId, userId,
+ * waitKind: 'approval' | 'input', waitId }`——同样不带 `runId` / `run_id` 键，
+ * run id 在 `aggregate_id`。
+ */
+export const EVENT_TYPE_RUN_WAITING_NOTIFICATION = 'run.waiting.notification';
 
 /**
  * 审核流程的**工作队列**（design `agent-output-review.md` §5.3 / §6.2）。
@@ -54,6 +61,12 @@ export const EVENT_TYPE_REVIEW_DECIDED = 'review.decided';
 /** 审核结果通知（复用投递账本，`kind` 取 `review_released` / `review_rejected`）。 */
 export const AGGREGATE_TYPE_REVIEW_NOTIFICATION = 'review_notification';
 export const EVENT_TYPE_REVIEW_DECIDED_NOTIFICATION = 'notification.review_decided';
+/**
+ * 待我审核：审核任务建立时的通知请求（design `notification-scenarios.md` §3.2）。
+ * payload `{ reviewTaskId, orgId, requesterUserId }`——不带 run id 键，任务 id 在
+ * `aggregate_id`，run id 由消费者按任务行回查。
+ */
+export const EVENT_TYPE_REVIEW_PENDING_NOTIFICATION = 'review.pending.notification';
 
 export const DEFAULT_MAX_ATTEMPTS = 10;
 export const DEFAULT_STALE_CLAIM_MS = 60_000;

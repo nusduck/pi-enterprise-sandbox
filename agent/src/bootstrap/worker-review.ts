@@ -5,7 +5,8 @@
  * `container.ts`，那里是行数棘轮热点）：
  *
  * - `ReviewPublisher`：放行/撤回、材料快照、修订版导入（跨服务调用）。
- * - `ReviewNotificationPublisher`：审核结果的邮件通知（复用投递账本）。
+ * - `NotificationDispatcher`：四类邮件通知（两类通知聚合都认领，与通知循环里的
+ *   分发器互斥认领、互不重发——`dedupe_key` 是第二道保险）。
  *
  * **能力关闭时循环照样跑**：审核工作队列与终态邮件无关，不能因为没配 SMTP 就
  * 停止放行产物——那会让「任务已通过、产物却永远不放行」。通知消费者在能力关闭时
@@ -18,7 +19,7 @@
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { resolveEmailNotificationConfig } from '../infrastructure/notification/email-config.js';
 import { NotificationStore } from '../infrastructure/notification/notification-store.js';
-import { ReviewNotificationPublisher } from '../infrastructure/notification/review-notification-publisher.js';
+import { NotificationDispatcher } from '../infrastructure/notification/notification-dispatcher.js';
 import { createSmtpMailer } from '../infrastructure/notification/smtp-mailer.js';
 import { ReviewPublisher } from '../infrastructure/review/review-publisher.js';
 import { createReviewTransportFromEnv } from './review-wiring.js';
@@ -54,7 +55,7 @@ export function startReviewLoop(opts: {
   });
 
   const config = resolveEmailNotificationConfig(opts.env as NodeJS.ProcessEnv);
-  const notifications = new ReviewNotificationPublisher({
+  const notifications = new NotificationDispatcher({
     outbox,
     store: new NotificationStore(opts.knex, { now: opts.now }),
     createRepositories: opts.createRepositories,
@@ -71,7 +72,8 @@ export function startReviewLoop(opts: {
     while (!abort.signal.aborted) {
       let claimed = 0;
       try {
-        // 两个消费者互不认领（不同的 aggregate_type），一个 tick 里都推一次。
+        // 工作队列与通知聚合互不认领，一个 tick 里都推一次。两个循环的分发器
+        // 之间靠 outbox 认领互斥，同一行不会被两个人同时处理。
         const jobResult = await jobs.publishOnce();
         const noteResult = await notifications.publishOnce();
         claimed = jobResult.claimed + noteResult.claimed;

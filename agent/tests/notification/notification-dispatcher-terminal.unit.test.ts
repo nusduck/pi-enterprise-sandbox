@@ -1,10 +1,17 @@
+/**
+ * 合并后的通知分发器：Run 终态分支（design `notification-scenarios.md` §4）。
+ *
+ * 原 `NotificationPublisher` 的单测改为针对分发器，断言保持：普通 Run 的终态
+ * 邮件行为（开关、时长阈值、去重、重试语义）不变，只是认领条件从单聚合扩大到
+ * 两种通知聚合、按 `event_type` 路由。
+ */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { NotificationPublisher } from '../../src/infrastructure/notification/notification-publisher.js';
+import { NotificationDispatcher } from '../../src/infrastructure/notification/notification-dispatcher.js';
 import { PermanentMailError } from '../../src/infrastructure/notification/smtp-mailer.js';
 import {
-  RUN_NOTIFICATION_CLAIM_ELIGIBILITY,
+  NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY,
 } from '../../src/infrastructure/outbox/eligibility.js';
 
 const ORG = '01M1ORG0000000000000000000';
@@ -34,20 +41,25 @@ function context(overrides: Record<string, unknown> = {}) {
     displayName: '多拉',
     email: 'dora@example.com',
     notifyRunComplete: true,
+    notifyReviewResult: true,
+    notifyReviewPending: true,
+    notifyRunWaiting: true,
     ...overrides,
   };
 }
 
 function harness(opts: {
   ctx?: any;
+  cron?: any;
   config?: any;
   mailError?: unknown;
   existingDelivery?: string;
   retryOutcome?: 'retry' | 'failed';
   payload?: Record<string, unknown>;
+  eventType?: string;
 } = {}) {
   const calls: Record<string, any[]> = {
-    claim: [], published: [], failed: [], retry: [], begin: [], sent: [], failure: [], mail: [], load: [],
+    claim: [], published: [], failed: [], retry: [], begin: [], sent: [], failure: [], mail: [], load: [], cron: [],
   };
   const outbox = {
     async claimBatch(args: any) {
@@ -56,6 +68,7 @@ function harness(opts: {
         outboxId: 'OB1',
         claimToken: 'TOK',
         aggregateId: RUN,
+        eventType: opts.eventType ?? 'notification.run_terminal',
         attempts: 1,
         payloadJson: opts.payload ?? { status: 'SUCCEEDED', orgId: ORG, userId: USER },
       }];
@@ -72,6 +85,12 @@ function harness(opts: {
       calls.load.push([runId, scope]);
       return opts.ctx === undefined ? context() : opts.ctx;
     },
+    async loadCronRun(runId: string, scope: any) {
+      calls.cron.push([runId, scope]);
+      return opts.cron === undefined ? null : opts.cron;
+    },
+    async listReviewPendingRecipients() { return []; },
+    now: () => new Date('2026-09-28T02:00:00.000Z'),
     async begin(input: any) {
       calls.begin.push(input);
       if (opts.existingDelivery) {
@@ -88,9 +107,11 @@ function harness(opts: {
       if (opts.mailError) throw opts.mailError;
     },
   };
-  const publisher = new NotificationPublisher({
+  const publisher = new NotificationDispatcher({
     outbox,
     store,
+    createRepositories: () => ({}),
+    db: {},
     mailer,
     config: opts.config ?? ENABLED,
     generateId: () => '01M1DELIVERY00000000000000',
@@ -98,11 +119,12 @@ function harness(opts: {
   return { publisher, calls };
 }
 
-describe('NotificationPublisher', () => {
-  it('claims only run_notification rows', async () => {
+describe('NotificationDispatcher — run terminal', () => {
+  it('claims both notification aggregates and routes by event type', async () => {
     const { publisher, calls } = harness();
     await publisher.publishOnce();
-    assert.deepEqual(calls.claim[0].eligibility, RUN_NOTIFICATION_CLAIM_ELIGIBILITY);
+    assert.deepEqual(calls.claim[0].eligibility, NOTIFICATION_DISPATCH_CLAIM_ELIGIBILITY);
+    assert.deepEqual(calls.claim[0].eligibility.aggregateTypes, ['run_notification', 'review_notification']);
   });
 
   for (const status of ['SUCCEEDED', 'FAILED', 'CANCELLED']) {
@@ -115,6 +137,7 @@ describe('NotificationPublisher', () => {
       assert.match(calls.mail[0].text, /https:\/\/agent\.example\.com\/c\/01M1CONV000000000000000000/);
       assert.deepEqual(calls.load[0], [RUN, { orgId: ORG, userId: USER }], 'recipient comes from the ledger scope');
       assert.equal(calls.begin[0].status, 'sending');
+      assert.equal(calls.begin[0].dedupeKey, `run_terminal:${RUN}`);
       assert.equal(calls.begin[0].recipientHash.length, 64, 'only a digest of the address is stored');
       assert.deepEqual(calls.sent, ['01M1DELIVERY00000000000000']);
       assert.deepEqual(calls.published, [['OB1', 'TOK']]);
@@ -211,9 +234,17 @@ describe('NotificationPublisher', () => {
     for (const h of [retry, exhausted]) assert.equal(h.calls.published.length, 0);
   });
 
+  it('rejects unknown event types instead of silently dropping them', async () => {
+    const { publisher, calls } = harness({ eventType: 'run.something.else' });
+    assert.deepEqual((await publisher.publishOnce()).outcomes, ['failed']);
+    assert.equal(calls.mail.length, 0);
+    assert.equal(calls.failed.length, 1);
+  });
+
   it('requires a mailer when the capability is enabled', () => {
-    assert.throws(() => new NotificationPublisher({
-      outbox: {}, store: {} as any, mailer: null, config: ENABLED, generateId: () => 'x',
+    assert.throws(() => new NotificationDispatcher({
+      outbox: {}, store: {} as any, createRepositories: () => ({}), db: {},
+      mailer: null, config: ENABLED, generateId: () => 'x',
     }), /requires a mailer/);
   });
 });

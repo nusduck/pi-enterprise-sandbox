@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { Agent } from '../../shared/api';
-import type { CronJob, CronJobInput } from '../../shared/api/cron-jobs';
+import type { CronJob, CronJobInput, CronNotifyPolicy } from '../../shared/api/cron-jobs';
 import {
   buildCron,
   formFromCron,
@@ -51,6 +51,7 @@ type Draft = {
   enabled: boolean;
   misfire: CronJobInput['misfire_policy'];
   concurrency: CronJobInput['concurrency_policy'];
+  notify: CronNotifyPolicy;
   form: ScheduleForm;
 };
 
@@ -78,6 +79,7 @@ function draftFor(job: CronJob | null): Draft {
     enabled: job?.enabled ?? true,
     misfire: job?.misfire_policy || 'skip',
     concurrency: job?.concurrency_policy || 'forbid',
+    notify: job?.notify_policy || 'failure',
     form,
   };
 }
@@ -159,6 +161,7 @@ export function ScheduleDialog({
         enabled: draft.enabled,
         misfire_policy: draft.misfire,
         concurrency_policy: draft.concurrency,
+        notify_policy: draft.notify,
       });
     } catch (err) {
       setError((err as Error).message || '保存失败');
@@ -299,6 +302,18 @@ export function ScheduleDialog({
                 <button type="button" aria-pressed={draft.concurrency === 'forbid'} onClick={() => setDraft({ ...draft, concurrency: 'forbid' })}>跳过本次</button>
                 <button type="button" aria-pressed={draft.concurrency === 'allow'} onClick={() => setDraft({ ...draft, concurrency: 'allow' })}>同时运行</button>
               </div>
+            </div>
+            <div className={s.optRow}>
+              <span>完成后通知<small>发到任务所有者的邮箱</small></span>
+              <select
+                id="cj-notify"
+                value={draft.notify}
+                onChange={(e) => setDraft({ ...draft, notify: e.target.value as CronNotifyPolicy })}
+              >
+                <option value="never">不通知</option>
+                <option value="failure">仅失败时</option>
+                <option value="always">每次</option>
+              </select>
             </div>
           </details>
 
