@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createFakeKnex, createFakeState } from '../mysql/fake-knex.js';
 import { createRepositoryBundle } from '../../src/bootstrap/container.js';
 import { GetRunService } from '../../src/application/get-run-service.js';
-import { presentGetRunResponse } from '../../src/bootstrap/create-http-server.js';
+import { presentGetRunResponse } from '../../src/presentation/http/run-presenters.js';
 import { createUlidGenerator } from '../../src/domain/shared/ulid.js';
 
 const ORG = '01K0G2PAV8FPMVC9QHJG7JPN4Z';

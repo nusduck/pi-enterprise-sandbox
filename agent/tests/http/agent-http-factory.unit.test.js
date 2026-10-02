@@ -8,14 +8,14 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createAgentHttpServer } from '../../src/bootstrap/create-http-server.ts';
 import {
-  createAgentHttpServer,
   resolveRequestTraceId,
   resolveRequestTraceContext,
   parseTraceparent,
-  mapErrorToHttp,
-  presentCreateRunResponse,
-} from '../../src/bootstrap/create-http-server.ts';
+} from '../../src/presentation/http/trace-context.js';
+import { mapErrorToHttp } from '../../src/presentation/http/error-mapper.js';
+import { presentCreateRunResponse } from '../../src/presentation/http/run-presenters.js';
 import { readSource } from '../support/read-source.js';
 import {
   OwnerScopedNotFoundError,
@@ -581,6 +581,8 @@ describe('createAgentHttpServer factory', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     assert.equal(res.status, 400);
+    // F02 收敛钉子：缺 auth 的 400 体统一带 AUTH_CONTEXT_REQUIRED。
+    assert.equal((await res.json()).code, 'AUTH_CONTEXT_REQUIRED');
   });
 
   it('events JSON history works (restart-safe, no Map)', async () => {

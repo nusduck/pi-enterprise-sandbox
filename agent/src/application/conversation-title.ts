@@ -80,3 +80,16 @@ export function isPlaceholderConversationTitle(title) {
     normalized === 'new conversation'
   );
 }
+
+/**
+ * 占位标题 → 从消息派生，非占位 → 原样返回。
+ *
+ * 收敛三处「占位检查 → 派生」：`create-run-service` 的首轮写回、
+ * `conversation-service` 列表与详情的两处展示派生。`session-title-projection`
+ * 的用法是另一语义（拿派生值当比较器，判断用户是否改过标题，且消息是按需
+ * 拉取的），硬并会改变拉取时机，不收敛。
+ */
+export function ensureDerivedConversationTitle(currentTitle, messages) {
+  if (!isPlaceholderConversationTitle(currentTitle)) return currentTitle;
+  return conversationTitleFromMessages(messages);
+}

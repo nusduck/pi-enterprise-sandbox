@@ -1,8 +1,7 @@
 /** Owner-scoped durable Trace query service (MySQL is the restart authority). */
 
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
-import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
-import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
+import { OwnerScopedNotFoundError, ValidationError, assertDomainRunId, requireAuth } from './errors.js';
 import {
   normalizeTraceId,
   normalizeSpanId,
@@ -27,7 +26,7 @@ export class TraceQueryService {
   }
 
   async #owner(auth, repos) {
-    if (!auth) throw new ValidationError('auth is required');
+    requireAuth(auth);
     const resolver = new ExternalIdentityResolver(
       {
         organizations: repos.organizations,
@@ -51,21 +50,10 @@ export class TraceQueryService {
     if (typeof runIdRaw !== 'string' || !runIdRaw.trim()) {
       throw new ValidationError('runId is required');
     }
-    if (isLegacyOrUuidIdentity(runIdRaw)) {
-      throw new OwnerScopedNotFoundError('Trace not found', {
-        resource: 'trace_spans',
-        id: runIdRaw,
-      });
-    }
-    let runId;
-    try {
-      runId = assertUlid(runIdRaw, 'runId');
-    } catch {
-      throw new OwnerScopedNotFoundError('Trace not found', {
-        resource: 'trace_spans',
-        id: runIdRaw,
-      });
-    }
+    const runId = assertDomainRunId(runIdRaw, {
+      resource: 'trace_spans',
+      message: 'Trace not found',
+    });
     const repos = this.createRepositories(this.db);
     const owner = await this.#owner(auth, repos);
     const scope = { orgId: owner.orgId, userId: owner.userId };
@@ -126,7 +114,7 @@ export class TraceQueryService {
     } catch {
       throw new ValidationError('traceId must be a non-zero W3C trace id');
     }
-    if (!auth) throw new ValidationError('auth is required');
+    requireAuth(auth);
     const repos = this.createRepositories(this.db);
     const owner = await this.#owner(auth, repos);
     const scope = { orgId: owner.orgId, userId: owner.userId };

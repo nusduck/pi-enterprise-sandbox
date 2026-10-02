@@ -19,14 +19,13 @@
 import http from 'node:http';
 import { createInternalAuthGate } from './internal-auth.js';
 import {
-  parseTraceparentContext,
-  parseTracestate,
   parseTraceparent,
   resolveRequestTraceContext,
   resolveRequestTraceId,
 } from '../presentation/http/trace-context.js';
 import {
-  authSubjectsFromRequest,
+  requireAuthSubjects,
+  parseSseCursor,
   resolveRequestId,
   readIdempotencyKey,
   readBody,
@@ -53,23 +52,6 @@ import { handleReviewRoute } from '../presentation/http/review-routes.js';
 import { handleIdentityRoute } from '../presentation/http/identity-routes.js';
 import { handleSkillRoute } from '../presentation/http/skill-routes.js';
 import { handleAuthRoute } from '../presentation/http/auth-routes.js';
-
-export {
-  parseTraceparentContext,
-  parseTracestate,
-  parseTraceparent,
-  resolveRequestTraceContext,
-  resolveRequestTraceId,
-  authSubjectsFromRequest,
-  resolveRequestId,
-  readIdempotencyKey,
-  readBody,
-  json,
-  mapErrorToHttp,
-  presentCreateRunResponse,
-  presentGetRunResponse,
-  presentToolExecutionResponse,
-};
 
 /** 过渡期宽松类型：这些依赖大多还是 JS 类，形状由各自的服务模块负责。 */
 type Loose = any;
@@ -255,14 +237,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           });
           return;
         }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            code: 'AUTH_CONTEXT_REQUIRED',
-          });
-          return;
-        }
+        const auth = requireAuthSubjects(req, res);
+        if (!auth) return;
         try {
           if (req.method === 'GET') {
             // 形状与边界由 ConversationService 判（越界 → 400）；不在这里 clamp，
@@ -297,14 +273,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           });
           return;
         }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            code: 'AUTH_CONTEXT_REQUIRED',
-          });
-          return;
-        }
+        const auth = requireAuthSubjects(req, res);
+        if (!auth) return;
         const raw = await readBody(req);
         let body: JsonBody = {};
         try {
@@ -344,14 +314,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           try {
             json(
               res,
@@ -379,14 +343,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           const conversationId = decodeURIComponent(m[1]);
           try {
             if (req.method === 'GET') {
@@ -417,15 +375,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error:
-                'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           const idempotencyKey = readIdempotencyKey(req);
           if (!idempotencyKey) {
             json(res, 400, {
@@ -478,14 +429,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           });
           return;
         }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            code: 'AUTH_CONTEXT_REQUIRED',
-          });
-          return;
-        }
+        const auth = requireAuthSubjects(req, res);
+        if (!auth) return;
         try {
           // 契约是 `{ approvals, next_cursor }`：原来的同值 `items` 已删除。
           const query = listQueryParams(parsedUrl, ['status', 'limit', 'cursor']);
@@ -507,14 +452,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           try {
             json(
               res,
@@ -539,14 +478,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           let body;
           try {
             const raw = await readBody(req);
@@ -584,14 +517,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           let body;
           try {
             const raw = await readBody(req);
@@ -630,15 +557,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           json(res, 400, { error: 'messages array is required' });
           return;
         }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error:
-              'X-Acting-User-Id and X-Acting-Organization-Id are required (trusted BFF subjects)',
-            code: 'AUTH_CONTEXT_REQUIRED',
-          });
-          return;
-        }
+        const auth = requireAuthSubjects(req, res);
+        if (!auth) return;
         const idempotencyKey = readIdempotencyKey(req);
         if (!idempotencyKey) {
           json(res, 400, {
@@ -691,13 +611,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           });
           return;
         }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-          });
-          return;
-        }
+        const auth = requireAuthSubjects(req, res);
+        if (!auth) return;
         try {
           const rows = await deps.listRuns({
             auth,
@@ -725,14 +640,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             json(res, 503, { error: 'Trace data plane unavailable', code: 'DEPENDENCY' });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           try {
             const requestTraceId = resolveRequestTraceId(req);
             // The response header identifies this HTTP call. The historical
@@ -758,14 +667,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         const m = path.match(/^\/internal\/agent-runs\/([^/]+)$/);
         if (m && req.method === 'GET') {
           const runId = decodeURIComponent(m[1]);
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error:
-                'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           try {
             const run = await deps.getRunService.execute({ runId, auth });
             const body = presentGetRunResponse(run);
@@ -808,14 +711,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             return;
           }
           const runId = decodeURIComponent(m[1]);
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error:
-                'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           try {
             const rows = await deps.listToolExecutions({ runId, auth });
             json(res, 200, {
@@ -834,39 +731,12 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/events$/);
         if (m && req.method === 'GET') {
           const runId = decodeURIComponent(m[1]);
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error:
-                'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
 
           // Cursor: after / after_sequence / afterSequence + Last-Event-ID
           // (numeric sequence or ULID event id — resolved by SSE service).
-          let after =
-            parseInt(
-              parsedUrl.searchParams.get('after_sequence') ||
-                parsedUrl.searchParams.get('after') ||
-                '0',
-              10,
-            ) || 0;
-          const afterSeqParam =
-            parsedUrl.searchParams.get('afterSequence') ||
-            parsedUrl.searchParams.get('after_sequence');
-          if (afterSeqParam && /^\d+$/.test(afterSeqParam)) {
-            after = Math.max(after, parseInt(afterSeqParam, 10));
-          }
-          const lastEventIdHeader = req.headers['last-event-id'];
-          const lastEventId =
-            typeof lastEventIdHeader === 'string' && lastEventIdHeader.trim()
-              ? lastEventIdHeader.trim()
-              : null;
-          // Numeric Last-Event-ID is still accepted as sequence (legacy).
-          if (lastEventId && /^\d+$/.test(lastEventId)) {
-            after = Math.max(after, parseInt(lastEventId, 10));
-          }
+          const { after, lastEventId } = parseSseCursor(parsedUrl, req);
 
           // JSON list helper for tests / clients that prefer non-SSE
           if (parsedUrl.searchParams.get('format') === 'json') {
@@ -1074,15 +944,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error:
-                'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           const idempotencyKey = readIdempotencyKey(req);
           if (!idempotencyKey) {
             json(res, 400, {
@@ -1138,14 +1001,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         const m = path.match(/^\/internal\/agent-runs\/([^/]+)\/cancel$/);
         if (m && req.method === 'POST') {
           const runId = decodeURIComponent(m[1]);
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error:
-                'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           const idempotencyKey = readIdempotencyKey(req);
           if (!idempotencyKey) {
             // Protocol contract; CancelRunService itself is first-writer durable
@@ -1208,14 +1065,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          const auth = authSubjectsFromRequest(req);
-          if (!auth) {
-            json(res, 400, {
-              error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-              code: 'AUTH_CONTEXT_REQUIRED',
-            });
-            return;
-          }
+          const auth = requireAuthSubjects(req, res);
+          if (!auth) return;
           let body;
           try {
             const raw = await readBody(req);
@@ -1255,14 +1106,8 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           });
           return;
         }
-        const auth = authSubjectsFromRequest(req);
-        if (!auth) {
-          json(res, 400, {
-            error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-            code: 'AUTH_CONTEXT_REQUIRED',
-          });
-          return;
-        }
+        const auth = requireAuthSubjects(req, res);
+        if (!auth) return;
         let body;
         try {
           const raw = await readBody(req);

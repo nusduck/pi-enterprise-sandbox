@@ -7,7 +7,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  authSubjectsFromRequest,
+  requireAuthSubjects,
   json,
   readBody,
   type AuthSubjects,
@@ -41,10 +41,6 @@ export interface CronRouteInput {
   readonly cronJobService?: CronJobServiceLike | null | undefined;
 }
 
-const AUTH_CONTEXT_ERROR = Object.freeze({
-  error: 'X-Acting-User-Id and X-Acting-Organization-Id are required',
-  code: 'AUTH_CONTEXT_REQUIRED',
-});
 const DEPENDENCY_ERROR = Object.freeze({
   error: 'Cron scheduler unavailable',
   code: 'DEPENDENCY',
@@ -72,11 +68,8 @@ function requireCronContext(
     json(res, 503, DEPENDENCY_ERROR);
     return null;
   }
-  const auth = authSubjectsFromRequest(req);
-  if (!auth) {
-    json(res, 400, AUTH_CONTEXT_ERROR);
-    return null;
-  }
+  const auth = requireAuthSubjects(req, res);
+  if (!auth) return null;
   return auth;
 }
 

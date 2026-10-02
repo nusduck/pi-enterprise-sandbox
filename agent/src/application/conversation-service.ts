@@ -16,8 +16,9 @@ import { ExternalIdentityResolver,
   type ExternalAuth,
 } from './parent/external-identity-resolver.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
+import { NO_ROLE } from '../domain/identity/roles.js';
 import {
-  conversationTitleFromMessages,
+  ensureDerivedConversationTitle,
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
 import {
@@ -287,7 +288,7 @@ export class ConversationService {
             owner,
             { limit: 500 },
           );
-          const title = conversationTitleFromMessages(messages);
+          const title = ensureDerivedConversationTitle(row.title, messages);
           if (!isPlaceholderConversationTitle(title)) {
             displayRow = { ...row, title };
           }
@@ -337,9 +338,7 @@ export class ConversationService {
       messages = [];
     }
     const session = await this.#sessionForConversation(repos, row, owner);
-    const title = isPlaceholderConversationTitle(row.title)
-      ? conversationTitleFromMessages(messages)
-      : row.title;
+    const title = ensureDerivedConversationTitle(row.title, messages);
     return presentConversation({ ...row, title }, messages, session);
   }
 
@@ -466,7 +465,7 @@ export class ConversationService {
       auth: {
         actingUserId: owner.userId,
         actingOrganizationId: owner.orgId,
-        actingRole: auth?.role || 'user',
+        actingRole: auth?.role || NO_ROLE,
       },
     });
     if (!sandbox || typeof sandbox.removeSessionWorkspace !== 'function') return;

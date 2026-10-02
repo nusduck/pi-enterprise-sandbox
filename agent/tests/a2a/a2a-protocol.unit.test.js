@@ -28,10 +28,8 @@ import {
 } from '../../src/application/a2a/task-service.js';
 import { A2aStreamService } from '../../src/application/a2a/stream-service.js';
 import { createA2aHttpHandler } from '../../src/presentation/a2a/http-handler.js';
-import {
-  createAgentHttpServer,
-  resolveRequestTraceContext,
-} from '../../src/bootstrap/create-http-server.js';
+import { createAgentHttpServer } from '../../src/bootstrap/create-http-server.js';
+import { resolveRequestTraceContext } from '../../src/presentation/http/trace-context.js';
 import { projectRunStatusToA2a } from '../../src/domain/a2a/status.js';
 import { OwnerScopedNotFoundError } from '../../src/application/errors.js';
 

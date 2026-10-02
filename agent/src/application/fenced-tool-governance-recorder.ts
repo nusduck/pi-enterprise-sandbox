@@ -39,7 +39,7 @@ import {
 import {
   buildCanonicalEnvelope,
   redactEventData,
-} from './fenced-run-event-recorder.js';
+} from './event-envelope.js';
 import { createPromiseTail } from './promise-tail.js';
 import { SANDBOX_TOOL_NAMES } from '../runtime/policy/tool-names.js';
 import { redactPayload } from '../lib/event-redaction.js';
@@ -67,9 +67,9 @@ export {
   assertCompatiblePolicyReplay,
 } from './durable-policy-replay.js';
 
-export type RunEventContext = import('./fenced-run-event-recorder.js').RunEventContext;
+export type RunEventContext = import('./event-envelope.js').RunEventContext;
 export type CanonicalRunEventEnvelope =
-  import('./fenced-run-event-recorder.js').CanonicalRunEventEnvelope;
+  import('./event-envelope.js').CanonicalRunEventEnvelope;
 export class FencedToolGovernanceRecorder {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   tx: Loose;

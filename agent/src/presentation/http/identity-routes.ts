@@ -3,7 +3,7 @@
  * 未映射的身份按 `OwnerScopedNotFoundError` 映射成 404。返回 `true` 表示已处理。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { authSubjectsFromRequest, json, type AuthSubjects } from './request-response.js';
+import { requireAuthSubjects, json, type AuthSubjects } from './request-response.js';
 import { mapErrorToHttp } from './error-mapper.js';
 
 export interface OwnerIdentityServiceLike {
@@ -26,11 +26,8 @@ export async function handleIdentityRoute(input: {
     json(res, 503, { error: 'Identity resolution unavailable', code: 'DEPENDENCY' });
     return true;
   }
-  const auth = authSubjectsFromRequest(req);
-  if (!auth) {
-    json(res, 400, { error: 'X-Acting-User-Id and X-Acting-Organization-Id are required', code: 'AUTH_CONTEXT_REQUIRED' });
-    return true;
-  }
+  const auth = requireAuthSubjects(req, res);
+  if (!auth) return true;
   try {
     json(res, 200, await ownerIdentityService.resolve(auth));
   } catch (error) {

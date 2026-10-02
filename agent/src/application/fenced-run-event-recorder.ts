@@ -16,109 +16,15 @@ import { assertUlid } from '../domain/shared/ulid.js';
 import { SessionFenceConflictError } from '../domain/session/errors.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import {
-  redactPayload,
-  redactInlineSecrets,
-} from '../lib/event-redaction.js';
+  buildCanonicalEnvelope,
+  redactEventData,
+  type CanonicalRunEventEnvelope,
+  type RunEventContext,
+} from './event-envelope.js';
 import { createPromiseTail } from './promise-tail.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
 type Loose = any;
-
-export type RunEventContext = {
-  orgId: string;
-  userId: string;
-  conversationId: string;
-  agentSessionId: string;
-  runId: string;
-  traceId: string;
-  sandboxSessionId?: string | null;
-};
-
-export type CanonicalRunEventEnvelope = {
-  eventId: string;
-  eventVersion: number;
-  sequence: number;
-  type: string;
-  timestamp: string;
-  context: {
-    orgId: string;
-    userId: string;
-    conversationId: string;
-    agentSessionId: string;
-    runId: string;
-    traceId: string;
-    spanId: string | null;
-    sandboxSessionId?: string | null;
-  };
-  data: Record<string, unknown>;
-};
-
-/**
- * Build plan §15.3 envelope (pure).
- *
- * @param {{
- *   eventId: string,
- *   sequence: number,
- *   type: string,
- *   timestamp: string | Date,
- *   context: RunEventContext & { spanId?: string | null },
- *   data?: Record<string, unknown>,
- *   eventVersion?: number,
- * }} input
- * @returns {CanonicalRunEventEnvelope}
- */
-export function buildCanonicalEnvelope(input: { eventId: string, sequence: number, type: string, timestamp: string | Date, context: RunEventContext & { spanId?: string | null }, data?: Record<string, unknown>, eventVersion?: number, }) {
-  const ts =
-    input.timestamp instanceof Date
-      ? input.timestamp.toISOString()
-      : String(input.timestamp);
-  const ctx = input.context;
-  const sandboxSessionId =
-    ctx.sandboxSessionId != null && String(ctx.sandboxSessionId).trim()
-      ? String(ctx.sandboxSessionId)
-      : null;
-  return Object.freeze({
-    eventId: String(input.eventId),
-    eventVersion: input.eventVersion ?? 1,
-    sequence: Number(input.sequence),
-    type: String(input.type),
-    timestamp: ts,
-    context: Object.freeze({
-      orgId: String(ctx.orgId),
-      userId: String(ctx.userId),
-      conversationId: String(ctx.conversationId),
-      agentSessionId: String(ctx.agentSessionId),
-      runId: String(ctx.runId),
-      traceId: String(ctx.traceId ?? ''),
-      spanId: ctx.spanId != null ? String(ctx.spanId) : null,
-      // Browser download/upload/list need the sandbox session ULID. Agent
-      // session alone cannot build /api/files/artifact-download URLs.
-      ...(sandboxSessionId ? { sandboxSessionId } : {}),
-    }),
-    data: Object.freeze(
-      input.data && typeof input.data === 'object' && !Array.isArray(input.data)
-        ? { ...input.data }
-        : {},
-    ),
-  });
-}
-
-/**
- * Redact event data for durable storage (secrets never stored).
- * @param data
- * @returns {Record<string, unknown>}
- */
-export function redactEventData(data: unknown) {
-  if (data == null) return {};
-  if (typeof data === 'string') {
-    return { text: redactInlineSecrets(data) };
-  }
-  const redacted = redactPayload(data);
-  if (redacted && typeof redacted === 'object' && !Array.isArray(redacted)) {
-    return (redacted as Record<string, unknown>);
-  }
-  return { value: redacted };
-}
 
 export class FencedRunEventRecorder {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。

@@ -25,7 +25,6 @@
  */
 
 import { RUN_STATUS, runStateMachine } from '../domain/run/index.js';
-import { assertUlid, isLegacyOrUuidIdentity } from '../domain/shared/ulid.js';
 import { ExternalIdentityResolver,
   type ExternalAuth,
 } from './parent/external-identity-resolver.js';
@@ -35,6 +34,7 @@ import { terminalizeParkedWaitingInputInTxn } from './parked-interaction-cancel.
 import {
   OwnerScopedNotFoundError,
   ValidationError,
+  assertDomainRunId,
 } from './errors.js';
 
 /** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
@@ -365,21 +365,7 @@ export class CancelRunService {
     if (typeof input.runId !== 'string' || !input.runId.trim()) {
       throw new ValidationError('runId is required');
     }
-    if (isLegacyOrUuidIdentity(input.runId)) {
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: input.runId,
-      });
-    }
-    let runId;
-    try {
-      runId = assertUlid(input.runId, 'runId');
-    } catch {
-      throw new OwnerScopedNotFoundError('Run not found', {
-        resource: 'runs',
-        id: input.runId,
-      });
-    }
+    const runId = assertDomainRunId(input.runId);
     if (!input.auth) {
       throw new ValidationError('auth (trusted external subjects) is required');
     }
