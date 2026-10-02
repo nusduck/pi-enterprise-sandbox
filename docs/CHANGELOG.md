@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 取消没有活 Worker 的 Run 时工具账本行永不结束
+
+- Worker 被强杀后，恢复扫描会因为账本里有执行中的工具（副作用未知）而转人工；此时用户取消 Run，
+  Run 进入 `CANCELLED`，但那些工具行一直停在 `RUNNING`。现在 Run 进入 `CANCELLED` 的同一事务里会给
+  未结束的工具行收尾：执行中的记为 `UNKNOWN`（错误码 `RUN_CANCELLED_OUTCOME_UNKNOWN`，结果不明），
+  未开始的记为 `CANCELLED`，并各追加一条 `tool.execution.failed` 事件。其他终态不受影响。
+
 ### Fixed — 分页每页条数选择器 UI 修复
 
 - 分页组件（`Pager`）的每页条数选择从原生 `<select>` 改为自定义可访问下拉菜单（`role="listbox"` / `role="option"`，基于 Portal 浮层定位并自适应翻转），消除 macOS 下原生弹出菜单与左侧文案重叠、缺少单位标识与系统暗黑模式毛玻璃遮挡的问题，并统一暗色/亮色视觉与键盘交互。
