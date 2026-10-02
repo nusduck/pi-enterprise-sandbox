@@ -27,7 +27,7 @@ function bullet(t: { name: string; description: string | null }): string {
 
 export function formatDelegationSection(
   targets: ReadonlyArray<{ name: string; description: string | null }>,
-  remote: ReadonlyArray<{ name: string; description: string | null }> = [],
+  remote: ReadonlyArray<{ name: string; description: string | null; protocol?: string }> = [],
 ): string {
   if (targets.length === 0 && remote.length === 0) return '';
   const out = ['## Delegation'];
@@ -46,6 +46,14 @@ export function formatDelegationSection(
         'Share only what the task needs. Available remote agents (use the id):',
       ...remote.map(bullet),
     );
+    // HiAgent 远端在同一会话里延续上下文（H2/H3）：模型需要全新对话时才传参，默认不提。
+    const continuing = remote.filter((r) => r.protocol === 'hiagent').map((r) => r.name);
+    if (continuing.length > 0) {
+      out.push(
+        `Conversations with ${continuing.join(', ')} continue from the previous turn in this session; ` +
+          'pass `new_conversation: true` only when you need a fresh start.',
+      );
+    }
   }
   return out.join('\n');
 }
@@ -67,7 +75,7 @@ export async function withDelegationSection(input: {
   transactionManager: { run: (fn: (trx: Loose) => Promise<Loose>) => Promise<Loose> };
   createRepositories: (db: Loose) => Loose;
   /** 测试注入；缺省读进程环境的 `A2A_REMOTE_AGENTS_JSON`。 */
-  remoteRegistry?: ReadonlyArray<{ id: string; description: string }>;
+  remoteRegistry?: ReadonlyArray<{ id: string; description: string; protocol?: string }>;
 }): Promise<string> {
   const { agents, remoteAgents } = input.delegation;
   if (agents.length === 0 && remoteAgents.length === 0) return input.lead;
@@ -75,8 +83,8 @@ export async function withDelegationSection(input: {
   // 名单里有、但清单里已没有的远端不进提示：工具会拒，列出来只会误导模型。
   const remote = remoteAgents
     .map((id) => registry.find((entry) => entry.id === id))
-    .filter((entry): entry is { id: string; description: string } => entry !== undefined)
-    .map((entry) => ({ name: entry.id, description: entry.description || null }));
+    .filter((entry): entry is { id: string; description: string; protocol?: string } => entry !== undefined)
+    .map((entry) => ({ name: entry.id, description: entry.description || null, protocol: entry.protocol }));
   const targets = agents.length === 0 ? [] : await input.transactionManager.run(async (trx) => {
     const repos = input.createRepositories(trx);
     const out: Array<{ name: string; description: string | null }> = [];

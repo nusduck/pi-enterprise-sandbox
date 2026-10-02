@@ -12,7 +12,7 @@ import {
   RemoteA2aError,
   deriveMessageId,
 } from '../../src/runtime/providers/a2a-remote-client.js';
-import type { RemoteAgentEntry } from '../../src/runtime/providers/a2a-remote-registry.js';
+import type { A2aRemoteAgentEntry } from '../../src/runtime/providers/a2a-remote-registry.js';
 
 const TOKEN = 'remote-test-token-value';
 
@@ -77,11 +77,12 @@ function task(id: string, state: string, extra: Record<string, unknown> = {}) {
   return { kind: 'task', id, contextId: 'ctx-1', status: { state, ...extra }, artifacts: [], history: [] };
 }
 
-function entry(fake: Fake, over: Partial<RemoteAgentEntry> = {}): RemoteAgentEntry {
+function entry(fake: Fake, over: Partial<A2aRemoteAgentEntry> = {}): A2aRemoteAgentEntry {
   return {
     id: 'agent-b',
     name: 'Agent B',
     description: '',
+    protocol: 'a2a',
     cardUrl: `${fake.base}/a2a/agents/b/.well-known/agent-card.json`,
     authTokenRef: 'REMOTE_B_TOKEN',
     timeoutMs: 60_000,

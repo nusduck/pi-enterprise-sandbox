@@ -687,8 +687,7 @@ export class DshRunExecutor {
         : null;
       this._runtime = await this.dshRuntimeFactory.create({
         agentVersion,
-        // 此处只传 persona + Delegation；平台路径/任务约定由 scoped sections 注入。
-        // 专业人格不是最终系统提示词，权限以执行 guard 为准。
+        // 只传 persona + Delegation（scoped sections 另行注入）；权限以执行 guard 为准。
         systemPrompt: await withDelegationSection({ lead: boundVersion.systemPrompt, delegation: boundVersion.delegation, orgId: scope.orgId, transactionManager: this.tx, createRepositories: this.createRepositories }),
         agentSession: session,
         sessionSnapshot,
@@ -701,20 +700,13 @@ export class DshRunExecutor {
         // 本 Run 的风险解析函数（平台层 + 租户层合并）。**必须按 Run 传**：
         // 租户层来自 AgentVersion，而工厂是进程级单例。
         riskOverrides: runRiskResolver,
-        // Complete risk decision (including custom riskApproval and nested MCP
-        // policy) is kept alongside the legacy level callback. The runtime
-        // policy merges this with AgentVersion authorization before lookup of
-        // any durable approval.
+        // Complete risk decision kept alongside the legacy level callback; the runtime
+        // policy merges it with AgentVersion authorization before durable approval lookup.
         policyResolver: runPolicyResolver,
-        // 把 runtime 侧的审批判定接到 durable 面（ADR 0009 D5 / 计划 H4.3）。
-        // 少了这一步，策略挂载点用的是进程内的 InMemoryApprovalStore：判定是
-        // 对的，但不落库、不发事件、不停泊 Run、不释放 Worker——审批链条从
-        // 判定之后就断了。2026-08-31 之前 recorder 只经 extensionBundleFactory
-        // 到达运行时，而那批旧引擎 Extension 已经删了。
-        // 本 Run 的应用层服务，经 ALS 交给注册在进程级的 provider（计划 H5）。
-        // provider 是 boot 时注册一次的单例，而队列绑着这个 Run 的事务与租户
-        // scope，所以只能在调用时按 Run 取——与 ctx.fs/shell/jobs 走 exec-rpc
-        // ALS 是同一条纪律（ADR 0009 D3）。
+        // 把 runtime 侧的审批判定接到 durable 面（ADR 0009 D5 / 计划 H4.3）：缺了它，
+        // 策略挂载点用进程内 InMemoryApprovalStore——判定对但不落库、不发事件、不停泊 Run。
+        // 本 Run 的应用层服务经 ALS 交给进程级 provider（计划 H5）：单例插件在
+        // 调用时取本 Run 的那份——与 ctx.fs/shell/jobs 走 exec-rpc ALS 同一条纪律。
         ...(this.subagentSpawnPort
           ? {
               runServices: buildRunServices({
@@ -722,6 +714,12 @@ export class DshRunExecutor {
                 parentRunId: runId,
                 tenant: { orgId: eventContext.orgId, userId: eventContext.userId },
                 delegation: boundVersion.delegation,
+                remoteScope: { orgId: eventContext.orgId, userId: eventContext.userId, conversationId: eventContext.conversationId },
+                remoteConversations: {
+                  get: (input) => this.tx.run((trx) => this.createRepositories(trx).remoteConversations.getBinding(input, input.remoteAgentId)),
+                  set: (input) => this.tx.run((trx) => this.createRepositories(trx).remoteConversations.setBinding(input, input.remoteAgentId, input.remoteConversationId)),
+                  clear: (input) => this.tx.run((trx) => this.createRepositories(trx).remoteConversations.clearBinding(input, input.remoteAgentId)),
+                },
               }),
             }
           : {}),

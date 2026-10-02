@@ -330,6 +330,20 @@ WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.ts`�
 - 结果只取文本（≤16 000 字符；状态消息与 artifact 都没有文本时回读 history 里最后一条 agent 消息）与产物的名称/链接，不下载字节；日志不记 prompt 与凭据。
 - 不新增表：参数、结果与审批都在工具账本里。
 
+#### 远端 HiAgent 委派（火山应用对话 API）
+
+设计见 [`design/hiagent-remote-delegation.md`](design/hiagent-remote-delegation.md)。
+同一登记表、同一工具的第二种协议：条目写 `protocol: "hiagent"`（缺省 `a2a`），工具按协议
+选择客户端，`AgentVersion` 授权、审批策略（`external_high`）、前端「协作」tab 都不变。
+
+- HiAgent 没有 A2A 面：`baseUrl` 指向部署提供的应用 API 根（`POST {baseUrl}/create_conversation` /
+  `chat_query_v2` 阻塞模式），鉴权头 `Apikey`，值在调用时从 `authTokenRef` 环境变量读。
+- 同一平台会话里对同一远端的连续委派默认**续聊**：绑定 `(org, user, conversation, remote)` →
+  远端会话 ID 存在 `tbl_agsvc_remote_conversations`，模型拿不到也传不进远端会话 ID；
+  `new_conversation: true` 强制全新对话（A2A 远端忽略该参数）。
+- 远端会话失效时删绑定、新建、只重试一次；`think_messages` / `tool_messages` 不回给模型；
+  结果形状与 A2A 一致（`taskId` 取 `task_id`，`state` 为 `completed`，`artifacts` 为空）。
+
 `LEGACY_REQUIRED_EXTENSION_NAMES`（三个，不含 `user-interaction`）仅用于兼容
 `user-interaction` 拆分之前的配置：给出这三个即隐含启用 `user-interaction`，
 `ask_user` 不会静默消失。

@@ -18,6 +18,7 @@ const ENTRY: RemoteAgentEntry = {
   id: 'finance-bot',
   name: '财务助手',
   description: '报销与预算',
+  protocol: 'a2a',
   cardUrl: 'https://finance.example/card.json',
   authTokenRef: 'A2A_FINANCE_TOKEN',
   timeoutMs: 60_000,

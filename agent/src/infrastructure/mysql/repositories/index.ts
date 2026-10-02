@@ -143,6 +143,10 @@ export {
 } from './trace-span-repository.js';
 export { InteractionRepository } from './interaction-repository.js';
 export {
+  RemoteConversationRepository,
+  REMOTE_CONVERSATIONS_TABLE,
+} from './remote-conversation-repository.js';
+export {
   TaskStateRepository,
   mapTodo,
   mapMemory,

@@ -21,7 +21,7 @@ import type {
   DurableSubagentQueue,
   DurableSubagentStore,
 } from '../runtime/providers/durable-subagent.js';
-import type { RunDelegationServices } from '../runtime/providers/run-services.js';
+import type { RunDelegationServices, RemoteConversationBindings } from '../runtime/providers/run-services.js';
 
 /** `SubagentSpawnService` 里本适配器用到的那部分。 */
 interface SpawnServiceLike {
@@ -137,6 +137,46 @@ function promptToTask(prompt: readonly unknown[]): string {
 }
 
 /**
+ * HiAgent 远端会话绑定的持久实现（docs/design/hiagent-remote-delegation.md H3）。
+ * 作用域在装配时固定，行为与 infra 仓储的 owner-scope 一致：跨 scope 查不到。
+ */
+export interface RemoteConversationStore {
+  get(input: {
+    orgId: string;
+    userId: string;
+    conversationId: string;
+    remoteAgentId: string;
+  }): Promise<string | null>;
+  set(input: {
+    orgId: string;
+    userId: string;
+    conversationId: string;
+    remoteAgentId: string;
+    remoteConversationId: string;
+  }): Promise<void>;
+  clear(input: {
+    orgId: string;
+    userId: string;
+    conversationId: string;
+    remoteAgentId: string;
+  }): Promise<void>;
+}
+
+/** 把持久 store 绑到本 Run 的 scope 上，交 ALS 里的工具用。 */
+export function bindRemoteConversationBindings(
+  scope: { orgId: string; userId: string; conversationId: string },
+  store: RemoteConversationStore,
+): RemoteConversationBindings {
+  const fixed = { ...scope };
+  return {
+    getBinding: (remoteAgentId) => store.get({ ...fixed, remoteAgentId }),
+    setBinding: (remoteAgentId, remoteConversationId) =>
+      store.set({ ...fixed, remoteAgentId, remoteConversationId }),
+    clearBinding: (remoteAgentId) => store.clear({ ...fixed, remoteAgentId }),
+  };
+}
+
+/**
  * 组装本 Run 的服务包，交给 `runWithRunServices` 的 ALS。
  *
  * 每 Run 一份：队列实例里存着 jobId → childRunId 的映射，做成进程级会串。
@@ -147,6 +187,10 @@ export function buildRunServices(input: {
   tenant: { orgId: string; userId: string };
   /** 本 Run 的 AgentVersion 的 `delegation`；名单为空的那一类不挂服务。 */
   delegation?: { agents: readonly string[]; remoteAgents: readonly string[] };
+  /** hiagent 续聊的本 Run 作用域；给了才挂 scope + bindings（A2A 不需要）。 */
+  remoteScope?: { orgId: string; userId: string; conversationId: string };
+  /** 绑定持久化；缺省时 hiagent 分支 fail-closed，不回退内存实现。 */
+  remoteConversations?: RemoteConversationStore;
 }): {
   subagents: {
     queue: DurableSubagentQueue;
@@ -155,7 +199,7 @@ export function buildRunServices(input: {
     parentRunId: string;
   };
   delegation?: RunDelegationServices;
-  remoteDelegation?: { agents: readonly string[]; runId: string };
+  remoteDelegation?: { agents: readonly string[]; runId: string; scope?: { orgId: string; userId: string; conversationId: string }; bindings?: RemoteConversationBindings };
 } {
   const queue = new SpawnServiceSubagentQueue(input.spawnPort, input.parentRunId);
   const store = new SpawnServiceSubagentStore(
@@ -166,6 +210,12 @@ export function buildRunServices(input: {
   );
   const agents = Object.freeze([...(input.delegation?.agents ?? [])]);
   const remoteAgents = Object.freeze([...(input.delegation?.remoteAgents ?? [])]);
+  const remoteScope = input.remoteScope
+    ? Object.freeze({ ...input.remoteScope })
+    : undefined;
+  const bindings = remoteScope && input.remoteConversations
+    ? bindRemoteConversationBindings(remoteScope, input.remoteConversations)
+    : undefined;
   return {
     subagents: {
       queue,
@@ -177,7 +227,14 @@ export function buildRunServices(input: {
       ? { delegation: buildDelegationServices(input.spawnPort, input.parentRunId, input.tenant, agents) }
       : {}),
     ...(remoteAgents.length > 0
-      ? { remoteDelegation: { agents: remoteAgents, runId: input.parentRunId } }
+      ? {
+          remoteDelegation: {
+            agents: remoteAgents,
+            runId: input.parentRunId,
+            ...(remoteScope ? { scope: remoteScope } : {}),
+            ...(bindings ? { bindings } : {}),
+          },
+        }
       : {}),
   };
 }

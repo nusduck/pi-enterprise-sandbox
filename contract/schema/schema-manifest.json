@@ -39,7 +39,8 @@
     "20261001000004_review_ledger.js",
     "20261002000001_browser_auth_sessions.js",
     "20261002000002_sso_identities.js",
-    "20261002000003_agent_visibility.js"
+    "20261002000003_agent_visibility.js",
+    "20261003000001_hiagent_remote_conversations.js"
   ],
   "allowedExtraTables": [],
   "tables": {
@@ -5567,6 +5568,151 @@
           "onDelete": "RESTRICT"
         },
         "process_executions_user_id_foreign": {
+          "columns": [
+            "user_id"
+          ],
+          "referencedTable": "tbl_agsvc_users",
+          "referencedColumns": [
+            "user_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        }
+      }
+    },
+    "tbl_agsvc_remote_conversations": {
+      "engine": "InnoDB",
+      "collation": "utf8mb4_unicode_ci",
+      "columns": {
+        "binding_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "conversation_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "created_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "org_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "remote_agent_id": {
+          "type": "varchar(32)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "remote_conversation_id": {
+          "type": "varchar(191)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        },
+        "updated_at": {
+          "type": "datetime(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP(3)",
+          "extra": "",
+          "charset": null,
+          "collation": null,
+          "generation": null
+        },
+        "user_id": {
+          "type": "char(26)",
+          "nullable": false,
+          "default": null,
+          "extra": "",
+          "charset": "utf8mb4",
+          "collation": "utf8mb4_unicode_ci",
+          "generation": null
+        }
+      },
+      "indexes": {
+        "PRIMARY": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "binding_id"
+          ]
+        },
+        "ind_agsvc_rc_a1": {
+          "unique": true,
+          "type": "BTREE",
+          "columns": [
+            "conversation_id",
+            "remote_agent_id"
+          ]
+        },
+        "ind_agsvc_rc_i1": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "org_id",
+            "user_id"
+          ]
+        },
+        "ind_agsvc_rc_i2": {
+          "unique": false,
+          "type": "BTREE",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "foreignKeys": {
+        "tbl_agsvc_remote_conversations_conversation_id_foreign": {
+          "columns": [
+            "conversation_id"
+          ],
+          "referencedTable": "tbl_agsvc_conversations",
+          "referencedColumns": [
+            "conversation_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "tbl_agsvc_remote_conversations_org_id_foreign": {
+          "columns": [
+            "org_id"
+          ],
+          "referencedTable": "tbl_agsvc_organizations",
+          "referencedColumns": [
+            "org_id"
+          ],
+          "onUpdate": "RESTRICT",
+          "onDelete": "RESTRICT"
+        },
+        "tbl_agsvc_remote_conversations_user_id_foreign": {
           "columns": [
             "user_id"
           ],
