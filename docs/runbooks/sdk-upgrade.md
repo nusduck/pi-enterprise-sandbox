@@ -103,7 +103,7 @@ When upstream changes matter:
 | Change | Action |
 |--------|--------|
 | session format / chunk-rows | Copy representative persisted entries; prove the new image restores pre-upgrade sessions |
-| Tool result / event field renames | Update `agent/src/runtime/projection/sse.ts` and its unit tests; keep durable platform events and BFF SSE types stable for frontend |
+| Tool result / event field renames | Update `agent/src/infrastructure/dsh/event-projector.ts` and its unit tests; keep durable platform events and BFF SSE types stable for frontend |
 | Default built-in local fs/shell/sandbox re-enabled | **Block release** until `src/runtime/plugins/manifest.ts` still disables them and `boot.test.ts` still asserts the composed result |
 | Credential provider fallback to Local | **Block release** — ADR 0007 明令不得组合出厂 `LocalCredentialProvider` |
 | Model / auth storage format | Verify env-credentials + model registry still accept LLMIO key path |

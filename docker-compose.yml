@@ -646,8 +646,6 @@ services:
       # 公司 SSO 的 client secret / 事务密钥只属于 BFF。
       SSO_CLIENT_SECRET: ""
       SSO_TRANSACTION_SECRET: ""
-      # Listen address only — does NOT authorize clients. See ALLOWED_CLIENT_CIDRS.
-      SANDBOX_BIND_HOST: ${SANDBOX_BIND_HOST:-0.0.0.0}
       SANDBOX_PORT: 8081
       # skill 草稿根（ADR 0009 D7）。createExecAppFromEnv 默认仍 fail-closed；
       # Compose 在这里显式打开。exec 按 <base>/<orgId>/<userId>
@@ -734,8 +732,6 @@ services:
       # 空值 = 拒绝全部内部面请求；非法 CIDR = 拒绝启动。开发默认放行回环与私网段
       # （Compose 网络在 Docker Desktop 为 172.x，在 OrbStack 为 192.168.x）。
       EXEC_INTERNAL_ALLOW_CIDR: ${EXEC_INTERNAL_ALLOW_CIDR:-127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:-*}
-      SANDBOX_CORS_ALLOW_CREDENTIALS: ${SANDBOX_CORS_ALLOW_CREDENTIALS:-true}
       SANDBOX_APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
       SANDBOX_APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       # Match agent/agent-worker service key (dev placeholder; prod :? override).

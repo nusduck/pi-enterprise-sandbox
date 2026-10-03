@@ -41,7 +41,7 @@ facade 是 slim 镜像，不带模型工具链、Bubblewrap、执行面代码与
 │    Internal execution plane: files · execution · process │
 │    search · datasets · artifacts · resource limits       │
 │    + MCP facade: same Dockerfile, separate slim image    │
-│    MySQL 8 (sole formal DB topology, dev + prod)         │
+│    MySQL（dev/CI 5.7，prod 8 / UPDRDB，见 deployment.md）         │
 │    container:8081 only — no host port in dev or prod     │
 ├──────────────────────────────────────────────────────────┤
 │    Redis 5.0.14 (Agent-only runtime coordination)        │
@@ -148,9 +148,10 @@ Agent（DeepSeek Harness）运行在独立 `agent/` 服务中，而非浏览器�
 `/tmp` 采用 Session 私有持久化目录而不是每次执行独立 tmpfs。该选择、配额与
 清理边界见 [ADR 0004](adr/0004-session-persistent-tmp.md)。
 
-### 4. MySQL 8 唯一正式持久化拓扑
+### 4. MySQL 唯一正式持久化拓扑
 
-- **dev / prod 均使用 MySQL 8**（`docker-compose.yml` + `docker-compose.prod.yml`）
+- **dev / CI 使用 MySQL 5.7**（`docker-compose.yml`），**生产使用 MySQL 8 /
+  UPDRDB**（`docker-compose.prod.yml` + ADR 0011）
 - 凭据与 DSN 来自环境变量：`AGENT_DATABASE_URL`、`SANDBOX_DATABASE_URL`、`MYSQL_*`
 - 所有服务启动（含 development）都拒绝 SQLite / PostgreSQL；Sandbox
   测试使用 connection-free fakes 或不可连接的 MySQL-shaped DSN，不安装

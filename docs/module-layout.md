@@ -56,7 +56,8 @@ agent/src/runtime/ Agent 侧的 DSH 组合层（agent 私有，同一次 tsc）
   plugins/           类型化清单，`npm run gen:patch` 写出 YAML
   providers/         ctx.fs / ctx.shell / ctx.jobs / sessionPersistence / skills / …
   policy/            四个挂载点：pre-execute / guard / execute / post-execute
-  projection/        session/event → 平台 Run Event → SSE（契约逐字节不变）
+  # 事件投影不在 runtime/ 下：平台事件即 SSE 契约（ADR 0014），投影实现位于
+  # agent/src/infrastructure/dsh/event-projector.ts 及 BFF 侧
 exec/              执行面 + MCP facade（取代 Python 版 sandbox/ 全部内容）
   src/fs/            WorkspaceFileSystem extends LocalFileSystem + 围栏
                      make-workspace-fs.ts 是**唯一**构造入口（每次新建 cordis

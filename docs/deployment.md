@@ -619,6 +619,7 @@ exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-1
 | `AGENT_RUN_MAX_TOOL_CALLS` | `200` | 单个 Run 最多执行的工具调用数；达到后下一轮只能基于已有结果作答 |
 | `AGENT_RUN_MAX_IDENTICAL_TOOL_CALLS` | `6` | 同一工具与规范化参数组合的最多执行次数 |
 | `AGENT_RUN_MAX_MODEL_TURNS` | `120` | 单个 Run 最多模型回合数；达到后下一轮禁用工具并要求作答 |
+| `AGENT_RUN_DEADLINE_MS` | `1800000` | 单个 Run 总截止时间（ms，默认 30 分钟）；超时后停止继续工具调用 |
 
 #### Run 队列按子任务深度分层（ADR 0012）
 
@@ -1068,7 +1069,7 @@ docker exec dsh-enterprise-nginx nginx -s reload
 
 ```bash
 docker compose logs sandbox
-docker compose run --rm sandbox python -c "import fastapi; print('ok')"
+docker compose run --rm sandbox node -e "console.log('ok')"
 ```
 
 ### API Server 状态异常

@@ -6,23 +6,21 @@ and it does not share Dataset business semantics.
 ## Layout and dependency boundary
 
 ```text
-sandbox/artifact/
-  domain/          # submit/download/import contracts
-  application/     # ArtifactFacade and formal submit runtime
-  infrastructure/  # manager, formal store/repository, immutable snapshots
-  api/             # public BFF adapter and internal HMAC adapter
+exec/src/artifact/
+  service.ts               # 公开入口：ArtifactService（提交 / 列表 / 下载 / 导入）
+  control-plane-storage.ts # 控制面快照存储（SANDBOX_ARTIFACTS_ROOT / SANDBOX_CONTROL_ROOT）
 ```
 
-New callers use `sandbox.artifact.application.facade.ArtifactFacade`:
+New callers use `ArtifactService` from `exec/src/artifact/service.ts`:
 
-- `submit(...)`
-- `list(...)`（按会话 / 工作区；产物库另有按 owner 跨会话的列表，见 `api.md` 的 `GET /artifacts`）
-- `resolve_download(...)`
-- `import_to_workspace(...)`
+- `submit(...)` / `submitRevision(...)`
+- `list(...)` / `listByWorkspace(...)` / `listByOwner(...)`（产物库另有按 owner 跨会话的列表，见 `api.md` 的 `GET /artifacts`）
+- `importToWorkspace(...)` / `importRevisionToWorkspace(...)`
+- `getInOrg(...)`（审核面 org 作用域只读）
 
-The former `sandbox.services.artifact_*`, `sandbox.routers.artifacts`, and
-`sandbox.app.*artifact*` paths are compatibility imports only. They must not
-receive new business logic.
+The former Python `sandbox.artifact.{domain,application,infrastructure,api}` package
+paths and `sandbox.artifact.application.facade.ArtifactFacade` no longer exist
+(TS 重写 ADR 0008 后已删除）. They must not receive new business logic.
 
 ## Frozen delivery contract
 
@@ -81,7 +79,7 @@ outbox 行（design §5.3）：
 | outbox 事件 | 谁排队 | 消费者做什么 |
 |---|---|---|
 | `review.snapshot` | Run 终态建审核任务时（同一事务） | 对每个材料调 `POST /internal/v1/review/artifacts/snapshot`，把材料行从 `unavailable` 推到 `ready` |
-| `review.decided` | 审核员通过/驳回时（同一事务） | 先 `POST …/visibility`（当前版本 → `released`，同一交付物集合里的其它版本 → `withdrawn`），再 `POST …/revision` 把修订版导入工作区 `审核版/X` |
+| `review.decided` | 审核员通过/驳回时（同一事务） | 先 `POST …/visibility`（当前版本 → `released`，同一交付物集合里的其它版本 → `withdrawn`），再 `POST …/import` 把修订版导入工作区 `审核版/X` |
 
 两条都**跨服务调用不进事务**（exec 侧单事务 + `WHERE visibility='held'` + 覆盖同名导入，
 所以至少一次投递下重复执行安全）。失败分类决定要不要重试：4xx/404 是输入不可满足

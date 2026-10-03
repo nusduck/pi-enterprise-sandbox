@@ -70,6 +70,8 @@ Out-of-map directories:
 | [0009](./adr/0009-dsh-host-tools-and-application-steward.md) | 出厂工具挂 host；application 做 DSH 管家（改写 0007 D4 的审批组合、0006 P1 的闸门形状） |
 | [0010](./adr/0010-retain-custom-a2a-server-layer.md) | 保留自建 A2A 服务端协议面（**撤销 0007 D8**） |
 | [0011](./adr/0011-updrdb-upredis-dbpm-migration.md) | 持久化／协调拓扑迁移至 UPDRDB / UPRedis，口令改由 DBPM 下发 |
+| [0012](./adr/0012-depth-layered-run-queues.md) | Run 队列按子任务深度分层，每层保留消费槽 |
+| [0013](./adr/0013-upspec-table-naming.md) | 共享 MySQL 库表按 UPspec《数据库设计规范》落标 |
 | [0014](./adr/0014-sse-contract-is-the-platform-events.md) | SSE 契约以真实平台事件为准（**取代 0007 验证要求第 1 条**「逐字节不变」夹具） |
 | [0015](./adr/0015-skill-catalog-and-agent-binding.md) | Skill 拆成「目录」与「绑定」：AgentVersion `skillPolicy` + 组织共享层（**Accepted**） |
 | [0016](./adr/0016-agent-output-human-review.md) | 智能体交付物人工审核：exec 持有产物可见性，agent 持有审核账本（**Accepted**） |
@@ -78,7 +80,7 @@ Out-of-map directories:
 07-12 task specs whose decisions `plan.md` superseded; they were removed on
 2026-07-19 in `7370220d`. **0002 was later reissued** as the DSH harness
 evaluation above; 0003 stays retired. A new ADR takes the next unused number
-(**0012**). Recover the originals from git
+(**0017**). Recover the originals from git
 history if you need the historical reasoning; do not cite them as current.
 
 ## How to close an acceptance item
