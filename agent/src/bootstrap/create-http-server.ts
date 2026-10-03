@@ -54,46 +54,112 @@ import { handleIdentityRoute } from '../presentation/http/identity-routes.js';
 import { handleSkillRoute } from '../presentation/http/skill-routes.js';
 import { handleAuthRoute } from '../presentation/http/auth-routes.js';
 
-/** 过渡期宽松类型：这些依赖大多还是 JS 类，形状由各自的服务模块负责。 */
-type Loose = any;
+/** HTTP 装配的服务依赖：按本文件实际调用的最小形状声明，返回值保留记录形状供展示层投影。 */
+type JsonRecord = Record<string, unknown>;
+interface RunServiceLike {
+  execute(input: JsonRecord): Promise<JsonRecord>;
+}
+interface SseEnvelopeLike extends JsonRecord {
+  readonly sequence: number;
+  readonly event: Record<string, unknown>;
+  readonly eventId?: string;
+  readonly event_id?: string;
+  readonly ts?: number;
+}
+interface EventPageLike extends JsonRecord {
+  readonly events: SseEnvelopeLike[];
+  readonly terminal?: unknown;
+  readonly status?: string;
+}
+interface EventQueryLike {
+  listEvents(input: JsonRecord): Promise<EventPageLike>;
+  resolveEventSequence?: (...args: unknown[]) => Promise<unknown>;
+}
+interface TraceQueryLike {
+  listForRun(input: { runId: unknown; auth: unknown; limit?: unknown; cursor?: unknown }): Promise<unknown>;
+  listByTrace?(input: { traceId: unknown; auth: unknown; limit?: unknown }): Promise<unknown>;
+}
+interface EventSseLike {
+  openStream(...args: unknown[]): Promise<unknown>;
+}
+interface A2aHandleLike {
+  handle(req: unknown, res: unknown, parsedUrl: URL): Promise<boolean>;
+}
+import type {
+  ExtensionDiagnosticsHandler,
+  MutateSkillHandler,
+  UploadSkillDraftHandler,
+  OrgSkillAdminHandler,
+  SkillShareHandler,
+} from '../presentation/http/skill-routes.js';
+interface BrowserAuthServiceLike {
+  register(body: JsonRecord): Promise<unknown>;
+  login(body: JsonRecord): Promise<unknown>;
+  me(authorization: string | undefined): Promise<unknown>;
+  profile(authorization: string | undefined): Promise<unknown>;
+  updateProfile(authorization: string | undefined, body: JsonRecord): Promise<unknown>;
+  authConfig?(): unknown;
+  logout?(authorization: string | undefined): Promise<unknown>;
+  ssoExchange?(body: JsonRecord): Promise<unknown>;
+}
+interface ConversationServiceLike {
+  list(auth: unknown, query: unknown): Promise<unknown>;
+  create(auth: unknown, body: JsonRecord): Promise<unknown>;
+  ensureSession(auth: unknown, input: JsonRecord): Promise<JsonRecord>;
+  resolveSandboxSession?(auth: unknown, sessionId: string): Promise<unknown>;
+  get(conversationId: string, auth: unknown): Promise<unknown>;
+  delete(conversationId: string, auth: unknown): Promise<unknown>;
+}
+interface ApprovalQueryLike {
+  list(auth: unknown, query: unknown): Promise<unknown>;
+  get(approvalId: string, auth: unknown): Promise<unknown>;
+}
+interface ApprovalDecisionLike {
+  resolve(input: JsonRecord): Promise<{ resumePending?: unknown } & JsonRecord>;
+  resume(input: JsonRecord): Promise<{ resumePending?: unknown } & JsonRecord>;
+}
+interface InteractionResponseLike {
+  respond(input: JsonRecord): Promise<{ resumePending?: unknown } & JsonRecord>;
+  rehydrateWaiting(input: JsonRecord): Promise<unknown>;
+}
 
 /**
  * 解析后的请求体。**刻意不收窄**：这是未经校验的外来 JSON，字段是否存在、
  * 是什么类型，由每条路由自己判断（大量 `body.a || body.b` 的双写法兼容）。
- * 写成 `Record<string, unknown>` 只会把判断变成一串断言，不会更安全。
+ * 按未知记录读取，调用方按使用处收窄。
  */
-type JsonBody = Record<string, any>;
+type JsonBody = Record<string, unknown>;
 
 /** HTTP 服务器的依赖面。必需的三个在函数体里 fail-fast，其余缺省即关闭对应路由。 */
 export interface AgentHttpServerDeps {
-  createRunService: { execute: Loose };
-  getRunService: { execute: Loose };
-  cancelRunService: { execute: Loose };
-  eventQueryService: { listEvents: Loose; resolveEventSequence?: Loose };
-  traceQueryService?: { listForRun: Loose; listByTrace?: Loose } | null;
-  eventSseService?: { openStream: Loose } | null;
-  a2aHandler?: { handle: Loose } | null;
-  a2aAdminHandler?: { handle: Loose } | null;
+  createRunService: RunServiceLike;
+  getRunService: RunServiceLike;
+  cancelRunService: RunServiceLike;
+  eventQueryService: EventQueryLike;
+  traceQueryService?: TraceQueryLike | null;
+  eventSseService?: EventSseLike | null;
+  a2aHandler?: A2aHandleLike | null;
+  a2aAdminHandler?: A2aHandleLike | null;
   config?: { AGENT_INTERNAL_TOKEN?: string; PORT?: number; A2A_PUBLIC_BASE_URL?: string };
   sandboxReadyCheck?: () => Promise<{ status?: string } | null>;
   dataPlaneReady?: boolean | (() => boolean | Promise<boolean>);
   mcpReadiness?: () => McpReadiness;
-  getExtensionDiagnostics?: Loose;
-  mutateSkill?: Loose;
-  uploadSkillDraft?: Loose;
+  getExtensionDiagnostics?: ExtensionDiagnosticsHandler;
+  mutateSkill?: MutateSkillHandler;
+  uploadSkillDraft?: UploadSkillDraftHandler;
   /** org 层管理员操作面（ADR 0015 §7.2）。省略时 `/internal/skills/org*` 返回 501。 */
-  orgSkillAdmin?: Loose;
+  orgSkillAdmin?: OrgSkillAdminHandler;
   /** 共享申请与审批（ADR 0015 §7.2）。省略时 `/internal/skills/share-requests*` 返回 501。 */
-  skillShare?: Loose;
-  browserAuthService?: Loose;
-  listRuns?: Loose;
-  conversationService?: Loose;
-  approvalQueryService?: { list: Loose; get: Loose } | null;
-  approvalDecisionService?: { resolve: Loose; resume: Loose } | null;
-  interactionResponseService?: { respond: Loose; rehydrateWaiting: Loose } | null;
-  steerRunService?: { execute: Loose } | null;
-  followUpService?: { execute: Loose } | null;
-  listToolExecutions?: Loose;
+  skillShare?: SkillShareHandler;
+  browserAuthService?: BrowserAuthServiceLike;
+  listRuns?: (input: { auth: unknown; conversationId: unknown; status: unknown; limit: unknown }) => Promise<Array<JsonRecord>>;
+  conversationService?: ConversationServiceLike;
+  approvalQueryService?: ApprovalQueryLike | null;
+  approvalDecisionService?: ApprovalDecisionLike | null;
+  interactionResponseService?: InteractionResponseLike | null;
+  steerRunService?: RunServiceLike | null;
+  followUpService?: RunServiceLike | null;
+  listToolExecutions?: (input: { runId: unknown; auth: unknown }) => Promise<Array<JsonRecord>>;
   cronJobService?: import('../presentation/http/cron-routes.js').CronJobServiceLike | null;
   agentCatalogService?: import('../presentation/http/agents-routes.js').AgentCatalogServiceLike | null;
   adminRunQueryService?: import('../presentation/http/admin-run-routes.js').AdminRunQueryServiceLike | null;
@@ -386,7 +452,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          let body;
+          let body: JsonBody;
           try {
             const raw = await readBody(req);
             body = raw ? JSON.parse(raw) : {};
@@ -481,7 +547,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           }
           const auth = requireAuthSubjects(req, res);
           if (!auth) return;
-          let body;
+          let body: JsonBody;
           try {
             const raw = await readBody(req);
             body = raw ? JSON.parse(raw) : {};
@@ -520,7 +586,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           }
           const auth = requireAuthSubjects(req, res);
           if (!auth) return;
-          let body;
+          let body: JsonBody;
           try {
             const raw = await readBody(req);
             body = raw ? JSON.parse(raw) : {};
@@ -955,7 +1021,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
             });
             return;
           }
-          let body;
+          let body: JsonBody;
           try {
             const raw = await readBody(req);
             body = raw ? JSON.parse(raw) : {};
@@ -1068,7 +1134,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
           }
           const auth = requireAuthSubjects(req, res);
           if (!auth) return;
-          let body;
+          let body: JsonBody;
           try {
             const raw = await readBody(req);
             body = raw ? JSON.parse(raw) : {};
@@ -1109,7 +1175,7 @@ export function createAgentHttpServer(deps: AgentHttpServerDeps) {
         }
         const auth = requireAuthSubjects(req, res);
         if (!auth) return;
-        let body;
+        let body: JsonBody;
         try {
           const raw = await readBody(req);
           body = raw ? JSON.parse(raw) : {};

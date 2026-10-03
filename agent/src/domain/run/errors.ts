@@ -3,14 +3,13 @@
  * State machine never writes storage; callers map these to HTTP/application errors.
  */
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+/** 状态机错误携带的状态取值：构造器传入 string，非法输入用 unknown 保留原值。 */
 
 export class InvalidRunTransitionError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  from: Loose;
-  to: Loose;
+  from: string;
+  to: string;
 
   constructor(from: string, to: string, message?: string) {
     super(
@@ -27,7 +26,7 @@ export class InvalidRunTransitionError extends Error {
 export class InvalidRunStatusError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  status: Loose;
+  status: unknown;
 
   constructor(status: unknown, message?: string) {
     super(
@@ -43,7 +42,7 @@ export class InvalidRunStatusError extends Error {
 export class UnknownLegacyOutcomeError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  outcome: Loose;
+  outcome: unknown;
 
   constructor(outcome: unknown) {
     super(

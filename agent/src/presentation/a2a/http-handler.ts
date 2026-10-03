@@ -54,32 +54,80 @@ function firstHeaderValue(req: { headers: Record<string, string | string[] | und
 }
 
 /**
- * 本处理器的依赖。由 JSDoc 的 `@param {{…}}` 转成真接口——原来的形状里
- * `taskService.listTasks` 是可选方法却没声明，`readBody`/`json` 是裸
- * `Function`，两处都逼出了 `@ts-expect-error`。
- *
- * 仍然宽松的部分（`Loose`）是过渡期的诚实表述：仓储与应用服务还是 JS，
- * 给它们编造精确类型会谎报现状。
+ * 本处理器的依赖：按实际调用的最小形状声明。仓储与应用服务仍是 JS，
+ * 这里只约束本文件用到的字段与方法，不虚构完整服务类型。
  */
-type Loose = any;
+interface A2aPrincipal extends Record<string, unknown> {
+  readonly orgId: string;
+  readonly clientId: string;
+  readonly agentId: string;
+  readonly serviceUserId: string;
+  readonly scopes: readonly string[];
+}
+interface A2aTaskMapping extends Record<string, unknown> {
+  readonly a2aTaskId: string;
+  readonly runId: string;
+}
+interface A2aAgentMeta extends Record<string, unknown> {
+  readonly name: string;
+  readonly description: string;
+  readonly skills?: unknown;
+}
+interface A2aArtifactRecord extends Record<string, unknown> {
+  readonly artifactId: string;
+  readonly runId: string;
+  readonly mimeType?: unknown;
+  readonly sizeBytes?: unknown;
+  readonly sha256?: unknown;
+  readonly displayName?: unknown;
+}
+interface A2aArtifactStore {
+  readonly getById: (
+    artifactId: string,
+    scope: { orgId: string; userId: string },
+  ) => Promise<A2aArtifactRecord | null>;
+}
+interface A2aReposLike {
+  readonly artifacts?: A2aArtifactStore;
+  readonly [key: string]: unknown;
+}
+import type { RequestTraceContext, TraceHeaderCarrier } from '../http/trace-context.js';
+interface RpcErrorBody {
+  readonly code: number;
+  readonly message: string;
+  readonly data?: unknown;
+}
+interface JsonRpcMessageLike extends Record<string, unknown> {
+  readonly messageId?: unknown;
+  readonly message_id?: unknown;
+}
+interface JsonRpcMetadataLike extends Record<string, unknown> {
+  readonly traceId?: unknown;
+}
 
 export interface A2aHandlerDeps {
-  readonly credentialService: { authenticate: (...args: Loose[]) => Loose };
-  readonly taskService: {
-    sendMessage: (...args: Loose[]) => Loose;
-    getTask: (...args: Loose[]) => Loose;
-    cancelTask: (...args: Loose[]) => Loose;
-    beginSubscribe?: (...args: Loose[]) => Loose;
-    auditStreamEnd?: (...args: Loose[]) => Loose;
-    auditArtifactDownload?: (...args: Loose[]) => Loose;
-    resolveOwnedTask?: (...args: Loose[]) => Loose;
-    /** 可选：不是每个部署都开列表接口，缺失时按 UNSUPPORTED 回。 */
-    listTasks?: (...args: Loose[]) => Loose;
+  readonly credentialService: {
+    authenticate(
+      authHeader: unknown,
+      opts: { requiredScope?: string; agentId?: string },
+    ): Promise<A2aPrincipal>;
   };
-  readonly streamService: { openTaskStream: (...args: Loose[]) => Loose };
-  // 返回形状按调用方实际给的来：有的实现返回带具体字段的对象，收得太紧会
-  // 让合法实现不可赋值。
-  readonly resolveAgentMeta?: (agentId: string) => Promise<Loose>;
+  readonly taskService: {
+    sendMessage(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+    getTask(input: Record<string, unknown>): Promise<unknown>;
+    cancelTask(input: Record<string, unknown>): Promise<unknown>;
+    beginSubscribe?(input: Record<string, unknown>): Promise<unknown>;
+    auditStreamEnd?(input: Record<string, unknown>): Promise<unknown>;
+    auditArtifactDownload?(input: Record<string, unknown>): Promise<unknown>;
+    resolveOwnedTask?(principal: A2aPrincipal, taskId: string): Promise<A2aTaskMapping>;
+    /** 可选：不是每个部署都开列表接口，缺失时按 UNSUPPORTED 回。 */
+    listTasks?(input: Record<string, unknown>): Promise<unknown>;
+  };
+  readonly streamService: {
+    openTaskStream(input: Record<string, unknown>, writer: Record<string, unknown>): Promise<unknown>;
+  };
+  // 返回形状按调用方实际给的来：只读卡片用到的字段，其余透传。
+  readonly resolveAgentMeta?: (agentId: string) => Promise<A2aAgentMeta | null>;
   readonly skillRoot?: string | null;
   readonly publicBaseUrl?: string | null;
   readonly deploymentEnv?: string;
@@ -95,12 +143,12 @@ export interface A2aHandlerDeps {
         sha256?: string | null;
       }>)
     | null;
-  readonly createRepositories?: (db?: Loose) => Loose;
-  readonly db?: Loose;
-  readonly resolveTraceId: (...args: Loose[]) => string;
-  readonly resolveTraceContext?: (req: Loose, bodyTrace?: unknown) => Loose;
-  readonly readBody: (...args: Loose[]) => Promise<string>;
-  readonly json: (...args: Loose[]) => void;
+  readonly createRepositories?: (db?: unknown) => A2aReposLike;
+  readonly db?: unknown;
+  readonly resolveTraceId: (req: TraceHeaderCarrier, bodyTrace?: unknown) => string;
+  readonly resolveTraceContext?: (req: TraceHeaderCarrier, bodyTrace?: unknown) => RequestTraceContext | null | undefined;
+  readonly readBody: (req: unknown) => Promise<string>;
+  readonly json: (res: unknown, status: number, body: unknown) => void;
 }
 
 export function createA2aHttpHandler(deps: A2aHandlerDeps) {
@@ -123,7 +171,7 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps) {
    * @param {unknown} [bodyTrace]
    * @returns {{ traceId: string, parentSpanId: string|null, traceFlags: string|null, traceState: string|null }}
    */
-  function resolveTraceContext(req: Loose, bodyTrace?: unknown) {
+  function resolveTraceContext(req: TraceHeaderCarrier, bodyTrace?: unknown) {
     if (typeof deps.resolveTraceContext === 'function') {
       const resolved = deps.resolveTraceContext(req, bodyTrace);
       if (resolved && typeof resolved.traceId === 'string') {
@@ -545,7 +593,7 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps) {
     const parsed = parseJsonRpcRequest(body);
     if (!parsed.ok) {
       // parseJsonRpcRequest 返回判别联合；`ok: false` 这一支才有 error。
-      const failed = parsed as { id: string | number; error: Loose };
+      const failed = parsed as { id: string | number | null; error: RpcErrorBody }; // reason: 解析失败分支的最小形状，直接透传给 jsonRpcError
       deps.json(res, 200, jsonRpcError(failed.id, failed.error));
       return;
     }
@@ -592,7 +640,7 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps) {
     const bodyTrace =
       params?.metadata &&
       typeof params.metadata === 'object' &&
-      (params.metadata as Loose).traceId;
+      (params.metadata as JsonRpcMetadataLike).traceId; // reason: 外来 RPC 元数据，按已用 traceId 字段读取
     const traceContext = resolveTraceContext(req, bodyTrace);
     const traceId = traceContext.traceId;
 
@@ -606,11 +654,12 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps) {
           // Fail INVALID_PARAMS early if no stable key (also enforced in service).
           try {
             requireStableIdempotencyKey({
-              messageId:
+              messageId: (
                 params?.message && typeof params.message === 'object'
-                  ? (params.message as Loose).messageId ||
-                    (params.message as Loose).message_id
-                  : params?.messageId,
+                  ? (params.message as JsonRpcMessageLike).messageId || // reason: 外来 RPC 消息体，按双拼写消息键读取
+                    (params.message as JsonRpcMessageLike).message_id // reason: 外来 RPC 消息体，按双拼写消息键读取
+                  : params?.messageId
+              ) as string | null, // reason: 外来消息键原样透传，缺失时由校验函数判 400
               // 头值可能是 string[]（重复头）。取第一个而不是把数组传下去——
               // 幂等键是单值语义，数组会让下游把 "a,b" 当成一个键。
               idempotencyKey: firstHeaderValue(req, 'idempotency-key'),
@@ -710,11 +759,12 @@ export function createA2aHttpHandler(deps: A2aHandlerDeps) {
         case A2A_METHODS.SEND_STREAMING_MESSAGE: {
           try {
             requireStableIdempotencyKey({
-              messageId:
+              messageId: (
                 params?.message && typeof params.message === 'object'
-                  ? (params.message as Loose).messageId ||
-                    (params.message as Loose).message_id
-                  : params?.messageId,
+                  ? (params.message as JsonRpcMessageLike).messageId || // reason: 外来 RPC 消息体，按双拼写消息键读取
+                    (params.message as JsonRpcMessageLike).message_id // reason: 外来 RPC 消息体，按双拼写消息键读取
+                  : params?.messageId
+              ) as string | null, // reason: 外来消息键原样透传，缺失时由校验函数判 400
               // 头值可能是 string[]（重复头）。取第一个而不是把数组传下去——
               // 幂等键是单值语义，数组会让下游把 "a,b" 当成一个键。
               idempotencyKey: firstHeaderValue(req, 'idempotency-key'),

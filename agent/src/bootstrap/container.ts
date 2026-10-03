@@ -65,48 +65,47 @@ export {
   resolveWorkerExecutorFactory,
 } from './container-env.js';
 
-/** 过渡期宽松类型：容器装配的对象几乎都还是 JS。 */
-type Loose = any;
+/** 容器装配句柄：按实际创建/消费的最小形状内联声明，不虚构完整服务类型。 */
 
 /** 构造期可注入的缝。生产不传，走真实实现；测试用它避开真连接。 */
 export interface ServiceContainerOptions {
   readonly generateId?: () => string;
   readonly now?: () => Date;
-  readonly runExecutorFactory?: Loose;
-  readonly createMysqlKnex?: Loose;
-  readonly createRedisClient?: Loose;
-  readonly createRunQueue?: Loose;
-  readonly destroyMysqlKnex?: Loose;
-  readonly destroyRedisClient?: Loose;
-  readonly destroyRunQueue?: Loose;
+  readonly runExecutorFactory?: import('../application/run-executor.js').RunExecutorFactory | null;
+  readonly createMysqlKnex?: (connectionUrl: string, options?: object) => import('knex').Knex;
+  readonly createRedisClient?: (connectionUrl: string, options?: object) => import('ioredis').default;
+  readonly createRunQueue?: (connectionUrl: string, options?: Record<string, unknown>) => { queue?: import('bullmq').Queue };
+  readonly destroyMysqlKnex?: (knex: import('knex').Knex) => Promise<unknown> | unknown;
+  readonly destroyRedisClient?: (redis: import('ioredis').default) => Promise<unknown> | unknown;
+  readonly destroyRunQueue?: (handle: { queue?: import('bullmq').Queue }) => Promise<unknown>;
   /** 启动取密。生产走 DBPM；测试注入固定值。 */
   readonly resolveCredentials?: (
     env: NodeJS.ProcessEnv | Record<string, string | undefined>,
     need: { mysql: boolean; redis: boolean },
   ) => Promise<{ mysql?: string | undefined; redis?: string | undefined }>;
   /** 启动时的 schema 核对。生产读随包清单；测试注入空实现。 */
-  readonly verifySchema?: (knex: Loose, opts: { role: string }) => Promise<void>;
+  readonly verifySchema?: (knex: import('knex').Knex, opts: { role: string }) => Promise<void>;
 }
 
 export class ServiceContainer {
   // TS 要求类字段显式声明；JS 里它们只在构造器里赋值。逐条列出来还有个好处：
   // 容器持有的可变状态一眼可见，不必读完整个构造器。
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  mysqlUrl: Loose;
-  redisUrl: Loose;
+  mysqlUrl: string;
+  redisUrl: string;
   generateId: () => string;
   now: () => Date;
   /** Explicit factory only — no silent production stub. */
-  runExecutorFactory: Loose;
+  runExecutorFactory: import('../application/run-executor.js').RunExecutorFactory | null;
   _opts: ServiceContainerOptions;
   knex: import('knex').Knex | null = null;
   /** DBPM 下发的口令，只在内存里；worker 建 BullMQ 消费者与 DSH 会话存储要用。 */
   credentials: { mysql?: string | undefined; redis?: string | undefined } = {};
-  redis: Loose = null;
-  runQueueHandle: Loose = null;
+  redis: import('ioredis').default | null = null;
+  runQueueHandle: { queue?: import('bullmq').Queue } | null = null;
   /** 分层 Run 队列（ADR 0012）：`subagent_depth` → Queue 句柄，以及生效的拓扑。 */
-  runQueueHandles: Map<number, Loose> = new Map();
-  runQueueTopology: Loose = null;
+  runQueueHandles: Map<number, { queue?: import('bullmq').Queue }> = new Map();
+  runQueueTopology: import('../infrastructure/redis/run-queue-topology.js').RunQueueTopology | null = null;
   started = false;
   /**
    * After a successful start then shutdown, instance is terminal (no restart).
@@ -327,8 +326,7 @@ export class ServiceContainer {
     if (!factory) {
       const err = new Error(
         'Run executor factory is not pre-configured. Production workers wire the DSH factory in createWorkerServices (ensureWorkerRunExecutorFactory). For offline tests inject runExecutorFactory, or set AGENT_ALLOW_STUB_EXECUTOR=true in non-production only.',
-      );
-      // @ts-ignore
+      ) as Error & { code?: string }; // reason: 缺执行器的部署错误码随错误对象传递
       err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
       throw err;
     }
@@ -340,9 +338,9 @@ export class ServiceContainer {
    * MODEL_ID registry entry → runtime Model descriptor (LLMIO baseUrl/apiKey from env).
    */
   createDefaultModelResolver(): (
-    agentVersion: Loose,
+    agentVersion: Record<string, unknown>,
     selection?: { modelId?: string | null },
-  ) => Promise<Loose> {
+  ) => Promise<Record<string, unknown>> {
     const env = this.env;
     return async (agentVersion, selection: { modelId?: string | null } = {}) => {
       const { bindAgentVersionConfig, resolveConcreteModel } = await import(
@@ -352,7 +350,7 @@ export class ServiceContainer {
         await import('../infrastructure/model-registry.js');
       const bound = bindAgentVersionConfig(agentVersion);
       if (bound.model) {
-        if (selection.modelId && String((bound.model as Loose).id) !== selection.modelId) {
+        if (selection.modelId && String((bound.model as { id?: unknown }).id) !== selection.modelId) { // reason: 模型描述的标识字段按实际读取
           return resolveConcreteModel(
             bound,
             toRuntimeModel(resolveModel(selection.modelId, { env }), {
@@ -362,7 +360,7 @@ export class ServiceContainer {
         }
         return resolveConcreteModel(bound, null);
       }
-      const policy: Loose = bound.modelPolicy || {};
+      const policy: Record<string, unknown> = bound.modelPolicy || {};
       const ref =
         policy.reference && typeof policy.reference === 'object'
           ? (policy.reference as Record<string, unknown>)
@@ -422,8 +420,7 @@ export class ServiceContainer {
     if (!this.knex || !this.redis) {
       const err = new Error(
         'ServiceContainer must be started with MySQL and Redis before wiring the worker DSH RunExecutor factory',
-      );
-      // @ts-ignore
+      ) as Error & { code?: string }; // reason: 缺执行器的部署错误码随错误对象传递
       err.code = 'RUN_EXECUTOR_NOT_CONFIGURED';
       throw err;
     }
@@ -474,9 +471,7 @@ export class ServiceContainer {
   createCancelSignal() {
     if (!this.redis) throw new Error('ServiceContainer Redis not started');
     // Lazy class load
-    return import('../infrastructure/redis/cancel-signal.js').then(
-      ({ CancelSignal }) => new CancelSignal(this.redis),
-    );
+    return import('../infrastructure/redis/cancel-signal.js').then(({ CancelSignal }) => new CancelSignal(this.redis as unknown as import('../infrastructure/redis/cancel-signal.js').RedisCancelLike)); // reason: ioredis 实例的方法子集即取消信号需要的形状
   }
 
   createLeaseManager() {
@@ -522,9 +517,9 @@ export class ServiceContainer {
    */
   createDshRuntimeFactory(
     opts: {
-      sessionAdapter?: { captureSnapshotPayload?: Loose; dispose?: Loose };
+      sessionAdapter?: { captureSnapshotPayload?: (sm: unknown, opts?: unknown) => unknown; dispose?: () => unknown };
       extensionFactories?: unknown[];
-      loadSdk?: () => Promise<Loose>;
+      loadSdk?: () => Promise<unknown>;
     } = {},
   ) {
     // Lazy class load so import of container stays free of SDK side effects.
@@ -555,7 +550,7 @@ export class ServiceContainer {
           // DSH 生成的会话标题 → Conversation.title（只覆盖占位标题）。
           onSessionEventsCommitted: createSessionTitleProjector({
             transactionManager: this.getTransactionManager(),
-            createRepositories: (db: Loose) => this.createRepositories(db),
+            createRepositories: (db: unknown) => this.createRepositories(db),
           }),
           sessionAdapter: opts.sessionAdapter,
           extensionFactories: opts.extensionFactories,
@@ -615,7 +610,7 @@ export class ServiceContainer {
           'SANDBOX_INTERNAL_HMAC_KEYRING and SANDBOX_INTERNAL_HMAC_ACTIVE_KID ' +
             'are required for production SandboxSession provisioning',
         );
-        (error as Loose).code = 'SANDBOX_INTERNAL_HMAC_REQUIRED';
+        (error as { code?: unknown }).code = 'SANDBOX_INTERNAL_HMAC_REQUIRED'; // reason: 生产缺凭据的错误码随错误对象传递
         throw error;
       }
       return null;
@@ -637,13 +632,12 @@ export class ServiceContainer {
    */
   createSessionRecoveryService(
     opts: {
-      transactionManager?: { run: Loose };
-      createRepositories?: (db: Loose) => Loose;
+      transactionManager?: { run: <T>(work: (trx: import('knex').Knex.Transaction) => Promise<T>) => Promise<T> };
+      createRepositories?: (db: import('knex').Knex | import('knex').Knex.Transaction) => ReturnType<typeof createRepositoryBundle>;
     } = {},
   ) {
     const tx = opts.transactionManager ?? this.getTransactionManager();
-    const createRepositories =
-      opts.createRepositories ?? ((db) => this.createRepositories(db));
+    const createRepositories: (db: import('knex').Knex | import('knex').Knex.Transaction) => ReturnType<typeof createRepositoryBundle> = opts.createRepositories ?? ((db) => this.createRepositories(db));
     return new SessionRecoveryService({
       transactionManager: tx,
       createRepositories,
@@ -666,12 +660,12 @@ export class ServiceContainer {
    *   workspaceResolver: (agentSession: object) => string | Promise<string>,
    *   extensionFactories?: unknown[],
      *   eventProjectionMode?: 'session-subscribe' | 'observability' | 'both',
-     *   sessionLockManager?: any,
-   *   dshRuntimeFactory?: any,
-   *   sessionAdapter?: any,
-   *   projector?: any,
+     *   sessionLockManager?: unknown,
+   *   dshRuntimeFactory?: unknown,
+   *   sessionAdapter?: unknown,
+   *   projector?: unknown,
    *   recoveryService?: SessionRecoveryService,
-   *   sandboxSessionProvisioner?: any,
+   *   sandboxSessionProvisioner?: unknown,
    *   promptImageLoader?: Function,
    *   sessionLockRenewIntervalMs?: number,
    *   steerPollIntervalMs?: number,

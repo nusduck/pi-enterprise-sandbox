@@ -11,6 +11,7 @@
  * 投递的目的地不会分叉。
  */
 
+import type { Knex } from 'knex';
 import {
   layerForDepth,
   routeRunToQueue,
@@ -18,8 +19,16 @@ import {
 } from '../infrastructure/redis/run-queue-topology.js';
 import { MAX_SUBAGENT_DEPTH } from '../infrastructure/dsh/subagent-constants.js';
 
-/** 过渡期宽松类型：容器装配的对象几乎都还是 JS。 */
-type Loose = any;
+type DbExecutor = Knex | Knex.Transaction;
+/** 投递引用的最小形状：深度路由只读 runId/orgId，其余字段原样透传。 */
+type QueueRefLike = Record<string, unknown> & {
+  readonly runId?: unknown;
+  readonly orgId?: unknown;
+};
+/** BullMQ Queue 句柄的最小形状：queue 是真实的 BullMQ Queue，只透传不调用。 */
+interface QueueHandleLike {
+  readonly queue?: import('bullmq').Queue;
+}
 
 type EnvLike = NodeJS.ProcessEnv | Record<string, string | undefined>;
 
@@ -53,8 +62,8 @@ export function resolveWorkerConcurrency(env: EnvLike): number {
  * 查不到行时**不默认 0**：那会把一个未知的 Run 投进根队列，抢走根任务的槽。
  */
 export async function resolveRunDepth(
-  knex: Loose,
-  ref: { runId?: unknown; orgId?: unknown },
+  knex: DbExecutor,
+  ref: QueueRefLike,
 ): Promise<number> {
   const runId = String(ref?.runId ?? '');
   const orgId = String(ref?.orgId ?? '');
@@ -78,21 +87,21 @@ export async function resolveRunDepth(
 
 export interface RunQueueAdapter {
   readonly topology: RunQueueTopology;
-  queueNameFor(ref: { runId?: unknown; orgId?: unknown }): Promise<string>;
-  enqueue(ref: Loose, options?: Loose): Promise<unknown>;
+  queueNameFor(ref: QueueRefLike): Promise<string>;
+  enqueue(ref: QueueRefLike, options?: Record<string, unknown>): Promise<unknown>;
 }
 
 /**
  * 建投递适配器。`handles` 是 `depth -> { queue }`，由容器在启动时按拓扑建好。
  */
 export function buildRunQueueAdapter(deps: {
-  handles: Map<number, Loose>;
+  handles: Map<number, QueueHandleLike>;
   topology: RunQueueTopology;
-  knex: Loose;
-  enqueueRunJob?: (queue: Loose, ref: Loose, options?: Loose) => Promise<unknown>;
+  knex: DbExecutor;
+  enqueueRunJob?: (queue: import('bullmq').Queue, ref: QueueRefLike, options?: Record<string, unknown>) => Promise<unknown>;
 }): RunQueueAdapter {
   const { handles, topology, knex } = deps;
-  const queueFor = (depth: number): Loose => {
+  const queueFor = (depth: number): import('bullmq').Queue => {
     // 越界深度在这里抛错，不夹到最深那层——见 routeRunToQueue 的注释。
     routeRunToQueue(topology, depth);
     const layer = layerForDepth(topology, depth);
@@ -108,11 +117,16 @@ export function buildRunQueueAdapter(deps: {
       return routeRunToQueue(topology, await resolveRunDepth(knex, ref));
     },
     async enqueue(ref, options) {
-      const enqueueRunJob =
-        deps.enqueueRunJob ??
-        (await import('../infrastructure/redis/run-queue.js')).enqueueRunJob;
       const queue = queueFor(await resolveRunDepth(knex, ref));
-      return enqueueRunJob(queue, ref, options);
+      if (deps.enqueueRunJob) return deps.enqueueRunJob(queue, ref, options);
+      const { enqueueRunJob: realEnqueueRunJob } = await import(
+        '../infrastructure/redis/run-queue.js'
+      );
+      return realEnqueueRunJob(
+        queue,
+        ref as import('../infrastructure/redis/run-queue.js').RunJobRef, // reason: 投递引用运行时必为完整三元组，由下游 assertRunJobRef 再验一次
+        options as import('bullmq').JobsOptions | undefined, // reason: 队列选项原样透传，由 BullMQ 校验
+      );
     },
   };
 }
@@ -120,11 +134,11 @@ export function buildRunQueueAdapter(deps: {
 /** 从环境算出**路由**拓扑，并按拓扑建每一层的 BullMQ Queue 句柄。 */
 export function startLayeredRunQueues(deps: {
   env: EnvLike;
-  createRunQueue: Loose;
-  planRunQueueTopology: (input: Loose) => RunQueueTopology;
+  createRunQueue: (redisUrl: string, opts: { queueName: string; prefix?: string; password?: string }) => QueueHandleLike;
+  planRunQueueTopology: (input: { maxDepth: number; baseQueueName?: string }) => RunQueueTopology;
   redisUrl: string;
   password?: string | undefined;
-}): { topology: RunQueueTopology; handles: Map<number, Loose> } {
+}): { topology: RunQueueTopology; handles: Map<number, QueueHandleLike> } {
   const { env } = deps;
   const base = env.AGENT_RUNS_QUEUE_NAME;
   const prefix = env.AGENT_RUN_QUEUE_PREFIX || undefined;
@@ -135,7 +149,7 @@ export function startLayeredRunQueues(deps: {
     maxDepth: resolveSubagentMaxDepth(env),
     ...(base ? { baseQueueName: base } : {}),
   });
-  const handles = new Map<number, Loose>();
+  const handles = new Map<number, QueueHandleLike>();
   for (const layer of topology.layers) {
     handles.set(
       layer.depth,
@@ -154,8 +168,8 @@ export function startLayeredRunQueues(deps: {
  * 依赖的拆卸纪律一致：拆卸阶段收集错误，最后一起报。
  */
 export async function destroyLayeredRunQueues(
-  handles: Map<number, Loose>,
-  destroy: (handle: Loose) => Promise<unknown>,
+  handles: Map<number, QueueHandleLike>,
+  destroy: (handle: QueueHandleLike) => Promise<unknown>,
 ): Promise<unknown[]> {
   const errors: unknown[] = [];
   for (const handle of handles.values()) {

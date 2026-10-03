@@ -23,6 +23,7 @@
  * 必须在切换前由运维在外部做同样的两项检查，不能用「旧镜像启动不报错」代替。
  */
 
+import type { Knex } from 'knex';
 import { NON_TERMINAL_RUN_STATUSES } from '../domain/run/run-status.js';
 import {
   assertNoStrandedLayers,
@@ -33,8 +34,17 @@ import {
 import { RedisConfigError } from '../infrastructure/redis/errors.js';
 import { resolveRunQueuePrefix } from '../infrastructure/redis/run-queue.js';
 
-/** 过渡期宽松类型：redis / knex 是容器里的 JS 句柄。 */
-type Loose = any;
+type DbExecutor = Knex | Knex.Transaction;
+/** 启动闸门需要的最小 Redis 形状：按 key 类型计数 BullMQ 状态 key。 */
+interface RedisLike {
+  type(key: string): Promise<string>;
+  llen(key: string): Promise<number>;
+  zcard(key: string): Promise<number>;
+}
+interface StrandedRunRow {
+  readonly subagent_depth?: unknown;
+  readonly n?: unknown;
+}
 
 /** BullMQ 会留下待消费作业的状态 key。 */
 const PENDING_STATES = ['wait', 'paused', 'active', 'delayed', 'prioritized'] as const;
@@ -52,7 +62,7 @@ export class WorkerDrainGateError extends Error {
  * list，delayed/prioritized 是 zset），而且跨版本改过，所以按实际类型来数。
  * 只有 `none`（key 不存在）算 0；其余一律抛错——**不能证明为空就不放行**。
  */
-async function countStateKey(redis: Loose, queueName: string, key: string): Promise<number> {
+async function countStateKey(redis: RedisLike, queueName: string, key: string): Promise<number> {
   let type: string;
   let count: number;
   try {
@@ -79,7 +89,7 @@ async function countStateKey(redis: Loose, queueName: string, key: string): Prom
 
 /** 本拓扑**不服务**的队列 → 待消费作业数。读失败抛 {@link WorkerDrainGateError}。 */
 export async function readUnservedQueueCounts(
-  redis: Loose,
+  redis: RedisLike,
   topology: RunQueueTopology,
   rawPrefix?: string | null,
 ): Promise<Record<string, number>> {
@@ -103,10 +113,10 @@ export async function readUnservedQueueCounts(
  * 不按租户过滤——闸门关心的是整个 Worker 拓扑，不是某个 owner。
  */
 export async function readStrandedRunCounts(
-  knex: Loose,
+  knex: DbExecutor,
   maxDepth: number,
 ): Promise<Record<number, number>> {
-  let rows: Loose[];
+  let rows: StrandedRunRow[];
   try {
     rows = await knex('tbl_agsvc_runs')
       .whereIn('status', [...NON_TERMINAL_RUN_STATUSES])
@@ -135,8 +145,8 @@ export async function readStrandedRunCounts(
  * 让运维一次看清还要等什么。
  */
 export async function assertWorkerTopologyDrained(deps: {
-  readonly redis: Loose;
-  readonly knex: Loose;
+  readonly redis: RedisLike;
+  readonly knex: DbExecutor;
   readonly topology: RunQueueTopology;
   readonly queuePrefix?: string | null;
 }): Promise<void> {

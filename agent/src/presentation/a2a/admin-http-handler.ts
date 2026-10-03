@@ -7,6 +7,9 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ExternalIdentityResolver } from '../../application/parent/external-identity-resolver.js';
+import type { ExternalAuth } from '../../application/parent/external-identity-resolver.js';
+import type { OrganizationRepository } from '../../infrastructure/mysql/repositories/organization-repository.js';
+import type { ExternalReferenceRepository } from '../../infrastructure/mysql/repositories/external-reference-repository.js';
 import { publicCredentialView } from '../../application/a2a/credential-service.js';
 import { isUlid } from '../../domain/shared/ulid.js';
 import { ROLE_ADMIN, hasRole } from '../../domain/identity/roles.js';
@@ -68,17 +71,53 @@ async function readJson(req: IncomingMessage, deps: AdminHandlerDeps): Promise<u
 }
 
 /**
- * 本处理器需要的依赖。宽松类型（`any` 的具名别名）是过渡期的诚实表述：
- * 仓储与服务都还是 JS，给它们编造精确类型等于谎报现状。等 application/ 与
- * infrastructure/ 转完 TS，这里会自然收紧。
+ * 本处理器需要的依赖：仓储与凭据服务仍是 JS，按实际调用的最小形状声明。
+ * 不确定的返回值用 unknown，调用方按使用处收窄。
  */
-type Loose = any;
+import type { A2aCredentialService } from '../../application/a2a/credential-service.js';
+interface ReposLike {
+  readonly organizations: OrganizationRepository;
+  readonly externalRefs: ExternalReferenceRepository;
+  readonly catalog: {
+    getDefinitionById(agentId: string): Promise<{ orgId: string; agentId: string } & Record<string, unknown> | null>;
+    listDefinitionsByOrg(orgId: string): Promise<Array<{ agentId: string } & Record<string, unknown>>>;
+  };
+  readonly a2aCredentials: {
+    listByOrg(orgId: string, opts: { agentId: string | null }): Promise<Array<Record<string, unknown>>>;
+    getById(credentialId: string): Promise<{ orgId: string; clientId: string; agentId: string } & Record<string, unknown> | null>;
+  };
+  readonly a2aTasks: {
+    listForOrgAdmin(orgId: string, opts: { agentId: string | null; limit: number }): Promise<unknown>;
+  };
+  readonly a2aAudit: {
+    listForOrgAdmin(orgId: string, opts: { agentId: string | null; limit: number }): Promise<unknown>;
+    append(input: Record<string, unknown>): Promise<unknown>;
+  };
+}
+interface OwnerLike {
+  readonly orgId: string;
+}
+interface AuditInputLike extends Record<string, unknown> {
+  readonly clientId?: unknown;
+  readonly credentialId?: unknown;
+  readonly agentId?: unknown;
+  readonly eventType?: unknown;
+  readonly traceId?: unknown;
+  readonly method?: unknown;
+  readonly payloadJson?: unknown;
+}
+interface CredentialBodyLike extends Record<string, unknown> {
+  readonly agentId: string;
+  readonly clientId?: unknown;
+  readonly scopes?: unknown;
+  readonly expiresAt?: unknown;
+}
 
 export interface AdminHandlerDeps {
-  readonly credentialService: Loose;
-  readonly createRepositories: (db: Loose) => Loose;
-  readonly db: Loose;
-  readonly authSubjectsFromRequest: (req: IncomingMessage) => Loose;
+  readonly credentialService: A2aCredentialService;
+  readonly createRepositories: (db: unknown) => ReposLike;
+  readonly db: unknown;
+  readonly authSubjectsFromRequest: (req: IncomingMessage) => ExternalAuth | null;
   readonly resolveTraceId: (req: IncomingMessage) => string;
   readonly readBody: (req: IncomingMessage) => Promise<string>;
   readonly json: (res: ServerResponse, status: number, body: unknown) => void;
@@ -111,7 +150,7 @@ export function createA2aAdminHttpHandler(deps: AdminHandlerDeps) {
     return { auth, owner: await resolver.resolveOwner(auth), repos };
   }
 
-  async function requireOwnedAgent(repos: Loose, owner: Loose, agentId: string) {
+  async function requireOwnedAgent(repos: ReposLike, owner: OwnerLike, agentId: string) {
     if (!isUlid(agentId)) throw namedError('agentId must be a ULID', 'ValidationError');
     const agent = await repos.catalog.getDefinitionById(agentId);
     // 跨租户一律当作不存在——存在性本身不能泄漏。
@@ -121,7 +160,7 @@ export function createA2aAdminHttpHandler(deps: AdminHandlerDeps) {
     return agent;
   }
 
-  async function appendAudit(repos: Loose, owner: Loose, input: Loose) {
+  async function appendAudit(repos: ReposLike, owner: OwnerLike, input: AuditInputLike) {
     await repos.a2aAudit.append({
       auditId: deps.generateId(),
       orgId: owner.orgId,
@@ -184,14 +223,14 @@ export function createA2aAdminHttpHandler(deps: AdminHandlerDeps) {
       }
 
       if (req.method === 'POST' && path === '/internal/a2a/credentials') {
-        const body = (await readJson(req, deps)) as Loose;
+        const body = (await readJson(req, deps)) as CredentialBodyLike; // reason: 外来 JSON 请求体，按已用字段的最小形状读取
         const agent = await requireOwnedAgent(repos, owner, body.agentId);
         const issued = await deps.credentialService.issue({
           orgId: owner.orgId,
           agentId: agent.agentId,
-          clientId: body.clientId,
-          scopes: body.scopes,
-          expiresAt: body.expiresAt,
+          clientId: body.clientId as string, // reason: 外来创建字段原样透传，由服务做校验与归一化
+          scopes: body.scopes as string[] | undefined, // reason: 外来创建字段原样透传，由服务做校验与归一化
+          expiresAt: body.expiresAt as string | undefined, // reason: 外来创建字段原样透传，由服务做校验与归一化
         });
         await appendAudit(repos, owner, {
           clientId: issued.credential.clientId,
@@ -217,13 +256,13 @@ export function createA2aAdminHttpHandler(deps: AdminHandlerDeps) {
           error.name = 'OwnerScopedNotFoundError';
           throw error;
         }
-        const body = (await readJson(req, deps)) as Loose;
+        const body = (await readJson(req, deps)) as CredentialBodyLike; // reason: 外来 JSON 请求体，按已用字段的最小形状读取
         if (action[2] === 'rotate') {
           const rotated = await deps.credentialService.rotate({
             credentialId,
             orgId: owner.orgId,
-            scopes: body.scopes,
-            expiresAt: body.expiresAt,
+            scopes: body.scopes as string[] | undefined, // reason: 外来轮换字段原样透传，由服务做校验与归一化
+            expiresAt: body.expiresAt as string | undefined, // reason: 外来轮换字段原样透传，由服务做校验与归一化
           });
           await appendAudit(repos, owner, {
             clientId: existing.clientId,

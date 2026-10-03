@@ -28,6 +28,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
+import type { Knex } from 'knex';
 import { collectStaleSkillVersions } from './enablement.js';
 import { physicalTableName } from '../infrastructure/mysql/schema-tables.js';
 import { AgentVersionSkillRefRepository } from '../infrastructure/mysql/repositories/agent-version-skill-ref-repository.js';
@@ -36,7 +37,18 @@ import { resolveSkillVersionGcGraceMs } from '../application/skill-enablement-se
 const SKILLS = physicalTableName('org_skills');
 const VERSIONS = physicalTableName('org_skill_versions');
 
-type Loose = any;
+type DbExecutor = Knex | Knex.Transaction;
+interface OrgSkillPointerRow {
+  readonly skill_name: unknown;
+  readonly current_digest: unknown;
+}
+interface OrgSkillVersionRow {
+  readonly skill_name: unknown;
+  readonly content_digest: unknown;
+}
+interface SkillRefDigestRow {
+  readonly content_digest: unknown;
+}
 
 // 宽限期**不在这里再定义一份**：用户层已有解析器（`skill-enablement-service.ts` 的
 // `resolveSkillVersionGcGraceMs`），org 层读同一个环境变量、同一个默认值。两份常量
@@ -45,7 +57,7 @@ export { DEFAULT_SKILL_VERSION_GC_GRACE_MS } from '../application/skill-enableme
 
 export interface OrgSkillGcDeps {
   /** 当前的 knex 执行器（事务内调用就传 trx）。 */
-  readonly db: Loose;
+  readonly db: DbExecutor;
   /** org 层发布存储基根；实际 owner 根是 `<base>/<orgId>/_org`。 */
   readonly publishedBase: string;
   readonly graceMs?: number;
@@ -90,15 +102,15 @@ export async function collectStaleOrgSkillVersions(
   // 保留集合的**引用部分**：一次查询，避免对每个候选问一次。
   const referenced = await referencedDigestsByName(deps.db, orgId);
   // 指针部分：当前推荐版本不能删。
-  const pointers: Loose[] = await deps.db(SKILLS).where({ org_id: orgId });
+  const pointers: OrgSkillPointerRow[] = await deps.db(SKILLS).where({ org_id: orgId });
   const currentByName = new Map<string, string>(
-    pointers.map((row: Loose) => [String(row.skill_name), String(row.current_digest ?? '')]),
+    pointers.map((row: OrgSkillPointerRow) => [String(row.skill_name), String(row.current_digest ?? '')]),
   );
   // 可被新绑定的版本（规则 3）：字节必须留在盘上。
-  const activeRows: Loose[] = await deps.db(VERSIONS).where({ org_id: orgId, status: 'active' });
+  const activeRows: OrgSkillVersionRow[] = await deps.db(VERSIONS).where({ org_id: orgId, status: 'active' });
   const activeDigestsOf = (name: string): string[] => activeRows
-    .filter((row: Loose) => String(row.skill_name) === name)
-    .map((row: Loose) => String(row.content_digest));
+    .filter((row: OrgSkillVersionRow) => String(row.skill_name) === name)
+    .map((row: OrgSkillVersionRow) => String(row.content_digest));
 
   let dirents;
   try {
@@ -141,7 +153,7 @@ export async function collectStaleOrgSkillVersions(
 
 /** 复验：被删的摘要里，有没有哪个现在是 referenced 或 current。 */
 async function racedAfterDeletion(
-  db: Loose,
+  db: DbExecutor,
   input: {
     orgId: string;
     name: string;
@@ -150,14 +162,14 @@ async function racedAfterDeletion(
 ): Promise<string[]> {
   if (input.removed.length === 0) return [];
   const raced: string[] = [];
-  const fresh: Loose = await db(SKILLS)
+  const fresh: OrgSkillPointerRow | undefined = await db(SKILLS)
     .where({ org_id: input.orgId, skill_name: input.name })
     .first();
   const currentNow = String(fresh?.current_digest ?? '');
-  const rows: Loose[] = await db(physicalTableName('agent_version_skill_refs'))
+  const rows: SkillRefDigestRow[] = await db(physicalTableName('agent_version_skill_refs'))
     .where({ org_id: input.orgId, scope: 'org', skill_name: input.name })
     .select('content_digest');
-  const referencedNow = new Set(rows.map((row: Loose) => String(row.content_digest ?? '')));
+  const referencedNow = new Set(rows.map((row: SkillRefDigestRow) => String(row.content_digest ?? '')));
   for (const digest of input.removed) {
     if (referencedNow.has(digest) || (currentNow !== '' && currentNow === digest)) {
       raced.push(digest);
@@ -173,7 +185,7 @@ async function racedAfterDeletion(
  * 属于那一层，两处各写一份迟早会漂。
  */
 async function referencedDigestsByName(
-  db: Loose,
+  db: DbExecutor,
   orgId: string,
 ): Promise<Map<string, Set<string>>> {
   return new AgentVersionSkillRefRepository(db).listReferencedDigests({ orgId });

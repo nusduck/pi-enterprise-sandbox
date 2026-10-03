@@ -142,7 +142,7 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
   },
   {
     rel: 'bootstrap/container.ts',
-    match: /runQueueHandles:\s*Map<number,\s*Loose>\s*=\s*new\s+Map\s*\(/,
+    match: /runQueueHandles:\s*Map<number,\s*\{[^;]*\}>\s*=\s*new\s+Map\s*\(/,
     purpose:
       'Container-held depth -> BullMQ Queue handles (ADR 0012); torn down with the container, never a Run fact',
     scope: 'instance',

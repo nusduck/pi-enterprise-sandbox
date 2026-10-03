@@ -22,15 +22,17 @@
  * 并使 `ready: false`；`/ready` 每次重读注册表，不再只看启动期快照。
  */
 import { createMcpReadinessReader } from '../runtime/index.js';
+import type { McpReadinessProjection } from '../runtime/index.js';
 
-type Loose = any;
+/** 失败时的明确快照：投影字段齐全，另带错误原因（调用方按未知字段忽略）。 */
+type McpSnapshot = McpReadinessProjection & { readonly error?: string; readonly mcpServers?: unknown[] };
 
 /** 插件树起来后返回的同步投影函数；每次调用都重读 DSH 工具注册表。 */
-type McpReadinessReader = () => Loose;
+type McpReadinessReader = () => McpReadinessProjection;
 
 export class McpDiscoveryState {
   /** 最近一次投影（失败时是明确的失败快照）。 */
-  snapshot: Loose = null;
+  snapshot: McpSnapshot | null = null;
   inFlight: Promise<object> | null = null;
   /** preflight 成功后的实时投影；有它时 `readiness()` 不再读快照。 */
   #reader: McpReadinessReader | null = null;
@@ -66,7 +68,7 @@ export class McpDiscoveryState {
             );
           }
         }
-        return snapshot as unknown as object;
+        return snapshot;
       })
       .catch((err) => {
         // 起不来时**不要**把它当成「没有 MCP」——那会让 /ready 报告一个
@@ -81,7 +83,8 @@ export class McpDiscoveryState {
           mcpServers: [],
           error: message,
         };
-        return this.snapshot as object;
+        const failed: McpSnapshot = this.snapshot;
+        return failed;
       })
       .finally(() => {
         this.inFlight = null;
@@ -99,7 +102,14 @@ export class McpDiscoveryState {
         this.snapshot = this.#reader();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.snapshot = { ...(this.snapshot ?? {}), ready: false, error: message };
+        const prev = this.snapshot;
+        this.snapshot = {
+          ready: false,
+          serverCount: prev?.serverCount ?? 0,
+          toolCount: prev?.toolCount ?? 0,
+          servers: prev?.servers ?? [],
+          error: message,
+        };
       }
       return this.snapshot;
     }

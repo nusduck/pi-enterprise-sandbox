@@ -23,13 +23,44 @@ import {
 } from '../application/dsh-run-tool-budget.js';
 import { bindAgentVersionConfig } from '../infrastructure/dsh/agent-version-bindings.js';
 import { resolveRunSkills } from '../skills/run-skills.js';
+import type { ServiceContainer } from './container.js';
+import type { PlatformEventProjector } from '../infrastructure/dsh/event-projector.js';
+import type { SessionRecoveryService } from '../application/session-recovery-service.js';
 import {
   projectSkillDiagnostics,
   type RunSkillDiagnostic,
 } from '../application/run-skill-diagnostics.js';
 
-/** 过渡期宽松类型：容器与应用服务仍是 JS。 */
-type Loose = any;
+/** 子 Agent 队列端口与执行器装配的最小容器形状：只用容器已有的公开方法与字段。 */
+interface SubagentPort {
+  spawn(input: Record<string, unknown>): Promise<unknown>;
+  getStatuses(input: Record<string, unknown>): Promise<Array<Record<string, unknown>>>;
+}
+interface SessionLockManagerLike {
+  acquire(agentSessionId: string, ownerToken: string): Promise<boolean>;
+  renew(agentSessionId: string, ownerToken: string): Promise<boolean>;
+  release(agentSessionId: string, ownerToken: string): Promise<boolean>;
+  renewIntervalMs?: number;
+}
+interface DshRuntimeFactoryLike {
+  create(input: Record<string, unknown>): Promise<unknown>;
+}
+interface SessionAdapterLike {
+  captureSnapshotPayload(sm: unknown, opts?: unknown): unknown;
+  dispose?(): unknown;
+}
+interface SandboxProvisionerLike {
+  ensure(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+}
+interface PromptImageInput extends Record<string, unknown> {
+  readonly traceId?: unknown;
+  readonly traceState?: unknown;
+  readonly workspaceId?: unknown;
+  readonly sandboxSessionId?: unknown;
+  readonly attachments?: unknown;
+  readonly signal?: unknown;
+  readonly scope?: { readonly orgId?: unknown; readonly userId?: unknown } & Record<string, unknown>;
+}
 
 /** Parse a positive-integer env value with fallback (invalid/absent → default). */
 function positiveIntEnv(raw: string | undefined, fallback: number): number {
@@ -47,7 +78,7 @@ function positiveIntEnv(raw: string | undefined, fallback: number): number {
  * per transaction anyway); the durable state lives entirely in MySQL.
  *
  */
-function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses: Loose } {
+function createSubagentSpawnPort(container: ServiceContainer): SubagentPort {
   const build = async () => {
     const { SubagentSpawnService } = await import(
       '../application/subagent-spawn-service.js'
@@ -66,8 +97,14 @@ function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses:
     });
   };
   return {
-    spawn: async (input) => (await build()).spawn(input),
-    getStatuses: async (input) => (await build()).getStatuses(input),
+    spawn: async (input) =>
+      (await build()).spawn(
+        input as { toolCallId: string; parentRunId: string; orgId: string; userId: string; task: string }, // reason: 队列透传的引用原样转交，由服务做字段校验
+      ),
+    getStatuses: async (input) =>
+      (await build()).getStatuses(
+        input as { parentRunId: string; orgId: string; userId: string }, // reason: 队列透传的引用原样转交，由服务做字段校验
+      ),
   };
 }
 
@@ -83,39 +120,36 @@ function createSubagentSpawnPort(container: Loose): { spawn: Loose; getStatuses:
  */
 
 /**
- * `buildDshRunExecutorFactory` 的选项。由 JSDoc 转成真接口。
- *
- * 大部分字段仍是 `Loose`：它们承载的对象（容器、仓储、应用服务）都还是 JS，
- * 给它们编造精确类型会谎报现状。等 application/ 与 infrastructure/ 转完，
- * 这里会自然收紧。
+ * `buildDshRunExecutorFactory` 的选项：按 L3 工厂实际消费的最小形状声明。
+ * 不确定的句柄用已有的领域类型（投影器/恢复服务）或最小结构接口。
  */
 export interface DshRunExecutorFactoryOptions {
   readonly modelResolver: (agentVersion: object) => object | Promise<object>;
   readonly workspaceResolver: (agentSession: object) => string | Promise<string>;
   readonly extensionFactories?: unknown[];
   readonly eventProjectionMode?: 'session-subscribe' | 'observability' | 'both';
-  readonly sessionLockManager?: Loose;
-  readonly dshRuntimeFactory?: Loose;
-  readonly sessionAdapter?: Loose;
-  readonly projector?: Loose;
-  readonly recoveryService?: Loose;
-  readonly sandboxSessionProvisioner?: Loose;
-  /** 入参携带 trace 与归属信息；这里不收紧成具体接口，它由 Run 上下文拼出。 */
+  readonly sessionLockManager?: SessionLockManagerLike;
+  readonly dshRuntimeFactory?: DshRuntimeFactoryLike;
+  readonly sessionAdapter?: SessionAdapterLike;
+  readonly projector?: PlatformEventProjector;
+  readonly recoveryService?: SessionRecoveryService;
+  readonly sandboxSessionProvisioner?: SandboxProvisionerLike;
+  /** 入参携带 trace 与归属信息；按实际读取的字段声明最小形状。 */
   readonly promptImageLoader?: (
-    input: Loose,
+    input: PromptImageInput,
   ) => Promise<Array<{ type: 'image'; data: string; mimeType: string }>>;
   readonly sessionLockRenewIntervalMs?: number;
   readonly steerPollIntervalMs?: number;
-  readonly subagentSpawnPort?: { spawn: Loose; getStatuses: Loose };
+  readonly subagentSpawnPort?: SubagentPort;
   readonly taskStateStore?: object;
   readonly otelToolSpans?: boolean;
-  readonly sandboxTransport?: Loose;
-  readonly toolRiskPolicy?: Loose;
-  readonly skillManagerFactory?: Loose;
+  readonly sandboxTransport?: unknown;
+  readonly toolRiskPolicy?: unknown;
+  readonly skillManagerFactory?: unknown;
   readonly deltaTruncateLimit?: number;
   readonly thinkingTruncateLimit?: number;
   /** model 带 provider/id 等字段，形状由模型目录决定，暂不收紧。 */
-  readonly requestAuthResolver?: (model: Loose, agentVersion: Loose) => object | Promise<object>;
+  readonly requestAuthResolver?: (model: Record<string, unknown>, agentVersion: Record<string, unknown>) => object | Promise<object>;
   /**
    * 每个 Run 的 skill 根目录。返回 `string[]`——写 `unknown` 会让
    * DshRunExecutor 的依赖声明对不上（它要的就是路径数组）。
@@ -127,7 +161,7 @@ export interface DshRunExecutorFactoryOptions {
 }
 
 export async function buildDshRunExecutorFactory(
-  container: Loose,
+  container: ServiceContainer,
   opts: DshRunExecutorFactoryOptions,
 ) {
   if (typeof opts?.modelResolver !== 'function') {
@@ -222,9 +256,9 @@ export async function buildDshRunExecutorFactory(
               { signal },
             ),
         },
-        sandboxSessionId: input.sandboxSessionId,
-        attachments: input.attachments,
-        signal: input.signal,
+        sandboxSessionId: input.sandboxSessionId as string, // reason: 附件加载的会话标识原样透传，由加载器校验
+        attachments: input.attachments as Array<{ attachmentId: string; mimeType: string; size?: number | null }>, // reason: 附件清单原样透传，由加载器逐项校验
+        signal: input.signal as AbortSignal | undefined, // reason: 调用方的中止信号原样透传，缺失时加载器按无信号处理
       });
     });
 
@@ -299,8 +333,8 @@ export async function buildDshRunExecutorFactory(
  * （版本不存在、账本/文件失败）时返回空数组——诊断是可观测性，不改变执行期
  * fail-closed 的 Run 失败语义（执行器自己还会再算一次并按原逻辑处理）。
  */
-export function createRunSkillDiagnosticsResolver(container: Loose): (
-  input: { run: Loose; scope: { orgId: string; userId: string } },
+export function createRunSkillDiagnosticsResolver(container: ServiceContainer): (
+  input: { run: Record<string, unknown> | null | undefined; scope: { orgId: string; userId: string } },
 ) => Promise<RunSkillDiagnostic[]> {
   return async ({ run, scope }) => {
     try {

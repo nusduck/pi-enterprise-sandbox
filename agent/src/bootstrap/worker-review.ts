@@ -16,6 +16,7 @@
  * 传输，继续跑只会把行反复重试到失败。
  */
 
+import type { Knex } from 'knex';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { resolveEmailNotificationConfig } from '../infrastructure/notification/email-config.js';
 import { NotificationStore } from '../infrastructure/notification/notification-store.js';
@@ -24,12 +25,21 @@ import { createSmtpMailer } from '../infrastructure/notification/smtp-mailer.js'
 import { ReviewPublisher } from '../infrastructure/review/review-publisher.js';
 import { createReviewTransportFromEnv } from './review-wiring.js';
 
-type Loose = any;
+type DbExecutor = Knex | Knex.Transaction;
+type RepositoryBundleLike = {
+  readonly runs: unknown;
+  readonly runEvents: unknown;
+  readonly outbox: unknown;
+  readonly approvals: unknown;
+  readonly toolExecutions: unknown;
+  readonly interactions: unknown;
+};
+type RepositoryFactory = (db?: DbExecutor) => RepositoryBundleLike;
 
 export function startReviewLoop(opts: {
-  knex: Loose;
+  knex: DbExecutor;
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  createRepositories: (db?: Loose) => Loose;
+  createRepositories: RepositoryFactory;
   generateId: () => string;
   now?: () => Date;
   log?: (level: 'info' | 'error', message: string) => void;
