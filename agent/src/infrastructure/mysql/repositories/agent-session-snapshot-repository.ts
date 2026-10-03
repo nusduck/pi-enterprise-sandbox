@@ -27,9 +27,6 @@ import {
   DEFAULT_MAX_JSONL_BYTES,
 } from '../../../application/session-json-codec.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Supported snapshot payload format identifiers. */
 export const SNAPSHOT_FORMAT = Object.freeze({
   SESSION_JSONL_V3: 'session_jsonl_v3',
@@ -80,9 +77,9 @@ export {
 
 export class AgentSessionSnapshotRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
-  maxSnapshotBytes: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
+  maxSnapshotBytes: number;
 
   /**
    * @param db

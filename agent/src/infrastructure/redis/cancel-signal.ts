@@ -8,9 +8,6 @@
 import { CANCEL_SIGNAL_TTL_MS, runCancelKey } from './constants.js';
 import { assertRunId } from './validation.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export type RedisCancelLike = {
   set: (key: string, value: string, ...args: unknown[]) => Promise<string | null>;
   get: (key: string) => Promise<string | null>;
@@ -21,8 +18,8 @@ export type RedisCancelLike = {
 
 export class CancelSignal {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  redis: Loose;
-  ttlMs: Loose;
+  redis: RedisCancelLike;
+  ttlMs: number;
 
   constructor(redis: RedisCancelLike, options: { ttlMs?: number } = {}) {
     if (!redis || typeof redis.set !== 'function' || typeof redis.get !== 'function') {

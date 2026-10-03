@@ -17,9 +17,6 @@ import {
   RUN_STREAM_PAYLOAD_MAX_BYTES,
 } from './validation.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export type RunStreamEvent = {
   eventId: string;
   sequence: number | string;
@@ -96,8 +93,8 @@ export type RedisStreamLike = {
 
 export class RunEventStream {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  redis: Loose;
-  maxLen: Loose;
+  redis: RedisStreamLike;
+  maxLen: number;
 
   constructor(redis: RedisStreamLike, options: { maxLen?: number } = {}) {
     if (!redis || typeof redis.xadd !== 'function' || typeof redis.xrange !== 'function') {

@@ -28,9 +28,6 @@ import { randomBytes } from 'node:crypto';
 import { config, resolveSandboxAuthHeader } from '../../../config.js';
 import { createTraceHeaders } from './trace-context.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 const BASE = config.SANDBOX_BASE_URL;
 
 /** 执行面 readiness 的投影；不带执行面 body，避免把存储项名以外的细节外传。 */
@@ -63,8 +60,8 @@ function processPath(sessionId: string, processId: string) {
 
 export class SandboxError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  status: Loose;
-  path: Loose;
+  status: number;
+  path: string;
 
   constructor(status, message, path) {
     super(message);
@@ -483,7 +480,7 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       } catch {
         return { status: 'unreachable' };
       }
-      let body: Loose = null;
+      let body: { status?: unknown } | null = null;
       try {
         body = await resp.json();
       } catch {

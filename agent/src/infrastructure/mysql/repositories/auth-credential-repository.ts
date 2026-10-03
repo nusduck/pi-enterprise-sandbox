@@ -1,7 +1,6 @@
+import type { Knex } from 'knex';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 import { NO_ROLE } from '../../../domain/identity/roles.js';
-
-type Loose = any;
 
 function mapCredential(row: Record<string, unknown> | undefined) {
   if (!row) return null;
@@ -21,10 +20,10 @@ function mapCredential(row: Record<string, unknown> | undefined) {
 
 /** Password credentials live in Agent's MySQL schema, beside identity mappings. */
 export class AuthCredentialRepository {
-  db: Loose;
+  db: Knex;
   now: () => Date;
 
-  constructor(db: Loose, { now = () => new Date() } = {}) {
+  constructor(db: Knex, { now = () => new Date() }: { now?: () => Date } = {}) {
     if (!db) throw new Error('AuthCredentialRepository requires a knex executor');
     this.db = db;
     this.now = now;
@@ -116,7 +115,7 @@ export class AuthCredentialRepository {
       || userFields.notify_review_pending !== undefined
       || userFields.notify_run_waiting !== undefined;
     if (Object.keys(userFields).length) {
-      await this.db.transaction(async (trx: Loose) => {
+      await this.db.transaction(async (trx: Knex.Transaction) => {
         if (Object.keys(fields).length) {
           await trx('tbl_agsvc_auth_credentials')
             .where({ external_user_id: externalUserId })

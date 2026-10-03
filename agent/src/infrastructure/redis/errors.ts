@@ -2,9 +2,6 @@
  * Explicit Redis infrastructure errors (no silent localhost/memory fallback).
  */
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export class RedisConfigError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
@@ -30,7 +27,7 @@ export class RedisDependencyError extends Error {
 export class RedisValidationError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  field: Loose;
+  field: string | null;
 
   constructor(message: string, meta: { field?: string } = {}) {
     super(message);
@@ -42,8 +39,8 @@ export class RedisValidationError extends Error {
 
 export class LeaseError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
-  runId: Loose;
+  code: string;
+  runId: string | null;
 
   constructor(message: string, meta: { runId?: string, code?: string } = {}) {
     super(message);
@@ -58,8 +55,8 @@ export class LeaseError extends Error {
  */
 export class SessionLockError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
-  agentSessionId: Loose;
+  code: string;
+  agentSessionId: string | null;
 
   constructor(message: string, meta: { agentSessionId?: string, code?: string } = {}) {
     super(message);

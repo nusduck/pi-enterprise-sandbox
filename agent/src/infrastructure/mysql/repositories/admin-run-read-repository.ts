@@ -11,8 +11,7 @@
 import { formatDateTime, mapRunEvent, toMysqlDateTime } from '../row-mappers.js';
 import { parseJsonColumn, publicJsonView } from './tool-execution-repository.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
-
-type Loose = any;
+import type { Knex } from 'knex';
 
 export interface AdminRunFilters {
   statuses?: readonly string[];
@@ -101,21 +100,22 @@ function mapAdminRun(row: Record<string, unknown>): AdminRunRow {
 export function userMessageText(content: unknown): string | null {
   if (typeof content === 'string') return content || null;
   if (content && typeof content === 'object' && !Array.isArray(content)) {
-    const text = (content as Loose).text;
+    const text = (content as { text?: unknown }).text; // 原因：content_json 解析后可能是 { text } 形态，宽容读取文本字段
     if (typeof text === 'string' && text.trim()) return text;
   }
-  const parts = Array.isArray(content) ? content : Array.isArray((content as Loose)?.content) ? (content as Loose).content : [];
+  const contentParts = (content as { content?: unknown })?.content; // 原因：content_json 解析后可能是 { content: parts[] } 旧形态，宽容读取 parts 数组
+  const parts: unknown[] = Array.isArray(content) ? content : Array.isArray(contentParts) ? contentParts : [];
   const joined = parts
-    .map((p: Loose) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : ''))
+    .map((p: string | { text?: unknown }) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : ''))
     .filter(Boolean)
     .join('\n');
   return joined || null;
 }
 
 export class AdminRunReadRepository {
-  readonly db: Loose;
+  readonly db: Knex;
 
-  constructor(db: Loose) {
+  constructor(db: Knex) {
     if (!db) throw new Error('AdminRunReadRepository requires db');
     this.db = db;
   }
@@ -161,7 +161,7 @@ export class AdminRunReadRepository {
     if (f.query) {
       const like = `%${f.query.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
       const exact = f.query;
-      q = q.andWhere((w: Loose) => {
+      q = q.andWhere((w: Knex.QueryBuilder) => {
         w.where('c.title', 'like', like)
           .orWhere('u.display_name', 'like', like)
           .orWhere(this.db.raw("JSON_UNQUOTE(JSON_EXTRACT(m.content_json, '$.text'))"), 'like', like)
@@ -171,8 +171,8 @@ export class AdminRunReadRepository {
     if (f.before) {
       const at = toMysqlDateTime(f.before.createdAt);
       const id = assertUlid(f.before.runId, 'cursor.runId');
-      q = q.andWhere((w: Loose) => {
-        w.where('r.created_at', '<', at).orWhere((w2: Loose) => {
+      q = q.andWhere((w: Knex.QueryBuilder) => {
+        w.where('r.created_at', '<', at).orWhere((w2: Knex.QueryBuilder) => {
           w2.where('r.created_at', '=', at).andWhere('r.run_id', '<', id);
         });
       });

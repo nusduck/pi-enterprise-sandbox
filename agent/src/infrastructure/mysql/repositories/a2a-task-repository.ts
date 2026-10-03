@@ -10,9 +10,6 @@ import { toMysqlDateTime, formatDateTime } from '../row-mappers.js';
 import { ConflictError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Opaque A2A context_id max length (VARCHAR(255)). */
 export const A2A_CONTEXT_ID_MAX_LEN = 255;
 
@@ -78,8 +75,8 @@ export function applyA2aClientScope(query: import('knex').Knex.QueryBuilder, sco
 
 export class A2aTaskRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('A2aTaskRepository requires a knex executor');

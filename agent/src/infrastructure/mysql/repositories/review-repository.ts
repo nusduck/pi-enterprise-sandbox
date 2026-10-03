@@ -15,8 +15,7 @@
  */
 
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
-
-type Loose = any;
+import type { Knex } from 'knex';
 
 /** 状态取值与迁移 `REVIEW_TASK_STATUSES` 一致；这里再钉一次，避免拼写漂移。 */
 export const REVIEW_STATUS = Object.freeze({
@@ -135,7 +134,29 @@ export interface ReviewTaskDraft {
  * 不能用写库用的 `toMysqlDateTime`：后者是没有时区的 UTC 挂钟串，前端会当本地时间解析，
  * 在 +08:00 的机器上整整慢 8 小时（返工单 R1；#68 修过同一类问题）。
  */
-export function mapTask(row: Loose): ReviewTaskRecord {
+interface ReviewTaskDbRow {
+  review_task_id: unknown;
+  org_id: unknown;
+  requester_user_id: unknown;
+  conversation_id: unknown;
+  agent_session_id: unknown;
+  run_id: unknown;
+  agent_id: unknown;
+  agent_version_id: unknown;
+  run_status: unknown;
+  status: unknown;
+  assignee_user_id: unknown;
+  claimed_at: unknown;
+  revision: unknown;
+  feedback: unknown;
+  decided_by: unknown;
+  decided_at: unknown;
+  context_injected_run_id: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
+export function mapTask(row: ReviewTaskDbRow): ReviewTaskRecord {
   return {
     reviewTaskId: String(row.review_task_id),
     orgId: String(row.org_id),
@@ -160,7 +181,17 @@ export function mapTask(row: Loose): ReviewTaskRecord {
   };
 }
 
-function mapItem(row: Loose): ReviewItemRecord {
+interface ReviewItemDbRow {
+  item_no: unknown;
+  original_artifact_id: unknown;
+  current_artifact_id: unknown;
+  name: unknown;
+  mime_type: unknown;
+  size_bytes: unknown;
+  sha256: unknown;
+}
+
+function mapItem(row: ReviewItemDbRow): ReviewItemRecord {
   return {
     itemNo: Number(row.item_no),
     originalArtifactId: String(row.original_artifact_id),
@@ -172,7 +203,17 @@ function mapItem(row: Loose): ReviewItemRecord {
   };
 }
 
-function mapMaterial(row: Loose): ReviewMaterialRecord {
+interface ReviewMaterialDbRow {
+  material_id: unknown;
+  attachment_id: unknown;
+  filename: unknown;
+  mime_type: unknown;
+  size_bytes: unknown;
+  snapshot_artifact_id: unknown;
+  snapshot_status: unknown;
+}
+
+function mapMaterial(row: ReviewMaterialDbRow): ReviewMaterialRecord {
   return {
     materialId: String(row.material_id),
     attachmentId: String(row.attachment_id),
@@ -185,7 +226,18 @@ function mapMaterial(row: Loose): ReviewMaterialRecord {
   };
 }
 
-export function mapEvent(row: Loose): ReviewEventRecord {
+interface ReviewEventDbRow {
+  event_id: unknown;
+  event_type: unknown;
+  actor_user_id: unknown;
+  item_no: unknown;
+  from_artifact_id: unknown;
+  to_artifact_id: unknown;
+  detail: unknown;
+  created_at: unknown;
+}
+
+export function mapEvent(row: ReviewEventDbRow): ReviewEventRecord {
   return {
     eventId: String(row.event_id),
     eventType: String(row.event_type ?? ''),
@@ -210,10 +262,10 @@ export function isDuplicateKeyError(err: unknown): boolean {
 }
 
 export class ReviewRepository {
-  db: Loose;
+  db: Knex;
   now: () => Date;
 
-  constructor(db: Loose, { now = () => new Date() }: { now?: () => Date } = {}) {
+  constructor(db: Knex, { now = () => new Date() }: { now?: () => Date } = {}) {
     if (!db) throw new Error('ReviewRepository requires a knex executor');
     this.db = db;
     this.now = now;
@@ -366,7 +418,7 @@ export class ReviewRepository {
       .orderBy('sequence_no', 'asc')
       .limit(input.limit)
       .select('message_id', 'sequence_no', 'content_json', 'created_at');
-    return rows.map((row: Loose) => {
+    return rows.map((row: { message_id: unknown; sequence_no: unknown; content_json: unknown; created_at: unknown }) => {
       const content = typeof row.content_json === 'string' ? safeParse(row.content_json) : row.content_json;
       const record = (content ?? {}) as Record<string, unknown>;
       return {
@@ -481,8 +533,8 @@ export class ReviewRepository {
     if (input.statuses && input.statuses.length > 0) q.whereIn('status', [...input.statuses]);
     if (input.assigneeUserId) q.andWhere({ assignee_user_id: input.assigneeUserId });
     if (input.cursor) {
-      q.andWhere((qb: Loose) => {
-        qb.where('created_at', '<', input.cursor!.createdAt).orWhere((inner: Loose) => {
+      q.andWhere((qb: Knex.QueryBuilder) => {
+        qb.where('created_at', '<', input.cursor!.createdAt).orWhere((inner: Knex.QueryBuilder) => {
           inner
             .where('created_at', '=', input.cursor!.createdAt)
             .andWhere('review_task_id', '<', input.cursor!.reviewTaskId);
@@ -650,7 +702,7 @@ export class ReviewRepository {
     readonly expectedRevision: number;
   }): Promise<number> {
     const now = toMysqlDateTime(this.now());
-    return await this.db.transaction(async (trx: Loose) => {
+    return await this.db.transaction(async (trx: Knex.Transaction) => {
       const task = await trx('tbl_agsvc_review_tasks')
         .where({
           review_task_id: input.reviewTaskId,

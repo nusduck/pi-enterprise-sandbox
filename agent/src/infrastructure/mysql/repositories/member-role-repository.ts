@@ -27,9 +27,6 @@ import { assertUlid, isUlid } from '../../../domain/shared/ulid.js';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 import { isKnownRole, type KnownRole } from '../../../domain/identity/roles.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 const ROLES = physicalTableName('member_roles');
 const EVENTS = physicalTableName('member_role_events');
 const USERS = physicalTableName('users');
@@ -98,8 +95,37 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }
 
+/** 成员列表查询行的最小形状（只含实际访问的列，列值类型用 unknown）。 */
+interface MemberListDbRow {
+  user_id: unknown;
+  username: unknown;
+  display_name: unknown;
+  email: unknown;
+  department: unknown;
+  last_login_at: unknown;
+}
+
+/** 角色账本查询行的最小形状（只含实际访问的列，列值类型用 unknown）。 */
+interface MemberRoleDbRow {
+  user_id: unknown;
+  role: unknown;
+  source: unknown;
+}
+
+/** 角色变更记录查询行的最小形状（只含实际访问的列，列值类型用 unknown）。 */
+interface RoleEventDbRow {
+  event_id: unknown;
+  role: unknown;
+  action: unknown;
+  source: unknown;
+  actor_user_id: unknown;
+  actor_username: unknown;
+  actor_display_name: unknown;
+  created_at: unknown;
+}
+
 export class MemberRoleRepository {
-  db: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
   now: () => Date;
 
   constructor(
@@ -120,7 +146,7 @@ export class MemberRoleRepository {
    *
    * @param onColumn 右侧的被连接列，例如 `u.external_subject` 或 `au.external_subject`。
    */
-  #joinCredentials(query: Loose, alias: string, onColumn: string): Loose {
+  #joinCredentials(query: import('knex').Knex.QueryBuilder, alias: string, onColumn: string): import('knex').Knex.QueryBuilder {
     return query.joinRaw(
       `left join ${AUTH_CREDENTIALS} as ${alias} `
         + `on concat(?, ${alias}.external_user_id) = ${onColumn}`,
@@ -151,7 +177,7 @@ export class MemberRoleRepository {
     const search = typeof query.q === 'string' ? query.q.trim() : '';
     if (search) {
       const pattern = `%${escapeLike(search.slice(0, 200))}%`;
-      q = q.where((builder: Loose) => {
+      q = q.where((builder: import('knex').Knex.QueryBuilder) => {
         builder
           .where('ac.username', 'like', pattern)
           .orWhere('u.display_name', 'like', pattern);
@@ -170,7 +196,7 @@ export class MemberRoleRepository {
     }
     if (query.cursor && isUlid(query.cursor)) q = q.where('u.user_id', '>', query.cursor);
     // 多取一行判断「还有下一页」，避免额外一次 count(*)。
-    const rows: Loose[] = await q.orderBy('u.user_id', 'asc').limit(limit + 1);
+    const rows: MemberListDbRow[] = await q.orderBy('u.user_id', 'asc').limit(limit + 1);
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
     return {
@@ -223,7 +249,7 @@ export class MemberRoleRepository {
   ): Promise<Array<{ role: KnownRole; source: string }>> {
     const org = assertUlid(orgId, 'orgId');
     const user = assertUlid(userId, 'userId');
-    const rows: Loose[] = await this.db(ROLES)
+    const rows: MemberRoleDbRow[] = await this.db(ROLES)
       .where({ org_id: org, user_id: user })
       .select('role', 'source')
       .orderBy('role', 'asc');
@@ -241,7 +267,7 @@ export class MemberRoleRepository {
     const ids = userIds.filter((id) => isUlid(id));
     const out = new Map<string, Array<{ role: KnownRole; source: string }>>();
     if (!ids.length) return out;
-    const rows: Loose[] = await this.db(ROLES)
+    const rows: MemberRoleDbRow[] = await this.db(ROLES)
       .where('org_id', org)
       .whereIn('user_id', ids)
       .select('user_id', 'role', 'source')
@@ -267,7 +293,7 @@ export class MemberRoleRepository {
     const org = assertUlid(orgId, 'orgId');
     let q = this.db(ROLES).where({ org_id: org, role: 'admin' }).select('user_id').orderBy('user_id', 'asc');
     if (opts.forUpdate) q = q.forUpdate();
-    const rows: Loose[] = await q;
+    const rows: Array<Pick<MemberRoleDbRow, 'user_id'>> = await q;
     return rows.map((row) => String(row.user_id));
   }
 
@@ -302,7 +328,7 @@ export class MemberRoleRepository {
       });
     } catch (err) {
       // 并发下两次授予同一角色：撞主键等价于「已经授予」，不是错误。
-      if ((err as Loose)?.code === 'ER_DUP_ENTRY' || (err as Loose)?.errno === 1062) return false;
+      if ((err as { code?: string })?.code === 'ER_DUP_ENTRY' || (err as { errno?: number })?.errno === 1062) return false;
       throw err;
     }
     return true;
@@ -371,7 +397,7 @@ export class MemberRoleRepository {
     let q = this.db(`${EVENTS} as e`)
       .leftJoin(`${USERS} as au`, 'au.user_id', 'e.actor_user_id');
     q = this.#joinCredentials(q, 'ac', 'au.external_subject');
-    const rows: Loose[] = await q
+    const rows: RoleEventDbRow[] = await q
       .where('e.org_id', org)
       .where('e.user_id', user)
       .select(

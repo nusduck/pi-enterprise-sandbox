@@ -36,9 +36,6 @@ import {
 import { computeRetryDelayMs } from './retry-delay.js';
 import { sanitizeOutboxError } from './sanitize-error.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export type DbExecutor = import('knex').Knex | import('knex').Knex.Transaction;
 
 export type ClaimEligibility = import('./eligibility.js').ClaimEligibility;
@@ -90,14 +87,14 @@ export function parseAffectedRows(rawResult: unknown) {
 
 export class OutboxRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  maxAttempts: Loose;
-  staleClaimMs: Loose;
-  baseDelayMs: Loose;
-  maxDelayMs: Loose;
-  now: Loose;
-  generateClaimToken: Loose;
-  defaultEligibility: Loose;
+  db: DbExecutor;
+  maxAttempts: number;
+  staleClaimMs: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  now: () => Date;
+  generateClaimToken: () => string;
+  defaultEligibility: ClaimEligibility | null;
 
   /**
    * @param db

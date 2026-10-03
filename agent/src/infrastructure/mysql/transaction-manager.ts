@@ -4,9 +4,6 @@
 
 import { MysqlDependencyError } from './errors.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export type DbExecutor = import('knex').Knex | import('knex').Knex.Transaction;
 
 /**
@@ -60,13 +57,13 @@ export function isConnectionMysqlError(error: unknown) {
   return typeof code === 'string' && CONNECTION_ERROR_CODES.has(code);
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export class TransactionManager {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  knex: Loose;
-  retryBackoffMs: Loose;
-  sleep: Loose;
+  knex: import('knex').Knex;
+  retryBackoffMs: number[];
+  sleep: (ms: number) => Promise<void>;
 
   constructor(knex: import('knex').Knex, opts: { retryBackoffMs?: readonly number[], sleep?: (ms: number) => Promise<void> } = {}) {
     if (!knex || typeof knex.transaction !== 'function') {

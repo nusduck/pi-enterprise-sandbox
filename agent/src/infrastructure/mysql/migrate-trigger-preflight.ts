@@ -15,17 +15,14 @@
 
 import { MysqlConfigError } from './errors.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Stable error code for deploy gates and tests. */
 export const MYSQL_TRIGGER_BINLOG_BLOCKED = 'MYSQL_TRIGGER_BINLOG_BLOCKED';
 
 export class MysqlTriggerCapabilityError extends MysqlConfigError {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   // code 不在此列：MysqlConfigError 已经声明过，子类重复声明是 TS2612。
-  logBin: Loose;
-  trustCreators: Loose;
+  logBin: boolean | null;
+  trustCreators: boolean | null;
 
   constructor(message: string, meta: { logBin?: boolean, trustCreators?: boolean } = {}) {
     super(message);

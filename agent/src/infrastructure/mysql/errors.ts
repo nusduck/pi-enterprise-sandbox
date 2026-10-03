@@ -2,9 +2,6 @@
  * Explicit MySQL infrastructure errors (no silent SQLite/memory fallback).
  */
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export class MysqlConfigError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
@@ -22,8 +19,8 @@ export class MysqlConfigError extends Error {
  */
 export class MysqlOrphanSchemaError extends MysqlConfigError {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  orphanTables: Loose;
-  missingMigrations: Loose;
+  orphanTables: string[];
+  missingMigrations: string[];
 
   constructor(message: string, meta: { orphanTables?: string[], missingMigrations?: string[] } = {}) {
     super(message);
@@ -48,8 +45,8 @@ export class MysqlDependencyError extends Error {
 export class OwnershipError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  resource: Loose;
-  id: Loose;
+  resource: string | null;
+  id: string | null;
 
   constructor(message: string, meta: { resource?: string, id?: string } = {}) {
     super(message);
@@ -63,8 +60,8 @@ export class OwnershipError extends Error {
 export class NotFoundError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  resource: Loose;
-  id: Loose;
+  resource: string | null;
+  id: string | null;
 
   constructor(message: string, meta: { resource?: string, id?: string } = {}) {
     super(message);
@@ -78,8 +75,8 @@ export class NotFoundError extends Error {
 export class ConflictError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  resource: Loose;
-  id: Loose;
+  resource: string | null;
+  id: string | null;
 
   constructor(message: string, meta: { resource?: string, id?: string } = {}) {
     super(message);
@@ -93,7 +90,7 @@ export class ConflictError extends Error {
 export class SequenceAllocationError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  runId: Loose;
+  runId: string | null;
 
   constructor(message: string, meta: { runId?: string } = {}) {
     super(message);

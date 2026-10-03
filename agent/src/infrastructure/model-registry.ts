@@ -21,9 +21,6 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -115,8 +112,8 @@ export type ModelEntry = {
 
 export class ModelRegistryError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
-  modelId: Loose;
+  code: string;
+  modelId: string | null;
 
   constructor(message: string, opts: { code?: string, modelId?: string|null } = {}) {
     super(message);

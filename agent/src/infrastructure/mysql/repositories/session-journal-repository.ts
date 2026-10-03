@@ -27,9 +27,6 @@ import {
   SESSION_JSONL_VERSION,
 } from '../../../application/session-json-codec.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Message role for journal channel rows. */
 export const JOURNAL_MESSAGE_ROLE = 'system';
 
@@ -254,9 +251,9 @@ export function unwrapJournalContent(msg: ReturnType<typeof mapMessage>) {
 
 export class SessionJournalRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
-  generateId: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
+  generateId: (() => string) | null;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date, generateId?: () => string } = {}) {
     if (!db) {

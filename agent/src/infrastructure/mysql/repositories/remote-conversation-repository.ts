@@ -12,9 +12,6 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { toMysqlDateTime } from '../row-mappers.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const REMOTE_CONVERSATIONS_TABLE = 'tbl_agsvc_remote_conversations';
 
 export interface RemoteConversationScope {
@@ -25,8 +22,8 @@ export interface RemoteConversationScope {
 
 export class RemoteConversationRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  generateId: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  generateId: (() => string) | null;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { generateId?: () => string } = {}) {
     if (!db) throw new Error('RemoteConversationRepository requires a knex executor');
@@ -39,7 +36,7 @@ export class RemoteConversationRepository {
    */
   async getBinding(scope: RemoteConversationScope, remoteAgentId: string): Promise<string | null> {
     const s = requireOwnerScope(scope);
-    const conversationId = assertUlid((scope as Loose).conversationId, 'conversationId');
+    const conversationId = assertUlid(scope.conversationId, 'conversationId');
     const row = await applyOwnerScope(
       this.db(REMOTE_CONVERSATIONS_TABLE).where({
         conversation_id: conversationId,
@@ -60,7 +57,7 @@ export class RemoteConversationRepository {
       throw new Error('RemoteConversationRepository requires generateId() for writes');
     }
     const s = requireOwnerScope(scope);
-    const conversationId = assertUlid((scope as Loose).conversationId, 'conversationId');
+    const conversationId = assertUlid(scope.conversationId, 'conversationId');
     const remoteId = String(remoteConversationId ?? '').trim();
     if (!remoteId || remoteId.length > 191) {
       throw new Error('RemoteConversationRepository requires a remote conversation id of 1-191 chars');
@@ -98,7 +95,7 @@ export class RemoteConversationRepository {
   /** 删绑定（H5 会话失效路径；幂等，不存在也不报错）。 */
   async clearBinding(scope: RemoteConversationScope, remoteAgentId: string): Promise<void> {
     const s = requireOwnerScope(scope);
-    const conversationId = assertUlid((scope as Loose).conversationId, 'conversationId');
+    const conversationId = assertUlid(scope.conversationId, 'conversationId');
     await applyOwnerScope(
       this.db(REMOTE_CONVERSATIONS_TABLE).where({
         conversation_id: conversationId,

@@ -7,10 +7,8 @@
  * 不删除行——撤销是可审计事实，不是清理。
  */
 
+import type { Knex } from 'knex';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
-
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
 
 const TABLE = 'tbl_agsvc_browser_auth_sessions';
 
@@ -32,10 +30,10 @@ function mapSession(row: Record<string, unknown> | undefined) {
 }
 
 export class BrowserAuthSessionRepository {
-  db: Loose;
+  db: Knex;
   now: () => Date;
 
-  constructor(db: Loose, { now = () => new Date() }: { now?: () => Date } = {}) {
+  constructor(db: Knex, { now = () => new Date() }: { now?: () => Date } = {}) {
     if (!db) throw new Error('BrowserAuthSessionRepository requires a knex executor');
     this.db = db;
     this.now = now;
