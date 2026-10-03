@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 部分模型上游的流式工具调用丢失工具名
+
+- 有的 OpenAI 兼容上游（vLLM 风格，调用 id 形如 `chatcmpl-tool-…`）会在首个分片之后的每个 tool_calls 分片里
+  显式带 `"id": ""` 和 `"name": null`。出厂 `dsh-llm-deepseek` 适配器会用这些空值覆盖首片里的工具名与调用 id，
+  导致工具名变成空串，被风险策略按未知工具拒绝（模型只看到 `resolved critical by platform (class:unknown)`）。
+- 现在 agent 只对 `POST {LLMIO_BASE_URL}/chat/completions` 的事件流去掉这些空值字段，其他请求和字段原样透传；
+  首片本身缺工具名时仍按未知工具拒绝。出厂适配器修好后，`tests/runtime/llm-stream-tool-call.test.ts` 的复现用例会失败，
+  届时删除这层处理。
+
 ### Fixed — `AGENT_RUN_STREAM_MAXLEN` 生效
 
 - deployment.md 与 compose 都把它列为可调的 Run stream 近似 MAXLEN，但 `RunEventStream` 的两处装配从未传入，改了不生效，

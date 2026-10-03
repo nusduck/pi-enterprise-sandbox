@@ -42,6 +42,7 @@ import {
   SessionOwnerBindings,
 } from './providers/mysql-session-persistence.js';
 import type { PersistenceBackend } from '@deepseek-ai/dsh-session-persistence';
+import { installLlmStreamSanitizer } from './providers/llm-stream-sanitizer.js';
 
 // 组合根感知全部自建 provider。策略挂载点见 runtime/policy/*（W5）。
 
@@ -406,5 +407,9 @@ export async function bootEnterpriseRuntime(
   ];
   const bareModuleBaseUrl = pathToFileURL(join(here, '../')).href;
   void rpc;
+  // 与 bundle/cordis.patch.yml 的 llm-deepseek.baseURL 同一表达式：只消毒这一个模型端点。
+  installLlmStreamSanitizer(
+    process.env['LLMIO_BASE_URL'] || process.env['DEEPSEEK_BASE_URL'] || 'https://api.deepseek.com',
+  );
   return boot('dsh-runtime', emptyConfig, patches, undefined, bareModuleBaseUrl);
 }
