@@ -188,7 +188,7 @@ const ADDITIONS: readonly PatchEntry[] = [
   {
     comment:
       'delegate_to_remote_agent：调用运维登记的远端 A2A Agent（docs/design/a2a-remote-delegation.md）。' + '\n' +
-      '清单只来自 A2A_REMOTE_AGENTS_JSON，风险分类 external_high（默认需要审批）。',
+      '清单只来自 A2A_REMOTE_AGENTS_JSON，风险分类 external_high（平台默认 medium，不审批）。',
     insert: [{ id: 'delegate-to-remote-agent', name: ownModule('delegate-to-remote-agent'), config: {} }],
   },
 ];

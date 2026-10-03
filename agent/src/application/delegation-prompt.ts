@@ -42,7 +42,7 @@ export function formatDelegationSection(
   if (remote.length > 0) {
     out.push(
       'You can send a self-contained task to a remote agent outside this organization with ' +
-        '`delegate_to_remote_agent` (it may need a human approval first). ' +
+        '`delegate_to_remote_agent`. ' +
         'Share only what the task needs. Available remote agents (use the id):',
       ...remote.map(bullet),
     );

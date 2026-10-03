@@ -51,8 +51,9 @@ export const SANDBOX_TOOL_NAMES = Object.freeze([
 export const ASK_USER_TOOL_NAME = 'ask_user_question';
 
 /**
- * 自建、但副作用落在**外部系统**的工具：风险分类为 `external_high`（平台默认需要审批），
- * 不是 `local_low`。与 MCP 工具同一档——它们都把会话内容发到本部署之外。
+ * 自建、但副作用落在**外部系统**的工具：风险分类为 `external_high`，不是 `local_low`。
+ * 与 MCP 工具同一档——它们都把会话内容发到本部署之外。默认是否审批看风险表的平台覆盖
+ * （`delegate_to_remote_agent` 2026-10-03 起默认放行，见 risk-table.ts）。
  */
 export const EXTERNAL_HOST_TOOL_NAMES = Object.freeze([
   // 自建：调用运维登记的远端 A2A Agent（docs/design/a2a-remote-delegation.md D4）。

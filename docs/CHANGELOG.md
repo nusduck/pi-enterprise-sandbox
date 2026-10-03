@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — 远端委派（HiAgent / A2A）默认不再需要审批
+
+- `delegate_to_remote_agent` 平台默认风险从 `high` 调为 `medium`，模型调用登记的远端智能体时直接发出，不再弹审批卡。远端仍只能是运维在 `A2A_REMOTE_AGENTS_JSON` 登记、且 Agent 配置 `delegation.remoteAgents` 授权的那些；需要人工把关的 Agent 可在 `toolPolicy.riskLevels` 里把它调回 `high`。自行维护 `TOOL_RISK_POLICY_PATH`/`TOOL_RISK_POLICY_JSON` 的部署要同步修改该条目，否则仍按原值审批。
+
 ### Fixed — 后台作业输出在 exec 重启后丢失
 
 - exec 把后台作业输出落到控制根 `job-output/`（运行中约每秒一次，结束时强制一次），作业结束 5 分钟后或 exec 重启后，进程日志与模型 `job_output` 仍能读到重启前的输出；读不到时明确返回 `outputUnavailable`，模型看到“输出不可用”提示。工作区删除时清理对应文件。

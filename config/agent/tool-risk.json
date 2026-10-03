@@ -70,7 +70,7 @@
     "ask_user_question": "low",
     "submit_artifact": "low",
     "delegate_to_agent": "low",
-    "delegate_to_remote_agent": "high"
+    "delegate_to_remote_agent": "medium"
   },
   "mcpServers": {}
 }
