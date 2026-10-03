@@ -75,10 +75,6 @@ HOTSPOT_LINE_BUDGETS = {
     # 2026-09-25 审批改为在对话流内就地处理，删掉 approvePending/rejectPending，
     # 1_454 -> 1_404，预算收紧。
     # 2026-09-25 图片发送改用 effectiveModel 判定（未选模型时用目录默认模型），1_404 -> 1_399。
-    # 2026-10-01 SSO 预留 P1b：认证会话/身份边界拆到 useAuthSession.ts 与
-    # identityRevision.ts（401/503 分流、切号重置、logout 撤销未确认），
-    # 1_399 -> 1_369，预算收紧。
-    "frontend/src/features/chat/ChatContext.tsx": 1_369,
     # entityBridge.ts 于本次拆分后回到 1_000 行默认上限之下（纯投影拆到
     # entityProjections.ts，durable trace 分页拆到 bridge/traceLoader.ts，
     # 门面只保留类型与状态机），不再需要预算。

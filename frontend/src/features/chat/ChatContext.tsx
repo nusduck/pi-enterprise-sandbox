@@ -21,16 +21,11 @@ import {
   abortStream,
   isActiveGeneration,
   persistConversationId,
-  loadPersistedConversationId,
   persistSidebarOpen,
   loadPersistedSidebarOpen,
+  loadPersistedConversationId,
   clearPersistedChat,
   writeConversationModelId,
-  normalizeServerMessages,
-  createAttachmentDraft,
-  patchAttachment,
-  removeAttachment,
-  validateNewAttachments,
   canSendAttachments,
   uploadedAttachments,
   buildUserTurnWithAttachments,
@@ -42,130 +37,33 @@ import { isNewChatShortcut } from '../../shared/ui/keyboard';
 import {
   createRun as apiCreateRun,
   streamRunEvents,
-  uploadDataset,
-  ensureSession,
-  getConversation,
-  deleteConversation,
-  listArtifacts,
-  importArtifact as apiImportArtifact,
   decideApproval,
 } from '../../shared/api';
 import { useConversationPaging } from './conversationPaging';
-import type { Agent, ModelItem } from '../../shared/api';
-import type { AuthConfig } from '../../shared/schemas/auth';
-import { projectLoginCapabilities, type LoginCapabilities } from '../../shared/schemas/auth';
+import { projectLoginCapabilities } from '../../shared/schemas/auth';
 import { createEntityBridge, type EntityBridge } from './entityBridge';
 import { useReviewResultPolling } from './useReviewResultPolling';
 import type { EntityStore, ProcessEntity } from '../../entities';
 import type { SSEEvent } from '../../shared/sse/parser';
 import { projectConversationMessages } from './projections/conversationMessages';
-import { beginConversationRestore, finishConversationRestore, failConversationRestore } from './conversationLoading';
 import { bindCreatedRunIdentity } from './conversationIdentity';
-import { runUploadQueue } from './uploads/runUploadQueue';
 import { useRunControls } from './controllers/useRunControls';
 import { useModelSelection } from './useModelSelection';
-import { fixedModelIdOf, mergeConversation } from './conversationProjection';
+import { fixedModelIdOf } from './conversationProjection';
 import { effectiveModel, supportsImages } from './effectiveModel';
 import { useAgentSelection } from './useAgentSelection';
 import { resolveApprovalDecision } from './approvalDecision';
 import { createIdentityRevision, type IdentityRevision } from './identityRevision';
 import { useAuthSession } from './useAuthSession';
+import type { AuthConfigState, ChatController } from './chatContextTypes';
+import { useUserMessageMutations } from './useUserMessageMutations';
+import { useAttachmentDrafts } from './useAttachmentDrafts';
+import { useConversationActions, isMobile } from './useConversationActions';
 
-/** 登录能力投影的加载状态：加载失败不能当成「没有登录方式」。 */
-export type AuthConfigState = {
-  config: AuthConfig | null;
-  capabilities: LoginCapabilities | null;
-  loading: boolean;
-  error: string | null;
-};
-
-export type ChatController = {
-  state: ChatState;
-  draftText: string;
-  setDraftText: (t: string) => void;
-  dropzoneVisible: boolean;
-  models: ModelItem[];
-  selectedModelId: string | null;
-  /** Model pinned by the bound AgentVersion for the focused conversation. */
-  fixedModelId: string | null;
-  setSelectedModelId: (modelId: string | null) => void;
-  /** org 内可选的智能体；只有一个时 UI 不渲染选择器（D2：一会话一 Agent）。 */
-  agents: Agent[];
-  selectedAgentId: string | null;
-  setSelectedAgentId: (agentId: string | null) => void;
-  agentNameById: (agentId: string | null | undefined) => string | null;
-  // Conversations
-  selectConversation: (id: string) => Promise<void>;
-  startNewChat: () => Promise<void>;
-  removeConversation: (id: string) => Promise<void>;
-  importArtifactToConversation: (
-    artifactId: string,
-    targetConversationId: string,
-    targetFilename?: string | null,
-  ) => Promise<void>;
-  toggleSidebar: () => void;
-  closeSidebar: () => void;
-  refreshConversations: () => Promise<void>;
-  loadMoreConversations: () => Promise<void>;
-  hasMoreConversations: boolean;
-  loadingMoreConversations: boolean;
-  conversationPagingError: string | null;
-  // Messaging
-  sendMessage: (text?: string) => Promise<void>;
-  cancelStream: () => void;
-  /** F4: user stop — abort stream + cancel run API. */
-  stopRun: () => void;
-  /** F4: steer current run (Running mode). */
-  steerRun: (text: string) => Promise<boolean>;
-  /** F4: queue follow-up after current work. */
-  followUpRun: (text: string) => Promise<boolean>;
-  /** F4: resume entry for interrupted runs. */
-  resumeInterrupted: () => Promise<void>;
-  respondInteraction: (response: unknown) => Promise<boolean>;
-  // Attachments
-  handleFilesSelected: (files: FileList | File[]) => Promise<void>;
-  removeAttachmentDraft: (localId: string) => void;
-  retryAttachmentDraft: (localId: string) => Promise<void>;
-  setDropzoneVisible: (v: boolean) => void;
-  // Approvals
-  /** Decide a specific approval by id (entity card or banner). */
-  resolveApproval: (
-    approvalId: string,
-    decision: 'approve' | 'reject',
-    reason?: string | null,
-  ) => Promise<boolean>;
-  // Auth
-  login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
-  /** 重新读一次 `me`。角色权威在服务端，撤销自己的 admin 后必须重新拉一次。 */
-  refreshAuthUser: () => Promise<boolean>;
-  /** 登录能力投影（`GET /api/auth/config`）；失败时 UI 显示错误与重试。 */
-  authConfig: AuthConfigState;
-  /** 重跑 config + `me` 检查；用于 503/加载失败后的可见重试。 */
-  retryAuth: () => Promise<void>;
-  /** 退出登录后服务端撤销未确认的可见提示；普通退出为 null。 */
-  logoutWarning: string | null;
-  // Flash
-  clearFlash: () => void;
-  // Display helpers
-  displayMessages: ChatMessage[];
-  canSend: boolean;
-  /** F2 normalized entity store (Conversation / Session / Run hierarchy). */
-  entityStore: EntityStore;
-  /** Immediately update or insert a process entity in the store. */
-  updateProcess: (entity: ProcessEntity) => void;
-  /** Active run id, derived directly from EntityStore. */
-  activeRunId: string | null;
-  /** Active Sandbox session, preferring the focused run entity. */
-  activeSessionId: string | null;
-  /** Active trace, owned by the focused run entity. */
-  activeTraceId: string | null;
-  /** Inspector drawer open (tablet/mobile + desktop toggle). */
-  inspectorOpen: boolean;
-  setInspectorOpen: (open: boolean) => void;
-  toggleInspector: () => void;
-};
+export type { AuthConfigState, ChatController } from './chatContextTypes';
+export { useUserMessageMutations } from './useUserMessageMutations';
+export { useAttachmentDrafts } from './useAttachmentDrafts';
+export { useConversationActions } from './useConversationActions';
 
 const ChatCtx = createContext<ChatController | null>(null);
 
@@ -173,11 +71,6 @@ export function useChat(): ChatController {
   const ctx = useContext(ChatCtx);
   if (!ctx) throw new Error('useChat must be used within ChatProvider');
   return ctx;
-}
-
-function isMobile(): boolean {
-  if (typeof window === 'undefined') return false;
-  return window.matchMedia('(max-width: 768px)').matches;
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
@@ -191,7 +84,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     });
   });
   const [draftText, setDraftText] = useState('');
-  const [dropzoneVisible, setDropzoneVisible] = useState(false);
   const [entityStore, setEntityStore] = useState<EntityStore>(() =>
     createEntityBridge().getStore(),
   );
@@ -286,29 +178,41 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     refreshConversations,
   } = useConversationPaging({ sessionRevision, setState });
 
-  const refreshArtifacts = useCallback(async (sessionId?: string | null) => {
-    const generation = sessionRevision.current();
-    const conversationGeneration = conversationLoadGenerationRef.current;
-    const sid = sessionId || currentSessionId();
-    if (!sid) {
-      setState((s) => update(s, { artifacts: [] }));
-      return;
-    }
-    try {
-      const data = await listArtifacts(sid);
-      if (!sessionRevision.isCurrent(generation) ||
-          conversationGeneration !== conversationLoadGenerationRef.current ||
-          sid !== currentSessionId()) return;
-      setState((s) => {
-        if (!sessionRevision.isCurrent(generation) ||
-            conversationGeneration !== conversationLoadGenerationRef.current ||
-            sid !== currentSessionId()) return s;
-        return update(s, { artifacts: data.artifacts || [] });
-      });
-    } catch (err) {
-      console.warn('[artifacts] list failed:', (err as Error).message);
-    }
-  }, [currentSessionId, sessionRevision]);
+  const {
+    refreshArtifacts,
+    selectConversation,
+    startNewChat,
+    removeConversation,
+    importArtifactToConversation,
+    ensureConversationSession,
+    restoreLastConversation,
+  } = useConversationActions({
+    stateRef,
+    setState,
+    activeStreamGenRef,
+    conversationLoadGenerationRef,
+    sessionRevision,
+    bridge,
+    currentSessionId,
+    setStatus,
+    flashError,
+    applyModelForConversation,
+    refreshConversations,
+  });
+
+  const {
+    dropzoneVisible,
+    setDropzoneVisible,
+    handleFilesSelected,
+    removeAttachmentDraft,
+    retryAttachmentDraft,
+  } = useAttachmentDrafts({
+    stateRef,
+    setState,
+    bridge,
+    ensureConversationSession,
+    flashError,
+  });
 
   const applySSE = useCallback(
     (ev: SSEEvent, generation: number, runId?: string | null) => {
@@ -352,238 +256,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
     },
     [setStatus, flashError, refreshArtifacts, bridge, currentSessionId],
-  );
-
-  const selectConversation = useCallback(
-    async (id: string) => {
-      const cur = stateRef.current;
-      if (!id || id === cur.conversationId) {
-        if (isMobile()) {
-          setState((s) => update(s, { sidebarOpen: false }));
-        }
-        return;
-      }
-      const loadGeneration = ++conversationLoadGenerationRef.current;
-
-      // F2: do NOT abort background runs / SSE managers on conversation switch.
-      // Only detach UI focus. EntityStore continues receiving events for
-      // in-flight background runs.
-      bridge.focusConversation(null);
-      // Optimistically focus the target conversation ID for instant feedback.
-      setState((s) => {
-        const n = update(beginConversationRestore(s, id), {
-          conversationId: id,
-          sessionId: null,
-          artifacts: [],
-          attachments: [],
-          traceId: null,
-          isStreaming: false,
-          // EntityBridge keeps the per-run controller while focus detaches.
-          abortCtrl: null,
-          streamGeneration: (s.streamGeneration || 0) + 1,
-        });
-        activeStreamGenRef.current = n.streamGeneration;
-        return n;
-      });
-
-      try {
-        setStatus('Loading…', '#94a3b8');
-        const conv = await getConversation(id);
-        if (loadGeneration !== conversationLoadGenerationRef.current) return;
-        const messages = normalizeServerMessages(conv.messages);
-        const sessionId = conv.sandbox_session_id || null;
-
-        bridge.focusConversation(conv.id);
-
-        setState((s) => {
-          // Focus switch without aborting abortCtrl (background run continues)
-          const conversations = mergeConversation(s.conversations, conv);
-          const n = update(s, {
-            conversationId: conv.id,
-            messages,
-            sessionId,
-            conversations,
-            artifacts: [],
-            attachments: [],
-            traceId: null,
-            isStreaming: false,
-            streamGeneration: (s.streamGeneration || 0) + 1,
-            sidebarOpen: isMobile() ? false : s.sidebarOpen,
-          });
-          activeStreamGenRef.current = n.streamGeneration;
-          return n;
-        });
-        persistConversationId(conv.id);
-
-        try {
-          await bridge.rehydrateConversation(conv.id);
-        } catch (error) {
-          console.warn('[conv] timeline restore failed:', error);
-          flashError('Conversation loaded, but activity history could not be restored');
-        }
-        if (loadGeneration !== conversationLoadGenerationRef.current) return;
-        setState((s) => finishConversationRestore(s, id));
-        applyModelForConversation(conv.id);
-
-        if (sessionId) {
-          await refreshArtifacts(sessionId);
-          if (loadGeneration !== conversationLoadGenerationRef.current) return;
-          setStatus(`Session ${sessionId.slice(-8)}`);
-        } else {
-          setStatus('Agent Ready');
-        }
-      } catch (err) {
-        if (loadGeneration !== conversationLoadGenerationRef.current) return;
-        bridge.focusConversation(null);
-        setState((s) => failConversationRestore(s, id));
-        console.error('[conv] select failed:', err);
-        flashError(`Failed to load conversation: ${(err as Error).message}`);
-        setStatus('Agent Ready');
-      }
-    },
-    [setStatus, flashError, refreshArtifacts, bridge, applyModelForConversation],
-  );
-
-  const importArtifactToConversation = useCallback(
-    async (
-      artifactId: string,
-      targetConversationId: string,
-      targetFilename?: string | null,
-    ) => {
-      try {
-        setStatus('Importing artifact…', '#94a3b8');
-        const result = await apiImportArtifact({
-          artifactId,
-          targetConversationId,
-          targetFilename,
-        });
-
-        if (stateRef.current.conversationId !== targetConversationId) {
-          await selectConversation(targetConversationId);
-        }
-        if (stateRef.current.conversationId !== targetConversationId) {
-          setStatus(`Imported ${result.workspace_file.name}`);
-          flashError(
-            `Imported ${result.workspace_file.name}, but the target conversation could not be opened. The file is available at ${result.workspace_file.path}.`,
-          );
-          return;
-        }
-
-        const file = result.workspace_file;
-        const localId =
-          globalThis.crypto?.randomUUID?.() ??
-          `import_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-        setState((s) => {
-          const next = update(s, {
-            attachments: [
-              ...(s.attachments || []),
-              {
-                localId,
-                status: 'uploaded',
-                name: file.name,
-                size: file.size,
-                mimeType: file.mime_type,
-                file: null,
-                attachmentId: result.import_id,
-                path: file.path,
-                idempotencyKey: `artifact_import_${result.import_id}`,
-                error: null,
-                errorCode: null,
-                traceId: null,
-                progress: 100,
-                abortCtrl: null,
-              },
-            ],
-          });
-          stateRef.current = next;
-          return next;
-        });
-        setStatus(`Imported ${file.name}`);
-        flashError(
-          `Imported ${file.name} into this conversation. It is ready in the composer.`,
-        );
-      } catch (err) {
-        setStatus('Artifact import failed', '#ef4444');
-        flashError(`Import failed: ${(err as Error).message}`);
-        throw err;
-      }
-    },
-    [flashError, selectConversation, setStatus],
-  );
-
-  const startNewChat = useCallback(async () => {
-    conversationLoadGenerationRef.current += 1;
-    const cur = stateRef.current;
-    // F2: detaching UI focus does not cancel background runs
-    if (cur.isStreaming) {
-      setState((s) => {
-        const n = update(s, {
-          isStreaming: false,
-          streamGeneration: (s.streamGeneration || 0) + 1,
-        });
-        activeStreamGenRef.current = n.streamGeneration;
-        return n;
-      });
-    }
-
-    bridge.focusConversation(null);
-
-    setState((s) => {
-      const n = update(s, {
-        conversationId: null,
-        restoringConversationId: null,
-        messages: [],
-        sessionId: null,
-        artifacts: [],
-        attachments: [],
-        traceId: null,
-        isStreaming: false,
-        abortCtrl: null,
-        streamGeneration: (s.streamGeneration || 0) + 1,
-        sidebarOpen: isMobile() ? false : s.sidebarOpen,
-      });
-      activeStreamGenRef.current = n.streamGeneration;
-      return n;
-    });
-    clearPersistedChat();
-    applyModelForConversation(null);
-    setStatus('Agent Ready');
-  }, [setStatus, bridge, applyModelForConversation]);
-
-  const removeConversation = useCallback(
-    async (id: string) => {
-      if (!id) return;
-      const cur = stateRef.current;
-      if (cur.isStreaming && id === cur.conversationId) {
-        setState((s) => {
-          const n = abortStream(s);
-          activeStreamGenRef.current = n.streamGeneration;
-          return n;
-        });
-      }
-      if (
-        !confirm(
-          'Delete this conversation? Workspace and linked session may be cleaned up.',
-        )
-      ) {
-        return;
-      }
-      try {
-        await deleteConversation(id);
-        setState((s) =>
-          update(s, {
-            conversations: (s.conversations || []).filter((c) => c.id !== id),
-          }),
-        );
-        if (stateRef.current.conversationId === id) {
-          await startNewChat();
-        }
-      } catch (err) {
-        console.error('[conv] delete failed:', err);
-        flashError(`Delete failed: ${(err as Error).message}`);
-      }
-    },
-    [startNewChat, flashError],
   );
 
   const sendMessage = useCallback(
@@ -794,41 +466,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  const appendUserMessage = useCallback((message: ChatMessage) => {
-    setState((s) => {
-      const next = update(s, { messages: [...s.messages, message] });
-      stateRef.current = next;
-      return next;
-    });
-  }, []);
-
-  const removeUserMessage = useCallback((messageId: string) => {
-    const id = String(messageId || '').trim();
-    if (!id) return;
-    setState((s) => {
-      const next = update(s, {
-        messages: s.messages.filter((m) => m._messageId !== id),
-      });
-      stateRef.current = next;
-      return next;
-    });
-  }, []);
-
-  const patchUserMessage = useCallback(
-    (messageId: string, patch: Partial<ChatMessage>) => {
-      const id = String(messageId || '').trim();
-      if (!id) return;
-      setState((s) => {
-        const messages = s.messages.map((m) =>
-          m._messageId === id ? { ...m, ...patch } : m,
-        );
-        const next = update(s, { messages });
-        stateRef.current = next;
-        return next;
-      });
-    },
-    [],
-  );
+  const {
+    appendUserMessage,
+    removeUserMessage,
+    patchUserMessage,
+  } = useUserMessageMutations({ stateRef, setState });
 
   const {
     cancelStream,
@@ -847,220 +489,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     removeUserMessage,
     patchUserMessage,
   });
-
-  const ensureConversationSession = useCallback(async () => {
-    const cur = stateRef.current;
-    if (cur.sessionId && cur.conversationId) {
-      return { sessionId: cur.sessionId, conversationId: cur.conversationId };
-    }
-    try {
-      const data = await ensureSession(cur.conversationId);
-      const conversationId = data.conversation_id || cur.conversationId;
-      const sessionId = data.session_id;
-      setState((s) => {
-        const patch: Partial<ChatState> = {};
-        if (conversationId && conversationId !== s.conversationId) {
-          patch.conversationId = conversationId;
-          persistConversationId(conversationId);
-        }
-        if (sessionId) patch.sessionId = sessionId;
-        if (data.trace_id) patch.traceId = data.trace_id;
-        return Object.keys(patch).length ? update(s, patch) : s;
-      });
-      if (sessionId) setStatus(`Session ${sessionId.slice(-8)}`);
-      await refreshConversations();
-      return { sessionId, conversationId };
-    } catch (err) {
-      const e = err as Error & { traceId?: string };
-      const trace = e.traceId ? ` [trace ${String(e.traceId).slice(0, 8)}]` : '';
-      throw new Error(`${e.message || 'Failed to prepare session'}${trace}`);
-    }
-  }, [setStatus, refreshConversations]);
-
-  /**
-   * Upload one draft. Prefer the optional `seed` draft: React setState is async,
-   * so stateRef may not yet include drafts that were just enqueued.
-   */
-  const runUploadForDraft = useCallback(
-    async (localId: string, seed?: (typeof state.attachments)[number]) => {
-      const fromRef = (stateRef.current.attachments || []).find(
-        (a) => a.localId === localId,
-      );
-      const draft = fromRef || seed;
-      if (!draft || !draft.file || draft.status === 'removed') return;
-
-      // Capture file + key now — do not depend on a later ref lookup for the blob.
-      const file = draft.file as File;
-      const idempotencyKey = draft.idempotencyKey;
-
-      const abortCtrl = new AbortController();
-      setState((s) => {
-        const next = update(s, {
-          attachments: patchAttachment(s.attachments, localId, {
-            status: 'uploading',
-            error: null,
-            errorCode: null,
-            abortCtrl,
-          }),
-        });
-        stateRef.current = next;
-        return next;
-      });
-
-      try {
-        const { sessionId, conversationId } = await ensureConversationSession();
-        if (!sessionId) throw new Error('No sandbox session');
-        if (!conversationId) throw new Error('No conversation');
-
-        const current = (stateRef.current.attachments || []).find(
-          (a) => a.localId === localId,
-        );
-        if (current?.status === 'removed') return;
-
-        const result = await uploadDataset({
-          sessionId,
-          conversationId,
-          file,
-          signal: abortCtrl.signal,
-          idempotencyKey,
-          traceId: stateRef.current.traceId || undefined,
-        });
-
-        // Dataset Panel and composer share the same successful server result:
-        // publish the formal row immediately while retaining a sendable draft.
-        bridge.recordDataset(result, { conversationId, sessionId });
-
-        const still = (stateRef.current.attachments || []).find(
-          (a) => a.localId === localId,
-        );
-        if (still?.status === 'removed') return;
-
-        setState((s) => {
-          const next = update(s, {
-            attachments: patchAttachment(s.attachments, localId, {
-              status: 'uploaded',
-              attachmentId: result.dataset_id,
-              path: result.path,
-              size: result.size,
-              progress: 100,
-              error: null,
-              errorCode: null,
-              traceId: result.trace_id || s.traceId || null,
-              abortCtrl: null,
-              file: still?.file ?? file,
-            }),
-            ...(result.trace_id ? { traceId: result.trace_id } : {}),
-          });
-          stateRef.current = next;
-          return next;
-        });
-      } catch (err) {
-        const error = err as Error & {
-          name?: string;
-          code?: string;
-          traceId?: string;
-        };
-        if (error.name === 'AbortError') return;
-        console.error('[upload] Error:', error);
-        const still = (stateRef.current.attachments || []).find(
-          (a) => a.localId === localId,
-        );
-        if (still?.status === 'removed') return;
-        const traceId = error.traceId || stateRef.current.traceId || null;
-        setState((s) => {
-          const next = update(s, {
-            attachments: patchAttachment(s.attachments, localId, {
-              status: 'failed',
-              error: error.message || 'Upload failed',
-              errorCode: error.code || null,
-              traceId,
-              abortCtrl: null,
-            }),
-            ...(traceId ? { traceId } : {}),
-          });
-          stateRef.current = next;
-          return next;
-        });
-        const t = traceId ? ` [trace ${String(traceId).slice(0, 8)}]` : '';
-        flashError(`Upload error: ${error.message || 'failed'}${t}`);
-      }
-    },
-    [ensureConversationSession, flashError, bridge],
-  );
-
-  const handleFilesSelected = useCallback(
-    async (fileList: FileList | File[]) => {
-      if (stateRef.current.restoringConversationId) return;
-      const files = Array.from(fileList || []).filter(Boolean) as File[];
-      if (!files.length) return;
-
-      const check = validateNewAttachments(stateRef.current.attachments, files);
-      if (!check.ok) {
-        flashError(check.message);
-        return;
-      }
-
-      const drafts = files.map((f) => createAttachmentDraft(f));
-      // Synchronously publish drafts into stateRef before kicking off uploads.
-      // Otherwise runUploadForDraft cannot find them (setState is async).
-      setState((s) => {
-        const next = update(s, {
-          attachments: [...(s.attachments || []), ...drafts],
-        });
-        stateRef.current = next;
-        return next;
-      });
-
-      await runUploadQueue(
-        drafts,
-        (draft) => runUploadForDraft(draft.localId, draft),
-        3,
-      );
-    },
-    [flashError, runUploadForDraft],
-  );
-
-  const removeAttachmentDraft = useCallback((localId: string) => {
-    setState((s) =>
-      update(s, {
-        attachments: removeAttachment(s.attachments, localId),
-      }),
-    );
-  }, []);
-
-  const retryAttachmentDraft = useCallback(
-    async (localId: string) => {
-      const draft = (stateRef.current.attachments || []).find(
-        (a) => a.localId === localId,
-      );
-      if (!draft || draft.status === 'removed') return;
-      if (!draft.file) {
-        flashError('Cannot retry: original file is no longer available');
-        return;
-      }
-      const retried = {
-        ...draft,
-        status: 'queued' as const,
-        error: null,
-        errorCode: null,
-        progress: 0,
-      };
-      setState((s) => {
-        const next = update(s, {
-          attachments: patchAttachment(s.attachments, localId, {
-            status: 'queued',
-            error: null,
-            errorCode: null,
-            progress: 0,
-          }),
-        });
-        stateRef.current = next;
-        return next;
-      });
-      await runUploadForDraft(localId, retried);
-    },
-    [flashError, runUploadForDraft],
-  );
 
   const resolveApproval = useCallback(
     async (approvalId: string, decision: 'approve' | 'reject', reason?: string | null) => {
@@ -1105,7 +533,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       activeStreamGenRef.current = next.streamGeneration;
       return next;
     });
-  }, [bridge, resetAgents, resetModels, sessionRevision]);
+  }, [bridge, resetAgents, resetModels, sessionRevision, setDropzoneVisible]);
 
   /** 切号后重新拉当前身份的会话/模型/Agent 目录。 */
   const afterIdentitySwitch = useCallback(async () => {
@@ -1113,49 +541,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     await refreshModels();
     await refreshAgents();
   }, [refreshAgents, refreshConversations, refreshModels]);
-
-  /** 恢复上次聚焦会话：会话切换或身份边界发生后，任何后续落地都必须作废。 */
-  const restoreLastConversation = useCallback(async () => {
-    const savedConvId = loadPersistedConversationId();
-    if (!savedConvId) return;
-    const loadGeneration = ++conversationLoadGenerationRef.current;
-    const snapshot = sessionRevision.current();
-    const stale = () =>
-      loadGeneration !== conversationLoadGenerationRef.current ||
-      !sessionRevision.isCurrent(snapshot);
-    try {
-      const conv = await getConversation(savedConvId);
-      if (stale()) return;
-      const messages = normalizeServerMessages(conv.messages);
-      setState((s) => update(s, {
-        conversationId: conv.id,
-        messages,
-        sessionId: conv.sandbox_session_id || null,
-        conversations: mergeConversation(s.conversations, conv),
-      }));
-      persistConversationId(conv.id);
-      bridge.focusConversation(conv.id);
-      try {
-        await bridge.rehydrateConversation(conv.id);
-      } catch (error) {
-        console.warn('[boot] timeline restore failed:', (error as Error).message);
-        if (!stale()) flashError('Conversation loaded, but activity history could not be restored');
-      }
-      if (stale()) return;
-      setState((s) => finishConversationRestore(s, savedConvId));
-      applyModelForConversation(conv.id);
-      if (conv.sandbox_session_id) {
-        await refreshArtifacts(conv.sandbox_session_id);
-        if (stale()) return;
-        setStatus(`Session ${conv.sandbox_session_id.slice(-8)}`);
-      }
-    } catch {
-      if (!stale()) {
-        setState((s) => finishConversationRestore(s, savedConvId));
-        clearPersistedChat();
-      }
-    }
-  }, [applyModelForConversation, bridge, flashError, refreshArtifacts, sessionRevision, setStatus]);
 
   /** 认证字段的集中写点（与 clearIdentity 的身份清理分开：这里只写认证投影）。 */
   const applyAuth = useCallback(
