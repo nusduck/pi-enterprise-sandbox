@@ -193,19 +193,30 @@ describe('RemoteA2aClient', () => {
 
   it('cancels the remote task when the caller aborts', async () => {
     fake.handlers['message/send'] = () => task('t-5', 'working');
-    fake.handlers['tasks/get'] = () => task('t-5', 'working');
-    fake.handlers['tasks/cancel'] = () => task('t-5', 'canceled');
     const controller = new AbortController();
+    fake.handlers['tasks/get'] = () => {
+      // 中止恰好落在轮询中：此时任务 id 已知，客户端按设计必走取消路径。
+      // 若在 message/send 完成之前中止，客户端连 task id 都拿不到、发不出
+      // cancel——那是测试时序问题，不是生产竞态，所以不在那里中止。
+      controller.abort();
+      return task('t-5', 'working');
+    };
+    fake.handlers['tasks/cancel'] = () => task('t-5', 'canceled');
     const slowSleep = (_ms: number, signal: AbortSignal) =>
       new Promise<void>((resolve) => {
         const t = setTimeout(resolve, 20);
         signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
       });
-    setTimeout(() => controller.abort(), 60);
     await assert.rejects(
       client({ sleep: slowSleep }).delegate({ entry: entry(fake), prompt: 'x', messageId: 'm-1', signal: controller.signal }),
       RemoteA2aError,
     );
+    // 取消请求是中止后才发出的异步 fetch：轮询等它落到 fake 服务端再断言。
+    const cancelStart = Date.now();
+    while (!fake.calls.some((c) => c.method === 'tasks/cancel')) {
+      if (Date.now() - cancelStart > 5_000) break;
+      await new Promise((r) => setTimeout(r, 5));
+    }
     assert.ok(fake.calls.some((c) => c.method === 'tasks/cancel'));
   });
 

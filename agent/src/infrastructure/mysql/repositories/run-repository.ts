@@ -263,6 +263,9 @@ export class RunRepository {
    *   queueName: string,
    *   attempt?: number,
    *   traceId: string,
+   *   traceState: string | null,
+   *   traceFlags: string | null,
+   *   traceParentSpanId: string | null,
    *   nextEventSequence?: number,
    *   startedAt?: Date | string | null,
    *   completedAt?: Date | string | null,
@@ -270,7 +273,7 @@ export class RunRepository {
    *   updatedAt?: Date | string,
    * }} input
    */
-  async create(input: { runId: string, orgId: string, userId: string, conversationId: string, agentSessionId: string, agentVersionId: string, triggeringMessageId: string, source: string, parentRunId?: string | null, subagentDepth?: number, subagentLabel?: string | null, status: string, statusReason?: string | null, queueName: string, attempt?: number, traceId: string, nextEventSequence?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, createdAt?: Date | string, updatedAt?: Date | string, }) {
+  async create(input: { runId: string, orgId: string, userId: string, conversationId: string, agentSessionId: string, agentVersionId: string, triggeringMessageId: string, source: string, parentRunId?: string | null, subagentDepth?: number, subagentLabel?: string | null, status: string, statusReason?: string | null, queueName: string, attempt?: number, traceId: string, traceState: string | null, traceFlags: string | null, traceParentSpanId: string | null, nextEventSequence?: number, startedAt?: Date | string | null, completedAt?: Date | string | null, createdAt?: Date | string, updatedAt?: Date | string, }) {
     const scope = requireOwnerUlids(input);
     const runId = assertUlid(input.runId, 'runId');
     const conversationId = assertUlid(input.conversationId, 'conversationId');
@@ -294,11 +297,8 @@ export class RunRepository {
     }
     const subagentLabel = sanitizeSubagentLabel(input.subagentLabel);
     const traceId = assertTraceId(input.traceId);
-    // @ts-expect-error 遗留JS占位类型object未展开，访问traceState需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceState' does not exist on type '{ runId: strin
     const traceState = assertTraceState(input.traceState);
-    // @ts-expect-error 遗留JS占位类型object未展开，访问traceFlags需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceFlags' does not exist on type '{ runId: strin
     const traceFlags = assertTraceFlags(input.traceFlags);
-    // @ts-expect-error 遗留JS占位类型object未展开，访问traceParentSpanId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceParentSpanId' does not exist on type '{ runId
     const traceParentSpanId = assertTraceParentSpanId(input.traceParentSpanId);
 
     const now = toMysqlDateTime(input.createdAt || this.now());

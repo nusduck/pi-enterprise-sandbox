@@ -863,7 +863,6 @@ export class ServiceContainer {
     const a2aStreamService = new A2aStreamService({
       taskService: a2aTaskService,
       eventQueryService,
-      getRunService,
       runEventStream,
       buildArtifactDownloadUri,
     });

@@ -116,19 +116,16 @@ export function presentTranscriptMessage(msg) {
  * @param [messages]
  * @param [session]
  */
-export function presentConversation(row: ReturnType<typeof mapConversation> & { sandboxSessionId?: string | null, sandbox_session_id?: string | null, workspaceId?: string | null, workspace_id?: string | null }, messages: ReturnType<typeof mapMessage>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null, deliveryMode?: string|null } | null = null) {
+export function presentConversation(row: ReturnType<typeof mapConversation>, messages: ReturnType<typeof mapMessage>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null, deliveryMode?: string|null } | null = null) {
   const transcript = Array.isArray(messages)
     ? messages.map(presentTranscriptMessage).filter(Boolean)
     : [];
   const agentSessionId =
     session?.agentSessionId ?? row.currentAgentSessionId ?? null;
-  const sandboxSessionId =
-    session?.sandboxSessionId ??
-    row.sandboxSessionId ??
-    row.sandbox_session_id ??
-    null;
-  const workspaceId =
-    session?.workspaceId ?? row.workspaceId ?? row.workspace_id ?? null;
+  // mapConversation 从不产出 sandbox / workspace 键：会话级标识只来自当前
+  // AgentSession（行里没有，读行永远是 undefined，走不到这里）。
+  const sandboxSessionId = session?.sandboxSessionId ?? null;
+  const workspaceId = session?.workspaceId ?? null;
   return {
     id: row.conversationId,
     title: row.title || 'New chat',
