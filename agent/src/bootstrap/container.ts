@@ -53,6 +53,7 @@ import {
   startLayeredRunQueues,
 } from './container-run-queue.js';
 import { McpDiscoveryState } from './container-mcp.js';
+import { runStreamMaxLenFromEnv } from '../infrastructure/redis/constants.js';
 
 // Re-exported so bootstrap callers keep one entry point for the container.
 export {
@@ -806,7 +807,7 @@ export class ServiceContainer {
         const { RunEventStream } = await import(
           '../infrastructure/redis/run-event-stream.js'
         );
-        runEventStream = new RunEventStream(this.redis);
+        runEventStream = new RunEventStream(this.redis, { maxLen: runStreamMaxLenFromEnv(this.env) });
       }
     } catch {
       runEventStream = null;
@@ -1000,7 +1001,7 @@ export class ServiceContainer {
       '../infrastructure/redis/run-event-stream.js'
     );
     const repository = new OutboxRepository(this.knex, { now: this.now });
-    const stream = new RunEventStream(this.redis);
+    const stream = new RunEventStream(this.redis, { maxLen: runStreamMaxLenFromEnv(this.env) });
     return new OutboxPublisher({ repository, stream });
   }
 
