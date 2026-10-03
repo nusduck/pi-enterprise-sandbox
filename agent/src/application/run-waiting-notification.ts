@@ -17,8 +17,6 @@ import {
 } from '../infrastructure/outbox/outbox-status.js';
 import { assertUlid } from '../domain/shared/ulid.js';
 
-type Loose = any;
-
 export type RunWaitKind = 'approval' | 'input';
 
 /**
@@ -26,7 +24,7 @@ export type RunWaitKind = 'approval' | 'input';
  * `repos` 就是调用方手里的那一份（`repos.outbox.insert` 同事务）。
  */
 export async function enqueueRunWaitingNotificationInTxn(input: {
-  repos: { outbox: Loose };
+  repos: { outbox: import('../infrastructure/outbox/outbox-repository.js').OutboxRepository };
   runId: string;
   scope: { orgId: string; userId: string };
   status: 'WAITING_APPROVAL' | 'WAITING_INPUT';

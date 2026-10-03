@@ -33,10 +33,10 @@ import {
 } from '../infrastructure/outbox/outbox-status.js';
 import { assertUlid } from '../domain/shared/ulid.js';
 
-type Loose = any;
+interface TerminalReviewRepos { reviews?: { createTask(draft: { reviewTaskId: string; orgId: string; requesterUserId: string; conversationId: string; agentSessionId: string; runId: string; agentVersionId: string; runStatus: string; items: ReadonlyArray<{ originalArtifactId: string; name: string; mimeType: string; sizeBytes: number; sha256: string }>; materials: ReadonlyArray<{ materialId: string; attachmentId: string; filename: string; mimeType: string; sizeBytes: number }> }, opts: { itemEventId: string }): Promise<string | null>; listArtifactReadyEvents(runId: string, orgId: string): Promise<Array<{ artifactId: string; name: string; mimeType: string; size: number; sha256: string }>>; getTaskByRunId(runId: string, orgId: string): Promise<{ reviewTaskId: string } | null>; listUserAttachmentsUpToRun(input: { conversationId: string; orgId: string; userId: string; triggeringMessageId: string }): Promise<Array<{ attachmentId: string; filename: string; mimeType: string; sizeBytes: number }>>; }; outbox: { insert(row: { outboxId: string; aggregateType: string; aggregateId: string; eventType: string; payloadJson: Record<string, unknown> }): Promise<unknown> }; }
 
 export interface TerminalReviewInput {
-  readonly repos: Loose;
+  readonly repos: TerminalReviewRepos;
   readonly run: {
     readonly runId: string;
     readonly orgId: string;

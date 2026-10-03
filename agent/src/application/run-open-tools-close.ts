@@ -13,7 +13,7 @@
 import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
 import { appendEventInTxn } from './run-event-append.js';
 
-type Loose = any;
+type CloseToolsRepos = { toolExecutions?: { listByRun(runId: string, scope: { orgId: string; userId: string }): Promise<Array<{ status: string; toolExecutionId: string }>>; transitionStatus(input: { toolExecutionId: string; orgId: string; userId: string; fromStatus: string; toStatus: string; resultJson: unknown; errorCode: string | null; setCompletedAt: boolean }): Promise<{ toolExecution: { toolExecutionId: string; toolCallId: string; toolName: string } }> } }; type CloseRunRow = { runId: string; cancelReason?: unknown; orgId: string; userId: string; conversationId: string; agentSessionId: string; traceId: string }; // CloseToolsRepos.toolExecutions 可选：调用方 run-transition.ts 以 typeof 守卫存在性，与 RunTransitionRepos 的可选声明对齐。
 
 const CLOSE_TO: Readonly<Record<string, { status: string; errorCode: string }>> = Object.freeze({
   [TOOL_EXECUTION_STATUS.RUNNING]: {
@@ -31,8 +31,8 @@ const CLOSE_TO: Readonly<Record<string, { status: string; errorCode: string }>> 
 });
 
 export async function closeOpenToolExecutionsInTxn(args: {
-  repos: Loose;
-  run: Loose;
+  repos: CloseToolsRepos;
+  run: CloseRunRow;
   scope: { orgId: string; userId: string };
   generateId: () => string;
   now: () => Date;

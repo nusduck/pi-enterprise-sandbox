@@ -36,9 +36,11 @@ import {
   ValidationError,
   assertDomainRunId,
 } from './errors.js';
+import type { TransactionManager } from '../infrastructure/mysql/transaction-manager.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { CancelSignal } from '../infrastructure/redis/cancel-signal.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
 
 /**
  * `cancelledDescendants` is the sub-agent subtree this cancel also stopped.
@@ -59,37 +61,20 @@ export type CancelRunResponse = {
 
 export class CancelRunService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  cancelSignal: Loose;
-  generateId: Loose;
-  now: Loose;
-  stateMachine: Loose;
-  defaultProvider: Loose;
+  tx: TransactionManager;
+  createRepositories: typeof createRepositoryBundle;
+  cancelSignal: CancelSignal;
+  generateId: () => string;
+  now: () => Date;
+  stateMachine: typeof runStateMachine;
+  defaultProvider: string | undefined;
 
   /**
    * `createRepositories` 里的 interactions / toolExecutions 本服务不直接读：
    * 取消一个 parked WAITING_INPUT 时整个 bundle 会透传给
    * `terminalizeParkedWaitingInputInTxn`，收尾那两张表的是它。端口声明要写
    * 拿到的东西，不是自己用到的那部分。
-   *
-   * @param {{
-   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => {
-   *     organizations: any,
-   *     externalRefs: any,
-   *     runs: any,
-   *     runEvents: any,
-   *     outbox: any,
-   *     interactions: any,
-   *     toolExecutions: any,
-   *   },
-   *   cancelSignal: { request: (runId: string, meta?: { reason?: string, requestedBy?: string }) => Promise<void> },
-   *   generateId: () => string,
-   *   now?: () => Date,
-   *   runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine,
-   *   defaultProvider?: string,
-   * }} deps
+   * @param {{ transactionManager: TransactionManager, createRepositories: typeof createRepositoryBundle, cancelSignal: CancelSignal, generateId: () => string, now?: () => Date, runStateMachine?: typeof runStateMachine, defaultProvider?: string, }} deps
    */
   constructor(deps) {
     if (!deps?.transactionManager?.run) {
@@ -300,13 +285,10 @@ export class CancelRunService {
           transitionedToCancelling = true;
 
         } else {
-          const reloaded = toCancelling.current ??
+          const reloaded = ('current' in toCancelling ? toCancelling.current : undefined) ??
             (await repos.runs.requireById(runId, scope));
           status = reloaded.status;
-          transitionedToCancelling = [
-            RUN_STATUS.CANCELLING,
-            RUN_STATUS.CANCELLED,
-          ].includes(status);
+          transitionedToCancelling = status === RUN_STATUS.CANCELLING || status === RUN_STATUS.CANCELLED;
         }
       }
 

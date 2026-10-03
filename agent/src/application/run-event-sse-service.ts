@@ -6,7 +6,7 @@
  *   Redis run:stream  = low-latency live notify / accelerate
  *
  * Guarantees:
- *   - Ownership fail-closed before any stream bytes.
+ *   - Ownership fail-closed before stream bytes.
  *   - Sequence-monotonic emit with dedupe (reconnect / Redis+MySQL overlap).
  *   - Watermark + MySQL catch-up across history→live cutover (no gap).
  *   - Redis failure falls back to MySQL poll (never treats empty Redis as status).
@@ -28,9 +28,12 @@ import {
   RunEventQueryService,
 } from './run-event-query-service.js';
 import type { ExternalAuth } from './parent/external-identity-resolver.js';
+import type { RunEventStream } from '../infrastructure/redis/run-event-stream.js';
+import type { ParsedRunStreamEvent } from '../infrastructure/redis/run-event-stream.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type SseEnvelope = { sequence: number; event: Record<string, unknown>; ts?: number; eventId?: string; event_id?: string };
+type EventQueryPort = RunEventQueryService | { listEvents: RunEventQueryService['listEvents'], resolveEventSequence?: RunEventQueryService['resolveEventSequence'] };
+interface WritableStreamLike { once?: (event: string, listener: () => void) => unknown; on?: (event: string, listener: () => void) => unknown; off?: (event: string, listener: () => void) => unknown; removeListener?: (event: string, listener: () => void) => unknown; writableEnded?: boolean; destroyed?: boolean; }
 
 /** Default live poll when Redis is absent or failed (ms). */
 export const DEFAULT_SSE_POLL_MS = 400;
@@ -84,29 +87,10 @@ export function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
 
 /**
  * Wait until a writable stream can accept more data, or the connection ends.
- *
- * Accepts either:
- * - Node stream-like: `once`/`on`/`off`/`removeListener` for drain/close/error
- * - Custom `{ waitDrain: () => Promise<'drained'|'closed'|'aborted'> }`
- *
- * Always removes every listener it attaches (no leak across long SSE).
- *
- * @param {{
- *   waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>,
- *   stream?: {
- *     once?: Function,
- *     on?: Function,
- *     off?: Function,
- *     removeListener?: Function,
- *     writableEnded?: boolean,
- *     destroyed?: boolean,
- *   },
- *   signal?: AbortSignal | null,
- *   isClosed?: () => boolean,
- * }} opts
- * @returns {Promise<'drained' | 'closed' | 'aborted'>}
+ * Accepts either Node stream-like or custom `{ waitDrain }`. Always removes
+ * every listener it attaches (no leak across long SSE).
  */
-export function waitForWritableResume(opts: { waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: { once?: Function, on?: Function, off?: Function, removeListener?: Function, writableEnded?: boolean, destroyed?: boolean, }, signal?: AbortSignal | null, isClosed?: () => boolean, } = {}) {
+export function waitForWritableResume(opts: { waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: WritableStreamLike, signal?: AbortSignal | null, isClosed?: () => boolean, } = {}) {
   if (typeof opts.waitDrain === 'function') {
     return Promise.resolve(opts.waitDrain()).then((r) => {
       if (r === 'drained' || r === 'closed' || r === 'aborted') return r;
@@ -177,7 +161,7 @@ export function waitForWritableResume(opts: { waitDrain?: () => Promise<'drained
  * @param envelope
  * @returns {string}
  */
-export function formatSseDataFrame(envelope: { sequence: number, event: Record<string, any>, ts?: number, eventId?: string, event_id?: string }) {
+export function formatSseDataFrame(envelope: SseEnvelope) {
   const eventId = envelope.event_id || envelope.event?.event_id || null;
   const type = envelope.event?.type || 'message';
   const id = eventId != null && String(eventId) ? String(eventId) : String(envelope.sequence);
@@ -220,10 +204,10 @@ export function projectRedisStreamToSseEnvelope(entry: {
   const sequence = Number(entry?.sequence);
   if (!Number.isSafeInteger(sequence) || sequence < 0) return null;
 
-  let payload = {};
+  let payload: Record<string, unknown> | object = {};
   if (typeof entry.payload === 'string' && entry.payload) {
     try {
-      const parsed = JSON.parse(entry.payload);
+      const parsed: unknown = JSON.parse(entry.payload);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         payload = parsed;
       }
@@ -241,7 +225,7 @@ export function projectRedisStreamToSseEnvelope(entry: {
     ...(eventId ? { event_id: String(eventId) } : {}),
     ...payload,
   };
-  // Prefer stream type over any payload collision.
+  // Prefer stream type over payload collisions.
   event.type = type;
 
   const ts = entry.createdAt ? Date.parse(entry.createdAt) : Date.now();
@@ -290,7 +274,7 @@ export async function resolveSseAfterSequence(input: { afterSequence?: number|st
  * @param lastEmitted
  * @returns {boolean}
  */
-export function shouldEmitSequence(envelope: Record<string, any>, lastEmitted: number) {
+export function shouldEmitSequence(envelope: Record<string, unknown>, lastEmitted: number) {
   const seq = Number(envelope?.sequence);
   if (!Number.isSafeInteger(seq) || seq < 0) return false;
   return seq > lastEmitted;
@@ -298,16 +282,16 @@ export function shouldEmitSequence(envelope: Record<string, any>, lastEmitted: n
 
 export class RunEventSseService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  eventQuery: Loose;
-  runEventStream: Loose;
-  pollMs: Loose;
-  heartbeatMs: Loose;
-  mysqlCatchupMs: Loose;
-  mysqlOpenRetryAttempts: Loose;
-  mysqlOpenRetryMs: Loose;
-  historyPageSize: Loose;
-  now: Loose;
-  sleep: Loose;
+  eventQuery: EventQueryPort;
+  runEventStream: RunEventStream | null;
+  pollMs: number;
+  heartbeatMs: number;
+  mysqlCatchupMs: number;
+  mysqlOpenRetryAttempts: number;
+  mysqlOpenRetryMs: number;
+  historyPageSize: number;
+  now: () => number;
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 
   /**
    * @param {{
@@ -323,7 +307,7 @@ export class RunEventSseService {
    *   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>,
    * }} deps
    */
-  constructor(deps: { eventQueryService: RunEventQueryService | { listEvents: Function, resolveEventSequence?: Function }, runEventStream?: { readAfter: Function } | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, mysqlOpenRetryAttempts?: number, mysqlOpenRetryMs?: number, historyPageSize?: number, now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, }) {
+  constructor(deps: { eventQueryService: EventQueryPort, runEventStream?: RunEventStream | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, mysqlOpenRetryAttempts?: number, mysqlOpenRetryMs?: number, historyPageSize?: number, now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, }) {
     if (!deps?.eventQueryService || typeof deps.eventQueryService.listEvents !== 'function') {
       throw new Error('RunEventSseService requires eventQueryService.listEvents');
     }
@@ -355,10 +339,11 @@ export class RunEventSseService {
    * @returns {Promise<number>}
    */
   async resolveCursor(input: { runId: string, auth: ExternalAuth, afterSequence?: number, lastEventId?: string|null, }) {
+    const query = this.eventQuery;
     const resolveEventSequence =
-      typeof this.eventQuery.resolveEventSequence === 'function'
-        ? (eventId) =>
-            this.eventQuery.resolveEventSequence({
+      'resolveEventSequence' in query && typeof query.resolveEventSequence === 'function'
+        ? (eventId: string) =>
+            query.resolveEventSequence({
               runId: input.runId,
               auth: input.auth,
               eventId,
@@ -396,7 +381,7 @@ export class RunEventSseService {
    * }} sinks
    * @returns {Promise<{ lastSequence: number, status: string|null, mode: string }>}
    */
-  async openStream(input: { runId: string, auth: ExternalAuth, afterSequence?: number, lastEventId?: string|null, }, sinks: { write: (chunk: string) => boolean | void | Promise<boolean | void>, waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: Record<string, any>, isClosed: () => boolean, signal?: AbortSignal, }) {
+  async openStream(input: { runId: string, auth: ExternalAuth, afterSequence?: number, lastEventId?: string|null, }, sinks: { write: (chunk: string) => boolean | void | Promise<boolean | void>, waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: WritableStreamLike, isClosed: () => boolean, signal?: AbortSignal, }) {
     const { write, isClosed, signal } = sinks;
     let lastEmitted = await this.resolveCursor(input);
     let status = null;
@@ -449,7 +434,7 @@ export class RunEventSseService {
     };
 
     /**
-     * @param {{ sequence: number, event: object, ts?: number, eventId?: string, event_id?: string }} envelope
+     * @param {SseEnvelope} envelope
      * @returns {Promise<boolean>}
      */
     const emitEnvelope = async (envelope) => {
@@ -496,8 +481,8 @@ export class RunEventSseService {
      * Opening and history/live cutover must tolerate brief MySQL outages, but
      * ownership and input failures are authoritative and must fail immediately.
      *
-     * @param {object} query
-     * @returns {Promise<{ page: object|null, aborted: boolean }>}
+     * @param {Parameters<RunEventQueryService['listEvents']>[0]} query
+     * @returns {Promise<{ page: Awaited<ReturnType<RunEventQueryService['listEvents']>> | null, aborted: boolean }>}
      */
     const queryMysqlWithOpenRetry = async (query) => {
       for (let attempt = 1; attempt <= this.mysqlOpenRetryAttempts; attempt += 1) {
@@ -594,7 +579,7 @@ export class RunEventSseService {
      * Contiguous seq (lastEmitted+1) may emit from Redis for low latency.
      * Gaps force MySQL catch-up first so history remains gap-free.
      *
-     * @param {Array<object>} entries
+     * @param {ParsedRunStreamEvent[]} entries
      * @returns {Promise<{ sawWork: boolean, needMysqlCatchup: boolean }>}
      */
     const applyRedisEntries = async (entries) => {

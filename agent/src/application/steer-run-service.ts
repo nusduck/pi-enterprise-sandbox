@@ -21,16 +21,13 @@ import {
 } from './errors.js';
 import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const STEER_RUN_OPERATION = 'steer_run';
 export const STEER_REQUESTED_EVENT = 'run.steer.requested';
 export const STEER_DELIVERED_EVENT = 'run.steer.delivered';
 export const DEFAULT_STEER_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_STEER_TEXT_CHARS = 64 * 1024;
 
-function requireRunId(value) {
+function requireRunId(value: unknown) {
   // 空值也走 404（与其它 Run 面守卫的空值 400 不同，这里是历史语义，保持不变）。
   if (typeof value !== 'string' || !value.trim()) {
     throw new OwnerScopedNotFoundError('Run not found', {
@@ -41,7 +38,7 @@ function requireRunId(value) {
   return assertDomainRunId(value.trim(), { id: String(value) });
 }
 
-function requireText(value) {
+function requireText(value: unknown) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new ValidationError('text is required');
   }
@@ -56,24 +53,24 @@ function requireText(value) {
 
 export class SteerRunService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  generateId: Loose;
-  now: Loose;
-  defaultProvider: Loose;
-  idempotencyTtlMs: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>;
+  generateId: () => string;
+  now: () => Date;
+  defaultProvider: string | undefined;
+  idempotencyTtlMs: number;
 
   /**
    * @param {{
-   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => any,
+   *   transactionManager: { run: (fn: (trx: unknown) => Promise<unknown>) => Promise<unknown> },
+   *   createRepositories: (db?: unknown) => object,
    *   generateId: () => string,
    *   now?: () => Date,
    *   defaultProvider?: string,
    *   idempotencyTtlMs?: number,
    * }} deps
    */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, now?: () => Date, defaultProvider?: string, idempotencyTtlMs?: number, }) {
+  constructor(deps: { transactionManager: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> }, createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, generateId: () => string, now?: () => Date, defaultProvider?: string, idempotencyTtlMs?: number, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SteerRunService requires transactionManager.run');
     }

@@ -60,8 +60,7 @@ import { terminalizeParallelToolsForPark } from './parallel-tool-park.js';
 import { bindDispatchedSandboxRequest } from './tool-dispatch-binding.js';
 import { enqueueRunWaitingNotificationInTxn } from './run-waiting-notification.js';
 
-/** 过渡期宽松类型（纯判定已拆到 durable-policy-replay.ts，再导出只为兼容既有导入路径）。 */
-type Loose = any;
+type GovRepos = { sessions: import('../infrastructure/mysql/repositories/agent-session-repository.js').AgentSessionRepository; toolExecutions: import('../infrastructure/mysql/repositories/tool-execution-repository.js').ToolExecutionRepository; sandboxAudit: import('../infrastructure/mysql/repositories/sandbox-audit-event-repository.js').SandboxAuditEventRepository; runs: import('../infrastructure/mysql/repositories/run-repository.js').RunRepository; approvals: import('../infrastructure/mysql/repositories/approval-repository.js').ApprovalRepository; interactions: import('../infrastructure/mysql/repositories/interaction-repository.js').InteractionRepository; runEvents: import('../infrastructure/mysql/repositories/run-event-repository.js').RunEventRepository; outbox: import('../infrastructure/outbox/outbox-repository.js').OutboxRepository };
 export {
   DurablePolicyConflictError,
   assertCompatiblePolicyReplay,
@@ -72,16 +71,16 @@ export type CanonicalRunEventEnvelope =
   import('./event-envelope.js').CanonicalRunEventEnvelope;
 export class FencedToolGovernanceRecorder {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  generateId: Loose;
-  context: Loose;
-  executionFenceToken: Loose;
-  now: Loose;
-  emit: Loose;
-  isLockLost: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db: unknown) => GovRepos;
+  generateId: () => string;
+  context: RunEventContext;
+  executionFenceToken: number;
+  now: () => Date;
+  emit: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null;
+  isLockLost: () => boolean;
   deliveryMode: 'direct' | 'review';
-  _tail: Loose;
+  _tail: ReturnType<typeof createPromiseTail>;
   _inflight: Map<any, any>;
 
   /**
@@ -170,7 +169,7 @@ export class FencedToolGovernanceRecorder {
     return p;
   }
 
-  async #appendEventInTrx(repos: any, input: { type: string, data: Record<string, any>, spanId?: string | null, timestamp: Date }) {
+  async #appendEventInTrx(repos: GovRepos, input: { type: string, data: Record<string, unknown>, spanId?: string | null, timestamp: Date }) {
     const eventId = assertUlid(this.generateId(), 'eventId');
     const outboxId = assertUlid(this.generateId(), 'outboxId');
     const data = redactEventData(input.data ?? {});
@@ -288,7 +287,7 @@ export class FencedToolGovernanceRecorder {
         errorCode = decision.reasonCode || 'POLICY_DENIED';
       }
 
-      let result: any = null;
+      let result = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -420,7 +419,7 @@ export class FencedToolGovernanceRecorder {
                 toolName,
                 keys:
                   input.args && typeof input.args === 'object'
-                    ? Object.keys((input.args as Record<string, any>)).slice(
+                    ? Object.keys(input.args).slice(
                         0,
                         16,
                       )
@@ -442,8 +441,7 @@ export class FencedToolGovernanceRecorder {
           toolExecution,
           audit,
           created: firstPolicyDecision,
-          envelopes: ((
-            startedEnvelope ? [startedEnvelope] : []) as CanonicalRunEventEnvelope[]),
+          envelopes: (startedEnvelope ? [startedEnvelope] : []),
         };
       });
 
@@ -476,7 +474,7 @@ export class FencedToolGovernanceRecorder {
 
     return this.#withInflight(`approval.requested:${toolCallId}`, async () => {
       const timestamp = this.now();
-      let out: any = null;
+      let out = null;
 
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
@@ -702,7 +700,7 @@ export class FencedToolGovernanceRecorder {
     }
 
     return this.#withInflight(`interaction.requested:${toolCallId}`, async () => {
-      let out: any = null;
+      let out = null;
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         const scope = { orgId: this.context.orgId, userId: this.context.userId };
@@ -805,7 +803,7 @@ export class FencedToolGovernanceRecorder {
             { resource: 'interactions', id: interaction.interactionId },
           );
         }
-        const envelopes: any[] = [];
+        const envelopes: CanonicalRunEventEnvelope[] = [];
         if (pending.created) {
           await this.#appendEventInTrx(repos, {
             type: 'interaction.requested',
@@ -886,7 +884,7 @@ export class FencedToolGovernanceRecorder {
     return this.#withInflight(`tool.execution.started:${toolCallId}`, async () => {
       const timestamp = this.now();
       let envelope: CanonicalRunEventEnvelope | null = null;
-      let toolExecution: any = null;
+      let toolExecution = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1095,7 +1093,7 @@ export class FencedToolGovernanceRecorder {
       const timestamp = this.now();
       let envelope: CanonicalRunEventEnvelope | null = null;
       let artifactEnvelope: CanonicalRunEventEnvelope | null = null;
-      let toolExecution: any = null;
+      let toolExecution = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1313,7 +1311,7 @@ export class FencedToolGovernanceRecorder {
     return this.#withInflight(`tool.execution.unknown:${toolCallId}`, async () => {
       const timestamp = this.now();
       let envelope: CanonicalRunEventEnvelope | null = null;
-      let toolExecution: any = null;
+      let toolExecution = null;
       let statusChanged = false;
 
       await this.tx.run(async (trx) => {
@@ -1389,7 +1387,7 @@ export class FencedToolGovernanceRecorder {
           // Idempotent same UNKNOWN: only re-check integrity when caller
           // supplies result. Omitted result must not re-fingerprint a newly
           // constructed default object against stored integrity.
-          const replay: Record<string, unknown> = {
+          const replay: Parameters<import('../infrastructure/mysql/repositories/tool-execution-repository.js').ToolExecutionRepository['transitionStatus']>[0] = {
             toolExecutionId: toolExecution.toolExecutionId,
             orgId: this.context.orgId,
             userId: this.context.userId,
@@ -1510,7 +1508,7 @@ export class FencedToolGovernanceRecorder {
     }
 
     return this.#withInflight(`sandbox.bind:${toolCallId}`, async () => {
-      let out: any = null;
+      let out = null;
       await this.tx.run(async (trx) => {
         const repos = this.createRepositories(trx);
         if (!repos?.toolExecutions?.bindSandboxRequest) {
@@ -1518,7 +1516,7 @@ export class FencedToolGovernanceRecorder {
             'createRepositories must wire toolExecutions.bindSandboxRequest',
           );
         }
-        const bindInput: Record<string, unknown> = {
+        const bindInput: Parameters<import('../infrastructure/mysql/repositories/tool-execution-repository.js').ToolExecutionRepository['bindSandboxRequest']>[0] = {
           runId: this.context.runId,
           toolCallId,
           toolName,

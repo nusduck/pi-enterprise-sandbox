@@ -35,8 +35,7 @@ import {
 } from './stream-event-schema.js';
 import type { ExternalAuth } from '../parent/external-identity-resolver.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type A2aPrincipal = { orgId: string; clientId: string; agentId: string; serviceUserId: string; credentialId: string; scopes?: readonly string[] | null };
 
 /** SSE comment keep-alive — not a `data:` frame (plan: every data is JSON-RPC). */
 export function formatA2aSseHeartbeatComment(timestampIso = new Date().toISOString()) {
@@ -45,17 +44,17 @@ export function formatA2aSseHeartbeatComment(timestampIso = new Date().toISOStri
 
 export class A2aStreamService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  taskService: Loose;
-  eventQuery: Loose;
-  getRunService: Loose;
-  runEventStream: Loose;
-  pollMs: Loose;
-  heartbeatMs: Loose;
-  mysqlCatchupMs: Loose;
-  historyPageSize: Loose;
-  now: Loose;
-  sleep: Loose;
-  buildArtifactDownloadUri: Loose;
+  taskService: import('./task-service.js').A2aTaskService;
+  eventQuery: import('../run-event-query-service.js').RunEventQueryService;
+  getRunService: import('../get-run-service.js').GetRunService;
+  runEventStream: import('../../infrastructure/redis/run-event-stream.js').RunEventStream | null;
+  pollMs: number;
+  heartbeatMs: number;
+  mysqlCatchupMs: number;
+  historyPageSize: number;
+  now: () => number;
+  sleep: typeof sleepMs;
+  buildArtifactDownloadUri: ((input: Record<string, unknown>) => unknown) | null;
 
   /**
    * @param {{
@@ -79,7 +78,7 @@ export class A2aStreamService {
    *   buildArtifactDownloadUri?: Function | null,
    * }} deps
    */
-  constructor(deps: { taskService: { getTask: Function, resolveOwnedTask: Function, runAuthForPrincipal: Function, }, eventQueryService: { listEvents: Function, resolveEventSequence?: Function, }, getRunService: { execute: Function }, runEventStream?: { readAfter: Function } | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, historyPageSize?: number, now?: () => number, sleep?: typeof sleepMs, buildArtifactDownloadUri?: Function | null, }) {
+  constructor(deps: { taskService: import('./task-service.js').A2aTaskService, eventQueryService: import('../run-event-query-service.js').RunEventQueryService, getRunService: import('../get-run-service.js').GetRunService, runEventStream?: import('../../infrastructure/redis/run-event-stream.js').RunEventStream | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, historyPageSize?: number, now?: () => number, sleep?: typeof sleepMs, buildArtifactDownloadUri?: ((input: Record<string, unknown>) => unknown) | null, }) {
     if (!deps?.taskService) {
       throw new Error('A2aStreamService requires taskService');
     }
@@ -121,7 +120,7 @@ export class A2aStreamService {
    *   signal?: AbortSignal,
    * }} sinks
    */
-  async openTaskStream(input: { principal: Record<string, any>, agentId: string, taskId: string, rpcId: string | number | null, afterSequence?: number, lastEventId?: string | null, includeInitialTask?: boolean, method?: string | null, }, sinks: { write: (chunk: string) => boolean | void | Promise<boolean | void>, waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: Record<string, any>, isClosed: () => boolean, signal?: AbortSignal, }) {
+  async openTaskStream(input: { principal: A2aPrincipal, agentId: string, taskId: string, rpcId: string | number | null, afterSequence?: number, lastEventId?: string | null, includeInitialTask?: boolean, method?: string | null, }, sinks: { write: (chunk: string) => boolean | void | Promise<boolean | void>, waitDrain?: () => Promise<'drained' | 'closed' | 'aborted'>, stream?: { once?: (event: string, listener: () => void) => unknown, on?: (event: string, listener: () => void) => unknown, off?: (event: string, listener: () => void) => unknown, removeListener?: (event: string, listener: () => void) => unknown, writableEnded?: boolean, destroyed?: boolean, }, isClosed: () => boolean, signal?: AbortSignal, }) {
     const { write, isClosed, signal } = sinks;
     const principal = input.principal;
     const mapping = await this.taskService.resolveOwnedTask(

@@ -43,9 +43,6 @@ import {
   isUlid,
 } from '../../domain/shared/ulid.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export type ParentGraph = {
   orgId: string;
   userId: string;
@@ -68,11 +65,11 @@ export type ParentGraph = {
 
 export class RunParentProvisioner {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  repos: Loose;
-  generateId: Loose;
-  now: Loose;
-  defaultProvider: Loose;
-  db: Loose;
+  repos: { organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository, externalRefs: import('../../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository, catalog: import('../../infrastructure/mysql/repositories/agent-catalog-repository.js').AgentCatalogRepository, conversations: import('../../infrastructure/mysql/repositories/conversation-repository.js').ConversationRepository, sessions: import('../../infrastructure/mysql/repositories/agent-session-repository.js').AgentSessionRepository, agentAccess: import('../../infrastructure/mysql/repositories/agent-access-repository.js').AgentAccessRepository, };
+  generateId: () => string;
+  now: () => Date;
+  defaultProvider: string;
+  db: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor;
 
   /**
    * @param {{

@@ -1,6 +1,6 @@
 /** Durable user-interaction response and WAITING_INPUT wake-up coordination. */
 
-import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
+import { ExternalIdentityResolver, type ExternalAuth } from './parent/external-identity-resolver.js';
 import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 import { sanitizeStatusReason } from './sanitize-status-reason.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
@@ -11,23 +11,20 @@ import { InteractionResponseValidationError } from '../domain/interaction/respon
 import { ConflictError, NotFoundError } from '../infrastructure/mysql/errors.js';
 import { appendEventInTxn } from './run-event-append.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
-function requiredUlid(value, field) {
+function requiredUlid(value: unknown, field: string) {
   if (!isUlid(value)) throw new ValidationError(`${field} must be a ULID`);
   return assertUlid(value, field);
 }
 
 export class InteractionResponseService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  runQueue: Loose;
-  generateId: Loose;
-  now: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>;
+  runQueue: { enqueue: (ref: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown> };
+  generateId: () => string;
+  now: () => Date;
 
-  constructor(deps: {transactionManager:{run:Function},createRepositories:Function,runQueue:{enqueue:(ref:Record<string, any>,options?:Record<string, any>)=>Promise<unknown>},generateId:Function,now?:()=>Date}) {
+  constructor(deps: { transactionManager: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> }, createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, runQueue: { enqueue: (ref: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown> }, generateId: () => string, now?: () => Date }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('InteractionResponseService requires transactionManager');
     }
@@ -47,14 +44,14 @@ export class InteractionResponseService {
     this.now = deps.now ?? (() => new Date());
   }
 
-  async #resolveOwner(auth, repos) {
+  async #resolveOwner(auth: ExternalAuth, repos: Pick<ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, 'organizations' | 'externalRefs'>) {
     return new ExternalIdentityResolver({
       organizations: repos.organizations,
       externalRefs: repos.externalRefs,
     }).resolveOwner(auth);
   }
 
-  async #enqueue(run, interactionId) {
+  async #enqueue(run: { runId: string; orgId: string; traceId: string }, interactionId: string) {
     try {
       await this.runQueue.enqueue(
         {
@@ -78,7 +75,7 @@ export class InteractionResponseService {
     }
   }
 
-  async #getInteraction(repos, interactionId, owner, opts = {}) {
+  async #getInteraction(repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, interactionId: string, owner: { orgId: string; userId: string }, opts: { forUpdate?: boolean } = {}) {
     try {
       return await repos.interactions.getById(interactionId, owner, opts);
     } catch (error) {
@@ -93,7 +90,7 @@ export class InteractionResponseService {
   }
 
   /** Resolve exactly once, append a redacted event, then best-effort wake Worker. */
-  async respond(input) {
+  async respond(input: { runId: unknown; interactionId: unknown; response?: unknown; auth: ExternalAuth }) {
     const runId = requiredUlid(input?.runId, 'runId');
     const interactionId = requiredUlid(input?.interactionId, 'interactionId');
     if (!Object.prototype.hasOwnProperty.call(input || {}, 'response')) {
@@ -252,7 +249,7 @@ export class InteractionResponseService {
     }
     const snapshot = await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
-      const owner = await this.#resolveOwner(input.auth, repos);
+      const owner = await this.#resolveOwner(input.auth as ExternalAuth, repos); // 路由层透传的可信外部身份，resolver内做运行时校验
       let runs;
       if (input.runId != null && input.runId !== '') {
         const runId = requiredUlid(input.runId, 'runId');
@@ -273,8 +270,8 @@ export class InteractionResponseService {
       const items = [];
       for (const run of runs) {
         const interactions = await repos.interactions.listByRunId(run.runId, owner);
-        const interaction = [...interactions].reverse().find((item) =>
-          [INTERACTION_STATUS.PENDING, INTERACTION_STATUS.RESOLVED].includes(item.status),
+        const interaction = [...interactions].reverse().find((item: { status: string }) =>
+          ([INTERACTION_STATUS.PENDING, INTERACTION_STATUS.RESOLVED] as string[]).includes(item.status), // includes要string[]，PENDING/RESOLVED字面量联合过窄
         );
         if (interaction) items.push({ run, interaction });
       }

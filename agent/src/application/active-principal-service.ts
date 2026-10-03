@@ -21,22 +21,19 @@ import { formatUserExternalSubject } from '../infrastructure/mysql/repositories/
 import { isUlid } from '../domain/shared/ulid.js';
 import { browserAuthStoreUnavailable, invalidBrowserToken } from './browser-auth-errors.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export interface ActivePrincipalIdentity {
   readonly orgId: string;
   readonly userId: string;
 }
 
 export interface ActivePrincipalServiceDeps {
-  readonly organizations: Loose;
-  readonly externalRefs: Loose;
+  readonly organizations: { getOrganization?(orgId: string): Promise<{ name: string; status?: unknown } | null>; getUser?(userId: string): Promise<{ userId: string; externalSubject: string; status: string } | null>; getMembership?(scope: { orgId: string; userId: string }): Promise<{ status: string } | null> };
+  readonly externalRefs: { getOrganizationRef(provider: string, externalSubject: string): Promise<{ orgId: string } | null> };
 }
 
 export class ActivePrincipalService {
-  readonly organizations: Loose;
-  readonly externalRefs: Loose;
+  readonly organizations: ActivePrincipalServiceDeps['organizations'];
+  readonly externalRefs: ActivePrincipalServiceDeps['externalRefs'];
 
   constructor(deps: ActivePrincipalServiceDeps) {
     if (!deps?.organizations || !deps?.externalRefs) {
@@ -66,14 +63,14 @@ export class ActivePrincipalService {
       throw invalidBrowserToken();
     }
 
-    let user: Loose;
-    let org: Loose;
-    let membership: Loose;
-    let ref: Loose;
+    let user: { userId: string; externalSubject: string; status: string } | null;
+    let org: { name: string; status?: unknown } | null;
+    let membership: { status: string } | null;
+    let ref: { orgId: string } | null;
     try {
-      user = await this.organizations.getUser(userId);
-      org = await this.organizations.getOrganization(orgId);
-      membership = await this.organizations.getMembership({ orgId, userId });
+      user = await this.organizations.getUser!(userId);
+      org = await this.organizations.getOrganization!(orgId);
+      membership = await this.organizations.getMembership!({ orgId, userId });
       ref = await this.externalRefs.getOrganizationRef('bff', input.externalOrgId);
     } catch {
       throw browserAuthStoreUnavailable();

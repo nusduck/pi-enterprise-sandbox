@@ -22,8 +22,8 @@ import {
   type AdminRunStatRow,
 } from '../infrastructure/mysql/repositories/admin-run-read-repository.js';
 import { ROLE_ADMIN, hasRole } from '../domain/identity/roles.js';
-
-type Loose = any;
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+type Repos = ReturnType<typeof createRepositoryBundle>;
 
 export interface AdminAuth extends ExternalAuth {
   role?: string | null;
@@ -206,8 +206,8 @@ export class AdminRunQueryService {
   readonly now: () => Date;
 
   constructor(deps: {
-    db?: Loose;
-    createRepositories?: (db: Loose) => Loose;
+    db?: Parameters<typeof createRepositoryBundle>[0];
+    createRepositories?: (db: Parameters<typeof createRepositoryBundle>[0]) => Repos;
     /** Tests inject these two; production derives them from db. */
     readRepository?: AdminRunReadRepository;
     resolveOrgId?: (auth: AdminAuth) => Promise<string>;
@@ -302,7 +302,7 @@ export class AdminRunQueryService {
     }
     const rows = await this.read.listEvents(orgId, runId, { afterSequence: after, limit });
     return {
-      events: rows.map((e: Loose) => ({
+      events: rows.map((e: Awaited<ReturnType<AdminRunReadRepository['listEvents']>>[number]) => ({
         run_id: e.runId,
         sequence: e.sequenceNo,
         event_id: e.eventId,

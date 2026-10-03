@@ -11,22 +11,23 @@
  */
 import { DurableInteractionPendingError } from '../runtime/providers/user-questions.js';
 
-type Loose = any;
+interface AskUserRequest { readonly questions?: unknown; readonly toolCallId?: unknown; readonly toolName?: unknown; readonly args?: unknown; }
+interface InteractionRecorder { requestInteraction(input: { readonly toolCallId: string; readonly toolName: string; readonly args: Record<string, unknown>; readonly interactionType: string; readonly title: string; readonly message: string; readonly options: string[]; readonly placeholder: null }): Promise<{ readonly durablePending: unknown }>; }
+function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
 
 export function createInteractionRequester(input: {
-  recorder: Loose;
+  recorder: InteractionRecorder;
   runSuspensionPort: { onDurableInteractionPending: (pending: unknown) => void };
 }) {
-  return async (request: Loose): Promise<never> => {
-    const first = Array.isArray(request?.questions)
-      ? (request.questions[0] as Record<string, any> | undefined)
-      : undefined;
+  return async (request: AskUserRequest): Promise<never> => {
+    const questions: unknown = request?.questions;
+    const first = Array.isArray(questions) && isRecord(questions[0]) ? questions[0] : undefined;
     if (!first || typeof first.question !== 'string' || !first.question.trim()) {
       throw new Error('ask_user_question requires a non-empty question');
     }
     const options = Array.isArray(first.options)
       ? first.options
-          .map((option: Loose) => String(option?.label ?? '').trim())
+          .map((option: unknown) => String(isRecord(option) ? option.label ?? '' : '').trim())
           .filter(Boolean)
           .slice(0, 20)
       : [];
@@ -35,10 +36,7 @@ export function createInteractionRequester(input: {
     const pending = await input.recorder.requestInteraction({
       toolCallId: String(request.toolCallId || ''),
       toolName: String(request.toolName || 'ask_user_question'),
-      args:
-        request.args && typeof request.args === 'object' && !Array.isArray(request.args)
-          ? request.args
-          : {},
+      args: isRecord(request.args) ? request.args : {},
       interactionType,
       title: String(first.header || '').trim() || '需要输入',
       message: first.question,

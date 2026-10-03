@@ -19,7 +19,7 @@
  */
 
 import { ROLE_ADMIN, ROLE_REVIEWER, hasRole } from '../domain/identity/roles.js';
-import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
+import { ExternalIdentityResolver, type ExternalAuth } from './parent/external-identity-resolver.js';
 import { assertUlid } from '../domain/shared/ulid.js';
 import { toMysqlDateTime } from '../infrastructure/mysql/row-mappers.js';
 import { ValidationError } from './errors.js';
@@ -30,7 +30,7 @@ import {
   EVENT_TYPE_REVIEW_DECIDED,
   EVENT_TYPE_REVIEW_DECIDED_NOTIFICATION,
 } from '../infrastructure/outbox/outbox-status.js';
-import { isReviewTerminalStatus, MATERIAL_SNAPSHOT_STATUS, REVIEW_STATUS } from '../infrastructure/mysql/repositories/review-repository.js';
+import { isReviewTerminalStatus, MATERIAL_SNAPSHOT_STATUS, REVIEW_STATUS, type ReviewEventRecord, type ReviewItemRecord, type ReviewMaterialRecord, type ReviewTaskRecord } from '../infrastructure/mysql/repositories/review-repository.js';
 import type { InternalReviewTransport, ReviewIdentity } from '../infrastructure/sandbox/internal-review-http.js';
 import { InternalReviewError } from '../infrastructure/sandbox/internal-review-http.js';
 import {
@@ -39,8 +39,6 @@ import {
   collectArtifactIds,
 } from './review-version-chain.js';
 import { REVIEW_TRANSFER_MAX_BYTES } from '@dsh/contract/delivery-policy.js';
-
-type Loose = any;
 
 /** 审核面错误码（design §7）。状态码与码一起定义，路由层原样映射。 */
 export class ReviewError extends Error {
@@ -161,25 +159,25 @@ function encodeCursor(task: { createdAt: string | null; reviewTaskId: string }):
 }
 
 export interface ReviewServiceDeps {
-  readonly db: Loose;
-  readonly createRepositories: (db?: Loose) => Loose;
-  readonly transactionManager: { run: <T>(work: (trx: Loose) => Promise<T>) => Promise<T> };
+  readonly db: unknown;
+  readonly createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>;
+  readonly transactionManager: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
   readonly generateId: () => string;
   readonly now?: () => Date;
   /** exec 内部审核面客户端；缺省时审核面拒绝启动（fail-closed）。 */
   readonly reviewTransport: InternalReviewTransport | null;
   /** 解析内部身份用。 */
-  readonly resolveOwner?: (actor: Loose) => Promise<{ orgId: string; userId: string }>;
+  readonly resolveOwner?: (actor: ExternalAuth) => Promise<{ orgId: string; userId: string }>;
 }
 
 export class ReviewService {
-  readonly #db: Loose;
-  readonly #createRepositories: (db?: Loose) => Loose;
-  readonly #tx: { run: <T>(work: (trx: Loose) => Promise<T>) => Promise<T> };
+  readonly #db: unknown;
+  readonly #createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>;
+  readonly #tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
   readonly #generateId: () => string;
   readonly #now: () => Date;
   readonly #transport: InternalReviewTransport | null;
-  readonly #resolveOwner: ((actor: Loose) => Promise<{ orgId: string; userId: string }>) | null;
+  readonly #resolveOwner: ((actor: ExternalAuth) => Promise<{ orgId: string; userId: string }>) | null;
 
   constructor(deps: ReviewServiceDeps) {
     if (!deps?.db) throw new Error('ReviewService requires db');
@@ -203,14 +201,14 @@ export class ReviewService {
     return this.#transport;
   }
 
-  #repos(): Loose {
+  #repos(): ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle> {
     return this.#createRepositories(this.#db);
   }
 
   /**
    * 鉴权 + 身份解析。**先角色、再解析**（与 `member-role-service` 同一顺序）。
    */
-  async #reviewer(actor: Loose): Promise<{ orgId: string; userId: string }> {
+  async #reviewer(actor: ExternalAuth): Promise<{ orgId: string; userId: string }> {
     if (!actor || !hasRole(actor, ROLE_REVIEWER)) throw reviewerRequired();
     if (!String(actor.externalOrgId ?? '').trim()) throw reviewerRequired();
     if (this.#resolveOwner) return await this.#resolveOwner(actor);
@@ -227,7 +225,7 @@ export class ReviewService {
     return { orgId: owner.orgId, userId: owner.userId };
   }
 
-  async #isAdmin(actor: Loose): Promise<boolean> {
+  async #isAdmin(actor: ExternalAuth): Promise<boolean> {
     return hasRole(actor, ROLE_ADMIN);
   }
 
@@ -235,14 +233,14 @@ export class ReviewService {
    * 任务 + org 作用域。**跨租户与不存在同一个 404**，不给「这个 id 存在但属于别人」
    * 任何可区分的信号。
    */
-  async #taskOr404(reviewTaskId: string, orgId: string, repos: Loose = this.#repos()) {
+  async #taskOr404(reviewTaskId: string, orgId: string, repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle> = this.#repos()) {
     const task = await repos.reviews.getTask(reviewTaskId, orgId);
     if (!task) throw notFound();
     return task;
   }
 
   /** 任务所属的工作区与会话身份（exec 侧要它来定位工作区与签名信封）。 */
-  async #identityFor(task: Loose): Promise<ReviewIdentity & { workspaceId: string }> {
+  async #identityFor(task: ReviewTaskRecord): Promise<ReviewIdentity & { workspaceId: string }> {
     const scope = { orgId: task.orgId, userId: task.requesterUserId };
     const session = await this.#repos().sessions.getById(task.agentSessionId, scope);
     if (!session) throw notFound();
@@ -260,7 +258,7 @@ export class ReviewService {
 
   // ── 列表与详情 ────────────────────────────────────────────────────────
 
-  async listTasks(actor: Loose, query: { status?: string | null; mine?: boolean; cursor?: string | null; limit?: unknown }) {
+  async listTasks(actor: ExternalAuth, query: { status?: string | null; mine?: boolean; cursor?: string | null; limit?: unknown }) {
     const { orgId, userId } = await this.#reviewer(actor);
     const limit = resolveListLimit(query?.limit);
     const statuses = parseTaskStatuses(query?.status);
@@ -306,13 +304,13 @@ export class ReviewService {
     }
   }
 
-  async #presentTasks(tasks: Loose[]) {
+  async #presentTasks(tasks: ReviewTaskRecord[]) {
     if (tasks.length === 0) return [];
     const repos = this.#repos();
-    const nameOf = await this.#displayNames(repos, tasks.flatMap((task: Loose) =>
+    const nameOf = await this.#displayNames(repos, tasks.flatMap((task) =>
       [task.requesterUserId, task.assigneeUserId].filter(Boolean)));
     const items = await Promise.all(tasks.map((task) => repos.reviews.listItems(task.reviewTaskId)));
-    const agentNames = await this.#agentNames(repos, tasks.map((task: Loose) => task.agentId));
+    const agentNames = await this.#agentNames(repos, tasks.map((task) => task.agentId));
     return tasks.map((task, index) => ({
       review_task_id: task.reviewTaskId,
       status: task.status,
@@ -335,7 +333,7 @@ export class ReviewService {
   }
 
   /** 智能体名称：按需取并缓存（列表投影要用，不能每条任务一次查询）。 */
-  async #agentNames(repos: Loose, agentIds: readonly string[]) {
+  async #agentNames(repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, agentIds: readonly string[]) {
     const cache = new Map<string, string | null>();
     const lookup = typeof repos?.catalog?.getDefinitionById === 'function'
       ? repos.catalog.getDefinitionById.bind(repos.catalog)
@@ -348,7 +346,7 @@ export class ReviewService {
   }
 
   /** 显示名：按需取并缓存（组织里没有批量按 id 取用户的仓储方法）。 */
-  async #displayNames(repos: Loose, userIds: readonly string[]) {
+  async #displayNames(repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, userIds: readonly string[]) {
     const cache = new Map<string, string | null>();
     for (const userId of new Set(userIds)) {
       const user = await repos.organizations.getUser(userId).catch(() => null);
@@ -357,7 +355,7 @@ export class ReviewService {
     return (userId: string) => cache.get(String(userId)) ?? null;
   }
 
-  async getTaskDetail(actor: Loose, reviewTaskId: string) {
+  async getTaskDetail(actor: ExternalAuth, reviewTaskId: string) {
     const { orgId } = await this.#reviewer(actor);
     const repos = this.#repos();
     const task = await this.#taskOr404(reviewTaskId, orgId, repos);
@@ -382,13 +380,13 @@ export class ReviewService {
     const versionChains = await this.#versionChains(repos, items, events, task);
     const versionActorIds = [...versionChains.values()]
       .flatMap((chain) => chain.map((entry) => entry.uploaded_by_user_id))
-      .filter(Boolean) as string[];
+      .filter(Boolean) as string[]; // 已filter(Boolean)，剩余为string
     const nameOf = await this.#displayNames(repos, [
       task.requesterUserId,
       task.assigneeUserId,
       task.decidedBy,
       ...versionActorIds,
-    ].filter(Boolean) as string[]);
+    ].filter(Boolean) as string[]); // 同上，展示名入参为string[]
     const agentVersion = await repos.catalog.getVersionById(task.agentVersionId);
     const agentDefinition = typeof repos.catalog?.getDefinitionById === 'function'
       ? await repos.catalog.getDefinitionById(task.agentId).catch(() => null)
@@ -418,21 +416,21 @@ export class ReviewService {
         ? { user_id: task.decidedBy, display_name: nameOf(task.decidedBy) }
         : null,
       feedback: task.feedback,
-      questions: questions.map((question: Loose) => ({
+      questions: questions.map((question) => ({
         message_id: question.messageId,
         sequence_no: question.sequenceNo,
         text: question.text,
         created_at: question.createdAt,
         // §3.2.7：标出触发本次任务的那一条提问，其余是上文（前端可折叠）。
         triggering: run != null && question.messageId === run.triggeringMessageId,
-        attachments: question.attachments.map((attachment: Loose) => ({
+        attachments: question.attachments.map((attachment) => ({
           attachment_id: attachment.attachmentId,
           filename: attachment.filename,
           mime_type: attachment.mimeType,
           size: attachment.sizeBytes,
         })),
       })),
-      materials: materials.map((material: Loose) => ({
+      materials: materials.map((material) => ({
         material_id: material.materialId,
         attachment_id: material.attachmentId,
         filename: material.filename,
@@ -440,7 +438,7 @@ export class ReviewService {
         size: material.sizeBytes,
         snapshot_status: material.snapshotStatus,
       })),
-      items: items.map((item: Loose) => ({
+      items: items.map((item) => ({
         item_no: item.itemNo,
         name: item.name,
         mime_type: item.mimeType,
@@ -449,7 +447,7 @@ export class ReviewService {
         original_artifact_id: item.originalArtifactId,
         current_artifact_id: item.currentArtifactId,
         revised: item.currentArtifactId !== item.originalArtifactId,
-        versions: (versionChains.get(item.itemNo) ?? []).map((version: Loose) => ({
+        versions: (versionChains.get(item.itemNo) ?? []).map((version) => ({
           artifact_id: version.artifact_id,
           current: version.current,
           revision: version.revision,
@@ -463,7 +461,7 @@ export class ReviewService {
           size: version.size,
         })),
       })),
-      events: events.map((event: Loose) => ({
+      events: events.map((event) => ({
         event_id: event.eventId,
         event_type: event.eventType,
         actor_user_id: event.actorUserId,
@@ -482,7 +480,7 @@ export class ReviewService {
    * 这里只负责把 exec 的元数据接上：大小与时间以 exec 的产物记录为权威，取不到就留
    * `null`。**失败降级**——审核面暂时不可用时详情仍要能打开（只有这几列显示「—」）。
    */
-  async #versionChains(repos: Loose, items: Loose[], events: Loose[], task: Loose) {
+  async #versionChains(repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, items: ReviewItemRecord[], events: ReviewEventRecord[], task: ReviewTaskRecord) {
     const chains = buildVersionChains({
       items,
       events,
@@ -501,7 +499,7 @@ export class ReviewService {
   }
 
   /** 任务里所有版本的 artifact id（原件 + 每个修订目标）。 */
-  async #allVersions(repos: Loose, reviewTaskId: string) {
+  async #allVersions(repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, reviewTaskId: string) {
     const [items, events] = await Promise.all([
       repos.reviews.listItems(reviewTaskId),
       repos.reviews.listEvents(reviewTaskId),
@@ -521,7 +519,7 @@ export class ReviewService {
 
   // ── 领取 / 释放 ───────────────────────────────────────────────────────
 
-  async claim(actor: Loose, reviewTaskId: string) {
+  async claim(actor: ExternalAuth, reviewTaskId: string) {
     const { orgId, userId } = await this.#reviewer(actor);
     const repos = this.#repos();
     const task = await this.#taskOr404(reviewTaskId, orgId, repos);
@@ -544,7 +542,7 @@ export class ReviewService {
     return await this.getTaskDetail(actor, reviewTaskId);
   }
 
-  async releaseClaim(actor: Loose, reviewTaskId: string) {
+  async releaseClaim(actor: ExternalAuth, reviewTaskId: string) {
     const { orgId, userId } = await this.#reviewer(actor);
     const repos = this.#repos();
     const task = await this.#taskOr404(reviewTaskId, orgId, repos);
@@ -583,7 +581,7 @@ export class ReviewService {
    * 那才是坏的。
    */
   async uploadRevision(
-    actor: Loose,
+    actor: ExternalAuth,
     reviewTaskId: string,
     itemNo: number,
     input: { baseRevision: unknown; filename?: string | null; mimeType?: string | null; bytes: Uint8Array },
@@ -647,7 +645,7 @@ export class ReviewService {
   // ── 字节读取（材料快照与交付物任一版本）───────────────────────────────
 
   /** 材料快照：只认本任务、且快照已就绪的行。 */
-  async readMaterial(actor: Loose, reviewTaskId: string, materialId: string) {
+  async readMaterial(actor: ExternalAuth, reviewTaskId: string, materialId: string) {
     const { orgId } = await this.#reviewer(actor);
     const repos = this.#repos();
     const task = await this.#taskOr404(reviewTaskId, orgId, repos);
@@ -669,7 +667,7 @@ export class ReviewService {
   }
 
   /** 交付物的任一版本——**限本任务内的 artifact**（design §7）。 */
-  async readArtifact(actor: Loose, reviewTaskId: string, artifactId: string) {
+  async readArtifact(actor: ExternalAuth, reviewTaskId: string, artifactId: string) {
     const { orgId } = await this.#reviewer(actor);
     const repos = this.#repos();
     const task = await this.#taskOr404(reviewTaskId, orgId, repos);
@@ -689,7 +687,7 @@ export class ReviewService {
 
   // ── 通过 / 驳回（P5）──────────────────────────────────────────────────
 
-  async approve(actor: Loose, reviewTaskId: string, input: { baseRevision: unknown; note?: unknown }) {
+  async approve(actor: ExternalAuth, reviewTaskId: string, input: { baseRevision: unknown; note?: unknown }) {
     const note = sanitizeText(input?.note, MAX_NOTE_LEN, 'note', false);
     return await this.#decide(actor, reviewTaskId, {
       baseRevision: input?.baseRevision,
@@ -698,7 +696,7 @@ export class ReviewService {
     });
   }
 
-  async reject(actor: Loose, reviewTaskId: string, input: { baseRevision: unknown; feedback?: unknown }) {
+  async reject(actor: ExternalAuth, reviewTaskId: string, input: { baseRevision: unknown; feedback?: unknown }) {
     // 驳回反馈**必填**（U3）：空反馈让发起人无从知道要改什么。
     const feedback = sanitizeText(input?.feedback, MAX_FEEDBACK_LEN, 'feedback', true);
     return await this.#decide(actor, reviewTaskId, {
@@ -718,7 +716,7 @@ export class ReviewService {
    * agent-worker 的审核循环投递，exec 侧幂等（design §5.3 原话）。
    */
   async #decide(
-    actor: Loose,
+    actor: ExternalAuth,
     reviewTaskId: string,
     input: { baseRevision: unknown; status: 'APPROVED' | 'REJECTED'; feedback: string | null },
   ) {
@@ -727,7 +725,7 @@ export class ReviewService {
     const now = this.#now();
     const generateId = this.#generateId;
 
-    const outcome = await this.#tx.run(async (trx: Loose) => {
+    const outcome = await this.#tx.run(async (trx: unknown) => {
       const repos = this.#createRepositories(trx);
       const task = await repos.reviews.getTask(reviewTaskId, orgId);
       if (!task) throw notFound();
@@ -770,7 +768,7 @@ export class ReviewService {
 
       const approved = input.status === 'APPROVED';
       // `originalArtifactId`：前端聊天卡片的 id 是智能体提交的原件；有修订时靠它把卡片对上当前版本。
-      const releasedArtifacts = items.map((item: Loose) => ({
+      const releasedArtifacts = items.map((item) => ({
         artifactId: item.currentArtifactId,
         originalArtifactId: item.originalArtifactId,
         name: item.name,
@@ -786,7 +784,7 @@ export class ReviewService {
         type: approved ? 'artifact.released' : 'review.rejected',
         data: approved
           ? { reviewTaskId, artifacts: releasedArtifacts }
-          : { reviewTaskId, feedback: input.feedback, artifacts: releasedArtifacts.map(({ artifactId, originalArtifactId, name }: Loose) => ({ artifactId, originalArtifactId, name })) },
+          : { reviewTaskId, feedback: input.feedback, artifacts: releasedArtifacts.map(({ artifactId, originalArtifactId, name }) => ({ artifactId, originalArtifactId, name })) },
         generateId,
         now,
       });
@@ -811,9 +809,9 @@ export class ReviewService {
       // 放行/撤回的工作项：当前版本放行、其余版本撤回（原件与中间修订）。
       const updates = approved
         ? [
-            ...items.map((item: Loose) => ({ artifactId: item.currentArtifactId, visibility: 'released' as const })),
+            ...items.map((item) => ({ artifactId: item.currentArtifactId, visibility: 'released' as const })),
             ...[...ids]
-              .filter((artifactId) => !items.some((item: Loose) => item.currentArtifactId === artifactId))
+              .filter((artifactId) => !items.some((item) => item.currentArtifactId === artifactId))
               .map((artifactId) => ({ artifactId, visibility: 'withdrawn' as const })),
           ]
         : [...ids].map((artifactId) => ({ artifactId, visibility: 'withdrawn' as const }));
@@ -822,8 +820,8 @@ export class ReviewService {
       // 修改（§5.4）。放行与导入都经 outbox：跨服务调用不进事务。
       const imports = approved
         ? items
-            .filter((item: Loose) => item.currentArtifactId !== item.originalArtifactId)
-            .map((item: Loose) => ({
+            .filter((item) => item.currentArtifactId !== item.originalArtifactId)
+            .map((item) => ({
               artifactId: item.currentArtifactId,
               targetPath: `${REVIEW_REVISION_DIR}/${item.name}`,
             }))
@@ -876,8 +874,8 @@ export class ReviewService {
  * 同事务的 outbox 行），因为前端重放与 SSE 都按这个形状读。
  */
 async function appendRunEventInTxn(
-  repos: Loose,
-  input: { run: Loose; type: string; data: Record<string, unknown>; generateId: () => string; now: Date },
+  repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>,
+  input: { run: { orgId: string; userId: string; conversationId: string; agentSessionId: string; runId: string; traceId: string }; type: string; data: Record<string, unknown>; generateId: () => string; now: Date },
 ): Promise<void> {
   const { run } = input;
   const eventId = assertUlid(input.generateId(), 'eventId');

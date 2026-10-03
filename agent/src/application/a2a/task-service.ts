@@ -53,9 +53,12 @@ import {
   parseSendParams,
   requireStableIdempotencyKey,
 } from './task-request.js';
+import type { createRepositoryBundle } from '../../bootstrap/container-env.js';
+import type { mapA2aTask } from '../../infrastructure/mysql/repositories/a2a-task-repository.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
+type A2aTaskMapRow = ReturnType<typeof mapA2aTask>;
+type A2aPrincipal = { orgId: string; clientId: string; agentId: string; serviceUserId: string; credentialId: string; scopes?: readonly string[] | null };
 
 // Re-exported so callers keep one entry point for the A2A task surface.
 export {
@@ -69,36 +72,20 @@ export {
 
 export class A2aTaskService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  createRunService: Loose;
-  getRunService: Loose;
-  cancelRunService: Loose;
-  eventQueryService: Loose;
-  createRepositories: Loose;
-  tx: Loose;
-  db: Loose;
-  generateId: Loose;
-  now: Loose;
-  defaultProvider: Loose;
-  buildArtifactDownloadUri: Loose;
-  requireAudit: Loose;
+  createRunService: import('../create-run-service.js').CreateRunService;
+  getRunService: import('../get-run-service.js').GetRunService;
+  cancelRunService: { execute: (input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, reason?: string | null, idempotencyKey?: string | null }) => Promise<unknown> };
+  eventQueryService: import('../run-event-query-service.js').RunEventQueryService | null;
+  createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => Repos;
+  tx: import('../../infrastructure/mysql/transaction-manager.js').TransactionManager | null;
+  db: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null;
+  generateId: () => string;
+  now: () => Date;
+  defaultProvider: string;
+  buildArtifactDownloadUri: ((input: Record<string, unknown>) => unknown) | null;
+  requireAudit: boolean;
 
-  /**
-   * @param {{
-   *   createRunService: { execute: Function },
-   *   getRunService: { execute: Function },
-   *   cancelRunService: { execute: Function },
-   *   eventQueryService?: { listEvents: Function } | null,
-   *   createRepositories: (db?: any) => any,
-   *   transactionManager?: { run: Function } | null,
-   *   db?: any,
-   *   generateId: () => string,
-   *   now?: () => Date,
-   *   defaultProvider?: string,
-   *   buildArtifactDownloadUri?: Function | null,
-   *   requireAudit?: boolean,
-   * }} deps
-   */
-  constructor(deps: { createRunService: { execute: Function }, getRunService: { execute: Function }, cancelRunService: { execute: Function }, eventQueryService?: { listEvents: Function } | null, createRepositories: (db?: any) => any, transactionManager?: { run: Function } | null, db?: any, generateId: () => string, now?: () => Date, defaultProvider?: string, buildArtifactDownloadUri?: Function | null, requireAudit?: boolean, }) {
+  constructor(deps: { createRunService: import('../create-run-service.js').CreateRunService, getRunService: import('../get-run-service.js').GetRunService, cancelRunService: { execute: (input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, reason?: string | null, idempotencyKey?: string | null }) => Promise<unknown> }, eventQueryService?: import('../run-event-query-service.js').RunEventQueryService | null, createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => Repos, transactionManager?: import('../../infrastructure/mysql/transaction-manager.js').TransactionManager | null, db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null, generateId: () => string, now?: () => Date, defaultProvider?: string, buildArtifactDownloadUri?: ((input: Record<string, unknown>) => unknown) | null, requireAudit?: boolean, }) {
     if (!deps?.createRunService?.execute) {
       throw new Error('A2aTaskService requires createRunService');
     }
@@ -141,7 +128,7 @@ export class A2aTaskService {
    *   method?: string,
    * }} input
    */
-  async sendMessage(input: { principal: Record<string, any>, agentId: string, params: Record<string, unknown>, traceId: string, traceState?: string | null, spanId?: string | null, traceFlags?: string | number | null, idempotencyKey?: string | null, method?: string, }) {
+  async sendMessage(input: { principal: A2aPrincipal, agentId: string, params: Record<string, unknown>, traceId: string, traceState?: string | null, spanId?: string | null, traceFlags?: string | number | null, idempotencyKey?: string | null, method?: string, }) {
     this.#assertScope(input.principal, A2A_SCOPES.INVOKE);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -158,7 +145,7 @@ export class A2aTaskService {
 
     await this.#ensureA2aIdentityBindings(input.principal);
 
-    let continueFrom: { conversationId: string | null, parentTask: Record<string, any> | null, wireContextId: string | null } = {
+    let continueFrom: { conversationId: string | null, parentTask: A2aTaskMapRow | null, wireContextId: string | null } = {
       conversationId: null,
       parentTask: null,
       wireContextId: contextId,
@@ -168,7 +155,7 @@ export class A2aTaskService {
       const parent = await this.#loadOwnedTask(input.principal, taskId);
       const parentRun = await this.#loadOwnedRun(input.principal, parent.runId);
       // In-flight tasks cannot accept a parallel follow-up message.
-      if (!CONTINUABLE_RUN_STATUSES.has(parentRun.status)) {
+      if (!(CONTINUABLE_RUN_STATUSES as ReadonlySet<string>).has(parentRun.status)) { // reason: 行状态是 string，集合按字面量声明
         throw new A2aTaskError('Unsupported operation', {
           code: 'TASK_BUSY',
           rpc: A2A_RPC_ERROR.UNSUPPORTED,
@@ -212,7 +199,7 @@ export class A2aTaskService {
         },
         traceId: input.traceId,
         ...(input.traceState ? { traceState: input.traceState } : {}),
-        traceFlags: input.traceFlags,
+        traceFlags: input.traceFlags as string | null, // CreateRun入参只收string：路由层恒传traceparent解析出的string，execute内部还会String()归一，断言保留原值不断流
         idempotencyKey,
         agentId: input.agentId,
         agentProfileId: input.agentId,
@@ -399,7 +386,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async getTask(input: { principal: Record<string, any>, agentId: string, taskId: string, historyLength?: number, method?: string, traceId?: string | null, }) {
+  async getTask(input: { principal: A2aPrincipal, agentId: string, taskId: string, historyLength?: number, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.READ);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -461,7 +448,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async listTasks(input: { principal: Record<string, any>, agentId: string, contextId?: string | null, limit?: number, method?: string, traceId?: string | null, }) {
+  async listTasks(input: { principal: A2aPrincipal, agentId: string, contextId?: string | null, limit?: number, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.READ);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -487,7 +474,7 @@ export class A2aTaskService {
       },
     );
 
-    const tasks: Record<string, any>[] = [];
+    const tasks: ReturnType<typeof buildA2aTaskObject>[] = [];
     for (const mapping of mappings) {
       // eslint-disable-next-line no-await-in-loop
       const run = await this.#loadOwnedRun(input.principal, mapping.runId);
@@ -536,7 +523,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async cancelTask(input: { principal: Record<string, any>, agentId: string, taskId: string, reason?: string | null, method?: string, traceId?: string | null, }) {
+  async cancelTask(input: { principal: A2aPrincipal, agentId: string, taskId: string, reason?: string | null, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.CANCEL);
     this.#assertAgentBinding(input.principal, input.agentId);
 
@@ -629,7 +616,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async beginSubscribe(input: { principal: Record<string, any>, agentId: string, taskId: string, method?: string, traceId?: string | null, }) {
+  async beginSubscribe(input: { principal: A2aPrincipal, agentId: string, taskId: string, method?: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.READ);
     this.#assertAgentBinding(input.principal, input.agentId);
     const mapping = await this.#loadOwnedTask(input.principal, input.taskId);
@@ -685,7 +672,7 @@ export class A2aTaskService {
    *   traceId?: string | null,
    * }} input
    */
-  async auditArtifactDownload(input: { principal: Record<string, any>, agentId: string, taskId: string, runId: string, artifactId: string, traceId?: string | null, }) {
+  async auditArtifactDownload(input: { principal: A2aPrincipal, agentId: string, taskId: string, runId: string, artifactId: string, traceId?: string | null, }) {
     this.#assertScope(input.principal, A2A_SCOPES.ARTIFACT_READ);
     this.#assertAgentBinding(input.principal, input.agentId);
     await this.#auditRequired({
@@ -837,7 +824,7 @@ export class A2aTaskService {
       return [];
     }
 
-    const all: Record<string, any>[] = [];
+    const all: Array<{ sequence: number, event: object, ts: number, event_id?: string }> = [];
     let after = 0;
     let pages = 0;
     const maxPages = Math.ceil(GET_TASK_EVENT_SCAN_MAX / 200) + 1;
@@ -879,7 +866,7 @@ export class A2aTaskService {
    * @param historyLengthRaw
    * @returns {Promise<object[]>}
    */
-  async #loadMessageHistory(principal: Record<string, any>, mapping: Record<string, any>, historyLengthRaw: unknown) {
+  async #loadMessageHistory(principal: A2aPrincipal, mapping: A2aTaskMapRow, historyLengthRaw: unknown) {
     const n = Number(historyLengthRaw);
     if (!Number.isFinite(n) || n <= 0) return [];
     const limit = Math.min(Math.max(Math.trunc(n), 1), 200);
@@ -961,11 +948,11 @@ export class A2aTaskService {
    * Mutating / authenticated ops: audit failure fails the request.
    * @param input
    */
-  async #auditRequired(input: Record<string, any>) {
+  async #auditRequired(input: Omit<Parameters<import('../../infrastructure/mysql/repositories/a2a-audit-repository.js').A2aAuditRepository['append']>[0], 'auditId'>) {
     return this.#auditSafe(input, { failClosed: this.requireAudit });
   }
 
-  async #auditSafe(input: Record<string, any>, opts: { failClosed?: boolean } = {}) {
+  async #auditSafe(input: Omit<Parameters<import('../../infrastructure/mysql/repositories/a2a-audit-repository.js').A2aAuditRepository['append']>[0], 'auditId'>, opts: { failClosed?: boolean } = {}) {
     const failClosed = opts.failClosed === true;
     const repos = this.createRepositories(this.db);
     if (!repos?.a2aAudit?.append) {

@@ -20,15 +20,8 @@ import {
 import { readExecRpcFromEnv } from '../runtime/providers/exec-rpc.js';
 
 type DbExecutor = Knex | Knex.Transaction;
-type RepositoryBundleLike = {
-  readonly runs: unknown;
-  readonly runEvents: unknown;
-  readonly outbox: unknown;
-  readonly approvals: unknown;
-  readonly toolExecutions: unknown;
-  readonly interactions: unknown;
-};
-type RepositoryFactory = (db?: DbExecutor) => RepositoryBundleLike;
+// 仓储工厂的形状以消费方 ReviewService 的构造签名为准。
+type RepositoryFactory = ConstructorParameters<typeof ReviewService>[0]['createRepositories'];
 type TransactionRunner = { run: <T>(work: (trx: Knex.Transaction) => Promise<T>) => Promise<T> };
 
 export interface ReviewServiceWiring {

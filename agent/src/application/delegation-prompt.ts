@@ -11,7 +11,7 @@
 
 import { parseRemoteAgentRegistry } from '../runtime/providers/a2a-remote-registry.js';
 
-type Loose = any;
+interface DelegationRepos { catalog: { getDefinitionByOrgAndName(orgId: string, name: string): Promise<{ status: string; activeVersionId: string | null; name: string; description: string | null } | null> }; }
 
 /** 单个描述进提示前的上限；描述是管理员文本，与 persona 同级，但不该淹没它。 */
 const DESCRIPTION_MAX_CHARS = 300;
@@ -72,8 +72,8 @@ export async function withDelegationSection(input: {
   lead: string;
   delegation: { agents: readonly string[]; remoteAgents: readonly string[] };
   orgId: string;
-  transactionManager: { run: (fn: (trx: Loose) => Promise<Loose>) => Promise<Loose> };
-  createRepositories: (db: Loose) => Loose;
+  transactionManager: { run: <T>(fn: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db: unknown) => DelegationRepos;
   /** 测试注入；缺省读进程环境的 `A2A_REMOTE_AGENTS_JSON`。 */
   remoteRegistry?: ReadonlyArray<{ id: string; description: string; protocol?: string }>;
 }): Promise<string> {

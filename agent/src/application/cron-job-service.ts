@@ -14,6 +14,7 @@ import { CRON_OWNER_RUN_LIST_MAX_LIMIT } from '../infrastructure/mysql/repositor
 import { ConflictError } from '../infrastructure/mysql/errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import { decodeKeysetCursor, encodeKeysetCursor, parseKeysetLimit } from './keyset-cursor.js';
+import type { CreateRunService } from './create-run-service.js';
 import {
   assertTimeZone,
   nextCronOccurrence,
@@ -22,8 +23,7 @@ import {
   toScheduleIso,
 } from './cron-schedule.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type CronRepos = { organizations: import('../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository; externalRefs: import('../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository; catalog: import('../infrastructure/mysql/repositories/agent-catalog-repository.js').AgentCatalogRepository; memberRoles: import('../infrastructure/mysql/repositories/member-role-repository.js').MemberRoleRepository; agentAccess: import('../infrastructure/mysql/repositories/agent-access-repository.js').AgentAccessRepository; cronJobs: import('../infrastructure/mysql/repositories/cron-job-repository.js').CronJobRepository };
 
 /** 定时任务列表默认每页 50（design ui-polish §2.4）。 */
 export const CRON_JOB_LIST_DEFAULT_PAGE_LIMIT = 50;
@@ -121,26 +121,15 @@ export function presentCronJobRun(execution) {
 
 export class CronJobService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  db: Loose;
-  createRunService: Loose;
-  generateId: Loose;
-  now: Loose;
-  misfireGraceMs: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db: unknown) => CronRepos;
+  db: unknown;
+  createRunService: { execute: CreateRunService['execute'] };
+  generateId: () => string;
+  now: () => Date;
+  misfireGraceMs: number;
 
-  /**
-   * @param {{
-   *   transactionManager: { run: Function },
-   *   createRepositories: Function,
-   *   db: any,
-   *   createRunService: { execute: Function },
-   *   generateId: () => string,
-   *   now?: () => Date,
-   *   misfireGraceMs?: number,
-   * }} deps
-   */
-  constructor(deps: { transactionManager: { run: Function }, createRepositories: Function, db: any, createRunService: { execute: Function }, generateId: () => string, now?: () => Date, misfireGraceMs?: number, }) {
+  constructor(deps: { transactionManager: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> }, createRepositories: (db: unknown) => CronRepos, db: unknown, createRunService: { execute: CreateRunService['execute'] }, generateId: () => string, now?: () => Date, misfireGraceMs?: number, }) {
     if (!deps?.transactionManager?.run || typeof deps.createRepositories !== 'function') {
       throw new Error('CronJobService requires transactionManager and createRepositories');
     }
@@ -478,14 +467,16 @@ export class CronJobService {
       }
       const ownerRole = await this.#ownerRole(repos, job.orgId, job.userId);
       if (job.agentId) await this.#assertAgentForOwner(job.agentId, job, repos, ownerRole);
+      // role 为冗余字段：execute 入参 auth 类型无 role 且实现不读它；经中间变量传入以保持运行时对象逐字一致（疑似缺陷，未修）。
+      const cronAuth = {
+        provider: job.authProvider,
+        externalOrgId: job.externalOrgId,
+        externalUserId: job.externalUserId,
+        role: ownerRole,
+      };
       const result = await this.createRunService.execute({
         messages: [{ role: 'user', content: job.prompt }],
-        auth: {
-          provider: job.authProvider,
-          externalOrgId: job.externalOrgId,
-          externalUserId: job.externalUserId,
-          role: ownerRole,
-        },
+        auth: cronAuth,
         traceId: traceId(),
         idempotencyKey: execution.idempotencyKey,
         agentId: job.agentId,
@@ -538,13 +529,13 @@ export class CronJobService {
 /** Timer wrapper used only by agent-worker, never by a browser or Extension. */
 export class CronScheduler {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  service: Loose;
-  now: Loose;
-  intervalMs: Loose;
-  claimRetryMs: Loose;
-  batchSize: Loose;
-  logger: Loose;
-  timer: Loose;
+  service: CronJobService;
+  now: () => Date;
+  intervalMs: number;
+  claimRetryMs: number;
+  batchSize: number;
+  logger: Console;
+  timer: ReturnType<typeof setInterval> | null;
   running: boolean;
   started: boolean;
 

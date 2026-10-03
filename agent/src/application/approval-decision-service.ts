@@ -1,6 +1,6 @@
 /** Durable owner-scoped approval decision and resume coordination. */
 
-import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
+import { ExternalIdentityResolver, type ExternalAuth } from './parent/external-identity-resolver.js';
 import {
   OwnerScopedNotFoundError,
   ValidationError,
@@ -18,9 +18,12 @@ import {
   NotFoundError,
 } from '../infrastructure/mysql/errors.js';
 import { appendEventInTxn } from './run-event-append.js';
+import type { TransactionManager } from '../infrastructure/mysql/transaction-manager.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { RunQueueAdapter } from '../bootstrap/container-run-queue.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
+interface DecisionInput { approvalId?: unknown; runId?: unknown; run_id?: unknown; approval_id?: unknown; decision?: unknown; reason?: unknown; auth?: ExternalAuth; }
 
 const DECISIONS = Object.freeze({
   approve: APPROVAL_STATUS.APPROVED,
@@ -63,22 +66,14 @@ function publicApprovalStatus(status) {
 
 export class ApprovalDecisionService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  runQueue: Loose;
-  generateId: Loose;
-  now: Loose;
+  tx: TransactionManager;
+  createRepositories: typeof createRepositoryBundle;
+  runQueue: RunQueueAdapter;
+  generateId: () => string;
+  now: () => Date;
 
-  /**
-   * @param {{
-   *   transactionManager: { run: Function },
-   *   createRepositories: (db: any) => any,
-   *   runQueue: { enqueue: (ref: object, options?: object) => Promise<unknown> },
-   *   generateId: () => string,
-   *   now?: () => Date,
-   * }} deps
-   */
-  constructor(deps: { transactionManager: { run: Function }, createRepositories: (db: any) => any, runQueue: { enqueue: (ref: Record<string, any>, options?: Record<string, any>) => Promise<unknown> }, generateId: () => string, now?: () => Date, }) {
+  /** @param {{ transactionManager: TransactionManager, createRepositories: typeof createRepositoryBundle, runQueue: RunQueueAdapter, generateId: () => string, now?: () => Date, }} deps */
+  constructor(deps: { transactionManager: TransactionManager, createRepositories: typeof createRepositoryBundle, runQueue: RunQueueAdapter, generateId: () => string, now?: () => Date, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('ApprovalDecisionService requires transactionManager');
     }
@@ -98,14 +93,14 @@ export class ApprovalDecisionService {
     this.now = deps.now ?? (() => new Date());
   }
 
-  async #resolveOwner(auth, repos) {
+  async #resolveOwner(auth: ExternalAuth, repos: Repos) {
     return new ExternalIdentityResolver({
       organizations: repos.organizations,
       externalRefs: repos.externalRefs,
     }).resolveOwner(auth);
   }
 
-  async #getApproval(repos, approvalId, owner, opts = {}) {
+  async #getApproval(repos: Repos, approvalId: string, owner: { orgId: string, userId: string }, opts: { forUpdate?: boolean } = {}) {
     try {
       return await repos.approvals.getById(approvalId, owner, opts);
     } catch (err) {
@@ -119,7 +114,7 @@ export class ApprovalDecisionService {
     }
   }
 
-  async #enqueue(run, approvalId) {
+  async #enqueue(run: { runId: string, orgId: string, traceId: string }, approvalId: string) {
     try {
       await this.runQueue.enqueue(
         {
@@ -149,7 +144,7 @@ export class ApprovalDecisionService {
   }
 
   /** Resolve a PENDING approval exactly once, then best-effort enqueue its Run. */
-  async resolve(input) {
+  async resolve(input: DecisionInput) {
     const approvalId = assertOptionalUlid(input?.approvalId, 'approvalId');
     if (!approvalId) throw new ValidationError('approvalId is required');
     const runIdHint = assertOptionalUlid(
@@ -317,7 +312,7 @@ export class ApprovalDecisionService {
   }
 
   /** Retry waking a resolved approval Run without changing MySQL decision facts. */
-  async resume(input) {
+  async resume(input: DecisionInput) {
     const runId = assertOptionalUlid(input?.runId, 'runId');
     if (!runId) throw new ValidationError('runId is required');
     const approvalId = assertOptionalUlid(

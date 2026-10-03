@@ -72,15 +72,14 @@ export function computeSandboxToolRequestHash(input: { toolName: string, args?: 
   });
 }
 
-/** 过渡期宽松类型：注入的仓储/事务管理器仍是 JS 类。 */
-type Loose = any;
+type SandboxBinderRepos = { toolExecutions: import('../infrastructure/mysql/repositories/tool-execution-repository.js').ToolExecutionRepository };
 
 export class SandboxRequestBinder {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  context: Loose;
-  executionFenceToken: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db: unknown) => SandboxBinderRepos;
+  context: { orgId: string; userId: string; conversationId: string; agentSessionId: string; runId: string; sandboxSessionId: string; traceId?: string };
+  executionFenceToken: number;
 
   /**
    * @param {{
@@ -169,7 +168,7 @@ export class SandboxRequestBinder {
       'sandboxSessionId',
     );
 
-    let out: any = null;
+    let out = null;
 
     await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
@@ -179,7 +178,7 @@ export class SandboxRequestBinder {
         );
       }
 
-      const bindInput: Record<string, unknown> = {
+      const bindInput: Parameters<import('../infrastructure/mysql/repositories/tool-execution-repository.js').ToolExecutionRepository['bindSandboxRequest']>[0] = {
         runId,
         toolCallId,
         toolName,

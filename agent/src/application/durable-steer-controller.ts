@@ -12,8 +12,9 @@ import {
   STEER_REQUESTED_EVENT,
 } from './steer-run-service.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type SteerRepos = { runEvents: import('../infrastructure/mysql/repositories/run-event-repository.js').RunEventRepository; messages: import('../infrastructure/mysql/repositories/message-repository.js').MessageRepository };
+type SteerRequest = { steerId: string; messageId: string };
+type SteerEventRecorder = { record: (event: { type: string; data?: Record<string, unknown>; dedupeKey?: string | null }) => Promise<unknown> };
 
 export const DEFAULT_STEER_POLL_INTERVAL_MS = 25;
 export const STEER_EVENT_PAGE_SIZE = 500;
@@ -47,38 +48,24 @@ export function steerTextFromMessage(message, binding) {
 
 export class DurableSteerController {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  runtimeSession: Loose;
-  eventRecorder: Loose;
-  runId: Loose;
-  conversationId: Loose;
-  agentSessionId: Loose;
-  scope: Loose;
-  pollIntervalMs: Loose;
-  onError: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db: unknown) => SteerRepos;
+  runtimeSession: { steer: (text: string) => Promise<void> | void; abort?: () => Promise<void> | void };
+  eventRecorder: SteerEventRecorder;
+  runId: string;
+  conversationId: string;
+  agentSessionId: string;
+  scope: { orgId: string; userId: string };
+  pollIntervalMs: number;
+  onError: ((error: unknown) => void) | null;
   cursor: number;
-  pending: Map<any, any>;
+  pending: Map<string, SteerRequest>;
   stopped: boolean;
-  timer: Loose;
-  inFlight: Loose;
-  error: Loose;
+  timer: ReturnType<typeof setTimeout> | null;
+  inFlight: Promise<void> | null;
+  error: unknown;
 
-  /**
-   * @param {{
-   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => any,
-   *   runtimeSession: { steer: (text: string) => Promise<void> | void, abort?: Function },
-   *   eventRecorder: { record: Function },
-   *   runId: string,
-   *   conversationId: string,
-   *   agentSessionId: string,
-   *   scope: { orgId: string, userId: string },
-   *   pollIntervalMs?: number,
-   *   onError?: (error: unknown) => void,
-   * }} deps
-   */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, runtimeSession: { steer: (text: string) => Promise<void> | void, abort?: Function }, eventRecorder: { record: Function }, runId: string, conversationId: string, agentSessionId: string, scope: { orgId: string, userId: string }, pollIntervalMs?: number, onError?: (error: unknown) => void, }) {
+  constructor(deps: { transactionManager: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> }, createRepositories: (db: unknown) => SteerRepos, runtimeSession: { steer: (text: string) => Promise<void> | void, abort?: () => Promise<void> | void }, eventRecorder: SteerEventRecorder, runId: string, conversationId: string, agentSessionId: string, scope: { orgId: string, userId: string }, pollIntervalMs?: number, onError?: (error: unknown) => void, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('DurableSteerController requires transactionManager');
     }
@@ -108,7 +95,7 @@ export class DurableSteerController {
     );
     this.onError = typeof deps.onError === 'function' ? deps.onError : null;
     this.cursor = 0;
-    this.pending = new Map();
+    this.pending = new Map(); // 保持无泛型实参：tests/bootstrap/no-authoritative-run-map 的白名单按 `new Map(` 字面形状登记，`Map<…>` 会让该行掉出白名单；字段类型已精确声明。
     this.stopped = true;
     this.timer = null;
     this.inFlight = null;
