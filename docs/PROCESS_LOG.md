@@ -1283,3 +1283,10 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **核对：** 复查 `agent/src/runtime/providers/remote-jobs.ts`：非本进程作业的 `get`/`read`/`kill` 发出
   exec RPC 后丢弃响应并返回占位值；exec 孤儿回收 G7 已有单独真机证据，不等于 C7 的句柄与日志恢复。
   本次是文档与证据整理，不重跑六套业务测试或容器链路。
+
+## 2026-10-03 — C1/C6 本地 gate 补证与 Worker 重启复跑
+
+- **Why：** 用户指出 Worker 更换与并发可以在隔离环境验证；重新审视此前把剩余 gate 说成只能在生产执行的错误判断。
+- **Action：** 在现有 Compose sandbox 里用生产执行器与真实 bwrap 跑多行 Python；在独立 MySQL 库跑 8 个并发建会话与 Workspace 重复绑定拒绝；复跑专用 Worker 重启 gate。首次重启 gate 的正对照因测试辅助漏传 `systemSkills` 失败，修复测试辅助后 5/5 通过，并把 C1 绑定断言加入 MySQL 集成用例。
+- **STATUS IDs：** C1、C6 `partial → done`；G2 保持 `done` 并补本次复跑；C7 保持 `partial`，跨 Worker 模型侧旧 job 查询与 exec 重启后的活句柄/日志恢复没有因 G2 通过而关闭。
+- **验证与边界：** 隔离 MySQL 3/3，重启 gate 5/5，容器内 Python/bwrap 探针通过；假模型只用于重启 gate，C6 走生产执行器入口而非 Agent/HTTP，均不是目标环境验收。详见[证据](evidence/2026-10-03-c1-c6-restart-local-gates.md)。

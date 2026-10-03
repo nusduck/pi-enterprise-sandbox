@@ -119,6 +119,27 @@ describeLive('default agent race (TEST_MYSQL_URL)', () => {
       (await knex('tbl_agsvc_agent_versions').where({ agent_id: definitions[0].agent_id })).length,
       1,
     );
+
+    const conversations = outcomes.map((outcome) => outcome.value);
+    const sessions = await knex('tbl_agsvc_agent_sessions')
+      .whereIn('conversation_id', conversations.map((conversation) => conversation.id));
+    assert.equal(sessions.length, CONCURRENCY, 'every conversation has one AgentSession');
+    assert.equal(new Set(sessions.map((session) => session.workspace_id)).size, CONCURRENCY);
+    assert.equal(new Set(sessions.map((session) => session.sandbox_session_id)).size, CONCURRENCY);
+    for (const conversation of conversations) {
+      const session = sessions.find((row) => row.conversation_id === conversation.id);
+      assert.equal(session.workspace_id, conversation.workspace_id);
+      assert.equal(session.sandbox_session_id, conversation.sandbox_session_id);
+    }
+
+    const [first, second] = sessions;
+    await assert.rejects(
+      knex('tbl_agsvc_agent_sessions')
+        .where({ agent_session_id: second.agent_session_id })
+        .update({ workspace_id: first.workspace_id }),
+      (error) => error?.code === 'ER_DUP_ENTRY',
+      'the database must reject two sessions owning one workspace',
+    );
   });
 
   it('control: creating after the default agent exists succeeds for every caller', async () => {
