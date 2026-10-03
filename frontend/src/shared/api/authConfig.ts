@@ -75,8 +75,8 @@ export type LogoutOutcome = {
  * P1b 契约（sso-reservation-tasks §锁定 DTO）：
  * - 200 `revocation:"confirmed"` / `"not_required"`：服务端已确认（或本来就
  *   无需）撤销。
- * - 409 `LEGACY_SESSION_NOT_REVOCABLE` / 503 `AUTH_REVOCATION_UNCONFIRMED` /
- *   网络失败：本机退出仍然完成，但服务端撤销未确认，必须如实提示。
+ * - 503 `AUTH_REVOCATION_UNCONFIRMED` / 网络失败：本机退出仍然完成，
+ *   但服务端撤销未确认，必须如实提示。
  *
  * 未知的 200 响应体不猜成 confirmed（避免把未确认当成功）。
  */
@@ -93,11 +93,8 @@ export function interpretLogoutResult(result: unknown): LogoutOutcome {
   };
 }
 
-/** 退出失败（409/503/网络）时的可见提示：本机已清，撤销状态未确认。 */
+/** 退出失败（503/网络）时的可见提示：本机已清，撤销状态未确认。 */
 export function unconfirmedLogoutWarning(code: string | null | undefined): string {
-  if (code === 'LEGACY_SESSION_NOT_REVOCABLE') {
-    return '已退出本机。旧登录凭据没有会话标识，服务端无法确认撤销，必要时请联系管理员。';
-  }
   if (code === 'AUTH_REVOCATION_UNCONFIRMED') {
     return '已退出本机。服务端未确认撤销登录凭据，如仍能访问请稍后重试或联系管理员。';
   }

@@ -157,7 +157,8 @@ user_set   = policy.user == allow ? 调用者 user 启用账本（既有 S1 核�
 
 ### 4.3 与 legacy `skills` 的关系
 
-- legacy 记录的 `skills` 继续返回 `LEGACY_FIELD_REQUIRES_MIGRATION`，不自动转换成 `skillPolicy`：
+- 无 `schemaVersion` 的记录在校验面直接失败（`CONFIG_SCHEMA_VERSION_MISSING`），
+  其 `skills` 按未知字段返回 `CONFIG_UNKNOWN_FIELD`，不自动转换成 `skillPolicy`：
   旧值是展示用的描述，不能推断出绑定意图。
 - Agent Card：有 `skillPolicy` 的版本从有效绑定（system 展开名单 + org 条目的 name/description）生成；
   无 `skillPolicy` 的 legacy 版本维持现状（旧值或系统根扫描）。`user` 层**不进** Agent Card——

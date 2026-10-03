@@ -204,11 +204,11 @@ describeLive('browser auth sessions (TEST_MYSQL_URL)', () => {
     await assert.rejects(service.me(`Bearer ${registered.token}`), (error) => error.status === 401);
   });
 
-  it('returns 409 for a valid unexpired legacy JWT and never claims revocation', async () => {
+  it('rejects a valid unexpired legacy JWT as an ordinary invalid session', async () => {
     const { service } = makeService();
     await assert.rejects(
       service.logout(`Bearer ${legacyToken()}`),
-      (error) => error.status === 409 && error.code === 'LEGACY_SESSION_NOT_REVOCABLE',
+      (error) => error.status === 401 && error.code === 'INVALID_TOKEN',
     );
     // 旧 JWT 也不能当有效会话。
     await assert.rejects(service.me(`Bearer ${legacyToken()}`), (error) => error.status === 401);

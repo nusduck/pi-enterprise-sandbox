@@ -532,7 +532,8 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 ##### 配置契约（`schemaVersion: 1`）与配置面接口
 
-新写入的配置带 `schemaVersion: 1`；没有该字段的历史记录按 legacy 读取，**不原地迁移**，
+新写入的配置带 `schemaVersion: 1`；没有该字段的配置在校验面直接失败
+（`CONFIG_SCHEMA_VERSION_MISSING`，fail-closed），不再按 legacy 读取或升级。
 历史 JSON 与 `config_hash` 永不改写。
 
 - `GET /api/agents/config/options` 返回 `{ schemaVersion, fieldSupport, platformConstraints,
@@ -564,10 +565,11 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 - `mcpReadiness.status` 区分三种事实：`ready`（清单已知）、`not_configured`（部署没有声明
   任何 server）、`unknown`（还问不到）。`unknown` 时引用 MCP 一律拒绝
   （`MCP_CATALOG_UNAVAILABLE`），**不能把"读不到"渲染成"空清单"**。
-- legacy 记录升级到 v1 时，`modelPolicy` 里的旧模型引用必须能映射到当前模型目录，
-  否则 `LEGACY_MODEL_UNMAPPABLE` 阻止升级；`skills` / `extensions` / `sandboxPolicy`
-  / `a2a` 与其他未识别键在 legacy 记录里返回 `LEGACY_FIELD_REQUIRES_MIGRATION`，要求管理员显式处理，
-  **不会在表单/JSON 往返中被静默丢掉**。`effectiveSummary.migration.blockedPaths` 列出待处理项。
+- 缺 `schemaVersion` 的配置一律校验失败（`CONFIG_SCHEMA_VERSION_MISSING`，
+  fail-closed）；`skills` / `extensions` / `sandboxPolicy` / `a2a`
+  与其他未识别键返回 `CONFIG_UNKNOWN_FIELD`，要求管理员显式处理，
+  **不会在表单/JSON 往返中被静默丢掉**。`effectiveSummary.migration.blockedPaths`
+  恒为空（legacy 升级路径已删除，仅保留字段形状）。
 - **绑定期 fail-closed（滚动升级护栏）**：带 `schemaVersion: 1` 的记录在运行进程
   （Agent / agent-worker）绑定时出现该进程不认识的**顶层键**，起 Run 直接失败
   （`DSH_CONFIG_UNSUPPORTED`），不按「字段省略」继续跑。原因：新字段由更新的写入方落库，
@@ -658,8 +660,8 @@ SSO 会话的 me/profile 返回 `login_method:"sso"`、`identity_provider:<issue
 `{token,user}` 仅给 BFF）：Agent 独立验签，按 `(iss, sub)` 找人或 JIT 建号（零角色、固定 org）。
 
 `POST /api/auth/logout`：200 `{ok:true,revocation:"confirmed"}` 表示当前有效 sid 已撤销；
-200 `{ok:true,revocation:"not_required"}` 表示无凭据、无效/已过期/已撤销凭据无需写入；
-合法未到期旧 JWT 缺 sid 返回 409 `LEGACY_SESSION_NOT_REVOCABLE`；
+200 `{ok:true,revocation:"not_required"}` 表示无凭据、无效/已过期/已撤销凭据（含无 sid
+旧 JWT：Agent 按普通无效会话返回 401 `INVALID_TOKEN`，BFF 映射为 `not_required`），无需写入；
 DB/内部网络故障或超时返回 503 `AUTH_REVOCATION_UNCONFIRMED`。进入 BFF 退出处理器后所有撤销结果均清 Cookie；跨站403拒绝不触发退出。
 内部 gate 的 401 不证明用户会话已失效，不得映射退出成功。退出不取消已有 Run。
 

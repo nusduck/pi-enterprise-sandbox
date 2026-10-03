@@ -643,7 +643,7 @@ describe('browser auth HTTP route', () => {
         }),
         logout: async (authorization: string | undefined) => {
           if (authorization === 'Bearer legacy') {
-            throw new BrowserAuthError(409, 'LEGACY_SESSION_NOT_REVOCABLE', 'legacy session');
+            throw new BrowserAuthError(401, 'INVALID_TOKEN', 'sid-less legacy session');
           }
           if (authorization === 'Bearer unreachable') {
             throw new BrowserAuthError(503, 'AUTH_REVOCATION_UNCONFIRMED', 'store down');
@@ -713,7 +713,7 @@ describe('browser auth HTTP route', () => {
     });
   });
 
-  it('maps the logout contract to confirmed / not_required / 409 / 503', async () => {
+  it('maps the logout contract to confirmed / not_required / 401 / 503', async () => {
     const noCredentials = await fetch(`http://127.0.0.1:${port}/internal/auth/logout`, { method: 'POST' });
     assert.equal(noCredentials.status, 200);
     assert.deepEqual(await noCredentials.json(), { ok: true, revocation: 'not_required' });
@@ -729,8 +729,8 @@ describe('browser auth HTTP route', () => {
       method: 'POST',
       headers: { Authorization: 'Bearer legacy' },
     });
-    assert.equal(legacy.status, 409);
-    assert.equal((await legacy.json() as any).code, 'LEGACY_SESSION_NOT_REVOCABLE');
+    assert.equal(legacy.status, 401);
+    assert.equal((await legacy.json() as any).code, 'INVALID_TOKEN');
 
     const unreachable = await fetch(`http://127.0.0.1:${port}/internal/auth/logout`, {
       method: 'POST',

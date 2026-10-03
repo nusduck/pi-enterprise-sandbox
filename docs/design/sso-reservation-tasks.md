@@ -52,8 +52,9 @@ created/expires/revoked。新表直接用 UPspec 物理名，真实迁移与 sch
 BFF `POST /api/auth/logout` 总是尝试清 Cookie，契约：
 
 - 200 `{ok:true,revocation:"confirmed"}`：有效 sid 已撤销。
-- 200 `{ok:true,revocation:"not_required"}`：无凭据/无效签名/已到期/已撤销，无数据库写入或幂等读取。
-- 409 `{error,code:"LEGACY_SESSION_NOT_REVOCABLE"}`：合法未到期旧 JWT 缺 sid，不能确认撤销。
+- 200 `{ok:true,revocation:"not_required"}`：无凭据/无效签名/已到期/已撤销/缺 sid
+  （无 sid 旧 JWT 按普通无效会话处理：Agent 返回 401 `INVALID_TOKEN`，BFF 映射为
+  `not_required`；旧 409 `LEGACY_SESSION_NOT_REVOCABLE` 分支已删除），无数据库写入或幂等读取。
 - 503 `{error,code:"AUTH_REVOCATION_UNCONFIRMED"}`：DB/内部网络失败或超时；不得 `{ok:true}`。
 
 禁止把所有上游错误都当无需撤销；BFF 只映射真实故障，不吞代码；响应 no-store。

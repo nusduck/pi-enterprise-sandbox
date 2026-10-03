@@ -3,7 +3,7 @@
  *
  * 真库上的会话撤销 CAS 与 owner 映射一致性由
  * `agent/tests/mysql/browser-auth-session.integration.test.js` 证明；这里只锁契约与
- * 失败语义（401 / 409 / 503 的分界）。
+ * 失败语义（401 / 503 的分界；无 sid 旧 JWT 按普通无效会话 401 处理）。
  */
 
 import assert from 'node:assert/strict';
@@ -93,7 +93,7 @@ describe('BrowserSessionTokens', () => {
     const expired = expiredTokens.verify(live);
     assert.equal(expired.state, 'expired');
 
-    // 合法未到期但缺 sid：状态是 valid 但 sid 为 null（退出契约据此返回 409）。
+    // 合法未到期但缺 sid：状态是 valid 但 sid 为 null（会话面与退出面都按无效会话 401 处理）。
     const sidLess = tokens.verify(legacyToken());
     assert.equal(sidLess.state, 'valid');
     if (sidLess.state !== 'valid') return;
@@ -172,16 +172,16 @@ describe('BrowserSessionService', () => {
     await assert.rejects(service.resolve(`Bearer ${legacyToken()}`), (e: any) => e.status === 401);
   });
 
-  it('maps the logout contract to confirmed / not_required / 409 / 503', async () => {
+  it('maps the logout contract to confirmed / not_required / 401 / 503', async () => {
     const { service, store } = makeSessions();
     // 无凭据永远 not_required。
     assert.deepEqual(await service.revoke(undefined), { ok: true, revocation: 'not_required' });
     // 无效签名不写库。
     assert.deepEqual(await service.revoke('Bearer forged'), { ok: true, revocation: 'not_required' });
-    // 合法未到期缺 sid：409，不能声称撤销完成。
+    // 合法未到期但缺 sid：按普通无效会话处理（401），不再有 409 兼容分支。
     await assert.rejects(
       service.revoke(`Bearer ${legacyToken()}`),
-      (error: any) => error.status === 409 && error.code === 'LEGACY_SESSION_NOT_REVOCABLE',
+      (error: any) => error.status === 401 && error.code === 'INVALID_TOKEN',
     );
     // 合法签名但已到期：not_required。
     const expiredTokens = makeTokens({ now: () => new Date(NOW.getTime() + 7_200_000) });

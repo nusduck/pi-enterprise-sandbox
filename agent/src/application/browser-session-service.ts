@@ -8,7 +8,7 @@
  *
  * 与 `BrowserSessionTokens`（纯 JWT）和 `ActivePrincipalService`（活跃准入）分开，
  * 是因为三个职责的失败语义不同：这里负责 sid ↔ 会话行的一致性，以及退出契约
- * （confirmed / not_required / 409 / 503）。三者都需要，缺一个就会出现「本机清干净了
+ * （confirmed / not_required / 401 / 503）。三者都需要，缺一个就会出现「本机清干净了
  * 但服务端会话还活着」或反过来的安全缺口。
  */
 
@@ -192,8 +192,8 @@ export class BrowserSessionService {
   /**
    * `POST /internal/auth/logout` 的契约（tasks §50–58）：
    *
-   * - 无凭据 / 无效签名 / 已到期 / 已撤销 → `not_required`（不写库或幂等读）。
-   * - 合法未到期但缺 sid 的旧 JWT → 409 `LEGACY_SESSION_NOT_REVOCABLE`。
+   * - 无凭据 / 无效签名 / 已到期 / 已撤销 / 无 sid → `not_required` 或 401
+   *  （无 sid 的旧 JWT 按普通无效会话处理，不再有 409 兼容分支）。
    * - 权威存储不可达 → 503 `AUTH_REVOCATION_UNCONFIRMED`，绝不 `{ok:true}`。
    */
   async revoke(authorization: string | undefined): Promise<BrowserLogoutResult> {
@@ -216,11 +216,8 @@ export class BrowserSessionService {
     }
     const claims = verification.token;
     if (!claims.sid) {
-      throw new BrowserAuthError(
-        409,
-        'LEGACY_SESSION_NOT_REVOCABLE',
-        'This legacy session has no revocable session id',
-      );
+      // 无 sid 的旧 JWT 按普通无效会话处理（401，fail-closed），不再设 409 兼容分支。
+      throw invalidBrowserToken();
     }
 
     let record: BrowserSessionRecord | null;

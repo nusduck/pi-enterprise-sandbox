@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   首片本身缺工具名时仍按未知工具拒绝。出厂适配器修好后，`tests/runtime/llm-stream-tool-call.test.ts` 的复现用例会失败，
   届时删除这层处理。
 
+### Removed — 旧数据升级路径（无存量，开发阶段清理）
+- Agent 配置的 legacy 读取/升级分支已删除（`agent-config-validator.ts` 的
+  `LEGACY_*` 诊断码、`agent-config-projection.ts` 的 `LEGACY_MODEL_REF_KEYS` /
+  `legacyModelReference`、`tool-risk-bindings.ts` 的 `projectLegacyToolNames`）。
+  缺 `schemaVersion` 的配置在校验面直接失败（`CONFIG_SCHEMA_VERSION_MISSING`，
+  fail-closed），旧字段（`modelRef`、`skills` 等）按 `CONFIG_UNKNOWN_FIELD` 拒绝，
+  不再静默接受、映射或忽略。开发库 8 个 `agent_version` 的 `config_json` 全部带
+  `schemaVersion`，无需要升级的旧配置。
+- 无 sid 旧 JWT 的 409 兼容分支已删除（agent `browser-session-service.ts` 的
+  `LEGACY_SESSION_NOT_REVOCABLE`、api-server `auth-revocation.ts` 的 409 映射）。
+  无 sid 令牌按普通无效会话处理：会话面 401 `INVALID_TOKEN`，退出面经 BFF 映射为
+  `not_required`（仍清 Cookie）。sid 引入（#74）已过 JWT TTL，不存在未过期的旧令牌。
 ### Fixed — `AGENT_RUN_STREAM_MAXLEN` 生效
 
 - deployment.md 与 compose 都把它列为可调的 Run stream 近似 MAXLEN，但 `RunEventStream` 的两处装配从未传入，改了不生效，
