@@ -412,9 +412,16 @@ EXEC_INTERNAL_ALLOW_CIDR=10.20.30.0/24
 
 ### Sandbox MCP（对外 facade）限额
 
+以下变量由 `sandbox-mcp`（facade，发桥前先判）与 `sandbox`（exec 窄桥，再判一次）**两个服务读同一份值**，
+Compose 已同时透传；单独部署时两边必须一起改，否则较小的一侧生效。非法值（非正整数）两侧都拒绝启动。
+
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_MCP_MAX_READ_BYTES` | `262144`（256 KiB） | `sandbox_file_read` 单次返回正文的字节上限（只计完整行）。超限时返回头部、`truncated: true`、`total_lines`/`next_offset`，用 `offset`/`limit` 翻页；facade 与 exec 桥侧同值，改一边必须改另一边 |
+| `SANDBOX_MCP_MAX_TIMEOUT_SECONDS` | `300` | 执行类工具 `timeout_seconds` 上限；exec 侧还会再夹到 `SANDBOX_EXECUTION_TIMEOUT_SECONDS` 以内 |
+| `SANDBOX_MCP_MAX_CODE_LENGTH` | `200000` | `sandbox_python_execute` 代码字符数上限 |
+| `SANDBOX_MCP_MAX_COMMAND_LENGTH` | `20000` | `sandbox_shell_execute` 命令字符数上限 |
+| `SANDBOX_MCP_MAX_FILE_SIZE_BYTES` | `10485760`（10 MiB） | `sandbox_file_write` / `sandbox_file_upload` 的单文件字节上限（产物提交另由执行面产物上限约束，默认 512 MiB） |
+| `SANDBOX_MCP_MAX_READ_BYTES` | `262144`（256 KiB） | `sandbox_file_read` 单次返回正文的字节上限（只计完整行）。超限时返回头部、`truncated: true`、`total_lines`/`next_offset`，用 `offset`/`limit` 翻页 |
 
 **入站 vs 出站：** `EXEC_INTERNAL_ALLOW_CIDR` 只约束 **入站** 内部面来源。已移除 container-wide
 iptables 与 `SANDBOX_ALLOWED_CIDRS` / 端口 union allowlist 作为隔离权威的设计。

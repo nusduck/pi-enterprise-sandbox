@@ -338,3 +338,43 @@ test('生产装配（createExecAppFromEnv）把环境里的限额接到 MCP 桥�
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test('生产装配读取 SANDBOX_MCP_MAX_*：代码/命令/文件大小/超时上限按环境生效，非法值拒绝启动', async () => {
+  const { createExecAppFromEnv } = await import('../src/http/app.js');
+  const base = await realpath(await mkdtemp(path.join(tmpdir(), 'exec-mcp-limits-env-')));
+  const env = {
+    DEPLOYMENT_ENV: 'development',
+    SANDBOX_INTERNAL_HMAC_KEYRING: JSON.stringify({ kid: Buffer.from('0'.repeat(32)).toString('base64url') }),
+    SANDBOX_INTERNAL_HMAC_ACTIVE_KID: 'kid',
+    SANDBOX_API_TOKEN: 'exec-test-service-token-32-bytes-long',
+    SANDBOX_MCP_INTERNAL_TOKEN: TOKEN,
+    SANDBOX_WORKSPACES_ROOT: path.join(base, 'ws'),
+    SANDBOX_TEMP_ROOT: path.join(base, 'tmp'),
+    SANDBOX_MCP_MAX_CODE_LENGTH: '10',
+    SANDBOX_MCP_MAX_COMMAND_LENGTH: '8',
+    SANDBOX_MCP_MAX_FILE_SIZE_BYTES: '5',
+    SANDBOX_MCP_MAX_TIMEOUT_SECONDS: '7',
+  } as NodeJS.ProcessEnv;
+  const runtime = createExecAppFromEnv(env);
+  const post = (route: string, payload: object) =>
+    runtime.app.request(`/internal/mcp/v1/${route}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...IDENTITY, ...payload }),
+    });
+  try {
+    const exec = { async run(spec: { timeoutMs: number }) { return emptyResult(spec.timeoutMs); } };
+    assert.equal((await withExecutor(exec, () => post('shell/execute', { command: 'echo hi', timeout_seconds: 7 }))).status, 200);
+    assert.equal((await withExecutor(exec, () => post('shell/execute', { command: 'echo hi!!', timeout_seconds: 7 }))).status, 400, '命令超过 8');
+    assert.equal((await withExecutor(exec, () => post('shell/execute', { command: 'pwd', timeout_seconds: 8 }))).status, 400, '超时超过 7');
+    assert.equal((await withExecutor({}, () => post('python/execute', { code: 'print(12345)' }))).status, 400, '代码超过 10');
+    assert.equal((await post('files/write', { path: 'a.txt', content: '12345' })).status, 200);
+    assert.equal((await post('files/write', { path: 'a.txt', content: '123456' })).status, 413, '文件超过 5 字节');
+  } finally {
+    await runtime.dispose();
+  }
+  for (const key of ['SANDBOX_MCP_MAX_CODE_LENGTH', 'SANDBOX_MCP_MAX_COMMAND_LENGTH', 'SANDBOX_MCP_MAX_FILE_SIZE_BYTES', 'SANDBOX_MCP_MAX_TIMEOUT_SECONDS']) {
+    assert.throws(() => createExecAppFromEnv({ ...env, [key]: '0' }), new RegExp(key));
+  }
+  await rm(base, { recursive: true, force: true });
+});

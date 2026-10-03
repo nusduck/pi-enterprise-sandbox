@@ -69,7 +69,7 @@ Skill（外部平台有自己的 Skill 体系，且避免内部内容外泄）�
 | `FILE_NOT_FOUND` | `source_path` 不是该 workspace 内已有相对路径（不要传绝对路径） |
 | `PATH_NOT_FOUND` | 读/列/删/搜的 `path` 在该 workspace 里不存在。用相对路径，且 `context_id` 与之前的调用一致 |
 | `BINARY_FILE` | 读的是二进制文件。改走 `sandbox_artifact_submit` 交付，或用 Python 处理 |
-| `TOO_LARGE` | 文件超过 `SANDBOX_MCP_MAX_FILE_SIZE_BYTES`（默认 10MiB） |
+| `TOO_LARGE` | 写入/上传超过 `SANDBOX_MCP_MAX_FILE_SIZE_BYTES`（默认 10MiB），或提交的产物超过执行面产物上限（默认 512 MiB） |
 | 读取被截断（`truncated: true`） | 文件超过 `SANDBOX_MCP_MAX_READ_BYTES`（默认 256 KiB）。按 `total_lines` 与 `next_offset`，用 `offset`/`limit`（1-based 行号）分段读取 |
 | `Invalid context_id` | ID 含空格、中文、`/` 等非法字符，或超过 255 字符 |
 
