@@ -43,3 +43,4 @@ docs/ref/
 
 # Local Claude Code settings (per-developer permissions, never shared).
 .claude/
+.agy-staff/
