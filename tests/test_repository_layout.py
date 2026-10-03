@@ -18,8 +18,10 @@ LOCAL_GENERATED_DIRECTORIES = frozenset(
         "tmp-workspaces",
         "artifacts",
         "control",
-        # Per-developer local tooling state (gitignored, never part of the repo).
+        # Per-developer local tooling state (.claude, .agy-staff): gitignored,
+        # never part of the repo.
         ".claude",
+        ".agy-staff",
     }
 )
 
