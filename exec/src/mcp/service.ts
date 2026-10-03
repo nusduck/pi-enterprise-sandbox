@@ -236,6 +236,59 @@ export class McpFacadeService {
     return { context_id: record.contextId, ...data };
   }
 
+  async fileDelete(input: {
+    contextId?: string | null;
+    path: string;
+    recursive?: boolean;
+  }): Promise<Json> {
+    const [record, data] = await this.#call('/internal/mcp/v1/files/delete', input.contextId, {
+      path: input.path,
+      recursive: input.recursive ?? false,
+    });
+    return { context_id: record.contextId, ...data };
+  }
+
+  async fileUpload(input: {
+    contextId?: string | null;
+    path: string;
+    contentBase64: string;
+    overwrite?: boolean;
+  }): Promise<Json> {
+    // 粗判：base64 约为原文的 4/3。过了这道，桥侧解码后还会精判一次。
+    if (Math.floor(input.contentBase64.length * (3 / 4)) > this.#settings.maxFileSizeBytes) {
+      throw new McpFacadeError('content exceeds MCP file size limit');
+    }
+    const [record, data] = await this.#call('/internal/mcp/v1/files/upload', input.contextId, {
+      path: input.path,
+      content_base64: input.contentBase64,
+      overwrite: input.overwrite ?? true,
+    });
+    return { context_id: record.contextId, ...data };
+  }
+
+  async fileSearch(input: {
+    contextId?: string | null;
+    path?: string;
+    pattern?: string | null;
+    query?: string | null;
+    maxResults?: number;
+  }): Promise<Json> {
+    const maxResults = input.maxResults ?? 100;
+    if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 500) {
+      throw new McpFacadeError('max_results must be in 1..500');
+    }
+    if ((input.pattern ?? null) === null && (input.query ?? null) === null) {
+      throw new McpFacadeError('at least one of pattern or query is required');
+    }
+    const [record, data] = await this.#call('/internal/mcp/v1/files/search', input.contextId, {
+      path: input.path ?? '.',
+      pattern: input.pattern ?? null,
+      query: input.query ?? null,
+      max_results: maxResults,
+    });
+    return { context_id: record.contextId, ...data };
+  }
+
   #signArtifact(artifactId: string, expiresAt: number): string {
     const body = b64(Buffer.from(JSON.stringify({ artifact_id: artifactId, exp: expiresAt })));
     const signature = createHmac('sha256', this.#settings.downloadSecret).update(body).digest();

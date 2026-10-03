@@ -6,7 +6,7 @@
  *
  * ## Model Experience
  * 模型看不到配置本身，但 `maxCodeLength` / `maxCommandLength` /
- * `maxFileSizeBytes` / `maxTimeoutSeconds` 决定它的调用会不会在到达执行面
+ * `maxFileSizeBytes` / `maxReadBytes` / `maxTimeoutSeconds` 决定它的调用会不会在到达执行面
  * 之前就被拒绝，拒绝理由是稳定短句，不含任何配置值。
  *
  * ## Known Limitations and Deferred Work
@@ -30,6 +30,8 @@ export interface McpSettings {
   readonly maxCodeLength: number;
   readonly maxCommandLength: number;
   readonly maxFileSizeBytes: number;
+  /** 单次读取上限（字节）。只声明在 facade 侧：真正的截断在桥侧执行，见桥的同名默认值。 */
+  readonly maxReadBytes: number;
   readonly redisPrefix: string;
 }
 
@@ -72,6 +74,8 @@ export function loadMcpSettings(env: Env = process.env): McpSettings {
     maxCodeLength: positiveInt(env, 'SANDBOX_MCP_MAX_CODE_LENGTH', 200_000),
     maxCommandLength: positiveInt(env, 'SANDBOX_MCP_MAX_COMMAND_LENGTH', 20_000),
     maxFileSizeBytes: positiveInt(env, 'SANDBOX_MCP_MAX_FILE_SIZE_BYTES', 10 * 1024 * 1024),
+    // 与桥侧 DEFAULT_MCP_MAX_READ_BYTES 同值（两侧各声明一次，改一边必须改另一边）。
+    maxReadBytes: positiveInt(env, 'SANDBOX_MCP_MAX_READ_BYTES', 256 * 1024),
     redisPrefix: str(env, 'SANDBOX_MCP_REDIS_PREFIX', 'sandbox:mcp:v1'),
   };
 }

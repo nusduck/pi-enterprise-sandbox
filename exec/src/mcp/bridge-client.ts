@@ -2,7 +2,7 @@
  * facade 私有的窄桥 HTTP 客户端。移植自已退役的 Python 执行面（旧 `sandbox/mcp/sandbox_client.py`，现为本模块）。
  *
  * 这条桥是 facade 唯一能碰到执行面的通道：它只认识 `/internal/mcp/v1/*` 这
- * 八条路由，且用与内部面 HMAC 不同的一枚 `SANDBOX_MCP_INTERNAL_TOKEN`。
+ * 十一条路由，且用与内部面 HMAC 不同的一枚 `SANDBOX_MCP_INTERNAL_TOKEN`。
  * facade 是对外暴露的进程，拿到它的 token 也够不到完整内部面——这是它值得
  * 单独部署的全部理由，重写时一条都不能少。
  *
@@ -26,11 +26,23 @@ const BRIDGE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     'Workspace file not found for artifact submit. ' +
     'Use the same context_id as the write/execute call, and a relative source_path ' +
     'that exists in that workspace.',
+  // FILE_NOT_FOUND 是 artifact submit 专用的：读/列/删走 PATH_NOT_FOUND，
+  // 两者的模型指引不同，不要合并。
+  PATH_NOT_FOUND:
+    "File or directory not found in this context's workspace. " +
+    'Use a relative path and the same context_id as earlier calls.',
+  BINARY_FILE:
+    'File is binary and cannot be read as text. ' +
+    'Deliver it with sandbox_artifact_submit or process it with Python instead.',
+  INVALID_INPUT: 'Invalid request: input contains NUL bytes',
+  IS_DIRECTORY: 'Path is a directory, not a file. To delete a directory pass recursive=true.',
+  FILE_EXISTS: 'File already exists. Pass overwrite=true to replace it.',
+  INVALID_BASE64: 'Invalid base64 content. Provide standard base64 for content_base64.',
   TOO_LARGE: 'File exceeds MCP max size for artifact submit',
   ARTIFACT_EXISTS: 'Artifact already exists',
   NOT_REGULAR_FILE: 'Artifact source must be a regular file',
   SYMLINK_REJECTED: 'Symlinks are not allowed as artifact sources',
-  PATH_INVALID: 'Invalid artifact source_path',
+  PATH_INVALID: 'Invalid path or argument. Use a relative path inside the workspace.',
   SOURCE_OPEN_FAILED: 'Unable to open artifact source file',
   SIZE_MISMATCH: 'Artifact snapshot failed integrity check',
 };

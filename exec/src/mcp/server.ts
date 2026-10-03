@@ -2,7 +2,7 @@
  * 独立部署的 Streamable HTTP MCP 应用。移植自已退役的 Python 执行面（旧 `sandbox/mcp/app.py`，现为本模块）。
  *
  * 这是整个系统里唯一对外暴露的进程。它拿到的 `SANDBOX_MCP_INTERNAL_TOKEN`
- * 只够走 `/internal/mcp/v1/*` 那八条窄桥路由，够不到执行面的完整内部面——
+ * 只够走 `/internal/mcp/v1/*` 那十一条窄桥路由，够不到执行面的完整内部面——
  * 这是它单独部署（而不是折进 exec 主进程）的全部理由。
  *
  * ## Model Experience
