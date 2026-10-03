@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — 外部 MCP 工作区闲置 3 天回收
+
+- `sandbox-mcp` 的工作区以前永不回收：映射在 Redis 里 7 天过期后，磁盘目录一直留着且再也访问不到。现在 exec 记录每个 MCP 工作区的最近调用时间（控制根 `mcp-workspaces/` 下的标记），每小时回收闲置超过 `SANDBOX_MCP_WORKSPACE_TTL_SECONDS`（默认 3 天）的工作区与 temp；`SANDBOX_MCP_CONTEXT_TTL_SECONDS` 默认由 7 天改为 3 天与之对齐。Agent 会话工作区不受影响；上线前已存在的 MCP 工作区没有标记，不会被自动回收。
+
 ### Fixed — 进程 SIGKILL 不再先发 SIGTERM
 
 - 进程控制台 / `signal` 接口请求 `SIGKILL` 时，exec 直接对整个进程组强杀，不再先走 SIGTERM 加 3 秒宽限；终态记录也随之是 `killed: SIGKILL`（此前一律记成 `killed: SIGTERM`，看起来像没按请求的信号执行）。`SIGTERM` 与取消的行为不变。

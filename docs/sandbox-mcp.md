@@ -41,6 +41,12 @@ flowchart LR
 `context_id` 的后续调用复用该工作区。未传 `context_id` 时会返回生成的 ID，
 调用方应保存它以继续同一工作区。
 
+**闲置 3 天回收**：一个 `context_id` 连续 3 天没有调用，映射过期
+（`SANDBOX_MCP_CONTEXT_TTL_SECONDS`，默认 259200），exec 也会删除对应工作区目录
+（`SANDBOX_MCP_WORKSPACE_TTL_SECONDS`，默认同值，每小时扫描一次）。之后再用同一个
+`context_id` 会得到一个新的空工作区。需要保留的结果请在此之前用 `sandbox_artifact_submit`
+交付并下载。
+
 ### 低代码平台（Dify 等）会话绑定
 
 推荐在**会话开启时**生成一个稳定的 `context_id`（格式

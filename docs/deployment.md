@@ -808,9 +808,16 @@ curl -f http://localhost:4000/health/ready
 | `./.runtime/sandbox/workspaces` | `/var/sandbox/workspaces` | Agent Session 物理工作区 |
 | `./.runtime/sandbox/tmp` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
 | `./.runtime/sandbox/artifacts` | `/var/sandbox/artifacts` | 显式提交的 Artifact blob |
-| `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态；`job-output/` 下是后台作业输出（每个作业一份 `<id>.log` + `<id>.meta.json`，上限同内存缓冲 500 KB，运行中约每秒落盘一次，工作区删除时一并清理；不挂进沙箱） |
+| `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态；`job-output/` 下是后台作业输出（每个作业一份 `<id>.log` + `<id>.meta.json`，上限同内存缓冲 500 KB，运行中约每秒落盘一次，工作区删除时一并清理；不挂进沙箱）；`mcp-workspaces/` 下是外部 MCP 工作区的活动标记（见下） |
 | `./.runtime/sandbox/skill-draft` | Agent `/home/sandbox/skill-draft` + exec `/var/sandbox/skill-draft` | owner-scoped Skill 草稿；Compose 显式打开 |
 | `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布版本（按摘要分目录） |
+
+**外部 MCP 工作区回收**：`sandbox-mcp` 的每次桥接调用都会刷新
+`control/mcp-workspaces/<workspace_id>` 的修改时间。exec 启动后立即扫一轮、之后每小时一轮，
+删除闲置超过 `SANDBOX_MCP_WORKSPACE_TTL_SECONDS`（默认 `259200`，即 3 天）的工作区与配对 temp，
+再删标记；删除失败保留标记下轮重试。只有带标记的工作区会被回收，Agent 会话工作区不受影响；
+本功能上线前已存在的 MCP 工作区没有标记，不会被自动回收。`sandbox-mcp` 的
+`SANDBOX_MCP_CONTEXT_TTL_SECONDS` 默认同为 3 天，两者应保持一致。
 
 Compose 一次性服务 `skill-draft-init` 会在 agent / agent-worker / sandbox 启动前把
 `./.runtime/sandbox/skill-draft` 建成 `0777`。Agent（up_docker，uid 1000）与 Sandbox（uid 10001）

@@ -5,6 +5,7 @@
 import { Hono } from 'hono';
 import { createInternalRouter, type InternalRouterDeps } from './router.js';
 import { registerInternalMcpRoutes } from './internal-mcp.js';
+import { McpWorkspaceGc, readMcpWorkspaceTtlSeconds } from '../workspace/mcp-workspace-gc.js';
 import { ArtifactService } from '../artifact/service.js';
 import { DatasetService } from '../dataset/service.js';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
@@ -211,6 +212,7 @@ export interface ExecAppDeps {
   readonly quotaStore?: QuotaStore;
   /** MCP 窄桥的 bearer token；空串表示该桥不可用（回 503）。 */
   readonly mcpInternalToken?: string;
+  readonly mcpWorkspaceActivity?: { touch(workspaceId: string): Promise<void> };
   /**
    * 公共面的服务间令牌（`SANDBOX_API_TOKEN`）。**必填**，因为"要不要做服务间
    * 鉴权"是一个必须显式做的决定：省略默认关掉的话，正是 exec 从 Python 换到
@@ -321,6 +323,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     bwrapExecutable: deps.bwrapExecutable,
     artifactService,
     internalToken: deps.mcpInternalToken ?? '',
+    ...(deps.mcpWorkspaceActivity !== undefined ? { workspaceActivity: deps.mcpWorkspaceActivity } : {}),
     // 与内部 Shell 路由同一份限额/配额：外部 MCP 命令不能绕过（复核 F1）。
     ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
     ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
@@ -357,6 +360,8 @@ export interface ExecRuntime {
    * 回收会写 `exec_jobs`，结构不对时不能先动账本。未配数据库（非生产内存模式）时为空操作。
    */
   verifySchema(): Promise<void>;
+  /** 外部 MCP 工作区闲置回收（`workspace/mcp-workspace-gc.ts`）；listen 之后启动。 */
+  startMcpWorkspaceGc(): void;
   /**
    * 启动期存储与隔离预检（design §9.2）。**在 `verifySchema()` 之后、`recoverOrphans()`
    * 之前 await**：建出（或确认）四个数据根，再用探针 profile 真跑一次 bwrap。任何一步
@@ -429,6 +434,12 @@ export function createExecAppFromEnv(
   const lifecycle = readWorkspaceLifecycleConfig(env);
   const workspaceManager = new WorkspaceManager(lifecycle);
   const controlRoots = readControlPlaneRoots(env);
+  // 外部 MCP 工作区闲置回收：标记在控制根下，只由 MCP 窄桥写入。
+  const mcpWorkspaceGc = new McpWorkspaceGc({
+    markerDir: path.join(controlRoots.controlRoot, 'mcp-workspaces'),
+    ttlSeconds: readMcpWorkspaceTtlSeconds(env),
+    workspaceManager,
+  });
   const dataSources = new DataSourceService({
     catalog: readDataSourceCatalog(env),
     passwords: opts.dataSourcePasswords ?? new Map(),
@@ -529,6 +540,7 @@ export function createExecAppFromEnv(
     bwrapExecutable,
     allowCidr: internalAllowCidr,
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
+    mcpWorkspaceActivity: mcpWorkspaceGc,
     publicApiToken,
     resourceLimits,
     childQuota,
@@ -564,6 +576,11 @@ export function createExecAppFromEnv(
     },
     markShuttingDown() {
       shuttingDown = true;
+      mcpWorkspaceGc.stop();
+    },
+    /** 预检通过后启动：立即扫一轮，之后每小时一轮。 */
+    startMcpWorkspaceGc() {
+      mcpWorkspaceGc.start();
     },
     internalAllowCidr,
     async dispose() {
