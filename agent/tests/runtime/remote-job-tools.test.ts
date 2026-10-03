@@ -90,3 +90,17 @@ test('model kill of a locally started bash job suppresses the completion notice;
   await assert.rejects(definitions.get('job_output').execute({ job_id: started, wait: 'yes' }, exec), /invalid wait/);
   await assert.rejects(definitions.get('job_kill').execute({ job_id: started, reason: 7 }, exec), /invalid reason/);
 });
+
+test('job_output tells the model when exec reports the output as unavailable', async () => {
+  const snap = { id: 'bash-lost', kind: 'bash', label: 'old', status: 'killed', startedAt: 1, finishedAt: 2, reported: false };
+  const fetchImpl = (async () => new Response(JSON.stringify({
+    ok: true, data: { text: '', outputUnavailable: true, nextCursor: '0-0', snapshot: snap },
+  }))) as typeof fetch;
+  const jobs = new RemoteJobs(new Context(), {
+    baseUrl: 'http://exec', keyring: { test: Buffer.from('0'.repeat(32)).toString('base64url') },
+    activeKid: 'test', orgId: 'org', userId: 'user', workspaceId: 'ws',
+    runId: 'run', fenceToken: 1, systemSkills: [], physicalRoots: [], fetchImpl,
+  });
+  const read = await jobs.readAuthoritative('bash-lost' as never);
+  assert.match(read.text, /output unavailable/);
+});

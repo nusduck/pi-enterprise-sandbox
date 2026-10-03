@@ -30,6 +30,11 @@ import {
   parseCursor,
 } from './job-cursor.js';
 import {
+  DEFAULT_PERSIST_MIN_INTERVAL_MS,
+  FileJobOutputStore,
+  MAX_PERSIST_INTERVAL_MS,
+} from './job-output-store.js';
+import {
   captureStartIdentity,
   identityMatches,
   safeSignalIdentity,
@@ -126,6 +131,19 @@ interface LiveEntry {
   settled: boolean;
   // 结算时刻（毫秒）。`null` 表示还在跑。清理只看这个字段——活作业永不被回收。
   settledAt: number | null;
+  // 上次落盘时刻（毫秒，`Date.now()`）。`read()` 触发的落盘按
+  // `persistMinIntervalMs` 节流；后台定时器走强制落盘（见
+  // `startLivePersistTimer`，输出不变时直接跳过、不调写盘）。
+  lastPersistAt: number;
+  // 上次落盘覆盖到的 buffer 总量（`snapshotState().total`，单调递增）。
+  // 定时器靠它判断"自上次落盘以来有没有新输出"，没有就不写盘。
+  lastPersistedTotal: number;
+  // 同一个作业落盘的串行链：定时器每次 tick 都链到它后面，保证同一时刻
+  // 只有一个落盘在飞，不能重入；链永不 reject（内部已吞错）。
+  persistChain: Promise<void>;
+  // 运行中定时落盘的句柄（仅启用 outputStore 时存在，已 `.unref()`）。
+  // `settle()` 时先清（最终强制落盘之前，避免并发写）；回收/丢弃条目时也清。
+  timer: NodeJS.Timeout | undefined;
   // spill 引用 → 物理路径的映射（只在内存有效，重启后 spill 引用即失效，
   // 调用方拿着旧引用再来读会得到 lossy=true + 空增量，不会泄漏旧路径）。
   spillPaths: Map<string, string>;
@@ -138,6 +156,18 @@ export interface JobRegistryOptions {
   readonly settledRetentionMs?: number;
   /** 同时保留的已结算条目上限，默认 512。超出时按结算时间从旧到新丢弃。 */
   readonly maxSettledEntries?: number;
+  /**
+   * 作业输出落盘目录（生产装配传 `<controlRoot>/job-output`，见
+   * `job-output-store.ts`）。省略则不持久化——无 live 条目时的 `read()`
+   * 保持旧语义（空文本、`lossy=false`），只供旧单测使用。
+   */
+  readonly jobOutputDir?: string | null | undefined;
+  /**
+   * 运行中落盘节流下限（毫秒），默认 1000。钳在 `[0, 2000]`：
+   * 运行中允许丢失最近一个落盘间隔的数据，但间隔有界；结算是强制落盘，
+   * 不受它限制。为 0 时后台定时器的周期取默认值（1000，不能 0 间隔空转）。
+   */
+  readonly persistMinIntervalMs?: number;
   /** 仅测试注入：覆盖默认的身份捕获实现。 */
   readonly captureIdentity?: (pid: number) => Promise<string | null>;
 }
@@ -157,6 +187,16 @@ export class MySqlJobRegistry {
   private readonly lives = new Map<string, LiveEntry>();
   private readonly settledRetentionMs: number;
   private readonly maxSettledEntries: number;
+  private readonly outputStore: FileJobOutputStore | null;
+  private readonly persistMinIntervalMs: number;
+  /**
+   * 工作区 GC 已删过落盘文件的作业 id（内存集合，重启即失）。
+   * 作用是关掉一个竞态：`DELETE /sessions/:id` 先 `kill()` 再删文件，
+   * 被杀作业的 `settle()` 是异步的，可能在删文件之后才落"最终窗口"、
+   * 把刚删的文件重建回来。集合里的 id 不再落盘。`start()` 遇到同名 id
+   * 会把它移出集合（新作业、新输出，不继承删除标记）。
+   */
+  private readonly purgedOutput = new Set<string>();
   private readonly captureIdentityFn: (pid: number) => Promise<string | null>;
 
   constructor(store: JobStore, options: JobRegistryOptions = {}) {
@@ -165,7 +205,106 @@ export class MySqlJobRegistry {
     this.maxOutputBytes = Math.max(1, options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES);
     this.settledRetentionMs = Math.max(0, options.settledRetentionMs ?? DEFAULT_SETTLED_RETENTION_MS);
     this.maxSettledEntries = Math.max(0, options.maxSettledEntries ?? DEFAULT_MAX_SETTLED_ENTRIES);
+    this.persistMinIntervalMs = Math.min(
+      MAX_PERSIST_INTERVAL_MS,
+      Math.max(0, options.persistMinIntervalMs ?? DEFAULT_PERSIST_MIN_INTERVAL_MS),
+    );
+    this.outputStore =
+      options.jobOutputDir === undefined || options.jobOutputDir === null
+        ? null
+        : new FileJobOutputStore(options.jobOutputDir, { maxBytes: this.maxOutputBytes });
     this.captureIdentityFn = options.captureIdentity ?? ((pid) => captureStartIdentity(pid));
+  }
+
+  /**
+   * 从活句柄拉取增量并搬进 buffer（`handle.readOutput()` → `append` → 登记
+   * spill 引用）。`read()`、`settle()`、后台定时器三处共用——不要复制。
+   * 同步、永不抛错：拉取失败视为无增量，不影响已缓冲的历史数据。
+   */
+  private drainHandle(id: string, entry: LiveEntry): void {
+    try {
+      const chunk = entry.handle.readOutput?.();
+      const text = chunkToText(chunk);
+      if (text) entry.buffer.append(text);
+      // spill 路径若存在，登记为不透明引用（物理路径绝不进 MySQL）。
+      if (chunk?.stdoutSpillPath ?? chunk?.stderrSpillPath) {
+        const ref = `spill:${id}:${Date.now()}`;
+        const phys = chunk?.stdoutSpillPath ?? chunk?.stderrSpillPath ?? '';
+        entry.spillPaths.set(ref, phys);
+      }
+    } catch {
+      // 读取失败视为无增量，不影响已缓冲的历史数据。
+    }
+  }
+
+  /**
+   * 把一个 live 条目的保留窗口落盘。best-effort 永不抛错
+   * （`FileJobOutputStore.save` 内部已吞错记 warn）。
+   * `force=false` 时按 `persistMinIntervalMs` 节流；定时器与结算路径传 `true`。
+   */
+  private async persistLiveOutput(id: string, entry: LiveEntry, force: boolean): Promise<void> {
+    if (this.outputStore === null) return;
+    // 工作区 GC 删过的输出不再重建（见 `purgedOutput` 的注释）。
+    if (this.purgedOutput.has(id)) return;
+    if (!force) {
+      const now = Date.now();
+      if (now - entry.lastPersistAt < this.persistMinIntervalMs) return;
+      entry.lastPersistAt = now;
+    } else {
+      entry.lastPersistAt = Date.now();
+    }
+    // 快照与取窗口文本之间无 await：单线程下两者是原子的，落盘内容与标量一致。
+    const state = entry.buffer.snapshotState();
+    await this.outputStore.save(id, state, entry.buffer.snapshotText(), entry.physicalRoots);
+    // 记这次落盘覆盖到的 total：写盘期间并发 append 的新数据（total 更大）
+    // 会使下一次检查判定为"有变化"，不会被误判为已落盘。
+    entry.lastPersistedTotal = state.total;
+  }
+
+  /**
+   * 起运行中定时落盘（仅启用 outputStore 时由 `start()` 调用）。
+   *
+   * 为什么需要它：输出只积在 `process-runner` 的 tracker 里，`read()` 之前
+   * buffer 是空的——从不被 read 的运行中作业在结算前一个字节都不会落盘，
+   * exec 重启会全丢。定时器每拍先 `drainHandle` 再看 total 有没有变化，
+   * 有才强制落盘，所以"运行中最多丢最近一个落盘间隔（≤2s）"。
+   */
+  private startLivePersistTimer(id: string, entry: LiveEntry): void {
+    if (this.outputStore === null) return;
+    // 为 0 时用默认值，不能 0 间隔空转。
+    const period =
+      this.persistMinIntervalMs > 0 ? this.persistMinIntervalMs : DEFAULT_PERSIST_MIN_INTERVAL_MS;
+    const timer = setInterval(() => {
+      // 先 drain 再看 total：输出不变就不写盘。tick 内全部吞错（链永不 reject）。
+      void this.enqueuePersist(id, entry, true, true);
+    }, period);
+    // 不阻止进程退出：exec 是常驻服务，但单测 / 嵌入式使用不能被它卡住。
+    timer.unref();
+    entry.timer = timer;
+  }
+
+  /**
+   * 把一次落盘排进该作业的串行链并等它完成。read() / 定时器 / settle() 的写盘
+   * 都必须走这里：它们写同一组 `.tmp` 再 rename，并发会让 log 与 meta 来自
+   * 不同快照（恢复时按损坏处理）。链永不 reject。
+   */
+  private enqueuePersist(id: string, entry: LiveEntry, force: boolean, drainFirst = false): Promise<void> {
+    entry.persistChain = entry.persistChain
+      .then(async () => {
+        if (drainFirst) this.drainHandle(id, entry);
+        if (force && entry.buffer.snapshotState().total === entry.lastPersistedTotal && entry.lastPersistAt !== 0) return;
+        await this.persistLiveOutput(id, entry, force);
+      })
+      .catch(() => {});
+    return entry.persistChain;
+  }
+
+  /** 清定时器（settle / 回收 / 丢弃前调用，幂等）。 */
+  private clearLiveTimer(entry: LiveEntry): void {
+    if (entry.timer !== undefined) {
+      clearInterval(entry.timer);
+      entry.timer = undefined;
+    }
   }
 
   // ── Start ───────────────────────────────────────────────────────────
@@ -192,6 +331,8 @@ export class MySqlJobRegistry {
     }
 
     const id = newJobId(spec.kind, spec.id);
+    // 同名 id 复用（Agent 预留 id）时清除旧的 GC 删除标记——新作业配新输出。
+    this.purgedOutput.delete(id);
     const createdAt = nowDate();
     let handle: JobProcessHandle;
     try {
@@ -246,9 +387,18 @@ export class MySqlJobRegistry {
       physicalRoots: [...spec.physicalRoots],
       settled: false,
       settledAt: null,
+      lastPersistAt: 0,
+      lastPersistedTotal: 0,
+      persistChain: Promise.resolve(),
+      timer: undefined,
       spillPaths: new Map(),
     };
+    // 同名 id 复用（Agent 预留 id）时旧条目即被丢弃：先清它的定时器。
+    const prev = this.lives.get(id);
+    if (prev !== undefined) this.clearLiveTimer(prev);
     this.lives.set(id, entry);
+    // 只有启用落盘才起定时器：从不被 read 的运行中作业也最多丢最近一个间隔。
+    this.startLivePersistTimer(id, entry);
     // 新作业进来时顺手收一次：不起后台定时器，回收永远发生在有请求的时候。
     this.pruneSettled();
 
@@ -279,20 +429,15 @@ export class MySqlJobRegistry {
     if (entry.settled) return;
     entry.settled = true;
 
-    // 最后一次把 handle 里的残留输出刷进 buffer（`readOutput` 可能还有没吐的 delta）。
-    try {
-      const chunk = entry.handle.readOutput?.();
-      const text = chunkToText(chunk);
-      if (text) entry.buffer.append(text);
-      // spill 路径若存在，登记为不透明引用（物理路径绝不进 MySQL）。
-      if (chunk?.stdoutSpillPath ?? chunk?.stderrSpillPath) {
-        const ref = `spill:${id}:${Date.now()}`;
-        const phys = chunk?.stdoutSpillPath ?? chunk?.stderrSpillPath ?? '';
-        entry.spillPaths.set(ref, phys);
-      }
-    } catch {
-      // 读取残留输出失败不影响结算。
-    }
+    // 先停定时器（最终强制落盘之前），再等它手里那一次落盘结束——
+    // 之后本函数是唯一的写盘者，与定时器没有并发写。
+    this.clearLiveTimer(entry);
+
+    // 最后一次把 handle 里的残留输出刷进 buffer，并强制落盘（排在已在飞的
+    // 落盘之后，`await` 的）：作业结束后的最终窗口一定完整，这是"结束 5 分钟后 /
+    // exec 重启后还能读"的前提。best-effort，不影响结算。
+    entry.lastPersistAt = 0;
+    await this.enqueuePersist(id, entry, true, true);
 
     const status: JobStatus =
       outcome.status === 'completed' ? 'completed' : outcome.status === 'killed' ? 'killed' : 'failed';
@@ -323,14 +468,15 @@ export class MySqlJobRegistry {
    * 回收已结算的 live 条目：超过保留窗口的先丢，仍超上限时按结算时间从旧到新
    * 继续丢。**只碰 `settledAt !== null` 的条目**——还在跑的作业永远不动。
    *
-   * 不用定时器：那要么阻止进程退出（不 unref），要么在空闲时不触发（unref）。
-   * 回收挂在 `start()` 与 `settle()` 上，作业越密集收得越勤，正是需要的。
+   * 回收不用定时器（落盘定时器见 `startLivePersistTimer`，两码事）：回收挂在
+   * `start()` 与 `settle()` 上，作业越密集收得越勤，正是需要的。
    */
   private pruneSettled(now: number = Date.now()): void {
     const settled: { id: string; at: number }[] = [];
     for (const [id, entry] of this.lives) {
       if (entry.settledAt === null) continue;
       if (now - entry.settledAt >= this.settledRetentionMs) {
+        this.clearLiveTimer(entry);
         this.lives.delete(id);
         continue;
       }
@@ -339,6 +485,8 @@ export class MySqlJobRegistry {
     if (settled.length <= this.maxSettledEntries) return;
     settled.sort((a, b) => a.at - b.at);
     for (const { id } of settled.slice(0, settled.length - this.maxSettledEntries)) {
+      const entry = this.lives.get(id);
+      if (entry !== undefined) this.clearLiveTimer(entry);
       this.lives.delete(id);
     }
   }
@@ -383,17 +531,13 @@ export class MySqlJobRegistry {
     // 与上游 `ShellProcess.readOutput()` 的"每次 read 都把这次的新输出吐完"
     // 完全一致。
     if (live) {
-      try {
-        const chunk = live.handle.readOutput?.();
-        const text = chunkToText(chunk);
-        if (text) live.buffer.append(text);
-        if (chunk?.stdoutSpillPath ?? chunk?.stderrSpillPath) {
-          const ref = `spill:${id}:${Date.now()}`;
-          live.spillPaths.set(ref, chunk?.stdoutSpillPath ?? chunk?.stderrSpillPath ?? '');
-        }
-      } catch {
-        // 读取失败视为无增量，不影响已缓冲的历史数据。
-      }
+      this.drainHandle(id, live);
+      // 读触发的节流落盘保留（不交给定时器，二选一的决定）：交互式读之后
+      // 调用方往往立刻取结果，定时器下一拍最多晚一个间隔；两者共用
+      // drainHandle 与 lastPersistAt/lastPersistedTotal 节流，读得再频繁
+      // 也不会多写盘。从不 read 的作业由后台定时器兜底（见
+      // `startLivePersistTimer`），这里只是让"读过"的作业 fresher。
+      await this.enqueuePersist(id, live, false);
       const cur = cursor ?? INITIAL_CURSOR;
       // 校验游标格式，非法抛 400（与 Python 版 read_stream 同一条映射）。
       try {
@@ -424,7 +568,51 @@ export class MySqlJobRegistry {
       };
     }
 
-    // 无活句柄（已结束或 Worker 重启后）：buffer 也不在内存，退化成快照
+    // 无活句柄（已结算被回收，或 Worker 重启后）：先试落盘恢复——从文件重建
+    // 一个只读缓冲，游标语义与落盘前完全一致（generation / dropped 判定只
+    // 依赖快照标量与窗口字节，见 `job-cursor.ts` 的 `restore()`）。
+    // 文件缺失或损坏时诚实地报 `outputUnavailable: true` + `lossy: true`，
+    // 调用方得以区分"确实没有新输出"和"输出已经丢了"。
+    if (this.outputStore !== null) {
+      const loaded = await this.outputStore.load(id, this.maxOutputBytes);
+      if (loaded.ok) {
+        const cur = cursor ?? INITIAL_CURSOR;
+        try {
+          parseCursor(cur);
+        } catch (e) {
+          const msg = redactPhysicalRoots(e instanceof Error ? e.message : String(e), physicalRoots);
+          throw new Error(msg);
+        }
+        const res = loaded.buffer.read(cur, limit);
+        return {
+          text: res.data,
+          lossy: res.dropped || res.truncated,
+          cursor: res.cursor,
+          nextCursor: res.nextCursor,
+          truncated: res.truncated,
+          logTotal: res.logTotal,
+          snapshot: toSnapshot(record),
+        };
+      }
+      try {
+        if (cursor !== null && cursor !== undefined && cursor !== '') parseCursor(cursor);
+      } catch (e) {
+        const msg = redactPhysicalRoots(e instanceof Error ? e.message : String(e), physicalRoots);
+        throw new Error(msg);
+      }
+      return {
+        text: '',
+        lossy: true,
+        outputUnavailable: true,
+        cursor: cursor || INITIAL_CURSOR,
+        nextCursor: cursor || INITIAL_CURSOR,
+        truncated: false,
+        logTotal: 0,
+        snapshot: toSnapshot(record),
+      };
+    }
+
+    // 未配置落盘时的旧语义（只供旧单测）：buffer 也不在内存，退化成快照
     // 的终态信息，`text` 为空但 `lossy` 标记为 false——历史上已缓冲的增量
     // 在重启后确实丢了，但这时已经没有办法把物理 spill 路径找回来（重启
     // 前的 `spillPaths` 映射已随进程内存一起丢失），所以这里诚实地返回
@@ -554,6 +742,34 @@ export class MySqlJobRegistry {
     const scope: JobOwnerScope = { orgId: owner.orgId, userId: owner.userId, workspaceId: owner.workspaceId };
     const rows = await this.store.listByRun(runId, scope, limit);
     return rows.map(toSnapshot);
+  }
+
+  /**
+   * 删一个工作区全部作业的落盘输出（工作区 GC 用）。
+   *
+   * 作业 id 只从持久化账本（`store.listByOwner`，生产即 MySQL）里取，
+   * **不按目录名猜**：目录里有什么文件不代表是谁的，反过来账本删了的行
+   * 对应的文件也不在这里碰（那是"账本有、文件无"的缺失路径，`read()` 已
+   * 按 `outputUnavailable` 处理）。best-effort 永不抛错，返回尝试删除数。
+   */
+  async deleteJobOutputsForOwner(owner: JobOwnerScope): Promise<number> {
+    if (this.outputStore === null) return 0;
+    let ids: string[];
+    try {
+      ids = (await this.store.listByOwner(owner, 10_000)).map((row) => row.id);
+    } catch {
+      return 0;
+    }
+    const n = await this.outputStore.deleteMany(ids);
+    // 记住删除标记，关掉 kill→settle 异步重建的竞态（见 `purgedOutput` 注释）。
+    // 集合只增不查、无定时清理，钳在 4096——工作区 GC 本来就是低频操作。
+    for (const id of ids) this.purgedOutput.add(id);
+    while (this.purgedOutput.size > 4096) {
+      const oldest = this.purgedOutput.values().next();
+      if (oldest.done) break;
+      this.purgedOutput.delete(oldest.value);
+    }
+    return n;
   }
 
   // ── Orphan recovery ────────────────────────────────────────────────
