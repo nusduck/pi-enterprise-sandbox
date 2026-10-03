@@ -214,10 +214,10 @@ export interface ExecAppDeps {
   readonly mcpInternalToken?: string;
   readonly mcpWorkspaceActivity?: { touch(workspaceId: string): Promise<void> };
   /**
-   * MCP 窄桥单次读取上限（`SANDBOX_MCP_MAX_READ_BYTES`）。不传时桥用自己的
-   * 默认（与 facade 的同名默认值一致）；非法值在装配时直接拒绝启动。
+   * MCP 窄桥的上限（`SANDBOX_MCP_MAX_*`，见 {@link readMcpBridgeLimits}）。不传的项
+   * 桥用自己的默认（与 facade 的同名默认值一致）；非法值在装配时直接拒绝启动。
    */
-  readonly mcpMaxReadBytes?: number;
+  readonly mcpLimits?: McpBridgeLimits;
   /**
    * 公共面的服务间令牌（`SANDBOX_API_TOKEN`）。**必填**，因为"要不要做服务间
    * 鉴权"是一个必须显式做的决定：省略默认关掉的话，正是 exec 从 Python 换到
@@ -333,7 +333,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
     ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
     ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
-    ...(deps.mcpMaxReadBytes !== undefined ? { maxReadBytes: deps.mcpMaxReadBytes } : {}),
+    ...(deps.mcpLimits ?? {}),
   });
   return app;
 }
@@ -355,14 +355,40 @@ export function readExecDbConfigFromSandboxEnv(env: NodeJS.ProcessEnv = process.
  * MCP 窄桥的读取上限（`SANDBOX_MCP_MAX_READ_BYTES`）。空缺取与 facade 一致的
  * 默认；给了但不是正整数就拒绝启动（与其它限额同一条 fail-fast 规矩）。
  */
-export function readMcpMaxReadBytes(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env['SANDBOX_MCP_MAX_READ_BYTES'];
-  if (raw === undefined || raw.trim() === '') return DEFAULT_MCP_MAX_READ_BYTES;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error('SANDBOX_MCP_MAX_READ_BYTES must be a positive integer');
-  }
-  return value;
+export interface McpBridgeLimits {
+  readonly maxReadBytes: number;
+  readonly maxCodeLength?: number;
+  readonly maxCommandLength?: number;
+  readonly maxFileSizeBytes?: number;
+  readonly maxTimeoutSeconds?: number;
+}
+
+/**
+ * MCP 窄桥的上限，与 facade（`mcp/settings.ts`）读同一组 `SANDBOX_MCP_MAX_*`。
+ * 缺省时用窄桥自己的默认值（与 facade 默认一致）；给了但不是正整数就拒绝启动——
+ * 只调大 facade 一侧时，超出部分会被桥用默认值拒掉，两侧必须读同一份配置。
+ */
+export function readMcpBridgeLimits(env: NodeJS.ProcessEnv = process.env): McpBridgeLimits {
+  const read = (name: string): number | undefined => {
+    const raw = env[name];
+    if (raw === undefined || raw.trim() === '') return undefined;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1) {
+      throw new Error(`${name} must be a positive integer`);
+    }
+    return value;
+  };
+  const optional = (key: keyof McpBridgeLimits, name: string) => {
+    const value = read(name);
+    return value === undefined ? {} : { [key]: value };
+  };
+  return {
+    maxReadBytes: read('SANDBOX_MCP_MAX_READ_BYTES') ?? DEFAULT_MCP_MAX_READ_BYTES,
+    ...optional('maxCodeLength', 'SANDBOX_MCP_MAX_CODE_LENGTH'),
+    ...optional('maxCommandLength', 'SANDBOX_MCP_MAX_COMMAND_LENGTH'),
+    ...optional('maxFileSizeBytes', 'SANDBOX_MCP_MAX_FILE_SIZE_BYTES'),
+    ...optional('maxTimeoutSeconds', 'SANDBOX_MCP_MAX_TIMEOUT_SECONDS'),
+  };
 }
 
 export interface ExecRuntime {
@@ -561,7 +587,7 @@ export function createExecAppFromEnv(
     allowCidr: internalAllowCidr,
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
     mcpWorkspaceActivity: mcpWorkspaceGc,
-    mcpMaxReadBytes: readMcpMaxReadBytes(env),
+    mcpLimits: readMcpBridgeLimits(env),
     publicApiToken,
     resourceLimits,
     childQuota,

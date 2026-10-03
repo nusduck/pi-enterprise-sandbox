@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — exec 窄桥读取 `SANDBOX_MCP_MAX_*` 配置
+
+- Compose 一直把 `SANDBOX_MCP_MAX_TIMEOUT_SECONDS` / `CODE_LENGTH` / `COMMAND_LENGTH` / `FILE_SIZE_BYTES` 传给 `sandbox`，但 exec 窄桥从未读取，始终用代码默认值；只调大 facade 一侧时，超出部分会被桥拒绝。现在 exec 与 facade 读同一组变量，非法值拒绝启动。
+
 ### Added — 外部 MCP 工作区闲置 3 天回收
 
 - `sandbox-mcp` 的工作区以前永不回收：映射在 Redis 里 7 天过期后，磁盘目录一直留着且再也访问不到。现在 exec 记录每个 MCP 工作区的最近调用时间（控制根 `mcp-workspaces/` 下的标记），每小时回收闲置超过 `SANDBOX_MCP_WORKSPACE_TTL_SECONDS`（默认 3 天）的工作区与 temp；`SANDBOX_MCP_CONTEXT_TTL_SECONDS` 默认由 7 天改为 3 天与之对齐。Agent 会话工作区不受影响；上线前已存在的 MCP 工作区没有标记，不会被自动回收。
