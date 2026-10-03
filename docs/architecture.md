@@ -415,6 +415,11 @@ Sandbox Session 不保存 Agent 对话，不能用 Sandbox 的会话 TTL 代替
 Agent Session 生命周期。
 ```
 
+会话删除/归档时 agent 调 exec `DELETE /sessions/{id}` 做工作区 GC（幂等：
+先经 `MySqlJobRegistry.kill()` 终止该会话仍在运行的托管作业，再删工作区目录
+与配对 temp；已删/从未创建回 `{"removed": false}`）。产物快照与数据集 blob
+在控制面共享根、作业账本行保留作 durable 历史，都不在这次删除范围内。
+
 DSH 引擎会话落在根 `ctx.sessionPersistence`：MySQL 表 `dsh_sessions` /
 `dsh_session_events`（带 org/user 作用域）。同一 Agent Session 的后续 Run 走
 `agents.resume`，不再每次 `agents.create`。企业对话账本仍是 `messages` 表；

@@ -223,7 +223,10 @@ describe('ConversationService MySQL authority', () => {
 
     await service.delete(created.id, FIXED_AUTH);
 
-    assert.deepEqual(removeCalls, [boundAgentSession.sandbox_session_id]);
+    // exec 的 `/sessions/:id` 路径段是工作区 id（目录名），不是 sandbox_session_id：
+    // 2026-10-03 真实链路里按 sandbox_session_id 删永远 removed:false，工作区留存。
+    assert.notEqual(boundAgentSession.workspace_id, boundAgentSession.sandbox_session_id);
+    assert.deepEqual(removeCalls, [boundAgentSession.workspace_id]);
     assert.equal(clientCalls.length, 1);
     assert.equal(clientCalls[0].auth.actingRole, 'user');
     assert.ok(clientCalls[0].auth.actingUserId);

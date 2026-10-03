@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LEGACY_SESSION_NOT_REVOCABLE`、api-server `auth-revocation.ts` 的 409 映射）。
   无 sid 令牌按普通无效会话处理：会话面 401 `INVALID_TOKEN`，退出面经 BFF 映射为
   `not_required`（仍清 Cookie）。sid 引入（#74）已过 JWT TTL，不存在未过期的旧令牌。
+### Fixed — 删除/归档会话时清理沙箱工作区
+- agent 删除/归档会话一直调 `DELETE {SANDBOX_BASE_URL}/sessions/{id}` 做工作区
+  GC，但 exec 公共面没有这条路由（只有 `/sessions/:id/files|processes|datasets`
+  子路由），请求必然失败、agent 侧 fail-soft 只打日志，工作区目录从不删除。
+  现在 exec 新增公共路由 `DELETE /sessions/:id`：与 files/processes 同一套会话
+  鉴权（跨租户一律 404）；幂等，先经作业登记现有终止路径停掉该会话仍在运行的
+  托管作业，再删工作区目录与配对 temp（`{"removed": true/false}`）；审核工作区
+  可删但多一道策略表创建组织绑定检查。agent 侧 `removeSessionWorkspace` 校验
+  响应形状，非 2xx（含纯文本 404）抛可读错误，不再有空消息或 JSON 解析崩溃。
 ### Fixed — `AGENT_RUN_STREAM_MAXLEN` 生效
 
 - deployment.md 与 compose 都把它列为可调的 Run stream 近似 MAXLEN，但 `RunEventStream` 的两处装配从未传入，改了不生效，

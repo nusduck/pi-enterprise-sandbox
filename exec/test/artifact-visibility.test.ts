@@ -302,6 +302,9 @@ describe('artifact visibility: review vs direct delivery', () => {
     await workspaceManager.initWorkspace(id);
     const broken: WorkspacePolicyStore = {
       rememberReview: async () => {},
+      reviewOwnerOf: async () => {
+        throw new Error('policy store is down');
+      },
       deliveryOf: async () => {
         throw new Error('policy store is down');
       },

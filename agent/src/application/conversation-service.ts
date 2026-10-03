@@ -457,7 +457,7 @@ export class ConversationService {
    * @param owner
    * @param sessions
    */
-  async #cleanupSandboxWorkspaces(auth: ExternalAuth, owner: { orgId: string, userId: string } | null, sessions: Array<{ sandboxSessionId: string }>) {
+  async #cleanupSandboxWorkspaces(auth: ExternalAuth, owner: { orgId: string, userId: string } | null, sessions: Array<{ workspaceId: string }>) {
     if (!owner || !sessions?.length || typeof this.createSandboxClient !== 'function') {
       return;
     }
@@ -471,11 +471,12 @@ export class ConversationService {
     if (!sandbox || typeof sandbox.removeSessionWorkspace !== 'function') return;
     for (const session of sessions) {
       try {
-        await sandbox.removeSessionWorkspace(session.sandboxSessionId);
+        // exec 的 `/sessions/:id` 以工作区 id 为路径段（目录名），不是 sandboxSessionId。
+        await sandbox.removeSessionWorkspace(session.workspaceId);
       } catch (err) {
         this.logger.error(
           `[conversation-service] Sandbox workspace cleanup failed for ` +
-            `sandboxSessionId=${session.sandboxSessionId}: ${sanitizeError(err)}`,
+            `workspaceId=${session.workspaceId}: ${sanitizeError(err)}`,
         );
       }
     }
