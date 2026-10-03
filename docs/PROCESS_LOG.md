@@ -1269,3 +1269,17 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
   `review-deferred-items.md` 的委派 callId 行补入本次结果（部分验证，重放路径仍未测）。
 - **验证：** exec 478/478（0 跳过）；隔离探针 12/12 + 配额 4/4；其余套件结果见上一条。详见
   [证据](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。更正上一份证据中"`model_id` 不生效"的说法（实际生效，失败来自网关）。
+
+## 2026-10-03 — #82–#111 合并后的 STATUS 补记
+
+- **范围：** 接续 [集成链路证据](evidence/2026-10-03-integration-live-chain.md)，新增
+  [第二、三轮开发栈证据](evidence/2026-10-03-fixes-cleanup-live-chain.md)，记录 #95–#111 的逐批验证和
+  `main @ bb810344` 重建后的 phase1、phase7 复验。证据对象是单组织 Compose 开发栈；真实 HiAgent、
+  目标环境和未列出的 §32 gate 均未因本次补记视为通过。
+- **STATUS IDs：** C1、C7 保持 `partial`，补入会话删除后工作区回收、进程控制与模型侧作业查询的当前边界；
+  D3、D5 保持 `done`，补入账本收尾与浏览器进程控制台证据；A5 只补旧配置升级路径删除的事实，保持
+  `partial`。E3 仅清理重复且矛盾的历史句，状态仍为 `done`。#81–#111 的合并影响在 STATUS 文末索引，
+  没有据单测或静态推断翻转其他行。
+- **核对：** 复查 `agent/src/runtime/providers/remote-jobs.ts`：非本进程作业的 `get`/`read`/`kill` 发出
+  exec RPC 后丢弃响应并返回占位值；exec 孤儿回收 G7 已有单独真机证据，不等于 C7 的句柄与日志恢复。
+  本次是文档与证据整理，不重跑六套业务测试或容器链路。
