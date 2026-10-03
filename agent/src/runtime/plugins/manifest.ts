@@ -121,6 +121,12 @@ const FACTORY_TUNING: readonly PatchEntry[] = [
 
 const REPLACEMENTS: readonly PatchEntry[] = [
   ...replaceFactory({
+    factoryId: 'tool-jobs',
+    ownId: 'enterprise-remote-job-tools',
+    module: 'remote-job-tools',
+    comment: '模型侧 job 工具等待 exec 权威结果；保留出厂工具 schema 与完成通知。',
+  }),
+  ...replaceFactory({
     factoryId: 'credentials',
     ownId: 'enterprise-credentials',
     module: 'env-credentials',

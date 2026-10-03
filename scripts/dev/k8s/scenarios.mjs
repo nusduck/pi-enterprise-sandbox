@@ -13,6 +13,7 @@
 //   same-session   同一会话第一个 Run 在跑时连发两个 follow-up：保持 QUEUED，第一个结束后按提交顺序执行
 //   rolling-restart 在途 Run 时 rollout restart：原副本 SIGTERM 后排空完成，不重放
 //   redis-outage   暂停专用 Redis：Worker 与 Agent HTTP 都摘流量，恢复后自动就绪且 Run 可用
+//   cross-worker-job A 的后台 bash 由 B 的模型侧 job_list/job_output/job_kill 查询并取消；需显式点名
 //
 // 有界关停（K4，默认 150s 排空 / 180s 宽限；只在点名时跑）：对承载 Run 的 Worker Pod 发 SIGTERM，
 // 核对退出码与时刻、排空期间是否还领取新 Run、账本与副作用：
@@ -157,6 +158,12 @@ async function toolRows(runId) {
     `SELECT tool_name, status, execution_fence_token FROM tbl_agsvc_tool_executions WHERE run_id = '${ulid(runId)}' ORDER BY created_at`,
   );
   return rows.map(([name, status, fence]) => `${name}:${status}:fence${fence}`);
+}
+async function toolResultRows(runId) {
+  const rows = await query(
+    `SELECT tool_name, HEX(CAST(result_json AS CHAR)) FROM tbl_agsvc_tool_executions WHERE run_id = '${ulid(runId)}' ORDER BY created_at`,
+  );
+  return rows.map(([name, hex]) => ({ name, result: hex && hex !== 'NULL' ? JSON.parse(Buffer.from(hex, 'hex').toString('utf8')) : null }));
 }
 async function runRow(runId) {
   const [row] = await query(`SELECT status, status_reason, attempt FROM tbl_agsvc_runs WHERE run_id = '${ulid(runId)}'`);
@@ -347,6 +354,61 @@ function record(scenario, name, ok, detail) {
 
 // ── 场景 ─────────────────────────────────────────────────────
 const scenarios = {
+  async 'cross-worker-job'(S) {
+    const c = await newUser('crossjob');
+    const convId = await newConversation(c);
+    const bgId = `c7bg-${tag}`;
+    const started = await submit(c, convId, bgId, 'bg');
+    record(S, 'background_run_accepted', started.status === 202 && Boolean(started.runId), started);
+    if (!started.runId) return;
+    const bgFinal = await waitTerminal(c, started.runId);
+    const bgEntry = (await llm.entries(bgId)).find((entry) => entry.turn === 1);
+    const originPod = podOf(bgEntry?.remote);
+    const [[jobId, jobStatus] = []] = await query(
+      `SELECT process_id, status FROM tbl_agsvc_exec_jobs WHERE run_id = '${ulid(started.runId)}' ORDER BY created_at DESC LIMIT 1`,
+    );
+    record(S, 'background_job_durable', bgFinal === 'SUCCEEDED' && Boolean(jobId), { bgFinal, originPod, jobId, jobStatus });
+    if (!jobId) return;
+
+    let other = null;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const readId = `c7read-${tag}-${attempt}`;
+      const encoded = Buffer.from(jobId, 'utf8').toString('base64');
+      const probe = await submit(c, convId, readId, `job-read jobid=${encoded}`);
+      if (!probe.runId) throw new Error(`job read run not accepted: ${JSON.stringify(probe)}`);
+      const final = await waitTerminal(c, probe.runId);
+      const entry = (await llm.entries(readId))[0];
+      const pod = podOf(entry?.remote);
+      const results = await toolResultRows(probe.runId);
+      if (entry && pod !== originPod) {
+        other = { final, pod, originPod, jobId, results };
+        break;
+      }
+    }
+    record(S, 'read_landed_on_other_worker', Boolean(other), other ?? { originPod });
+    if (other) {
+      const listed = other.results.find((row) => row.name === 'job_list')?.result?.$payload?.value;
+      const output = other.results.find((row) => row.name === 'job_output')?.result?.$payload?.value;
+      record(S, 'other_worker_sees_old_job_and_output',
+        other.final === 'SUCCEEDED' &&
+        Array.isArray(listed) && listed.some((row) => row.id === jobId) &&
+        typeof output?.text === 'string' && output.text.includes(`C7_${bgId}`),
+        { ...other, listed, output });
+      await kubectl('delete', 'pod', originPod, '--wait=false');
+      const killId = `c7kill-${tag}`;
+      const encoded = Buffer.from(jobId, 'utf8').toString('base64');
+      const probe = await submit(c, convId, killId, `job-kill jobid=${encoded}`);
+      const killFinal = await waitTerminal(c, probe.runId);
+      const killEntry = (await llm.entries(killId))[0];
+      await refreshIpNames();
+      const killPod = podOf(killEntry?.remote);
+      const killed = (await toolResultRows(probe.runId)).find((row) => row.name === 'job_kill')?.result?.$payload?.value;
+      record(S, 'other_worker_can_kill_old_job',
+        killFinal === 'SUCCEEDED' && killPod !== originPod &&
+        killed?.job?.id === jobId && killed?.outcome === 'cancellation-requested',
+        { originPod, killPod, killFinal, killed });
+    }
+  },
   async 'exactly-once'(S) {
     const c = await newUser('once');
     const ids = Array.from({ length: 8 }, (_, i) => `once-${tag}-${i}`);
@@ -854,7 +916,7 @@ sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
 // drain-* 每个要 1–5 分钟，只在点名时跑。
 const selected = process.argv.slice(2).length
   ? process.argv.slice(2)
-  : Object.keys(scenarios).filter((n) => !n.startsWith('drain-'));
+  : Object.keys(scenarios).filter((n) => !n.startsWith('drain-') && n !== 'cross-worker-job');
 const forwards = [await portForward('svc/frontend', BFF_PORT, 80), await portForward('svc/fake-llm', LLM_PORT, 8080)];
 try {
   await waitWorkersReady();
