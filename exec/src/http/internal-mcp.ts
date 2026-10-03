@@ -1,9 +1,9 @@
 /**
- * MCP facade 专用的**窄桥**：`/internal/mcp/v1/*` 八条路由。
+ * MCP facade 专用的**窄桥**：`/internal/mcp/v1/*` 十一条路由。
  * 移植自已退役的 Python 执行面（旧 `sandbox/routers/mcp_internal.py` + `sandbox/mcp/runtime.py`，现为本模块）。
  *
  * **这条桥为什么单独存在**：facade（`exec/src/mcp/`）是整个系统里唯一对外
- * 暴露的进程。它持有的 `SANDBOX_MCP_INTERNAL_TOKEN` 只够走这八条路由，
+ * 暴露的进程。它持有的 `SANDBOX_MCP_INTERNAL_TOKEN` 只够走这十一条路由，
  * 够不到 `/internal/v1/*` 那套 HMAC 内部面。把 facade 的凭据泄漏出去，
  * 攻击面到此为止——这是它值得单独部署的全部理由，也是这个文件不能被并进
  * `router.ts` 的原因。
@@ -22,9 +22,13 @@
  */
 
 import type { Hono } from 'hono';
-import { timingSafeEqual } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { appendFile, lstat, mkdir, open, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+import { Readable } from 'node:stream';
+import { FsError } from '@deepseek-ai/dsh-fs';
 import { makeWorkspaceFs } from '../fs/make-workspace-fs.js';
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell';
 import { deniedRunResult, type IsolatedShellExecutor } from '../shell/executor.js';
@@ -35,7 +39,7 @@ import {
   runGuardedForeground,
   type GuardedExecutionDeps,
 } from '../shell/guarded-execution.js';
-import { fileSearchService } from '../search/index.js';
+import { fileSearchService, isBinaryBytes, SearchQueryError } from '../search/index.js';
 import { redactPhysicalRoots } from '../fs/redact.js';
 import { ArtifactError } from '../artifact/service.js';
 import type { ArtifactService } from '../artifact/service.js';
@@ -55,15 +59,21 @@ export interface InternalMcpDeps extends GuardedExecutionDeps {
   readonly maxCodeLength?: number;
   readonly maxCommandLength?: number;
   readonly maxFileSizeBytes?: number;
+  /** 单次读取返回正文的字节上限（只计完整行）。与 facade 的同名配置同值。 */
+  readonly maxReadBytes?: number;
   readonly maxTimeoutSeconds?: number;
   /** 记录 MCP 工作区活动，供闲置回收使用（`workspace/mcp-workspace-gc.ts`）。 */
   readonly workspaceActivity?: { touch(workspaceId: string): Promise<void> };
 }
 
+/** facade（`SANDBOX_MCP_MAX_READ_BYTES` 默认）与桥侧必须一致，见 settings.ts。 */
+export const DEFAULT_MCP_MAX_READ_BYTES = 256 * 1024;
+
 const DEFAULTS = {
   maxCodeLength: 200_000,
   maxCommandLength: 20_000,
   maxFileSizeBytes: 10 * 1024 * 1024,
+  maxReadBytes: DEFAULT_MCP_MAX_READ_BYTES,
   maxTimeoutSeconds: 300,
 };
 
@@ -108,6 +118,11 @@ function requireString(value: unknown, field: string, max = 4096): string {
   if (typeof value !== 'string' || value === '' || value.length > max) {
     throw new BridgeError('PATH_INVALID', `invalid ${field}`, 400);
   }
+  // NUL 字节走执行/写入会一路变成 500（spawn、bwrap、fs 都在不同层炸）。
+  // 在这里拦成 400 INVALID_INPUT，facade 有对应的精确文案。
+  if (value.includes('\0')) {
+    throw new BridgeError('INVALID_INPUT', `${field} contains NUL bytes`, 400);
+  }
   return value;
 }
 
@@ -127,10 +142,198 @@ const MIME_BY_EXT: Readonly<Record<string, string>> = {
   '.json': 'application/json',
   '.py': 'text/x-python',
   '.html': 'text/html',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.gz': 'application/gzip',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-function guessMime(p: string): string {
-  return MIME_BY_EXT[path.extname(p).toLowerCase()] ?? 'text/plain';
+/** 文本类路由缺省 text/plain；上传是任意字节，缺省 application/octet-stream。 */
+function guessMime(p: string, fallback = 'text/plain'): string {
+  return MIME_BY_EXT[path.extname(p).toLowerCase()] ?? fallback;
+}
+
+/**
+ * 探针内容是否是合法 UTF-8。探针读满时末尾可能切在一个多字节字符中间，
+ * 最多去掉 3 个尾字节再判一次，不把这种切口误判成二进制。
+ */
+function isValidUtf8Probe(sample: Buffer, probeFull: boolean): boolean {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const tries = probeFull ? 4 : 1;
+  for (let cut = 0; cut < tries && cut < sample.length; cut += 1) {
+    try {
+      decoder.decode(sample.subarray(0, sample.length - cut));
+      return true;
+    } catch {
+      // 换一个切口再试
+    }
+  }
+  return sample.length === 0;
+}
+
+/** 二进制探针宽度，与搜索面的 GREP_BINARY_PROBE 同量级。 */
+const BINARY_PROBE_BYTES = 8192;
+
+/** 头部采样判二进制：含 NUL 或控制字节超 30% 即二进制（复用搜索面的判定）。 */
+async function assertTextFile(targetKey: string): Promise<void> {
+  let handle;
+  try {
+    handle = await open(targetKey, 'r');
+    const buf = Buffer.alloc(BINARY_PROBE_BYTES);
+    const { bytesRead } = await handle.read(buf, 0, BINARY_PROBE_BYTES, 0);
+    const sample = buf.subarray(0, bytesRead);
+    if (isBinaryBytes(sample) || !isValidUtf8Probe(sample, bytesRead === BINARY_PROBE_BYTES)) {
+      throw new BridgeError(
+        'BINARY_FILE',
+        'file is binary; deliver it with sandbox_artifact_submit or process it with Python',
+        400,
+      );
+    }
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+interface BoundedRead {
+  readonly content: string;
+  readonly truncated: boolean;
+  /** 1-based：继续翻页时的 offset。读完则为 null。 */
+  readonly nextOffset: number | null;
+  readonly totalLines: number;
+}
+
+/**
+ * 有界行读取：流式扫描，只保留窗口内的完整行。
+ *
+ * - 输出字节决不超过 `maxBytes`；超了就停，`truncated: true`。
+ * - 单行自身超过上限时整行丢弃（只计数），否则内存会被一行超长文本撑爆。
+ * - `totalLines` 必须全文件扫描才知道——逐行计数，内存仍有界（只攒窗口内的行）。
+ * - `offset` 是 1-based 行号（与旧 Python 版一致），`limit: null` = 到文件尾。
+ * - 文件尾换行会被保留（整文件读回时与原文逐字节一致）：调用方按 `st.size`
+ *   预读最后 1 字节，把 1 字节尾换行预算预留出来。
+ */
+async function readTextBounded(
+  targetKey: string,
+  opts: { offset: number; limit: number | null; maxBytes: number; endsWithNewline: boolean },
+): Promise<BoundedRead> {
+  const { offset, limit, maxBytes, endsWithNewline } = opts;
+  const lineBudget = endsWithNewline ? maxBytes - 1 : maxBytes;
+  const taken: string[] = [];
+  let takenBytes = 0;
+  let lineNo = 0;
+  let overBudget = false;
+  let beyondWindow = false;
+  // 当前行已确定装不下（自身超预算），直接丢弃、换行时只计数。
+  let dropping = false;
+
+  /** 即将完成的行号（1-based）是否在请求窗口内。 */
+  const upcomingInWindow = (): boolean =>
+    lineNo + 1 >= offset && (limit === null || lineNo + 1 < offset + limit);
+
+  const pushLine = (line: string): void => {
+    lineNo += 1;
+    if (lineNo < offset) return;
+    if (limit !== null && lineNo >= offset + limit) {
+      beyondWindow = true;
+      return;
+    }
+    if (overBudget) return;
+    const cost = Buffer.byteLength(line, 'utf8') + (taken.length === 0 ? 0 : 1);
+    if (takenBytes + cost > lineBudget) {
+      overBudget = true;
+      return;
+    }
+    taken.push(line);
+    takenBytes += cost;
+  };
+
+  const stream = createReadStream(targetKey);
+  const decoder = new StringDecoder('utf8');
+  let buf = '';
+  await new Promise<void>((resolve, reject) => {
+    stream.on('error', (err) => {
+      stream.destroy();
+      reject(err);
+    });
+    stream.on('data', (chunk: Buffer) => {
+      if (dropping) {
+        // 丢弃中的超长行：找到换行就计数一行，剩下的回到正常流程。
+        const text = decoder.write(chunk);
+        const idx = text.indexOf('\n');
+        if (idx < 0) return;
+        lineNo += 1;
+        dropping = false;
+        buf = text.slice(idx + 1);
+      } else {
+        buf += decoder.write(chunk);
+      }
+      let idx: number;
+      while (!dropping && (idx = buf.indexOf('\n')) >= 0) {
+        pushLine(buf.slice(0, idx));
+        buf = buf.slice(idx + 1);
+      }
+      // buf 里是没有换行的"当前行前半"：单个行超预算就整体丢弃，保证内存有界。
+      if (!dropping && Buffer.byteLength(buf, 'utf8') > lineBudget) {
+        if (upcomingInWindow()) overBudget = true;
+        dropping = true;
+        buf = '';
+      }
+    });
+    stream.on('end', () => {
+      buf += decoder.end();
+      if (dropping) {
+        lineNo += 1;
+      } else if (buf !== '') {
+        pushLine(buf);
+      }
+      resolve();
+    });
+  });
+  const truncated = overBudget || beyondWindow;
+  // 读到文件尾且窗口覆盖最后一行时，补回原文的尾换行（整文件读回逐字节一致）。
+  const reachedEnd =
+    !overBudget &&
+    endsWithNewline &&
+    lineNo >= offset &&
+    (limit === null || lineNo < offset + limit);
+  const content = taken.join('\n') + (reachedEnd ? '\n' : '');
+  return {
+    content,
+    truncated,
+    nextOffset: truncated ? offset + taken.length : null,
+    totalLines: lineNo,
+  };
+}
+
+/** 最后一字节是不是换行（O(1) 预读，供读取的尾换行保留逻辑用）。 */
+async function endsWithNewline(targetKey: string, size: number): Promise<boolean> {
+  if (size <= 0) return false;
+  let handle;
+  try {
+    handle = await open(targetKey, 'r');
+    const buf = Buffer.alloc(1);
+    const { bytesRead } = await handle.read(buf, 0, 1, size - 1);
+    return bytesRead === 1 && buf[0] === 0x0a;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+/** 严格 base64：Buffer.from 本身不抛，非法字符必须自己拦。 */
+function decodeBase64Strict(value: string): Buffer {
+  const compact = value.replace(/\s+/g, '');
+  if (compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) {
+    throw new BridgeError('INVALID_BASE64', 'invalid content_base64', 400);
+  }
+  return Buffer.from(compact, 'base64');
 }
 
 export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): void {
@@ -169,9 +372,9 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       tempRoot: deps.workspaceManager.physicalTempPath(workspaceId),
       systemSkillRoot: deps.systemSkillRoot,
       enabledSkillPackages: [],
-      // MCP 窄桥**不带系统名单**（`systemSkillPackages` 省略 = 整树只读）：它没有
-      // AgentVersion 绑定，外部 MCP 客户端一直能读全部系统 Skill。是否收窄它是
-      // 对外行为变化，需要产品决定，不随 ADR 0015 顺带改变。
+      // 产品 2026-10-03 决定：外部 MCP 不读取平台系统 Skill（外部平台有自己的
+      // Skill 体系，且避免内部内容外泄）。空数组 = 一个不挂（undefined 才是整树）。
+      systemSkillPackages: [],
     };
   }
 
@@ -216,6 +419,21 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
         { detail: { code: err.code, message: redactPhysicalRoots(err.message, roots) } },
         err.status as never,
       );
+    }
+    if (err instanceof SearchQueryError) {
+      return c.json({ detail: { code: 'PATH_INVALID', message: err.message } }, 400 as never);
+    }
+    if (err instanceof FsError && err.code === 'FS_NOT_FOUND') {
+      return c.json({ detail: { code: 'PATH_NOT_FOUND', message: 'path not found' } }, 404 as never);
+    }
+    // 直调 node:fs 的那几条路由（read 探针、delete、upload）：ENOENT/ENOTDIR
+    // 是"路径不存在"，固定文案不带物理路径；EISDIR 是"是个目录"。
+    const errno = (err as { code?: unknown }).code;
+    if (errno === 'ENOENT' || errno === 'ENOTDIR') {
+      return c.json({ detail: { code: 'PATH_NOT_FOUND', message: 'path not found' } }, 404 as never);
+    }
+    if (errno === 'EISDIR') {
+      return c.json({ detail: { code: 'IS_DIRECTORY', message: 'path is a directory' } }, 400 as never);
     }
     const raw = err instanceof Error ? err.message : String(err);
     // 已知的路径类错误映射成 400 "Invalid request"，其余 500——与 Python
@@ -263,6 +481,7 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       const executionId = `exec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
       const executor = shellOf(ctx);
       const timeoutMs = timeoutSeconds * 1000;
+      const startedAt = Date.now();
       const result = await guarded(c, ctx, executor, timeoutMs, (signal) =>
         executor.runPython({ code, executionId, timeoutMs, signal }),
       );
@@ -271,10 +490,9 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
         exit_code: result.exitCode,
         stdout_preview: result.stdout.text,
         stderr_preview: result.stderr.text,
-        duration_ms: null,
+        duration_ms: Date.now() - startedAt,
         truncated: result.stdout.truncated || result.stderr.truncated,
         execution_id: executionId,
-        python_version: null,
         python_mode: 'materialized',
       });
     } catch (err) {
@@ -292,6 +510,7 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       const timeoutSeconds = clampTimeout(payload['timeout_seconds'], maxTimeoutSeconds);
       const executor = shellOf(ctx);
       const spec = executor.resolve({ command, timeoutMs: timeoutSeconds * 1000 });
+      const startedAt = Date.now();
       const result = await guarded(c, ctx, executor, spec.timeoutMs, (signal) =>
         executor.run({ ...spec, signal }),
       );
@@ -301,7 +520,7 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
         exit_code: result.exitCode,
         stdout_preview: result.stdout.text,
         stderr_preview: result.stderr.text,
-        duration_ms: null,
+        duration_ms: Date.now() - startedAt,
         truncated: result.stdout.truncated || result.stderr.truncated,
         execution_id: executionId,
       });
@@ -319,6 +538,7 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       const logical = requireString(payload['path'], 'path');
       const content = payload['content'];
       if (typeof content !== 'string') throw new BridgeError('PATH_INVALID', 'invalid content', 400);
+      if (content.includes('\0')) throw new BridgeError('INVALID_INPUT', 'content contains NUL bytes', 400);
       if (Buffer.byteLength(content, 'utf8') > limits.maxFileSizeBytes) {
         throw new BridgeError('TOO_LARGE', 'content exceeds MCP file size limit', 413);
       }
@@ -326,16 +546,13 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
 
       const fs = fsOf(ctx);
       const target = await fs.resolve(logical);
-      const { mkdir, writeFile, appendFile } = await import('node:fs/promises');
       await mkdir(path.dirname(target.targetKey), { recursive: true });
       if (mode === 'append') await appendFile(target.targetKey, content, 'utf8');
       else await writeFile(target.targetKey, content, 'utf8');
 
-      const { stat } = await import('node:fs/promises');
       const st = await stat(target.targetKey);
       return c.json({
         path: logical,
-        content: '',
         size: st.size,
         truncated: false,
         mime_type: guessMime(logical),
@@ -352,27 +569,48 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
       const ctx = await contextOf(payload);
       roots = rootsOf(ctx);
       const logical = requireString(payload['path'], 'path');
-      const offset = payload['offset'] == null ? null : Number(payload['offset']);
-      const limit = payload['limit'] == null ? null : Number(payload['limit']);
+      const rawOffset = payload['offset'];
+      const rawLimit = payload['limit'];
+      const offset = rawOffset === undefined || rawOffset === null ? 1 : Number(rawOffset);
+      const limit = rawLimit === undefined || rawLimit === null ? null : Number(rawLimit);
+      if (!Number.isInteger(offset) || offset < 1) {
+        throw new BridgeError('PATH_INVALID', 'invalid offset', 400);
+      }
+      if (limit !== null && (!Number.isInteger(limit) || limit < 1)) {
+        throw new BridgeError('PATH_INVALID', 'invalid limit', 400);
+      }
 
       const fs = fsOf(ctx);
       const target = await fs.resolve(logical);
-      const { readFile, stat } = await import('node:fs/promises');
       const st = await stat(target.targetKey);
-      let content = await readFile(target.targetKey, 'utf8');
-      let truncated = false;
-      if (offset !== null && limit !== null) {
-        const lines = content.split('\n');
-        // Python 的 offset 是 1-based 行号。
-        content = lines.slice(Math.max(0, offset - 1), Math.max(0, offset - 1) + limit).join('\n');
-        truncated = lines.length > offset - 1 + limit;
+      if (!st.isFile()) {
+        if (st.isDirectory()) throw new BridgeError('IS_DIRECTORY', 'path is a directory', 400);
+        throw new BridgeError('PATH_INVALID', 'not a readable file', 400);
       }
+      await assertTextFile(target.targetKey);
+      // 大文件不整段进内存：流式逐行扫描，内存只保留窗口内的完整行。
+      const out = await readTextBounded(target.targetKey, {
+        offset,
+        limit,
+        maxBytes: limits.maxReadBytes,
+        endsWithNewline: await endsWithNewline(target.targetKey, st.size),
+      });
       return c.json({
         path: logical,
-        content,
+        content: out.content,
         size: st.size,
-        truncated,
+        truncated: out.truncated,
         mime_type: guessMime(logical),
+        total_lines: out.totalLines,
+        next_offset: out.nextOffset,
+        ...(out.truncated
+          ? {
+              hint:
+                `File exceeds the ${limits.maxReadBytes}-byte read limit. ` +
+                'Read it in pages with offset/limit (1-based line numbers); ' +
+                'total_lines shows the full line count.',
+            }
+          : {}),
       });
     } catch (err) {
       return fail(c, err, roots);
@@ -396,7 +634,175 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
         { root: ctx.workspaceRoot, start: target.targetKey, publicPrefix: null },
         { depth },
       );
+      if (result.stop_reason === 'not_found') {
+        throw new BridgeError('PATH_NOT_FOUND', 'path not found', 404);
+      }
       return c.json(result);
+    } catch (err) {
+      return fail(c, err, roots);
+    }
+  });
+
+  app.post('/internal/mcp/v1/files/delete', async (c) => {
+    let roots: readonly string[] = [];
+    try {
+      const payload = await body(c);
+      const ctx = await contextOf(payload);
+      roots = rootsOf(ctx);
+      const logical = requireString(payload['path'], 'path');
+      const rawRecursive = payload['recursive'];
+      const recursive =
+        rawRecursive === undefined || rawRecursive === null ? false : rawRecursive;
+      if (typeof recursive !== 'boolean') {
+        throw new BridgeError('PATH_INVALID', 'invalid recursive', 400);
+      }
+      const normalized = path.posix.normalize(logical);
+      if (
+        normalized === '' ||
+        normalized === '.' ||
+        normalized === '/' ||
+        normalized === '..' ||
+        normalized.startsWith('../')
+      ) {
+        throw new BridgeError('PATH_INVALID', 'refusing to delete workspace root', 400);
+      }
+      const fs = fsOf(ctx);
+      // 先过围栏（防穿越与符号链接逃逸），再在父目录下定位链接本身。
+      await fs.resolve(logical);
+      const parentLogical = path.posix.dirname(normalized);
+      const parent = await fs.resolve(parentLogical === '' ? '.' : parentLogical);
+      const linkPath = path.join(parent.targetKey, path.posix.basename(normalized));
+      const contained = [ctx.workspaceRoot, ctx.tempRoot].some(
+        (root) => linkPath === root || linkPath.startsWith(root + path.sep),
+      );
+      if (!contained) throw new BridgeError('PATH_INVALID', 'path escapes workspace', 400);
+      let entry;
+      try {
+        // lstat 不跟随最后一段：删符号链接时删的是链接本身，不断目标。
+        entry = await lstat(linkPath);
+      } catch (err) {
+        if ((err as { code?: unknown }).code === 'ENOENT') {
+          throw new BridgeError('PATH_NOT_FOUND', 'path not found', 404);
+        }
+        throw err;
+      }
+      if (entry.isSymbolicLink() || entry.isFile()) {
+        await unlink(linkPath);
+      } else if (entry.isDirectory()) {
+        if (!recursive) {
+          throw new BridgeError('IS_DIRECTORY', 'directory requires recursive=true', 400);
+        }
+        await rm(linkPath, { recursive: true });
+      } else {
+        await unlink(linkPath);
+      }
+      return c.json({ path: logical, deleted: true });
+    } catch (err) {
+      return fail(c, err, roots);
+    }
+  });
+
+  app.post('/internal/mcp/v1/files/upload', async (c) => {
+    let roots: readonly string[] = [];
+    try {
+      const payload = await body(c);
+      const ctx = await contextOf(payload);
+      roots = rootsOf(ctx);
+      const logical = requireString(payload['path'], 'path');
+      if (typeof payload['content_base64'] !== 'string') {
+        throw new BridgeError('INVALID_BASE64', 'invalid content_base64', 400);
+      }
+      const rawOverwrite = payload['overwrite'];
+      const overwrite =
+        rawOverwrite === undefined || rawOverwrite === null ? true : rawOverwrite;
+      if (typeof overwrite !== 'boolean') {
+        throw new BridgeError('PATH_INVALID', 'invalid overwrite', 400);
+      }
+      // 桥侧精判：解码后的字节数（facade 只按 base64 长度粗判）。
+      const bytes = decodeBase64Strict(payload['content_base64']);
+      if (bytes.length > limits.maxFileSizeBytes) {
+        throw new BridgeError('TOO_LARGE', 'content exceeds MCP file size limit', 413);
+      }
+      const fs = fsOf(ctx);
+      const target = await fs.resolve(logical);
+      let existing = null;
+      try {
+        existing = await lstat(target.targetKey);
+      } catch (err) {
+        if ((err as { code?: unknown }).code !== 'ENOENT') throw err;
+      }
+      if (existing !== null) {
+        if (existing.isDirectory()) {
+          throw new BridgeError('IS_DIRECTORY', 'path is a directory', 400);
+        }
+        if (!overwrite) {
+          throw new BridgeError('FILE_EXISTS', 'file exists and overwrite is false', 409);
+        }
+      }
+      await mkdir(path.dirname(target.targetKey), { recursive: true });
+      await writeFile(target.targetKey, bytes);
+      const st = await stat(target.targetKey);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      return c.json({
+        path: logical,
+        size: st.size,
+        sha256,
+        mime_type: guessMime(logical, 'application/octet-stream'),
+      });
+    } catch (err) {
+      return fail(c, err, roots);
+    }
+  });
+
+  app.post('/internal/mcp/v1/files/search', async (c) => {
+    let roots: readonly string[] = [];
+    try {
+      const payload = await body(c);
+      const ctx = await contextOf(payload);
+      roots = rootsOf(ctx);
+      const logical =
+        payload['path'] === undefined || payload['path'] === null
+          ? '.'
+          : requireString(payload['path'], 'path');
+      const pattern =
+        payload['pattern'] === undefined || payload['pattern'] === null
+          ? null
+          : requireString(payload['pattern'], 'pattern', 256);
+      const query =
+        payload['query'] === undefined || payload['query'] === null
+          ? null
+          : requireString(payload['query'], 'query', 512);
+      if (pattern === null && query === null) {
+        throw new BridgeError('PATH_INVALID', 'at least one of pattern or query is required', 400);
+      }
+      const rawMax = payload['max_results'];
+      const maxResults = rawMax === undefined || rawMax === null ? 100 : Number(rawMax);
+      if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 500) {
+        throw new BridgeError('PATH_INVALID', 'max_results must be in 1..500', 400);
+      }
+      const fs = fsOf(ctx);
+      const target = await fs.resolve(logical);
+      // 公共前缀 null：返回逻辑相对路径，物理根不出桥（与 files/list 同做法）。
+      const where = { root: ctx.workspaceRoot, start: target.targetKey, publicPrefix: null };
+      if (query !== null) {
+        const result = await fileSearchService.grep(where, {
+          query,
+          glob: pattern,
+          limit: maxResults,
+        });
+        if (result.stop_reason === 'not_found') {
+          throw new BridgeError('PATH_NOT_FOUND', 'path not found', 404);
+        }
+        return c.json({ path: logical, mode: 'grep', ...result });
+      }
+      const result = await fileSearchService.find(where, {
+        pattern: pattern ?? '*',
+        limit: maxResults,
+      });
+      if (result.stop_reason === 'not_found') {
+        throw new BridgeError('PATH_NOT_FOUND', 'path not found', 404);
+      }
+      return c.json({ path: logical, mode: 'find', ...result });
     } catch (err) {
       return fail(c, err, roots);
     }

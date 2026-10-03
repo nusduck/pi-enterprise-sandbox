@@ -410,6 +410,12 @@ EXEC_INTERNAL_ALLOW_CIDR=10.20.30.0/24
 
 外部 MCP 由 Agent Runtime 直接连接，不经过 Sandbox。凭据由 `authTokenRef` 指向的环境变量注入。
 
+### Sandbox MCP（对外 facade）限额
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SANDBOX_MCP_MAX_READ_BYTES` | `262144`（256 KiB） | `sandbox_file_read` 单次返回正文的字节上限（只计完整行）。超限时返回头部、`truncated: true`、`total_lines`/`next_offset`，用 `offset`/`limit` 翻页；facade 与 exec 桥侧同值，改一边必须改另一边 |
+
 **入站 vs 出站：** `EXEC_INTERNAL_ALLOW_CIDR` 只约束 **入站** 内部面来源。已移除 container-wide
 iptables 与 `SANDBOX_ALLOWED_CIDRS` / 端口 union allowlist 作为隔离权威的设计。
 
@@ -858,7 +864,8 @@ Skill 分三层：
 >   `DSH_CONFIG_UNSUPPORTED` 拒绝绑定，不会按「省略」静默放开。
 >
 > 收紧（缺 `systemSkills` 即 `ENVELOPE_INVALID`）只在全部 exec 上的上述告警归零后单独做，尚未执行。
-> 公共面、MCP 窄桥与隔离探针不带名单，维持整树只读挂载（与 ADR 0015 之前相同）。`_org` 目录随
+> 公共面与隔离探针不带名单，维持整树只读挂载（与 ADR 0015 之前相同）。MCP 窄桥带**空名单**
+> （产品 2026-10-03 决定外部 MCP 不读平台系统 Skill），沙箱里没有任何系统 Skill 挂载。`_org` 目录随
 > `published/` 一起备份，不新增 export。
 
 Compose 通过 `SANDBOX_SKILL_DRAFT_ROOT=/var/sandbox/skill-draft` 显式打开草稿写面；直接启动 exec 时变量缺失则能力关闭。模型不再拥有 Skill 变更工具，只能在自己的草稿根写文件。用户在 Capabilities 页点击启用后，Agent 在一个事务里锁住该 owner 的 membership 行，校验结构与系统同名遮蔽，按复制后字节的摘要发布只读版本并写 `user_skill_enablements`；停用只删账本行，字节保留给仍在运行的 Run。旧版本在同名包下次启停时回收：既不被事务前后的账本引用、又超过 `SKILL_VERSION_GC_GRACE_MS`（Agent HTTP 读取，非负整数毫秒，默认 `86400000` 即 24 小时）才删除。

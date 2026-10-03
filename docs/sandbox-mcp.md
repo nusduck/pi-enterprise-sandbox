@@ -13,7 +13,7 @@ flowchart LR
     U[UPAgent / MCP Client] -->|Bearer SANDBOX_MCP_TOKEN| M[sandbox-mcp :8082/mcp]
     M <-->|Context mapping + lock| R[(Redis)]
     M -->|Bearer SANDBOX_MCP_INTERNAL_TOKEN| S[Sandbox :8081 internal MCP bridge]
-    S --> E[ExecutionManager / FileManager / Bubblewrap]
+    S --> E[WorkspaceManager / IsolatedShellExecutor (Bubblewrap)]
     S --> A[Control-plane Artifact snapshots]
     M -->|signed temporary URL| U
 ```
@@ -25,8 +25,11 @@ flowchart LR
 | `sandbox_python_execute` | 在隔离 Python 环境执行代码 |
 | `sandbox_shell_execute` | 在同一隔离环境执行 bash 命令（网络禁用，与 `sandbox_python_execute` 同一工作区与限制） |
 | `sandbox_file_write` | 写入 UTF-8 文件（覆盖或追加） |
-| `sandbox_file_read` | 读取文本文件（可传 offset/limit） |
+| `sandbox_file_read` | 读取文本文件（可传 offset/limit；超 `SANDBOX_MCP_MAX_READ_BYTES` 时只返回头部完整行，带 `truncated`/`total_lines`/`next_offset` 与翻页提示） |
 | `sandbox_file_list` | 有深度上限的文件列表 |
+| `sandbox_file_delete` | 删除文件；目录需 `recursive=true`，工作区根不可删 |
+| `sandbox_file_upload` | 上传二进制文件（`content_base64`，父目录自动创建） |
+| `sandbox_file_search` | 按 glob（`pattern`）找文件名、按文本（`query`）搜内容，至少给一个 |
 | `sandbox_artifact_submit` | 对已生成文件做不可变快照并返回临时下载 URL |
 
 两个执行工具与 Agent 的 shell 工具**同一套**限额：exec 端的 `SANDBOX_MAX_PROCESS_COUNT` /
@@ -35,6 +38,10 @@ flowchart LR
 （见 [deployment.md](deployment.md#per-execution-resource-limits)）。配额超额时结果为
 `failed`（exit 126，原因在 stderr）；`timeout_seconds` 超过 `SANDBOX_EXECUTION_TIMEOUT_SECONDS`
 时桥接回 400。
+
+外部 MCP 执行**不挂载平台系统 Skill**（产品 2026-10-03 决定）：窄桥下发的
+`WorkspaceContext` 带空的 `systemSkillPackages`，Bubblewrap 挂载里没有系统
+Skill（外部平台有自己的 Skill 体系，且避免内部内容外泄）。
 
 每个调用可传 `context_id`。`sandbox-mcp` 把它映射为 Redis 中的
 `(sandbox_session_id, workspace_id)`，首次使用会在短锁下创建工作区；同一
@@ -60,7 +67,10 @@ flowchart LR
 |---|---|
 | write 成功但 artifact 失败 | 两次调用的 `context_id` 不一致，或 submit 时漏传 → 新空工作区 |
 | `FILE_NOT_FOUND` | `source_path` 不是该 workspace 内已有相对路径（不要传绝对路径） |
+| `PATH_NOT_FOUND` | 读/列/删/搜的 `path` 在该 workspace 里不存在。用相对路径，且 `context_id` 与之前的调用一致 |
+| `BINARY_FILE` | 读的是二进制文件。改走 `sandbox_artifact_submit` 交付，或用 Python 处理 |
 | `TOO_LARGE` | 文件超过 `SANDBOX_MCP_MAX_FILE_SIZE_BYTES`（默认 10MiB） |
+| 读取被截断（`truncated: true`） | 文件超过 `SANDBOX_MCP_MAX_READ_BYTES`（默认 256 KiB）。按 `total_lines` 与 `next_offset`，用 `offset`/`limit`（1-based 行号）分段读取 |
 | `Invalid context_id` | ID 含空格、中文、`/` 等非法字符，或超过 255 字符 |
 
 `sandbox_artifact_submit` 只是把 workspace 里**已有文件**做不可变快照；
@@ -73,8 +83,9 @@ submit 成功后返回的 `download_url` 用 query `token` 鉴权（**不需要*
 点击该 URL 应返回文件字节。
 
 若返回 **HTTP 500** 且文件名含中文/非 ASCII：旧版把原名直接写入
-`Content-Disposition: filename="..."`，Starlette 按 latin-1 编码 header 会
-`UnicodeEncodeError`。请升级包含 RFC 5987 `filename*` 修复的版本。
+`Content-Disposition: filename="..."`，Node 的 `ServerResponse.setHeader`
+拒绝非 latin-1 的头部值导致失败。当前 TS 实现（`exec/src/mcp/disposition.ts`）
+固定发送 ASCII 兜底 `filename="..."` 加 RFC 5987 `filename*`，请升级到包含该实现的版本。
 
 返回 **404 Artifact not found**：token 无效/过期，或 Redis 元数据已过期
 （`SANDBOX_MCP_ARTIFACT_TTL_SECONDS`，默认 24h）。

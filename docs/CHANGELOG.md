@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `sandbox-mcp` 的工作区以前永不回收：映射在 Redis 里 7 天过期后，磁盘目录一直留着且再也访问不到。现在 exec 记录每个 MCP 工作区的最近调用时间（控制根 `mcp-workspaces/` 下的标记），每小时回收闲置超过 `SANDBOX_MCP_WORKSPACE_TTL_SECONDS`（默认 3 天）的工作区与 temp；`SANDBOX_MCP_CONTEXT_TTL_SECONDS` 默认由 7 天改为 3 天与之对齐。Agent 会话工作区不受影响；上线前已存在的 MCP 工作区没有标记，不会被自动回收。
 
+### Added — Sandbox MCP 新增三个工具
+
+- `sandbox_file_delete`（`path` + `recursive`，默认 false）：删文件；目录需 `recursive=true`（否则 400 `IS_DIRECTORY`），工作区根不可删，不跟随符号链接（删链接本身）。桥路由 `/internal/mcp/v1/files/delete`。
+- `sandbox_file_upload`（`path` + `content_base64` + `overwrite`，默认 true）：上传二进制文件，父目录自动创建，返回 `path`/`size`/`sha256`/`mime_type`。解码后字节数超 `SANDBOX_MCP_MAX_FILE_SIZE_BYTES` → 413，非法 base64 → 400。桥路由 `/internal/mcp/v1/files/upload`。
+- `sandbox_file_search`（`pattern` + `query` 至少给一个，`path` 默认 `.`，`max_results` 默认 100、上限 500）：复用执行面 `fileSearchService`（find/grep），只返回逻辑相对路径。桥路由 `/internal/mcp/v1/files/search`。
+- 新增配置 `SANDBOX_MCP_MAX_READ_BYTES`（默认 256 KiB）：facade `settings.ts` 与 exec 桥 `InternalMcpDeps` 同值，compose 的 `sandbox`/`sandbox-mcp` 透传，`.env.example` 与部署文档同步。
+
+### Fixed — Sandbox MCP 窄桥缺陷
+
+- `sandbox_file_read` 不限大小：桥侧读取新增上限（默认 256 KiB），超限返回头部完整行（不断行、不切断 UTF-8 字符），带 `truncated: true`、`total_lines`、`next_offset` 与翻页提示；`offset`/`limit` 结果同样不超过上限；大文件流式逐行扫描，内存有界。
+- 二进制文件读取：返回 400 `BINARY_FILE`，模型指引改走 `sandbox_artifact_submit` 交付或用 Python 处理。判定为「含 NUL、控制字节过多或不是合法 UTF-8」（探针末尾切断的多字节字符不算）。
+- `PATH_INVALID` 的对外文案改为通用的「路径或参数无效，请用工作区内相对路径」（此前写成 artifact 专用，删除/搜索时也这么报）；`IS_DIRECTORY` 提示删除目录需 `recursive=true`；上传未知扩展名的 `mime_type` 为 `application/octet-stream`。
+- 读/列/删不存在的路径：返回 404 `PATH_NOT_FOUND`（原 500）。facade 封闭错误表新增该码，`FILE_NOT_FOUND`（artifact submit 专用文案）保持不变。
+- 命令/代码/内容含 NUL 字节：执行前校验，返回 400 `INVALID_INPUT`（原 500）。
+- `duration_ms` 填真实耗时（毫秒整数）；删除 `python_version: null` 与 `file_write` 返回里无意义的 `content: ''`（`python_mode` 保留）。
+
+### Changed — 外部 MCP 不再挂载系统 Skill
+
+- MCP 窄桥下发的 `WorkspaceContext` 带空的 `systemSkillPackages`（空数组 = 一个不挂）：外部 MCP 执行的沙箱里没有任何系统 Skill 挂载（产品 2026-10-03 决定：外部平台有自己的 Skill 体系，且避免内部内容外泄）。
+
 ### Fixed — 进程 SIGKILL 不再先发 SIGTERM
 
 - 进程控制台 / `signal` 接口请求 `SIGKILL` 时，exec 直接对整个进程组强杀，不再先走 SIGTERM 加 3 秒宽限；终态记录也随之是 `killed: SIGKILL`（此前一律记成 `killed: SIGTERM`，看起来像没按请求的信号执行）。`SIGTERM` 与取消的行为不变。

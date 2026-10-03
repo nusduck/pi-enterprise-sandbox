@@ -4,7 +4,7 @@
  */
 import { Hono } from 'hono';
 import { createInternalRouter, type InternalRouterDeps } from './router.js';
-import { registerInternalMcpRoutes } from './internal-mcp.js';
+import { DEFAULT_MCP_MAX_READ_BYTES, registerInternalMcpRoutes } from './internal-mcp.js';
 import { McpWorkspaceGc, readMcpWorkspaceTtlSeconds } from '../workspace/mcp-workspace-gc.js';
 import { ArtifactService } from '../artifact/service.js';
 import { DatasetService } from '../dataset/service.js';
@@ -214,6 +214,11 @@ export interface ExecAppDeps {
   readonly mcpInternalToken?: string;
   readonly mcpWorkspaceActivity?: { touch(workspaceId: string): Promise<void> };
   /**
+   * MCP 窄桥单次读取上限（`SANDBOX_MCP_MAX_READ_BYTES`）。不传时桥用自己的
+   * 默认（与 facade 的同名默认值一致）；非法值在装配时直接拒绝启动。
+   */
+  readonly mcpMaxReadBytes?: number;
+  /**
    * 公共面的服务间令牌（`SANDBOX_API_TOKEN`）。**必填**，因为"要不要做服务间
    * 鉴权"是一个必须显式做的决定：省略默认关掉的话，正是 exec 从 Python 换到
    * TS 时丢掉这道校验的原因。`null` = 本装配显式不做（单测/本地直连）。
@@ -328,6 +333,7 @@ export function createExecApp(deps: ExecAppDeps): Hono {
     ...(deps.resourceLimits !== undefined ? { resourceLimits: deps.resourceLimits } : {}),
     ...(deps.childQuota !== undefined ? { childQuota: deps.childQuota } : {}),
     ...(deps.quotaStore !== undefined ? { quotaStore: deps.quotaStore } : {}),
+    ...(deps.mcpMaxReadBytes !== undefined ? { maxReadBytes: deps.mcpMaxReadBytes } : {}),
   });
   return app;
 }
@@ -343,6 +349,20 @@ function execDbEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export function readExecDbConfigFromSandboxEnv(env: NodeJS.ProcessEnv = process.env): ExecDbConfig {
   return readExecDbConfig(execDbEnv(env));
+}
+
+/**
+ * MCP 窄桥的读取上限（`SANDBOX_MCP_MAX_READ_BYTES`）。空缺取与 facade 一致的
+ * 默认；给了但不是正整数就拒绝启动（与其它限额同一条 fail-fast 规矩）。
+ */
+export function readMcpMaxReadBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env['SANDBOX_MCP_MAX_READ_BYTES'];
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MCP_MAX_READ_BYTES;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error('SANDBOX_MCP_MAX_READ_BYTES must be a positive integer');
+  }
+  return value;
 }
 
 export interface ExecRuntime {
@@ -541,6 +561,7 @@ export function createExecAppFromEnv(
     allowCidr: internalAllowCidr,
     mcpInternalToken: env['SANDBOX_MCP_INTERNAL_TOKEN'] ?? '',
     mcpWorkspaceActivity: mcpWorkspaceGc,
+    mcpMaxReadBytes: readMcpMaxReadBytes(env),
     publicApiToken,
     resourceLimits,
     childQuota,

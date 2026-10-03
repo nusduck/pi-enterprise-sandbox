@@ -1,5 +1,5 @@
 /**
- * 六个 MCP 工具的注册。移植自已退役的 Python 执行面（旧 `sandbox/mcp/app.py`，现为本模块）的 `@mcp.tool` 段。
+ * 九个 MCP 工具的注册。移植自已退役的 Python 执行面（旧 `sandbox/mcp/app.py`，现为本模块）的 `@mcp.tool` 段。
  *
  * ## Model Experience
  * 工具名与描述**逐字**沿用 Python 版：外部客户端（UPAgent、Dify 等）的提示词
@@ -137,6 +137,72 @@ export function registerMcpTools(server: McpServer, service: McpFacadeService): 
           sourcePath: source_path,
           name: name ?? null,
           mimeType: mime_type ?? null,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'sandbox_file_delete',
+    {
+      description:
+        'Delete a file in the persistent Sandbox workspace. ' +
+        'Deleting a directory requires recursive=true; the workspace root cannot be deleted.',
+      inputSchema: {
+        path: z.string(),
+        context_id: z.string().nullable().optional(),
+        recursive: z.boolean().default(false),
+      },
+    },
+    async ({ path, context_id, recursive }) =>
+      ok(await service.fileDelete({ contextId: context_id ?? null, path, recursive })),
+  );
+
+  server.registerTool(
+    'sandbox_file_upload',
+    {
+      description:
+        'Upload a binary file to the persistent Sandbox workspace. ' +
+        'Content is standard base64; parent directories are created automatically.',
+      inputSchema: {
+        path: z.string(),
+        content_base64: z.string(),
+        context_id: z.string().nullable().optional(),
+        overwrite: z.boolean().default(true),
+      },
+    },
+    async ({ path, content_base64, context_id, overwrite }) =>
+      ok(
+        await service.fileUpload({
+          contextId: context_id ?? null,
+          path,
+          contentBase64: content_base64,
+          overwrite,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'sandbox_file_search',
+    {
+      description:
+        'Search file names by glob pattern and/or file contents by text query ' +
+        'under a persistent Sandbox workspace path.',
+      inputSchema: {
+        context_id: z.string().nullable().optional(),
+        path: z.string().default('.'),
+        pattern: z.string().nullable().optional(),
+        query: z.string().nullable().optional(),
+        max_results: z.number().int().default(100),
+      },
+    },
+    async ({ context_id, path, pattern, query, max_results }) =>
+      ok(
+        await service.fileSearch({
+          contextId: context_id ?? null,
+          path,
+          pattern: pattern ?? null,
+          query: query ?? null,
+          maxResults: max_results,
         }),
       ),
   );
