@@ -1308,3 +1308,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Why：** exec 的作业输出只在内存环形缓冲，结束 5 分钟后或 exec 重启后丢失，且无 live 条目时返回空文本、`lossy=false`，调用方分不清“没有新输出”和“输出已丢”。
 - **Action：** exec 把保留窗口落到控制根 `job-output/`（tmp + rename，定时器约每秒、read 节流、结算强制，同一作业串行），无 live 条目时从文件恢复游标语义，缺失/损坏返回 `outputUnavailable`；工作区删除按账本清文件。Agent 对 `outputUnavailable` 给模型明确提示。实现经 dsh worker 两轮，主线程复核补了串行化。
 - **STATUS IDs：** C7 仍为 `partial`。真机 BFF 日志 8/8、模型 `job_output` 6/8（2 次空增量未定位）。见[证据](evidence/2026-10-03-c7-job-output-persist.md)。
+
+## 2026-10-03 — ADR 0017：后台进程不跨 exec 重启存活
+
+- **Why：** 产品确认接受“进程随 exec 重启结束、输出持久化”的边界；plan §32 未要求进程跨执行面重启存活，此前 STATUS 把它列为 C7 缺口。
+- **Action：** 新增 ADR 0017，STATUS C7 去掉该缺口。
+- **STATUS IDs：** C7 仍为 `partial`，剩余缺口只有模型侧重启后立即读取的空增量（未定位）。
