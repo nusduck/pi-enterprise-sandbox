@@ -1,8 +1,10 @@
 # Refactor acceptance status
 
 **Tracks:** `main`（DSH 重建已合并；旧 Pi / Python 面的 §32 证据已随删除而失效，以各行为准）  
-**Last audited at:** `main` @ `21c66561`（2026-10-02；本次对 A2 / A3 / C4 / E1–E3 / F2 / H2 / H3 做了清库重建后的真机复核（C8、H5/H6 按用户决定不做），**非全表重新验收**；其余行的日期与取证对象以各行证据为准）
-**Docs pass:** `2026-09-01` — 对齐 ADR 0009、Agent 浏览器认证权威、DSH 多轮 journal、原生 session resume、Worker 重启后模型上下文、exec 长进程账本与真机收口证据。
+**Last audited at:** `main` @ `bb810344`（2026-10-03；本次仅核对 #82–#111 对相关行的影响，并接入[开发栈链路证据](evidence/2026-10-03-fixes-cleanup-live-chain.md)；2026-10-02 对 A2 / A3 / C4 / E1–E3 / F2 / H2 / H3 的清库重建取证仍见各行。**非全表、非目标环境重新验收**；C8、H5/H6 未执行其剩余 gate。）
+
+**Docs pass:** `2026-10-03` — #103 核对并修正文档与代码漂移；不代表本板所有历史备注已重新验收。
+
 **Normative source:** [`plan.md`](./plan.md) §32
 **Evidence index:** [`evidence/`](./evidence/)  
 **Process log:** [`PROCESS_LOG.md`](./PROCESS_LOG.md)
@@ -24,7 +26,7 @@ A green unit-test suite alone does **not** complete a row.
 > 2026-08-29 当时的**功能性回归**（搜索 / 产物 / 数据集是占位实现）已在 Wave 7
 > 按语义补齐，见 [`design/waves/gap-audit.md`](design/waves/gap-audit.md) 的
 > 「已补」栏与 `exec/test/semantic-gaps.test.ts`。实现补上不等于验收完成：
-> C8 / E2 / E3 现为 `partial`，等 compose 里真实 bwrap + 现有 LLMIO 网关下的重新取证。
+> 当时 C8 / E2 / E3 均为 `partial`；E2 / E3 已在 2026-10-02 补证，当前状态以各行状态列为准。C8 的 5 GiB gate 仍未重跑。
 >
 > 2026-08-30 做过逐行重审（见文末）。**在重新取证完成前，不要引用旧的 `done`
 > 作为「已达成」**；以本板当前行状态为准。
@@ -50,10 +52,10 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | A1 | Use Pi native Agent Loop | `unknown` | **证据已删除**：`agent/src/infrastructure/pi/*` 不复存在。Pi 换成 DSH（ADR 0007），本行需按 `agent/src/runtime/` 重新表述与取证 |
-| A2 | Required enterprise policy layers load | `done` | 插件树、基础策略与 exec 工具链已有[既往取证](evidence/2026-09-01-dsh-process-closure-live-chain.md)。2026-09-06：AgentVersion 显式 deny、MCP 精确引用、风险跨具体性取更严已在**真实插件树 + `tools.execute`** 验证（含正向对照：被授权工具体执行一次），见[接入证据 §2](evidence/2026-09-06-agent-version-runtime-integration.md)。2026-09-06 P5：重建容器后以 admin 走完真机链——deny 版本使工具从模型侧消失且无 `tool_executions` 行、无 deny 对照版本工具执行成功（[证据 §5](evidence/2026-09-06-agent-version-runtime-integration.md)，开发栈）。审批停泊→批准→放行一次的浏览器专项仍待补。 2026-10-02 真机（开发栈）：需审批的工具调用停在 `WAITING_APPROVAL`、批准前无执行、他人 404、批准后放行**恰好一次**（重复批准 `changed:false`），账本 1 行终态；`bash`+`require_approval` 同样通过。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。审批中心的浏览器操作未做（本次 API 驱动）。 |
-| A3 | MCP 接入 | `done` | `@deepseek-ai/dsh-mcp-client` 连接、发现与调用已有真实 stdio 测试，外部 facade 仍为独立入口。2026-09-06：AgentVersion 引用现在**限制执行权限**——未引用 server/tool 一律拒、空引用零 MCP 权限、被引用工具经真实管线放行一次，见[接入证据 §2](evidence/2026-09-06-agent-version-runtime-integration.md)。目录不可读（`unknown`）与空目录已在校验面区分。2026-09-06 真机链证 config/options 的 `mcpReadiness=ready` 且不泄漏连接材料（[证据 §5.1](evidence/2026-09-06-agent-version-runtime-integration.md)）。合法引用调用一次的容器内工具链仍待补。 2026-10-02 真机：智能体版本只授权 `exa/web_search_exa`，模型调用经审批后成功执行一次（真实 MCP 服务，非替身）。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。 |
+| A2 | Required enterprise policy layers load | `done` | 插件树、基础策略与 exec 工具链已有[既往取证](evidence/2026-09-01-dsh-process-closure-live-chain.md)。2026-09-06：AgentVersion 显式 deny、MCP 精确引用、风险跨具体性取更严已在**真实插件树 + `tools.execute`** 验证（含正向对照：被授权工具体执行一次），见[接入证据 §2](evidence/2026-09-06-agent-version-runtime-integration.md)。2026-09-06 P5：重建容器后以 admin 走完真机链——deny 版本使工具从模型侧消失且无 `tool_executions` 行、无 deny 对照版本工具执行成功（[证据 §5](evidence/2026-09-06-agent-version-runtime-integration.md)，开发栈）。2026-09-06 当时尚未补审批停泊→批准→放行一次的浏览器专项。2026-10-02 真机（开发栈）：需审批的工具调用停在 `WAITING_APPROVAL`、批准前无执行、他人 404、批准后放行**恰好一次**（重复批准 `changed:false`），账本 1 行终态；`bash`+`require_approval` 同样通过。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。审批中心的浏览器操作未做（本次 API 驱动）。 |
+| A3 | MCP 接入 | `done` | `@deepseek-ai/dsh-mcp-client` 连接、发现与调用已有真实 stdio 测试，外部 facade 仍为独立入口。2026-09-06：AgentVersion 引用现在**限制执行权限**——未引用 server/tool 一律拒、空引用零 MCP 权限、被引用工具经真实管线放行一次，见[接入证据 §2](evidence/2026-09-06-agent-version-runtime-integration.md)。目录不可读（`unknown`）与空目录已在校验面区分。2026-09-06 真机链证 config/options 的 `mcpReadiness=ready` 且不泄漏连接材料（[证据 §5.1](evidence/2026-09-06-agent-version-runtime-integration.md)）。2026-09-06 当时尚未补合法引用调用一次的容器内工具链。2026-10-02 真机：智能体版本只授权 `exa/web_search_exa`，模型调用经审批后成功执行一次（真实 MCP 服务，非替身）。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。 |
 | A4 | Multi-turn Session recoverable | `done` | DSH offline recovery/journal 用例覆盖 header 保留与空 checkpoint 单根连接。2026-09-01 compose：同一 Agent Session 原生 `create` → MySQL 落盘 → `resume`；Worker `SIGKILL` 换新 PID 后 follow-up 仍 `resume`，模型原样复述上一轮一次性口令。Evidence: [`evidence/2026-09-01-dsh-worker-restart-model-context.md`](evidence/2026-09-01-dsh-worker-restart-model-context.md)、[`evidence/2026-09-01-dsh-native-session-resume.md`](evidence/2026-09-01-dsh-native-session-resume.md)。 |
-| A5 | Agent Version pinned | `partial` | 版本 ID 与会话绑定已有实现和 `agent/tests/a2a/` 回归。2026-09-06：模型生成参数（maxTokens/effort）、persona 字面量与企业 section、逻辑路径的实际消费面已在**真实 wire request** 验证，配置契约（v1/legacy、字段校验、乐观并发激活）与配置面接口已落地并有单元/HTTP/BFF/前端回归，见[接入证据](evidence/2026-09-06-agent-version-runtime-integration.md)。2026-09-06 真机链证：旧会话追加轮次钉在其绑定版本（active 指针已后移仍不受影响）、新会话用当前 active 版本、激活乐观并发 409 回传当前指针（[证据 §5.2/§5.3](evidence/2026-09-06-agent-version-runtime-integration.md)，开发栈）；未改写历史 JSON/hash。 2026-09-30：平台任务约定、工具指导随 schema 过滤与文件交付指导已落地；真实模型两轮请求 header、产物快照、进程控制和跨组织 404 已验证，见[证据](evidence/prompt-assembly-contract-2026-09-30.md)。本行保持 partial。 |
+| A5 | Agent Version pinned | `partial` | 版本 ID 与会话绑定已有实现和 `agent/tests/a2a/` 回归。2026-09-06：模型生成参数（maxTokens/effort）、persona 字面量与企业 section、逻辑路径的实际消费面已在**真实 wire request** 验证，配置契约（v1/legacy、字段校验、乐观并发激活）与配置面接口已落地并有单元/HTTP/BFF/前端回归，见[接入证据](evidence/2026-09-06-agent-version-runtime-integration.md)。2026-09-06 真机链证：旧会话追加轮次钉在其绑定版本（active 指针已后移仍不受影响）、新会话用当前 active 版本、激活乐观并发 409 回传当前指针（[证据 §5.2/§5.3](evidence/2026-09-06-agent-version-runtime-integration.md)，开发栈）；未改写历史 JSON/hash。 2026-09-30：平台任务约定、工具指导随 schema 过滤与文件交付指导已落地；真实模型两轮请求 header、产物快照、进程控制和跨组织 404 已验证，见[证据](evidence/prompt-assembly-contract-2026-09-30.md)。本行保持 partial。 2026-10-03：无 `schemaVersion` 的旧配置升级路径已删除（#106），此类配置现按 `CONFIG_SCHEMA_VERSION_MISSING` 明确拒绝；开发库全部版本已带 schemaVersion。 |
 
 ## B. State
 
@@ -70,13 +72,13 @@ Change this file in the **same commit** as the implementation or evidence that j
 
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
-| C1 | Session ↔ Workspace 1:1 | `partial` | Agent 侧唯一约束仍成立；2026-09-01 真机证明 BFF 经 Agent 授权把 Sandbox Session 映射到同一 Workspace，并能查询 exec-owned 进程。尚未重跑并发创建/冲突约束 gate。 |
+| C1 | Session ↔ Workspace 1:1 | `partial` | Agent 侧唯一约束仍成立；2026-09-01 真机证明 BFF 经 Agent 授权把 Sandbox Session 映射到同一 Workspace，并能查询 exec-owned 进程。尚未重跑并发创建/冲突约束 gate。 **2026-10-03**：删除/归档会话时按 `workspace_id` 回收工作区与配对 temp（#107，此前 exec 无该路由且 agent 传错 id，工作区从未回收），真机确认目录消失、后台作业 `killed`，他人删除 404 且工作区保留（[证据](evidence/2026-10-03-fixes-cleanup-live-chain.md) phase7）。并发创建/冲突约束 gate 仍未重跑，本行保持 partial。 |
 | C2 | Stable Agent paths | `done` | `/home/sandbox/workspace`, `/home/sandbox/skill` |
 | C3 | No global mutable workspace symlink | `done` | lease/symlink model removed in refactor |
-| C4 | Concurrent session isolation | `done` | **证据针对已删除的 Python 执行面**。exec 侧有离线用例（`exec/test/isolation-*.test.ts`），live gate 未重跑。**2026-09-16 修了一个此前不成立的前提**：`SANDBOX_MAX_PROCESS_COUNT` 等资源限额与 `ChildWorkspaceQuotaWatch` 子进程配额监控在 `exec/src` 里没有任何消费者，「每工作区资源约束」只是声明（审查 R1）。现在装配层读限额、逐条落到命名空间内部 `ulimit`，shell 路由做 spawn 前配额准入 + 执行中采样，生产启动调 `assertProductionQuotaBackend()`。离线回归：`exec/test/internal-shell-wiring.test.ts`、`exec/test/isolation-render.test.ts`。**同日复核 F1**：外部 MCP 的 `/internal/mcp/v1/shell/execute`、`python/execute` 当时仍是裸执行器，已改为与内部路由共用 `shell/guarded-execution.ts`（回归 `exec/test/internal-mcp-limits.test.ts`）。**本条仍是 `unknown`**：低阈值超限命令终止后代、另一 owner 不受影响、重启后账本额度一致这三项需要在真实容器栈上跑，未跑 **2026-10-02 真机复核**（证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)）：namespace 内 rlimit 与 compose 渲染值逐项一致；nproc 上限使 60 个子进程只起来 37 个（额度内 5/5 对照成功）；两个 owner 并发各 3 秒、互相看不到对方文件；低阈值 exec（2 MB 配额）下超限写入在执行中被终止、越线后新命令被拒且未 spawn、另一 owner 不受影响、**重启 exec 后额度状态与落盘字节一致**。边界：配额一项用的是另起的低阈值 exec 容器（同镜像、同安全配置），不是对开发栈填盘。 |
+| C4 | Concurrent session isolation | `done` | 早期证据针对已删除的 Python 执行面；exec 侧另有离线用例（`exec/test/isolation-*.test.ts`），2026-10-02 已补当前执行面的真机 gate。**2026-09-16 修了一个此前不成立的前提**：`SANDBOX_MAX_PROCESS_COUNT` 等资源限额与 `ChildWorkspaceQuotaWatch` 子进程配额监控在 `exec/src` 里没有任何消费者，「每工作区资源约束」只是声明（审查 R1）。现在装配层读限额、逐条落到命名空间内部 `ulimit`，shell 路由做 spawn 前配额准入 + 执行中采样，生产启动调 `assertProductionQuotaBackend()`。离线回归：`exec/test/internal-shell-wiring.test.ts`、`exec/test/isolation-render.test.ts`。**同日复核 F1**：外部 MCP 的 `/internal/mcp/v1/shell/execute`、`python/execute` 当时仍是裸执行器，已改为与内部路由共用 `shell/guarded-execution.ts`（回归 `exec/test/internal-mcp-limits.test.ts`）。2026-09-16 当时尚未跑低阈值超限、另一 owner 正对照与重启后额度一致 gate。**2026-10-02 真机复核**（证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)）：namespace 内 rlimit 与 compose 渲染值逐项一致；nproc 上限使 60 个子进程只起来 37 个（额度内 5/5 对照成功）；两个 owner 并发各 3 秒、互相看不到对方文件；低阈值 exec（2 MB 配额）下超限写入在执行中被终止、越线后新命令被拒且未 spawn、另一 owner 不受影响、**重启 exec 后额度状态与落盘字节一致**。边界：配额一项用的是另起的低阈值 exec 容器（同镜像、同安全配置），不是对开发栈填盘。 |
 | C5 | Ordinary commands no approval | `done` | policy defaults; enterprise tools only |
 | C6 | Python multi-line auto-materialize | `partial` | 逻辑已移植（`exec/src/shell/python-materialize.ts`，含单测）。镜像里的 `python3` 与运行库在 2026-08-30 前是缺失的，现已修复并有 plan 断言；**compose 内真实 bwrap 待跑**（Mac Docker 可以，见下） |
-| C7 | Long tasks via Process Handle | `partial` | exec 以 `exec_jobs` 持久化进程事实；2026-09-01 模型后台 `bash` → exec 登记 → BFF list/log/signal/cancel → 跨租户 404 真机通过。剩余缺口：模型侧同步 `job_list`/`job_output` 尚未取得异步 exec 结果；日志缓冲与活句柄不能跨 exec 重启恢复；hard-kill/orphan gate 未跑。Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。**2026-09-16 修了三条跨服务接线**（审查 R2/R4/R6）：前台 RPC 的传输截止改为「执行预算 + 有界回传余量」并与取消融合（此前 15 秒固定超时让客户端放弃、沙箱继续执行）；`workdir`/`stdin`/`env`/`stdoutMaxBytes` 不再被路由静默丢弃；Agent 侧后台输出缓冲有界。离线回归：`agent/tests/runtime/shell-deadline-buffer.test.ts`、`exec/test/internal-shell-wiring.test.ts`、`contract/test/shell-payload.test.ts`。20 秒任务在 120 秒预算内成功、短预算超时停止写入、取消/断连后无残留写入这三项已用真实 bwrap 验证：2026-09-16 于 `99ef6b02`（[证据 §一](evidence/exec-resource-limits-and-shell-contract-2026-09-16.md)），2026-09-17 在执行编排收进 `guarded-execution.ts` 之后的 `1e1fc604` 上复验 5/5（含写入正对照，[证据 §三](evidence/worker-restart-gate-layered-and-c7-recheck-2026-09-17.md)）。**本条仍是 `partial`**：上面「剩余缺口」所列的模型侧 job 查询、exec 重启后恢复与 hard-kill/orphan gate 未完成 |
+| C7 | Long tasks via Process Handle | `partial` | exec 以 `exec_jobs` 持久化进程事实；2026-09-01 模型后台 `bash` → exec 登记 → BFF list/log/signal/cancel → 跨租户 404 真机通过。剩余缺口：模型侧同步 `job_list`/`job_output` 对非本进程作业尚不能返回 exec 权威结果；日志缓冲与活句柄不能跨 exec 重启恢复。exec 启动期孤儿回收的 G7 gate 已于 2026-09-04 通过，两者不能混同。Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。**2026-09-16 修了三条跨服务接线**（审查 R2/R4/R6）：前台 RPC 的传输截止改为「执行预算 + 有界回传余量」并与取消融合（此前 15 秒固定超时让客户端放弃、沙箱继续执行）；`workdir`/`stdin`/`env`/`stdoutMaxBytes` 不再被路由静默丢弃；Agent 侧后台输出缓冲有界。离线回归：`agent/tests/runtime/shell-deadline-buffer.test.ts`、`exec/test/internal-shell-wiring.test.ts`、`contract/test/shell-payload.test.ts`。20 秒任务在 120 秒预算内成功、短预算超时停止写入、取消/断连后无残留写入这三项已用真实 bwrap 验证：2026-09-16 于 `99ef6b02`（[证据 §一](evidence/exec-resource-limits-and-shell-contract-2026-09-16.md)），2026-09-17 在执行编排收进 `guarded-execution.ts` 之后的 `1e1fc604` 上复验 5/5（含写入正对照，[证据 §三](evidence/worker-restart-gate-layered-and-c7-recheck-2026-09-17.md)）。**本条仍是 `partial`**：上面所列的模型侧 job 查询与 exec 重启后恢复未完成。**2026-10-03**：`kill` 默认 SIGKILL（#84）、`signal` 按信号种类区分且终态不再被 `stopping` 覆盖（#95，真机仅覆盖 SIGKILL 路径）、进程控制台自动加载与轮询（#98），phase1/phase6b 通过（[证据](evidence/2026-10-03-fixes-cleanup-live-chain.md)）。剩余缺口按代码核实为：`agent/src/runtime/providers/remote-jobs.ts` 的 `get`/`read`/`kill` 对不在本进程内存里的作业（Worker 重启后或由其他 Worker 启动）返回占位快照，发往 exec 的 RPC 结果被丢弃，只有 `wait` 轮询 exec；exec 重启后日志缓冲与活句柄不恢复。 |
 | C8 | Dataset streams into Workspace | `partial` | Wave 7 已改成三段式流式（`beginUpload` → `writeChunk` → `finishUpload`），控制面暂存后再发布到工作区。离线语义用例在 `exec/test/semantic-gaps.test.ts`。**5GiB live 未重跑**，不能标 `done` |
 
 ## D. Frontend
@@ -85,9 +87,9 @@ Change this file in the **same commit** as the implementation or evidence that j
 |----|-----------|--------|------------------|
 | D1 | Refresh restores messages/tools/process/artifacts | `done` | **2026-07-19 offline matrix:** rehydrateConversation restores messages/tools/process/artifacts; WAITING_INPUT via rehydrateInProgress. Fixed durable history seq + flat platform payloads (`platformEventNormalize`; the legacy `agentEventAdapter` was removed 2026-09-30). FE suite 200 pass. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual non-blocking: browser F5 harness absent. |
 | D2 | Show Run status | `done` | run UI + SSE |
-| D3 | Cancel Run | `done` | controls + API |
+| D3 | Cancel Run | `done` | controls + API；2026-10-03：无活 Worker 时取消 Run 收尾工具账本（#82），Worker 重启后取消真机通过（[证据](evidence/2026-10-03-fixes-cleanup-live-chain.md) phase3b） |
 | D4 | Upload Dataset | `done` | upload tests + BFF proxy |
-| D5 | View Process output | `done` | Process entity→console logs; owner-scoped process API client paths; ProcessConsole structural UI. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual: live open-console click. |
+| D5 | View Process output | `done` | Process entity→console logs; owner-scoped process API client paths; ProcessConsole structural UI. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. 2026-10-03 浏览器真机：打开控制台即加载日志、运行中轮询、取消后显示终态（#98，[证据](evidence/2026-10-03-fixes-cleanup-live-chain.md) phase6b）。 |
 | D6 | Enterprise approval UX | `done` | `resolveApprovalDecision` never marks on failed decide; pending remains decidable; ApprovalsPage failure banner contract. Evidence: `evidence/p1-fe-refresh-matrix-2026-07-19.md`. Residual: browser Approval Center audit. |
 | D7 | View Trace | `done` | Durable MySQL span projection + `TraceQueryService.listForRun` + BFF `/trace` authority + FE TracePanel rehydrate. Evidence: `evidence/p1-trace-audit-2026-07-19.md`. Residual: full OTEL backend productization out of scope. |
 | D8 | View Agent A2A config | `done` | `A2aPage` + BFF `/api/a2a` |
@@ -98,7 +100,7 @@ Change this file in the **same commit** as the implementation or evidence that j
 |----|-----------|--------|------------------|
 | E1 | write/edit do not auto-download | `done` | 2026-10-02 清库重建后的真机 Run：`write` 了 `hello.py` 后，该会话产物列表仍只有 `submit_artifact` 提交的那一个。证据：[`evidence/2026-10-02-clean-rebuild-live-chain.md`](evidence/2026-10-02-clean-rebuild-live-chain.md)（开发栈） |
 | E2 | Only `submit_artifact` creates Artifact | `done` | 同上：真实 Run 中 `submit_artifact` 产出产物，账本 sha256 `74a9483f…` 与经 BFF 下载所得字节的 sha256 一致。证据同 E1 |
-| E3 | Download tenant/user scoped | `done` | 2026-10-02 真机：同组织另一账号下载同一产物 404、未登录 401、合法 owner 200（同证据）。**只构造了跨用户，未构造跨组织**，故保持 `partial` 2026-10-02 真机：同组织另一账号下载同一产物 404、未登录 401、owner 200（[证据](evidence/2026-10-02-clean-rebuild-live-chain.md)）。**跨组织不再验收**：部署只有一个组织（用户 2026-10-02 确认）。 |
+| E3 | Download tenant/user scoped | `done` | 2026-10-02 真机：同组织另一账号下载同一产物 404、未登录 401、owner 200（[证据](evidence/2026-10-02-clean-rebuild-live-chain.md)）。只验证了跨用户，未构造跨组织；当前部署只有一个组织，跨组织用例按用户 2026-10-02 的范围决定不再验收。 |
 
 ## F. A2A
 
@@ -128,8 +130,8 @@ Change this file in the **same commit** as the implementation or evidence that j
 | ID | Criterion | Status | Evidence / notes |
 |----|-----------|--------|------------------|
 | H1 | Cross-tenant blocked | `done` | live isolation gate |
-| H2 | Workspace path escape blocked | `done` | 性质已移植且有离线用例（`exec/test/fs-path-policy.test.ts`、`isolation-*`、`search-service.test.ts` 的符号链接越界）；live gate 未重跑 2026-10-02 真机（绕过词法黑名单后直打 bwrap 层）：`/etc/shadow`、宿主 `/var/sandbox` 与 workspaces、`/proc/1/environ` 中的密钥、指向它们的符号链接全部不可达；`/usr` `/bin` `/lib` 只读；看不到 exec 进程；无网络。公共面 `files/download` 对 `../` 与绝对路径 400。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。 |
-| H3 | Skill tree not writable (exec side) | `done` | `exec/test/isolation-build.test.ts` 断言 skill 层全为 `ro_bind`；2026-09-30 容器栈真机跑过：系统层按 `systemSkills` 逐包 `ro_bind`（`system: none` 时 `/home/sandbox/skill` 根本不存在）、org 层挂到 `skill-org`，模型在 Run 里 `ls`/`read` 验证同构；live gate 本身仍未重跑 2026-10-02 真机：绑定 2 个系统包时 skill 树只列出这两个，包内创建/追加/删除均 `EROFS`，读取成功（对照）。注意 skill 根目录本身是命名空间内 tmpfs，根上 `mkdir` 能成功但只在当次 Run 内存在、不跨 Run 不跨 owner。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。 |
+| H2 | Workspace path escape blocked | `done` | 性质已移植且有离线用例（`exec/test/fs-path-policy.test.ts`、`isolation-*`、`search-service.test.ts` 的符号链接越界）；随后在 2026-10-02 真机（绕过词法黑名单后直打 bwrap 层）：`/etc/shadow`、宿主 `/var/sandbox` 与 workspaces、`/proc/1/environ` 中的密钥、指向它们的符号链接全部不可达；`/usr` `/bin` `/lib` 只读；看不到 exec 进程；无网络。公共面 `files/download` 对 `../` 与绝对路径 400。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。 |
+| H3 | Skill tree not writable (exec side) | `done` | `exec/test/isolation-build.test.ts` 断言 skill 层全为 `ro_bind`；2026-09-30 容器栈真机跑过：系统层按 `systemSkills` 逐包 `ro_bind`（`system: none` 时 `/home/sandbox/skill` 根本不存在）、org 层挂到 `skill-org`，模型在 Run 里 `ls`/`read` 验证同构；随后在 2026-10-02 真机：绑定 2 个系统包时 skill 树只列出这两个，包内创建/追加/删除均 `EROFS`，读取成功（对照）。注意 skill 根目录本身是命名空间内 tmpfs，根上 `mkdir` 能成功但只在当次 Run 内存在、不跨 Run 不跨 owner。证据: [`evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md`](evidence/2026-10-02-acceptance-gates-a2-a3-c4-h2-h3-f2.md)。 |
 | H4 | Sandbox non-privileged | `partial` | 镜像以 uid 10001 运行（已在容器内实测）；`setpriv` 剥离 capabilities 为 fail-closed。compose/prod 约束未随新镜像重审 |
 | H5 | Secrets not in model/logs/events | `partial` | Offline dual-path closed (redaction + suite green). Ops residual checklist: `evidence/partial-h5-h6-ops-checklist-2026-07-19.md` (+ prior h5-h6 evidence). **Still open:** production/staging log + durable-row sampling under secret-bearing MCP load — no invented samples. |
 | H6 | Business DB only via controlled MCP | `partial` | Offline structural closed: MCP-only module set; enterprise tools = sandbox-bridge 10 + ask_user; tightened secret-and-mcp-policy. Same ops checklist. **Still open:** deployment `MCP_SERVERS_JSON` allowlist audit + live no-business-SQL-tool snapshot. |
@@ -196,7 +198,7 @@ Non-blocking debt remains in [`review-deferred-items.md`](./review-deferred-item
 |---|---|---|
 | A2 | `done` | 真实 LLM 模型驱动前台/后台工具 Run 已完成；策略、账本与 exec 链均生效 |
 | A4 | `partial` | 同 Session 连续 Run 已通过；仍缺原生 DSH persistence resume 与 Worker 重启上下文 gate |
-| C7 | `partial` | start/list/log/signal/cancel 与跨租户 404 已通过；仍缺模型侧 job 查询和 exec 重启恢复 |
+| C7 | `partial` | 2026-09-01 当时已通过 start/list/log/signal/cancel 与跨用户 404；后续进展和剩余缺口以本板 C7 主行及 2026-10-03 新增证据为准 |
 | G7 | `done` | 2026-09-04 已执行：见上表 G7 行与 `evidence/g7-exec-orphan-recovery-2026-09-04.md` |
 
 Evidence: [`evidence/2026-09-01-dsh-process-closure-live-chain.md`](evidence/2026-09-01-dsh-process-closure-live-chain.md)。
@@ -224,3 +226,25 @@ where to look:
 
 这段合并记录之后又发生了 DSH / TypeScript exec 重建；当前阻塞项以本板顶部行状态和
 “2026-09-01 当前重审增量”为准，不能再把 H5/H6 写成唯一缺口。
+
+
+## Work merged 2026-10-03（#81–#111）
+
+功能补齐、缺陷修复与全仓清理。没有把任何 `done` 行改回；运行链路证据见 [`evidence/2026-10-03-fixes-cleanup-live-chain.md`](evidence/2026-10-03-fixes-cleanup-live-chain.md) 与 [`evidence/2026-10-03-integration-live-chain.md`](evidence/2026-10-03-integration-live-chain.md)。
+
+| Merged | Change | Rows it touches |
+|--------|--------|-----------------|
+| #82 | 无活 Worker 时取消 Run，工具账本随终态收尾 | D3, G2 |
+| #83 | exec 单实例断言接入启动入口 | — |
+| #84 #95 | kill 默认 SIGKILL；signal 语义与终态保护 | C7 |
+| #85 | 远端委派接入火山 HiAgent（真实服务未验收） | — |
+| #86 #87 | 通知场景扩展；SSO 部门 claim 预留 | — |
+| #90–#94 #97 #99 | 清理批次 C1–C6：死代码、重复实现、错误映射与 reason_code 透传、注释漂移 | B3, H1 |
+| #96 #98 #100 #101 #104 | 审批原因、进程控制台、前端热点文件拆分 | D5, D6（状态不变） |
+| #102 | `AGENT_RUN_STREAM_MAXLEN` 生效 | B6 |
+| #103 | 文档与实现漂移修正 | — |
+| #105 | 流式工具调用丢失工具名（网关上游空 id / null name） | A2 |
+| #106 | 删除旧 Agent 配置与无 sid JWT 的升级路径 | A5, H1 |
+| #107 | 删除会话回收沙箱工作区 | C1 |
+| #108 | 删除无调用方 BFF 端点与旧配置别名 | — |
+| #109–#111 | `type Loose = any` 全仓清零（行为不变） | — |
