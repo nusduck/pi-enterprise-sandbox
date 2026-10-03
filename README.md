@@ -157,8 +157,10 @@ SANDBOX_BASE_URL=http://localhost:8081
 Sandbox **不再**按空闲 TTL 后台清会话/工作区（旧 `SANDBOX_SESSION_TTL_*` /
 `SANDBOX_CLEANUP_INTERVAL_*` / draft·conversation·audit TTL 配置已移除，设置了也会被忽略）。
 
-公共面没有删除整个 Session 的路由（`DELETE /sessions/{id}` 不存在），文件删除只支持
-按路径（`DELETE /sessions/{id}/files?path=`）。
+会话删除/归档时 agent 调 exec `DELETE /sessions/{id}` 做工作区 GC（幂等：
+先停掉该会话仍在运行的托管作业，再删工作区目录与配对 temp；
+`{"removed": true/false}`；与 files/processes 同一套会话鉴权，跨租户一律 404）。
+文件删除仍只支持按路径（`DELETE /sessions/{id}/files?path=`）。
 
 ### 网络策略（入站 vs 出站分离）
 

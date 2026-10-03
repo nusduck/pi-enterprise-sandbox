@@ -1,5 +1,5 @@
 /**
- * 公共面总路由——把 files/artifacts/datasets/processes 四组路由粘起来。
+ * 公共面总路由——把 files/artifacts/datasets/processes/sessions 五组路由粘起来。
  *
  * 这是 W3-C 的唯一组合入口（_shared #3）：入口只做组合，不重写协议解析、
  * 归属校验、脱敏（各子路由已各自落实无条件脱敏）。公共面走会话作用域，
@@ -27,6 +27,7 @@ import { registerPublicFilesRoutes } from './files.js';
 import { registerPublicArtifactRoutes } from './artifacts.js';
 import { registerPublicDatasetRoutes } from './datasets.js';
 import { registerPublicProcessRoutes } from './processes.js';
+import { registerPublicSessionRoutes } from './sessions.js';
 
 
 
@@ -117,6 +118,13 @@ export function createPublicRouter(deps: PublicRouterDeps): Hono {
     ...(deps.workspacePolicies !== undefined ? { workspacePolicies: deps.workspacePolicies } : {}),
   });
   registerPublicProcessRoutes(app, {
+    workspaceManager: deps.workspaceManager,
+    systemSkillRoot: deps.systemSkillRoot,
+    enabledSkillPackagesFor: deps.enabledSkillPackagesFor,
+    jobRegistry: deps.jobRegistry,
+    ...(deps.workspacePolicies !== undefined ? { workspacePolicies: deps.workspacePolicies } : {}),
+  });
+  registerPublicSessionRoutes(app, {
     workspaceManager: deps.workspaceManager,
     systemSkillRoot: deps.systemSkillRoot,
     enabledSkillPackagesFor: deps.enabledSkillPackagesFor,

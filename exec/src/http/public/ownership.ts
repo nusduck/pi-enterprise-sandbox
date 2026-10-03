@@ -46,10 +46,14 @@ export interface OwnershipContext {
  *   E1 写成「只列 released」，不是「拒绝」。
  * - `upload`：写入。**照常允许**（E7）：发起人得能提供材料，而写进去的东西
  *   不会因此泄漏（他读不到这个工作区）。
+ * - `delete`：会话工作区 GC（`DELETE /sessions/:id`）。与 `upload` 同样不受
+ *   读封锁——归档/删除会话必须能清掉 review 工作区，否则磁盘只增不减；
+ *   跨租户判定由调用路由用策略表的创建组织绑定另行执行（见 `sessions.ts`），
+ *   这里只做与其它路由同一套的 acting/形状校验。
  *
  * 缺省是 `read`：忘了传模式只会更严，不会放行。
  */
-export type WorkspaceAccess = 'read' | 'artifact' | 'upload';
+export type WorkspaceAccess = 'read' | 'artifact' | 'upload' | 'delete';
 
 export interface OwnershipDeps {
   readonly workspaceManager: WorkspaceManager;
@@ -76,7 +80,8 @@ function physicalRootsOf(ctx: WorkspaceContext): readonly string[] {
  * - **404，不是 403**：请求方本来就该认为这个工作区"没有可读的东西"，用 403
  *   等于确认它存在（AGENTS.md §2 跨租户一律 404 的同一条理由）。
  * - **查询失败 → 503**：不能把「策略读不到」当成「不需要审核」，那是 fail-open。
- * - **`artifact` / `upload` 不受影响**：E1–E4 由产物可见性判，E7 明确要求照常上传。
+ * - **`artifact` / `upload` / `delete` 不受影响**：E1–E4 由产物可见性判，E7 明确要求照常上传，
+ *   会话 GC 必须能删 review 工作区（跨租户由 `sessions.ts` 的策略绑定组织检查负责）。
  */
 async function assertWorkspaceReadable(
   workspaceId: string,

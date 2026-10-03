@@ -231,8 +231,11 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
       if (!resp.ok) {
         const detail = (await resp
           .json()
-          .catch(() => ({ detail: resp.statusText }))) as { detail?: string };
-        throw new SandboxError(resp.status, detail.detail || resp.statusText, path);
+          // 纯文本错误体（如 Hono 默认 404 `Not Found`）走这里：statusText 也可能
+          // 为空（undici 构造的 Response 默认空），最后兜底 `HTTP <status>`，
+          // 保证抛出去的永远是可读错误，而不是空消息或 JSON 解析崩溃。
+          .catch(() => ({ detail: resp.statusText || `HTTP ${resp.status}` }))) as { detail?: string };
+        throw new SandboxError(resp.status, detail.detail || resp.statusText || `HTTP ${resp.status}`, path);
       }
       return resp;
     } catch (err) {
@@ -258,13 +261,28 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
      * separate legal-hold requirement — Sandbox disk is deleted when its
      * owning conversation is deleted). A session that was never provisioned
      * or already removed is not an error — Sandbox reports `removed: false`.
+     *
+     * 对应 exec 公共路由 `DELETE /sessions/:sessionId`（与 files/processes
+     * 同一套会话鉴权：服务 `X-API-Key` + 已校验的 `X-Acting-*`，见 `headers()`）。
+     * 响应形状 `{ removed: boolean }` 在这里做运行时断言：形状不对就抛可读错误，
+     * 不能把 `undefined` 流到下游调用方。
      * @param sessionId sandbox_session_id (AgentSession-bound)
      */
-    async removeSessionWorkspace(sessionId: string) {
-      const resp = await sbFetch(`/sessions/${encodeURIComponent(sessionId)}`, {
+    async removeSessionWorkspace(sessionId: string): Promise<{ removed: boolean }> {
+      const encoded = encodeURIComponent(sessionId);
+      const requestPath = `/sessions/${encoded}`;
+      const resp = await sbFetch(requestPath, {
         method: 'DELETE',
       });
-      return resp.json();
+      const body = (await resp.json().catch(() => null)) as { removed?: unknown } | null;
+      if (!body || typeof body !== 'object' || typeof body.removed !== 'boolean') {
+        throw new SandboxError(
+          resp.status,
+          `unexpected session-delete response shape for ${sessionId}`,
+          requestPath,
+        );
+      }
+      return { removed: body.removed };
     },
 
     // ── Managed processes ───────────────────────────

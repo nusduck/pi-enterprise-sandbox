@@ -919,6 +919,7 @@ socket 目录回收，每个连接记一条只含元数据的审计日志（`eve
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `DELETE` | `/sessions/{id}` | 会话工作区 GC（幂等，见下方 Session 删除） |
 | — | `/sessions/{id}/files/*` | 见下方 Files（删除走 `DELETE /sessions/{id}/files?path=`，仅支持删除文件路径） |
 | `GET` `POST` | `/sessions/{id}/datasets` | 列出 / 创建 Dataset |
 | `GET` | `/sessions/{id}/datasets/{did}` | Dataset 详情 |
@@ -928,6 +929,28 @@ socket 目录回收，每个连接记一条只含元数据的审计日志（`eve
 | `GET` | `/sessions/{id}/processes/{pid}/logs\|read` | 进程输出（偏移 / 游标） |
 | `POST` | `/sessions/{id}/processes/{pid}/signal\|stdin\|cancel` | 进程控制 |
 | `GET` | `/health` `/ready` | 探针 |
+
+---
+
+### Session 删除（工作区 GC）
+
+agent 删除/归档会话时调 `DELETE /sessions/{id}`（`{id}` 同样是 `workspace_id`）。
+与 files/processes 同一套会话鉴权（服务 `X-API-Key` + 已校验的 `X-Acting-*`）；
+无 acting 或 id 非法 → **404**（跨租户一律 404，不用 403）。
+
+- 幂等：先终止该会话仍在运行的托管作业（复用作业登记的 `kill` 终止路径，
+  SIGTERM 起、按既有宽限升级 SIGKILL，逐个 best-effort），再删工作区目录与
+  配对的持久 temp。已删/从未创建回 `200 {"removed": false}`，本次删除回
+  `200 {"removed": true}`。
+- 删的是工作区字节 + 配对 temp；产物快照/数据集 blob（控制面共享根）与作业
+  账本行（kill 后进终态、保留作历史）不在范围内，不新建表。
+- 审核工作区可删（GC 不受字节读封锁），但多一道创建组织绑定检查：策略表组织
+  与调用方不一致 → 404；策略查询失败 → 503（fail-closed）。
+
+```json
+// Response (200)
+{ "removed": true }
+```
 
 ---
 

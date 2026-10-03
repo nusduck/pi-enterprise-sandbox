@@ -32,6 +32,17 @@ export interface WorkspacePolicyStore {
   /** 记录这个工作区需要审核。已存在即无操作（只能设置、不能撤销）。 */
   rememberReview(workspaceId: string, orgId: string): Promise<void>;
   /**
+   * 读审核策略绑定的组织。`null` = 没有审核策略（direct 工作区或从未 ensure）。
+   *
+   * 用途唯一：`DELETE /sessions/:id` 的跨租户 404。exec 侧没有 sandbox session
+   * 表，这是唯一能判定"这个审核工作区是谁的"的事实：由 HMAC 内部面 ensure 经
+   * 已校验 claims 写入（`rememberReview`），只能设置、不能撤销。direct 工作区
+   * 没有行，调用方仍走轻量归属（上游 agent/BFF 已做过 owner 校验）。
+   *
+   * **实现必须把 I/O 失败抛出去**，不能吞成 `null`：调用方 fail-closed 503。
+   */
+  reviewOwnerOf(workspaceId: string): Promise<string | null>;
+  /**
    * 读工作区策略。`null` = 没有策略，即 direct。
    *
    * **实现必须把 I/O 失败抛出去**，不能吞成 `null`：调用方按
@@ -83,6 +94,16 @@ export class MySqlWorkspacePolicyStore implements WorkspacePolicyStore {
     const row = rows[0] as Row | undefined;
     return row === undefined ? null : mapRow(row).delivery;
   }
+
+  async reviewOwnerOf(workspaceId: string): Promise<string | null> {
+    // 无需迁移：`org_id` 列已存在，这里只读它，不改变 `deliveryOf` 语义。
+    const [rows] = await this.pool.execute<Row[]>(
+      `SELECT org_id FROM ${this.table} WHERE workspace_id = ?`,
+      [workspaceId],
+    );
+    const row = rows[0] as Row | undefined;
+    return row?.org_id ?? null;
+  }
 }
 
 export class InMemoryWorkspacePolicyStore implements WorkspacePolicyStore {
@@ -100,5 +121,9 @@ export class InMemoryWorkspacePolicyStore implements WorkspacePolicyStore {
 
   async deliveryOf(workspaceId: string): Promise<WorkspaceDelivery | null> {
     return this.map.get(workspaceId)?.delivery ?? null;
+  }
+
+  async reviewOwnerOf(workspaceId: string): Promise<string | null> {
+    return this.map.get(workspaceId)?.orgId ?? null;
   }
 }
