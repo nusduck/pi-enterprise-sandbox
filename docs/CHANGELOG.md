@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — 无效的全局审批模式变量
+
+- 删除 `APPROVAL_MODE`（以及 agent 侧的 `SANDBOX_APPROVAL_MODE` / `APPROVAL_ENABLED` /
+  `SANDBOX_APPROVAL_ENABLED` 别名）：两侧的 `APPROVAL_MODES`、`resolveApprovalMode`、旧布尔解析、
+  生产校验里的 `auto_approve` 分支、`effectiveConfig` / 启动日志里的 `APPROVAL_MODE` 字段，
+  以及 compose 与 `.env.example` 中的相关注入与说明。删除原因：这些变量从未影响审批决策
+  （审批完全由工具风险表 `config/agent/tool-risk.json` 与 Agent 配置 `toolPolicy`、
+  加 MySQL 审批账本决定），只会让运维误以为 `auto_approve` / `deny` 能改变审批行为。
+- 对部署的影响：这些变量现在被完全忽略，不再导致启动失败。以前在生产环境设置了
+  `auto_approve` 会拒绝启动，现在不会（但它同样不产生任何放行效果——高风险工具照常暂停等人审）。
+
 ### Fixed — 后台作业输出在 exec 重启后丢失
 
 - exec 把后台作业输出落到控制根 `job-output/`（运行中约每秒一次，结束时强制一次），作业结束 5 分钟后或 exec 重启后，进程日志与模型 `job_output` 仍能读到重启前的输出；读不到时明确返回 `outputUnavailable`，模型看到“输出不可用”提示。工作区删除时清理对应文件。
@@ -55,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 建 Run 请求体只认 `messages[]` + snake_case：退役 `message.content[]` 形状与 `agentId` / `agentProfileId` / `modelId` 驼峰别名。
 - SSE 续传游标只认 `after_sequence` + `Last-Event-ID`：退役 `afterSequence` / `after` 别名；BFF 转发给 Agent 时也只发 `after_sequence`。
 - BFF 不再读取 `SANDBOX_AUTH_ENABLED`、`SANDBOX_APPROVAL_MODE`、`APPROVAL_ENABLED`、`SANDBOX_APPROVAL_ENABLED`
- （`APPROVAL_MODE` 仍是 BFF 规范变量；Agent 侧继续解析旧布尔映射，不受影响）。
+ （`APPROVAL_MODE` 本身亦已删除，见本版「无效的全局审批模式变量」一节；Agent 侧旧布尔映射一并删除）。
   同步删除 `.env.example` / compose 中 BFF 侧的旧变量投影。
 - `api-server/src/domain/roles.ts` 删除无生产调用的导出（`ROLE_REVIEWER`、`isKnownRole`、`primaryRole`，
   测试同步去掉对应断言；跨包夹具与 Agent 侧实现保留）。

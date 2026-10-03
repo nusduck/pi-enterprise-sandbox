@@ -87,44 +87,6 @@ export function resolveDevelopmentActingIdentity(
   });
 }
 
-/** Supported approval behavior for approval_required policy results. */
-export const APPROVAL_MODES = Object.freeze({
-  ASK: 'ask',
-  AUTO_APPROVE: 'auto_approve',
-  DENY: 'deny',
-} as const);
-
-export type ApprovalMode = typeof APPROVAL_MODES[keyof typeof APPROVAL_MODES];
-
-function nonEmptyEnv(
-  env: NodeJS.ProcessEnv | Record<string, unknown>,
-  key: string,
-): string | null {
-  const value = env?.[key];
-  return value != null && String(value).trim() !== '' ? String(value).trim() : null;
-}
-
-/**
- * Resolve the global approval policy. Default is ask. Only `APPROVAL_MODE` is
- * read — the retired `APPROVAL_ENABLED` / `SANDBOX_APPROVAL_*` booleans are
- * Agent-side concerns (agent/config.ts still parses them) and no longer affect
- * the BFF. auto_approve is explicit and intended only for development.
- */
-export function resolveApprovalMode(
-  env: NodeJS.ProcessEnv | Record<string, unknown> = process.env,
-): string {
-  const explicit = nonEmptyEnv(env, 'APPROVAL_MODE');
-  if (explicit) {
-    const mode = explicit.toLowerCase().replaceAll('-', '_');
-    if ((Object.values(APPROVAL_MODES) as readonly string[]).includes(mode)) return mode;
-    throw new Error(
-      `Invalid APPROVAL_MODE=${explicit}; expected ask|auto_approve|deny`,
-    );
-  }
-
-  return APPROVAL_MODES.ASK;
-}
-
 export function resolveDeploymentEnv(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): 'development' | 'production' {
@@ -184,10 +146,6 @@ export function validateProductionConfig(
     errors.push('AUTH_ENABLED must be true in production');
   }
 
-  if (resolveApprovalMode(env) === APPROVAL_MODES.AUTO_APPROVE) {
-    errors.push('APPROVAL_MODE=auto_approve is forbidden in production (use ask or deny)');
-  }
-
   if (errors.length) {
     throw new ProductionConfigError(
       `Production configuration is unsafe (${errors.length} issue(s)): ${errors.join('; ')}`,
@@ -209,7 +167,6 @@ export function effectiveConfig(cfg: typeof config = config): Record<string, unk
     AGENT_BASE_URL: cfg.AGENT_BASE_URL,
     AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
     AUTH_ENABLED: cfg.AUTH_ENABLED,
-    APPROVAL_MODE: cfg.APPROVAL_MODE,
     JSON_BODY_LIMIT_BYTES: cfg.JSON_BODY_LIMIT_BYTES,
     DATASET_UPLOAD_MAX_BYTES: cfg.DATASET_UPLOAD_MAX_BYTES,
     CORS_ALLOWED_ORIGINS: cfg.CORS_ALLOWED_ORIGINS,
@@ -262,12 +219,6 @@ export const config = {
    */
   AUTH_ENABLED: resolveAuthEnabled(),
   DEVELOPMENT_ACTING_IDENTITY: resolveDevelopmentActingIdentity(),
-  /**
-   * Approval behavior for high-risk tools. Default ask;
-   * auto_approve requires an explicit mode and is rejected in production.
-   * (BFF 自身不执行审批策略，只做生产校验与启动日志。)
-   */
-  APPROVAL_MODE: resolveApprovalMode(),
   JSON_BODY_LIMIT_BYTES:
     parseInt(process.env.JSON_BODY_LIMIT_BYTES || '1048576', 10) || 1024 * 1024,
   DATASET_UPLOAD_MAX_BYTES: resolveDatasetUploadMaxBytes(),
