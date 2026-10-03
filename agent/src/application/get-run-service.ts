@@ -13,30 +13,23 @@ import { ExternalIdentityResolver } from './parent/external-identity-resolver.js
 import { OwnerScopedNotFoundError, ValidationError, assertDomainRunId } from './errors.js';
 import { RUN_STATUS } from '../domain/run/run-status.js';
 import { INTERACTION_STATUS } from '../domain/interaction/interaction-status.js';
+import type { TransactionManager } from '../infrastructure/mysql/transaction-manager.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { mapRunRow } from '../infrastructure/mysql/repositories/run-repository.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
+type RunRecord = ReturnType<typeof mapRunRow>;
+type EnrichedRun = RunRecord & { sandboxSessionId?: string; workspaceId?: string; pendingInput?: { interactionId: string; interactionType: string; title: string; message: string | null; options: string[]; status: string; }; };
 
 export class GetRunService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  createRepositories: Loose;
-  db: Loose;
-  defaultProvider: Loose;
-  tx: Loose;
+  createRepositories: typeof createRepositoryBundle;
+  db: Parameters<typeof createRepositoryBundle>[0] | null;
+  defaultProvider: string | undefined;
+  tx: TransactionManager | null;
 
-  /**
-   * @param {{
-   *   createRepositories: (db?: any) => {
-   *     organizations: any,
-   *     externalRefs: any,
-   *     runs: any,
-   *   },
-   *   db?: any,
-   *   defaultProvider?: string,
-   *   transactionManager?: { run: (fn: (trx: any) => Promise<any>) => Promise<any> } | null,
-   * }} deps
-   */
-  constructor(deps: { createRepositories: (db?: any) => { organizations: any, externalRefs: any, runs: any, }, db?: any, defaultProvider?: string, transactionManager?: { run: (fn: (trx: any) => Promise<any>) => Promise<any> } | null, }) {
+  /** @param {{ createRepositories: typeof createRepositoryBundle, db?: Parameters<typeof createRepositoryBundle>[0], defaultProvider?: string, transactionManager?: TransactionManager | null, }} deps */
+  constructor(deps: { createRepositories: typeof createRepositoryBundle, db?: Parameters<typeof createRepositoryBundle>[0], defaultProvider?: string, transactionManager?: TransactionManager | null, }) {
     if (typeof deps?.createRepositories !== 'function') {
       throw new Error('GetRunService requires createRepositories');
     }
@@ -94,7 +87,7 @@ export class GetRunService {
       }
 
       const scope = { orgId: owner.orgId, userId: owner.userId };
-      const run = await repos.runs.getById(runId, scope);
+      const run: EnrichedRun | null = await repos.runs.getById(runId, scope);
       if (!run) {
         throw new OwnerScopedNotFoundError('Run not found', {
           resource: 'runs',
@@ -126,7 +119,7 @@ export class GetRunService {
         try {
           const pending = await repos.interactions.getPendingForRun(runId, scope);
           if (pending && pending.status === INTERACTION_STATUS.PENDING) {
-            const request =
+            const request: Record<string, unknown> =
               pending.requestJson && typeof pending.requestJson === 'object'
                 ? pending.requestJson
                 : {};

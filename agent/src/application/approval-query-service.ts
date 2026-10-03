@@ -9,9 +9,9 @@ import { NotFoundError } from '../infrastructure/mysql/errors.js';
 import { isUlid } from '../domain/shared/ulid.js';
 import { APPROVAL_LIST_DEFAULT_LIMIT } from '../infrastructure/mysql/repositories/approval-repository.js';
 import { decodeKeysetCursor, encodeKeysetCursor, parseKeysetLimit } from './keyset-cursor.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
 
 function publicStatus(status) {
   return String(status || '').toLowerCase();
@@ -62,10 +62,10 @@ export function presentApproval(approval) {
 
 export class ApprovalQueryService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  createRepositories: Loose;
-  db: Loose;
+  createRepositories: typeof createRepositoryBundle;
+  db: Parameters<typeof createRepositoryBundle>[0];
 
-  constructor(deps: { createRepositories: (db: any) => any, db: any }) {
+  constructor(deps: { createRepositories: typeof createRepositoryBundle, db: Parameters<typeof createRepositoryBundle>[0] }) {
     if (typeof deps?.createRepositories !== 'function' || !deps.db) {
       throw new Error('ApprovalQueryService requires repositories and db');
     }

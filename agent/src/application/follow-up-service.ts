@@ -6,16 +6,16 @@
 import { assertUlid } from '../domain/shared/ulid.js';
 import { ValidationError } from './errors.js';
 import type { ExternalAuth } from './parent/external-identity-resolver.js';
+import type { CreateRunService } from './create-run-service.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type FollowUpRunPort = Pick<CreateRunService, 'execute'>;
 
 export class FollowUpService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  createRunService: Loose;
+  createRunService: FollowUpRunPort;
 
-  /** @param {{ createRunService: { execute: Function } }} deps */
-  constructor(deps) {
+  /** deps.createRunService 需带 execute（类型见 FollowUpRunPort） */
+  constructor(deps: { createRunService: FollowUpRunPort }) {
     if (!deps?.createRunService?.execute) {
       throw new Error('FollowUpService requires createRunService.execute');
     }

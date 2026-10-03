@@ -16,9 +16,6 @@ import {
 import { OwnerScopedNotFoundError, ValidationError } from '../errors.js';
 import { assertUlid, isLegacyOrUuidIdentity, isUlid } from '../../domain/shared/ulid.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Default external identity provider for BFF compatibility. */
 export const DEFAULT_EXTERNAL_PROVIDER = 'bff';
 
@@ -80,8 +77,8 @@ export interface ExternalAuth {
 
 export class ExternalIdentityResolver {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  repos: Loose;
-  defaultProvider: Loose;
+  repos: { organizations: import('../../infrastructure/mysql/repositories/organization-repository.js').OrganizationRepository, externalRefs: import('../../infrastructure/mysql/repositories/external-reference-repository.js').ExternalReferenceRepository, };
+  defaultProvider: string;
 
   /**
    * @param {{

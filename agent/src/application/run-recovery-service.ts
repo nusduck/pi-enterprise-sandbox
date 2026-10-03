@@ -42,16 +42,16 @@ import {
   APPROVAL_STATUS,
   isTerminalApprovalStatus,
 } from '../domain/tool/approval-status.js';
+import type { TransactionManager } from '../infrastructure/mysql/transaction-manager.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { RunQueueAdapter } from '../bootstrap/container-run-queue.js';
+import type { LeaseManager } from '../infrastructure/redis/lease-manager.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
+type RunRecord = { runId: string; orgId: string; userId: string; traceId: string; status: string; agentSessionId: string; cancelRequestedAt: string | null; cancelRequestedBy: string | null; cancelReason: string | null; };
 
 // Membership checks below (.has()/.includes()) run against a `String(run.status)`
 // that has already been widened away from its literal union, so the sets/arrays
-// themselves are typed as plain `string` containers rather than the narrower
-// literal unions `TOOL_EXECUTION_STATUS`/`RUN_STATUS` would otherwise infer.
-// Membership testing is safe for any string value (an unknown status just
-// yields `false`), so this is a type-only widening, not a behavior change.
 const REPLAY_SAFE_TOOL_STATUSES: Set<string> = new Set([
   TOOL_EXECUTION_STATUS.SUCCEEDED,
   TOOL_EXECUTION_STATUS.FAILED,
@@ -83,25 +83,15 @@ export type RecoveryAction = RecoveryActionBase & {
 
 export class RunRecoveryService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  runQueue: Loose;
-  generateId: Loose;
-  stateMachine: Loose;
-  now: Loose;
-  leaseManager: Loose;
+  tx: TransactionManager;
+  createRepositories: typeof createRepositoryBundle;
+  runQueue: RunQueueAdapter;
+  generateId: () => string;
+  stateMachine: typeof runStateMachine;
+  now: () => Date;
+  leaseManager: LeaseManager | null;
 
-  /**
-   * @param {{
-   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => { runs: any, runEvents: any, outbox: any, interactions?: any, approvals?: any, toolExecutions?: any, sessions?: any },
-   *   runQueue: { enqueue: (ref: { runId: string, orgId: string, traceId: string }, options?: object) => Promise<unknown> },
-   *   generateId: () => string,
-   *   runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine,
-   *   now?: () => Date,
-   *   leaseManager?: { getOwner: (runId: string) => Promise<string | null> } | null,
-   * }} deps
-   */
+  /** @param {{ transactionManager: TransactionManager, createRepositories: typeof createRepositoryBundle, runQueue: RunQueueAdapter, generateId: () => string, runStateMachine?: typeof runStateMachine, now?: () => Date, leaseManager?: LeaseManager | null, }} deps */
   constructor(deps) {
     if (!deps?.transactionManager?.run) {
       throw new Error('RunRecoveryService requires transactionManager');
@@ -185,7 +175,7 @@ export class RunRecoveryService {
    * @param run
    * @returns {Promise<RecoveryAction>}
    */
-  async #recoverOne(run: Record<string, any>): Promise<RecoveryAction> {
+  async #recoverOne(run: RunRecord): Promise<RecoveryAction> {
     const runId = String(run.runId);
     const orgId = String(run.orgId);
     const traceId = String(run.traceId || '');
@@ -244,7 +234,7 @@ export class RunRecoveryService {
         });
         if (status === RUN_STATUS.ACCEPTED) {
           const proj = await this.#projectAcceptedToQueued(run);
-          if (!proj.ok && !proj.alreadyAdvanced) {
+          if (!proj.ok && !('alreadyAdvanced' in proj && proj.alreadyAdvanced)) {
             return {
               ...base,
               action: 'enqueued',
@@ -288,7 +278,7 @@ export class RunRecoveryService {
    * @param handler
    * @returns {Promise<RecoveryAction>}
    */
-  async #terminalizeParkedCancel(run: Record<string, any>, base: RecoveryActionBase, handler: { parkedStatus: string, terminalize: (repos: any, current: any, scope: any) => Promise<{ status: string }> }): Promise<RecoveryAction> {
+  async #terminalizeParkedCancel(run: RunRecord, base: RecoveryActionBase, handler: { parkedStatus: string, terminalize: (repos: Repos, current: RunRecord, scope: { orgId: string, userId: string }) => Promise<{ status: string }> }): Promise<RecoveryAction> {
     return recoverParkedCancel({
       tx: this.tx,
       createRepositories: this.createRepositories,
@@ -305,7 +295,7 @@ export class RunRecoveryService {
    *   the original active job cannot absorb it
    * - still PENDING → leave parked (the user must answer)
    */
-  async #recoverWaitingInput(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
+  async #recoverWaitingInput(run: RunRecord, base: RecoveryActionBase): Promise<RecoveryAction> {
     // A Run can get cancel intent with no live worker to act on it — a
     // sub-agent child reached by its parent's cancel cascade is exactly that.
     // Without this the child stays parked on ask_user forever, because the
@@ -402,7 +392,7 @@ export class RunRecoveryService {
    * @param base
    * @returns {Promise<RecoveryAction>}
    */
-  async #recoverWaitingApproval(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
+  async #recoverWaitingApproval(run: RunRecord, base: RecoveryActionBase): Promise<RecoveryAction> {
     const scope = { orgId: run.orgId, userId: run.userId };
     if (run.cancelRequestedAt) {
       return this.#terminalizeParkedCancel(run, base, {
@@ -476,7 +466,7 @@ export class RunRecoveryService {
    * @param base
    * @returns {Promise<RecoveryAction>}
    */
-  async #terminalizeCancelling(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
+  async #terminalizeCancelling(run: RunRecord, base: RecoveryActionBase): Promise<RecoveryAction> {
     const leaseHeld = await this.#isLeaseHeld(run.runId);
     if (leaseHeld === true) {
       return {
@@ -522,7 +512,7 @@ export class RunRecoveryService {
           ...base,
           status: RUN_STATUS.CANCELLED,
           action: 'terminalized',
-          reason: result.already
+          reason: 'already' in result && result.already
             ? 'already CANCELLED'
             : 'CANCELLING→CANCELLED (no live lease)',
         };
@@ -552,7 +542,7 @@ export class RunRecoveryService {
    * @param base
    * @returns {Promise<RecoveryAction>}
    */
-  async #reconcileOrphanRuntime(run: Record<string, any>, base: RecoveryActionBase): Promise<RecoveryAction> {
+  async #reconcileOrphanRuntime(run: RunRecord, base: RecoveryActionBase): Promise<RecoveryAction> {
     const leaseHeld = await this.#isLeaseHeld(run.runId);
     if (leaseHeld === true) {
       return {
@@ -804,14 +794,14 @@ export class RunRecoveryService {
             'recovered: lease-free STARTING/RUNNING replayed from durable session state',
         });
       });
-      if (result.recoveryRequired) {
+      if ('recoveryRequired' in result && result.recoveryRequired) {
         return {
           ...base,
           action: 'needsReconciliation',
           reason: result.reason,
         };
       }
-      if (result.resumePending) {
+      if ('resumePending' in result && result.resumePending) {
         try {
           await this.runQueue.enqueue(
             {
@@ -841,7 +831,7 @@ export class RunRecoveryService {
         };
       }
       if (result.ok) {
-        if (result.already && result.status) {
+        if ('already' in result && result.already && result.status) {
           return {
             ...base,
             status: result.status,
@@ -849,7 +839,7 @@ export class RunRecoveryService {
             reason: `already ${result.status}`,
           };
         }
-        if (result.status === RUN_STATUS.CANCELLED) {
+        if ('status' in result && result.status === RUN_STATUS.CANCELLED) {
           return {
             ...base,
             status: RUN_STATUS.CANCELLED,
@@ -861,7 +851,7 @@ export class RunRecoveryService {
           ...run,
           status: RUN_STATUS.RETRYING,
         });
-        if (!projected.ok && !projected.alreadyAdvanced) {
+        if (!projected.ok && !('alreadyAdvanced' in projected && projected.alreadyAdvanced)) {
           return {
             ...base,
             status: RUN_STATUS.RETRYING,
@@ -913,7 +903,7 @@ export class RunRecoveryService {
     }
   }
 
-  async #projectAcceptedToQueued(run: Record<string, any>) {
+  async #projectAcceptedToQueued(run: RunRecord) {
     const scope = { orgId: run.orgId, userId: run.userId };
     try {
       this.stateMachine.assertTransition(
@@ -945,7 +935,7 @@ export class RunRecoveryService {
     }
   }
 
-  async #projectRetryingToQueued(run: Record<string, any>) {
+  async #projectRetryingToQueued(run: RunRecord) {
     const scope = { orgId: run.orgId, userId: run.userId };
     try {
       this.stateMachine.assertTransition(

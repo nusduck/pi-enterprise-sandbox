@@ -27,9 +27,9 @@ import {
   normalizeListSearch,
   parseKeysetLimit,
 } from './keyset-cursor.js';
-
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { createSandboxClient } from '../infrastructure/sandbox/sandbox-client.js';
+import type { mapAgentSession, mapConversation, mapMessage } from '../infrastructure/mysql/row-mappers.js';
 
 const MAX_CREATE_ATTEMPTS = 3;
 
@@ -116,7 +116,7 @@ export function presentTranscriptMessage(msg) {
  * @param [messages]
  * @param [session]
  */
-export function presentConversation(row: Record<string, any>, messages: Record<string, any>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null, deliveryMode?: string|null } | null = null) {
+export function presentConversation(row: ReturnType<typeof mapConversation> & { sandboxSessionId?: string | null, sandbox_session_id?: string | null, workspaceId?: string | null, workspace_id?: string | null }, messages: ReturnType<typeof mapMessage>[] = [], session: { sandboxSessionId?: string|null, workspaceId?: string|null, agentSessionId?: string|null, deliveryMode?: string|null } | null = null) {
   const transcript = Array.isArray(messages)
     ? messages.map(presentTranscriptMessage).filter(Boolean)
     : [];
@@ -150,28 +150,28 @@ export function presentConversation(row: Record<string, any>, messages: Record<s
 
 export class ConversationService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  db: Loose;
-  generateId: Loose;
-  now: Loose;
-  sessionProvisioner: Loose;
-  createSandboxClient: Loose;
-  logger: Loose;
+  tx: import('../infrastructure/mysql/transaction-manager.js').TransactionManager;
+  createRepositories: (db?: import('../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>;
+  db: import('../infrastructure/mysql/transaction-manager.js').DbExecutor;
+  generateId: () => string;
+  now: () => Date;
+  sessionProvisioner: { ensure: (input: Record<string, unknown>) => Promise<{ status: unknown }> } | null;
+  createSandboxClient: typeof createSandboxClient | null;
+  logger: { error: (...args: unknown[]) => void };
 
   /**
    * @param {{
- *   transactionManager: { run: Function },
- *   createRepositories: (db: any) => any,
- *   db: any,
+ *   transactionManager: import('../infrastructure/mysql/transaction-manager.js').TransactionManager,
+ *   createRepositories: (db?: import('../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>,
+ *   db: import('../infrastructure/mysql/transaction-manager.js').DbExecutor,
  *   generateId: () => string,
  *   now?: () => Date,
- *   sessionProvisioner?: { ensure: Function } | null,
- *   createSandboxClient?: (opts: { auth?: object }) => { removeSessionWorkspace: Function } | null,
- *   logger?: { error: Function },
+ *   sessionProvisioner?: { ensure: (input: Record<string, unknown>) => Promise<{ status: unknown }> } | null,
+ *   createSandboxClient?: typeof createSandboxClient | null,
+ *   logger?: { error: (...args: unknown[]) => void },
  * }} deps
    */
-  constructor(deps: { transactionManager: { run: Function }, createRepositories: (db: any) => any, db: any, generateId: () => string, now?: () => Date, sessionProvisioner?: { ensure: Function } | null, createSandboxClient?: (opts: { auth?: Record<string, any> }) => { removeSessionWorkspace: Function } | null, logger?: { error: Function }, }) {
+  constructor(deps: { transactionManager: import('../infrastructure/mysql/transaction-manager.js').TransactionManager, createRepositories: (db?: import('../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>, db: import('../infrastructure/mysql/transaction-manager.js').DbExecutor, generateId: () => string, now?: () => Date, sessionProvisioner?: { ensure: (input: Record<string, unknown>) => Promise<{ status: unknown }> } | null, createSandboxClient?: typeof createSandboxClient | null, logger?: { error: (...args: unknown[]) => void }, }) {
     if (!deps?.transactionManager || typeof deps.transactionManager.run !== 'function') {
       throw new Error('ConversationService requires transactionManager');
     }
@@ -210,7 +210,7 @@ export class ConversationService {
    * @param row conversation row
    * @param owner
    */
-  async #sessionForConversation(repos: Record<string, any>, row: Record<string, any>, owner: { orgId: string, userId: string }) {
+  async #sessionForConversation(repos: ReturnType<typeof createRepositoryBundle>, row: ReturnType<typeof mapConversation>, owner: { orgId: string, userId: string }) {
     const agentSessionId = row?.currentAgentSessionId ?? null;
     if (!agentSessionId || typeof repos.sessions?.getById !== 'function') {
       return null;
@@ -229,7 +229,7 @@ export class ConversationService {
   }
 
   /** 绑定版本的交付模式；读不到一律 `direct`（不谎报审核模式）。 */
-  async #deliveryModeFor(repos: Record<string, any>, session: Record<string, any>): Promise<'direct' | 'review'> {
+  async #deliveryModeFor(repos: ReturnType<typeof createRepositoryBundle>, session: ReturnType<typeof mapAgentSession>): Promise<'direct' | 'review'> {
     const agentVersionId = session?.agentVersionId ?? null;
     if (!agentVersionId || typeof repos.catalog?.getVersionById !== 'function') return 'direct';
     try {
@@ -342,14 +342,12 @@ export class ConversationService {
     return presentConversation({ ...row, title }, messages, session);
   }
 
-  async create(auth, input = {}) {
+  async create(auth, input: Record<string, unknown> = {}) {
     if (input == null || typeof input !== 'object' || Array.isArray(input)) {
       throw new ValidationError('conversation body must be an object');
     }
-    // @ts-expect-error 遗留JS占位类型object未展开，访问title需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'title' does not exist on type 'object'.
     const title = normalizeTitle(input.title);
     const selectedAgentId = normalizeSelectedAgentId(
-      // @ts-expect-error 遗留JS占位类型object未展开，访问agent_id需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'agent_id' does not exist on type 'object'.
       input.agent_id ?? input.agentId ?? null,
     );
     let lastRace = null;
@@ -482,10 +480,9 @@ export class ConversationService {
     }
   }
 
-  async ensureSession(auth, input = {}) {
+  async ensureSession(auth, input: Record<string, unknown> = {}) {
     if (!this.sessionProvisioner?.ensure) {
-      const error = new Error('Sandbox session provisioning unavailable');
-      // @ts-expect-error 遗留JS占位类型object未展开，访问code需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'code' does not exist on type 'Error'.
+      const error: Error & { code?: string } = new Error('Sandbox session provisioning unavailable');
       error.code = 'SANDBOX_SESSION_PROVISION_FAILED';
       throw error;
     }
@@ -493,13 +490,11 @@ export class ConversationService {
       throw new ValidationError('session ensure body must be an object');
     }
     const rawConversationId =
-      // @ts-expect-error 遗留JS占位类型object未展开，访问conversationId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'conversationId' does not exist on type 'object'.
       input.conversationId ?? input.conversation_id ?? null;
     let conversationId = null;
     // 既有会话：Agent 由会话本身决定（D2 不可变），请求体里的 agent_id 不参与。
     // 新会话：这里就是"建会话"的时刻，按请求选 Agent。
     let selectedAgentId = normalizeSelectedAgentId(
-      // @ts-expect-error 遗留JS占位类型object未展开，访问agent_id需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'agent_id' does not exist on type 'object'.
       input.agent_id ?? input.agentId ?? null,
     );
     if (rawConversationId != null && rawConversationId !== '') {
@@ -584,7 +579,6 @@ export class ConversationService {
       // 交付策略随会话绑定的版本固定（ADR 0016 D3）：只有 review 才发出去，
       // exec 那边是 `INSERT IGNORE`，所以这条信号只能把工作区置成审核。
       ...(parents.deliveryMode === 'review' ? { delivery: 'review' } : {}),
-      // @ts-expect-error 遗留JS占位类型object未展开，访问traceId需收窄，存活代码先用expect-error收敛 —— TS2339: Property 'traceId' does not exist on type 'object'.
       traceId: input.traceId,
     });
     return {

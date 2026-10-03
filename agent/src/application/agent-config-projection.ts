@@ -17,8 +17,8 @@ import {
   type HostArgumentSpec,
 } from '../domain/agent/mcp-host-arguments.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+/** 温度能力是注册表行的可选扩展字段（`ModelEntry` 主类型之外,缺失即不支持）。 */
+type TemperatureCapable = { readonly supports_temperature?: unknown; readonly temperature_min?: unknown; readonly temperature_max?: unknown };
 
 /**
  * v1 白名单常量跟着 `canonicalObject` 一起搬过来：它按这些清单决定嵌套键的排序，
@@ -103,7 +103,7 @@ export function modelIdOf(entry: ModelEntry | null | undefined): string | null {
   return entry?.model_id ? String(entry.model_id) : null;
 }
 
-export function safeModel(entry: ModelEntry) {
+export function safeModel(entry: ModelEntry & TemperatureCapable) {
   return {
     modelId: entry.model_id,
     provider: entry.provider,
@@ -113,12 +113,12 @@ export function safeModel(entry: ModelEntry) {
     supportsReasoning: Boolean(entry.supports_reasoning),
     // The current DSH loop has no temperature call-config seam.  Keep this
     // explicit so a future adapter must opt in before the UI exposes it.
-    supportsTemperature: Boolean((entry as Loose).supports_temperature),
-    ...(Number.isFinite(Number((entry as Loose).temperature_min))
-      ? { temperatureMin: Number((entry as Loose).temperature_min) }
+    supportsTemperature: Boolean(entry.supports_temperature),
+    ...(Number.isFinite(Number(entry.temperature_min))
+      ? { temperatureMin: Number(entry.temperature_min) }
       : {}),
-    ...(Number.isFinite(Number((entry as Loose).temperature_max))
-      ? { temperatureMax: Number((entry as Loose).temperature_max) }
+    ...(Number.isFinite(Number(entry.temperature_max))
+      ? { temperatureMax: Number(entry.temperature_max) }
       : {}),
   };
 }

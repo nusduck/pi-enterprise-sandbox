@@ -26,6 +26,7 @@ import {
 import { assertUlid } from '../../domain/shared/ulid.js';
 import { formatUserExternalSubject } from '../../infrastructure/mysql/repositories/organization-repository.js';
 import { OwnerScopedNotFoundError, ValidationError } from '../errors.js';
+import type { createRepositoryBundle } from '../../bootstrap/container-env.js';
 import { parseDeliveryPolicy } from '@dsh/contract/delivery-policy.js';
 import {
   A2A_IDENTITY_PROVIDER,
@@ -33,8 +34,7 @@ import {
   normalizeA2aClientId,
 } from './identity.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Tx = import('../../infrastructure/mysql/transaction-manager.js').TransactionManager | null;
 
 /**
  * 审核模式的 Agent 不能对外暴露 A2A（ADR 0016 D3、design §2）。
@@ -54,7 +54,7 @@ type Loose = any;
  * `createRepositoryBundle` 固定提供，所以这里不会在真实链路上静默失效。
  */
 export async function assertAgentNotUnderArtifactReview(
-  repos: Loose,
+  repos: ReturnType<typeof createRepositoryBundle>,
   input: { orgId: string, agentId: string },
 ) {
   if (typeof repos?.catalog?.getDefinitionById !== 'function') return;
@@ -82,7 +82,7 @@ const DUMMY_SECRET_HASH =
 export class A2aAuthError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   name: string;
-  code: Loose;
+  code: string;
 
   constructor(message: string, opts: { code?: string } = {}) {
     super(message);
@@ -126,24 +126,24 @@ export function evaluateStoredExpiry(expiresAt, now = () => new Date()) {
 
 export class A2aCredentialService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  createRepositories: Loose;
-  tx: Loose;
-  db: Loose;
-  generateId: Loose;
-  now: Loose;
-  allowNonTransactionalRotate: Loose;
+  createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>;
+  tx: Tx;
+  db: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null;
+  generateId: () => string;
+  now: () => Date;
+  allowNonTransactionalRotate: boolean;
 
   /**
    * @param {{
-   *   createRepositories: (db?: any) => any,
-   *   transactionManager?: { run: (fn: (trx: any) => Promise<any>) => Promise<any> } | null,
-   *   db?: any,
+   *   createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>,
+   *   transactionManager?: Tx,
+   *   db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null,
    *   generateId: () => string,
    *   now?: () => Date,
    *   allowNonTransactionalRotate?: boolean,
    * }} deps
    */
-  constructor(deps: { createRepositories: (db?: any) => any, transactionManager?: { run: (fn: (trx: any) => Promise<any>) => Promise<any> } | null, db?: any, generateId: () => string, now?: () => Date, allowNonTransactionalRotate?: boolean, }) {
+  constructor(deps: { createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>, transactionManager?: Tx, db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null, generateId: () => string, now?: () => Date, allowNonTransactionalRotate?: boolean, }) {
     if (typeof deps?.createRepositories !== 'function') {
       throw new Error('A2aCredentialService requires createRepositories');
     }
@@ -229,7 +229,7 @@ export class A2aCredentialService {
    * @param input
    * @returns {Promise<string>}
    */
-  async #resolveServiceUser(repos: Record<string, any>, input: { orgId: string, clientId: string }) {
+  async #resolveServiceUser(repos: ReturnType<typeof createRepositoryBundle>, input: { orgId: string, clientId: string }) {
     const organizations = repos?.organizations;
     if (
       !organizations?.getUserByExternalSubject ||
@@ -506,7 +506,7 @@ export class A2aCredentialService {
   }
 }
 
-export function publicCredentialView(cred: Record<string, any> | null) {
+export function publicCredentialView(cred: ReturnType<typeof mapA2aCredential> | null) {
   if (!cred) return null;
   return {
     credentialId: cred.credentialId,

@@ -14,8 +14,8 @@
 import { computeSandboxToolRequestHash } from './sandbox-request-binder.js';
 import { TOOL_EXECUTION_STATUS, TOOL_SOURCE } from '../domain/tool/tool-execution-status.js';
 
-/** 过渡期宽松类型：仓储与行对象仍是 JS 形状。 */
-type Loose = any;
+interface DispatchToolExecution { readonly status: string; readonly toolSource: string; readonly toolExecutionId: string; readonly toolCallId: string; }
+interface DispatchRepos { toolExecutions: { bindSandboxRequest(input: { toolExecutionId: string; runId: string; toolCallId: string; toolName: string; agentSessionId: string; conversationId: string; sandboxSessionId: string; requestHash: string; requestHashVersion: number; executionFenceToken: number; orgId: string; userId: string }): Promise<{ bound: boolean; toolExecution: DispatchToolExecution }> }; }
 
 /**
  * 为已 RUNNING 的 sandbox 工具行绑定请求；非 sandbox 工具或非 RUNNING 原样返回。
@@ -25,13 +25,13 @@ type Loose = any;
  * 同一 toolCallId 换了参数重来时，绑定冲突抛 ConflictError——派发前 fail-closed。
  */
 export async function bindDispatchedSandboxRequest(input: {
-  repos: Loose;
-  toolExecution: Loose;
+  repos: DispatchRepos;
+  toolExecution: DispatchToolExecution;
   toolName: string;
   args: unknown;
   executionFenceToken: number;
   context: { orgId: string; userId: string; runId: string; agentSessionId: string; conversationId?: string | null; sandboxSessionId?: string | null };
-}): Promise<Loose> {
+}): Promise<DispatchToolExecution> {
   const { toolExecution, context } = input;
   if (
     toolExecution?.status !== TOOL_EXECUTION_STATUS.RUNNING ||

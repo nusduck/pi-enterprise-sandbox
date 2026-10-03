@@ -20,7 +20,7 @@ import {
   toDshPromptInvocation,
 } from './dsh-run-input.js';
 
-type Loose = any;
+type PromptContent = string | Array<{ type: string; text?: string }>;
 
 /**
  * 把平台文本前置到提示词之前。
@@ -28,16 +28,15 @@ type Loose = any;
  * 提示词可能是字符串，也可能是分片数组（多模态）；两种形状都要处理，否则数组形状
  * 会退化成 `"[object Object]"` 或直接丢注入。
  */
-export function prependPlatformText(prompt: Loose, text: string | null | undefined): Loose {
+export function prependPlatformText(prompt: PromptContent, text: string | null | undefined) {
   const prefix = typeof text === 'string' ? text.trim() : '';
   if (!prefix) return prompt;
   if (typeof prompt === 'string') return `${prefix}\n\n${prompt}`;
   if (Array.isArray(prompt)) {
     return [{ type: 'text', text: prefix }, ...prompt];
   }
-  if (prompt && typeof prompt === 'object' && typeof prompt.text === 'string') {
-    return { ...prompt, text: `${prefix}\n\n${prompt.text}` };
-  }
+  const legacyObj: { text?: unknown } = prompt; // 对象分支兜底：签名只收string|array，直接读text会是never
+  if (legacyObj && typeof legacyObj.text === 'string') return { ...legacyObj, text: `${prefix}\n\n${legacyObj.text}` };
   return prompt;
 }
 
@@ -52,7 +51,7 @@ export interface TriggeringPromptInput {
 }
 
 /** 触发消息 → 本次 prompt（含审核上下文注入与附件清单）。 */
-export function buildTriggeringPrompt(input: TriggeringPromptInput): Loose {
+export function buildTriggeringPrompt(input: TriggeringPromptInput) {
   const base = prependPlatformText(
     derivePromptFromTriggeringMessage(input.triggering),
     input.reviewContext ?? null,
@@ -67,7 +66,7 @@ export function buildTriggeringPrompt(input: TriggeringPromptInput): Loose {
 }
 
 export interface AttachPromptImagesInput {
-  readonly prompt: Loose;
+  readonly prompt: { text: string; options?: { images?: unknown } };
   readonly imageAttachments: readonly unknown[];
   readonly modelAcceptsImages: boolean;
   readonly loader:
@@ -79,7 +78,7 @@ export interface AttachPromptImagesInput {
         traceId: unknown;
         traceState: unknown;
         signal: unknown;
-      }) => Promise<Loose>)
+      }) => Promise<unknown>)
     | null
     | undefined;
   readonly sandboxSessionId: unknown;
@@ -105,7 +104,7 @@ export async function attachPromptImages(
   if (!input.loader) {
     return { ok: false, statusReason: 'image attachments require a configured attachment store' };
   }
-  let images: Loose;
+  let images: unknown;
   try {
     images = await input.loader({
       attachments: input.imageAttachments,

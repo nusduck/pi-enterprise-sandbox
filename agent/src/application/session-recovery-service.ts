@@ -37,9 +37,10 @@ import {
 } from '../infrastructure/mysql/repositories/agent-session-snapshot-repository.js';
 import { AGGREGATE_TYPE_RUN } from '../infrastructure/outbox/outbox-status.js';
 import { createHash } from 'node:crypto';
+import type { TransactionManager } from '../infrastructure/mysql/transaction-manager.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
 
 /** customType for protected platform manifest inside session JSONL. */
 export const PLATFORM_MANIFEST_CUSTOM_TYPE = 'platform.session.manifest';
@@ -88,10 +89,10 @@ export function buildProtectedManifestEntry(input: { id: string, parentId?: stri
  * @param entries
  * @returns {object | null}
  */
-export function findProtectedManifest(entries: Record<string, any>[]) {
+export function findProtectedManifest(entries: readonly unknown[]) {
   if (!Array.isArray(entries)) return null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const e = entries[i];
+    const e = entries[i] as { type?: unknown; customType?: unknown; data?: unknown } | null | undefined; // 条目来自已校验的快照载荷，这里只做形状收窄
     if (
       e &&
       e.type === 'custom' &&
@@ -115,28 +116,13 @@ function materializeChecksum(payload: unknown) {
 
 export class SessionRecoveryService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  generateId: Loose;
-  now: Loose;
+  tx: TransactionManager | { run: TransactionManager['run'] };
+  createRepositories: typeof createRepositoryBundle;
+  generateId: () => string;
+  now: () => Date;
 
-  /**
-   * @param {{
-   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => {
-   *     sessions: any,
-   *     sessionSnapshots: any,
-   *     journal: any,
-   *     runEvents?: any,
-   *     outbox?: any,
-   *     runs?: any,
-   *     catalog?: any,
-   *   },
-   *   generateId: () => string,
-   *   now?: () => Date,
-   * }} deps
-   */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => { sessions: any, sessionSnapshots: any, journal: any, runEvents?: any, outbox?: any, runs?: any, catalog?: any, }, generateId: () => string, now?: () => Date, }) {
+  /** @param {{ transactionManager: TransactionManager | { run: TransactionManager['run'] }, createRepositories: typeof createRepositoryBundle, generateId: () => string, now?: () => Date, }} deps */
+  constructor(deps: { transactionManager: TransactionManager | { run: TransactionManager['run'] }, createRepositories: typeof createRepositoryBundle, generateId: () => string, now?: () => Date, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SessionRecoveryService requires transactionManager.run');
     }
@@ -292,7 +278,7 @@ export class SessionRecoveryService {
 
     // Case: empty session (no snapshot pointer, no journal)
     if (
-      (!snapshot || snapshot.__error) &&
+      (!snapshot || '__error' in snapshot) &&
       !journalComplete &&
       Number(session.sessionVersion) === 0
     ) {
@@ -306,7 +292,7 @@ export class SessionRecoveryService {
     }
 
     // Case: usable pointed snapshot (acceleration). Cross-check journal when present.
-    if (snapshot && !snapshot.__error) {
+    if (snapshot && !('__error' in snapshot)) {
       const snapPayload = validateSnapshotPayload(snapshot.snapshotJson);
       const snapChecksum = materializeChecksum(snapPayload);
 
@@ -323,10 +309,12 @@ export class SessionRecoveryService {
         }
         // Latest protected manifest must bind the content-only journal digest.
         const manifest = findProtectedManifest(snapPayload.entries);
+        const manifestData: unknown = manifest?.data;
+        const manifestDigest = manifestData && typeof manifestData === 'object' && !Array.isArray(manifestData) && 'journalDigest' in manifestData ? manifestData.journalDigest : undefined;
         if (
-          manifest?.data?.journalDigest &&
+          manifestDigest &&
           journal.digest &&
-          String(manifest.data.journalDigest) !== journal.digest
+          String(manifestDigest) !== journal.digest
         ) {
           await this.#markAndThrow(
             agentSessionId,
@@ -359,15 +347,16 @@ export class SessionRecoveryService {
     }
 
     // Neither source complete
+    const snapshotError = snapshot && '__error' in snapshot ? snapshot.__error : null;
     await this.#markAndThrow(
       agentSessionId,
       scope,
       fence,
-      snapshot?.__error?.code === 'SNAPSHOT_SDK_VERSION_INCOMPATIBLE'
+      snapshotError?.code === 'SNAPSHOT_SDK_VERSION_INCOMPATIBLE'
         ? RECOVERY_REASON_CODE.VERSION_INCOMPATIBLE
         : RECOVERY_REASON_CODE.SNAPSHOT_INVALID,
-      snapshot?.__error
-        ? `snapshot unusable (${snapshot.__error.code}); journal incomplete`
+      snapshotError
+        ? `snapshot unusable (${snapshotError.code}); journal incomplete`
         : 'no complete snapshot or journal for recovery',
     );
   }
@@ -394,7 +383,7 @@ export class SessionRecoveryService {
    *   interactionResumeId?: string | null,
    * }} input
    */
-  async checkpoint(input: { agentSessionId: string, orgId: string, userId: string, executionFenceToken: number, runId: string, traceId: string, payload: { header: Record<string, any>, entries: Record<string, any>[] }, workspacePath?: string | null, agentVersionId: string, configHash: string, workspaceId: string, interactionResumeId?: string | null, }) {
+  async checkpoint(input: { agentSessionId: string, orgId: string, userId: string, executionFenceToken: number, runId: string, traceId: string, payload: { header: Record<string, unknown>, entries: Record<string, unknown>[] }, workspacePath?: string | null, agentVersionId: string, configHash: string, workspaceId: string, interactionResumeId?: string | null, }) {
     const agentSessionId = assertUlid(input.agentSessionId, 'agentSessionId');
     const scope = {
       orgId: assertUlid(input.orgId, 'orgId'),
@@ -436,7 +425,7 @@ export class SessionRecoveryService {
         entries,
       });
 
-      // Content entries only (strip any client-supplied platform manifests first).
+      // Content entries only (strip client-supplied platform manifests first).
       const contentEntries = normalizedBase.entries.filter(
         (e) =>
           !(
@@ -469,7 +458,7 @@ export class SessionRecoveryService {
 
       // Append the manifest to the current journal leaf. Only the first entry
       // in an entirely empty journal may be a null-parent root.
-      const leafId = findLeafEntryId(journalAfter.entries);
+      const leafId = findLeafEntryId(journalAfter.entries as Array<{ id: string, parentId?: string | null }>); // journal 条目运行期均带 string id，函数内部仍有 typeof 防守检查
       const manifest = buildProtectedManifestEntry({
         id: this.generateId(),
         parentId: leafId,
@@ -642,7 +631,7 @@ export class SessionRecoveryService {
   }
 }
 
-export function emptySessionPayload(opts: { header?: Record<string, any>, entries?: Record<string, any>[], cwd?: string, id?: string } = {}) {
+export function emptySessionPayload(opts: { header?: Record<string, unknown>, entries?: Record<string, unknown>[], cwd?: string, id?: string } = {}) {
   const header =
     opts.header ||
     buildSessionHeader({

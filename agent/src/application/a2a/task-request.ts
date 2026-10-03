@@ -16,9 +16,6 @@ import { ValidationError } from '../errors.js';
 import { A2A_RPC_ERROR } from './json-rpc.js';
 import { A2A_SUPPORTED_OUTPUT_MODES } from './agent-card.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Run statuses that accept a follow-up message on the same task conversation. */
 export const CONTINUABLE_RUN_STATUSES = new Set([
   RUN_STATUS.SUCCEEDED,
@@ -31,9 +28,9 @@ export const CONTINUABLE_RUN_STATUSES = new Set([
 export class A2aTaskError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   name: string;
-  code: Loose;
-  rpc: Loose;
-  details: Loose;
+  code: string;
+  rpc: { code: number, message: string } | null;
+  details: unknown;
 
   constructor(message: string, opts: { code?: string, rpc?: { code: number, message: string }, details?: unknown } = {}) {
     super(message);
@@ -47,7 +44,7 @@ export class A2aTaskError extends Error {
 export class A2aAuditError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   name: string;
-  code: Loose;
+  code: string;
 
   constructor(message: string, opts: { code?: string } = {}) {
     super(message);
@@ -64,11 +61,11 @@ export function extractTextFromA2aMessage(message: unknown) {
   if (!message || typeof message !== 'object') {
     throw new ValidationError('message is required');
   }
-  const parts = (message as any).parts;
+  const parts = (message as { parts?: unknown }).parts; // 外部A2A消息为unknown，线形parts在此处断言后由Array.isArray收窄
   if (!Array.isArray(parts) || parts.length === 0) {
     const bare =
-      (message as any).text ||
-      (message as any).content;
+      (message as { text?: unknown; content?: unknown }).text || // 非parts形态的裸文本消息，字段存在性由后继typeof收窄
+      (message as { text?: unknown; content?: unknown }).content; // 同上：content为text的兼容别名
     if (typeof bare === 'string' && bare.trim()) return bare.trim();
     throw new ValidationError('message.parts must be a non-empty array');
   }
@@ -165,10 +162,10 @@ export function parseSendParams(params: unknown) {
 
   const metadata =
     p.metadata && typeof p.metadata === 'object' && !Array.isArray(p.metadata)
-      ? (p.metadata as Record<string, any>)
+      ? (p.metadata as Record<string, unknown>)
       : {};
   return {
-    message: (message as Record<string, any>),
+    message: (message as Record<string, unknown>),
     messageId,
     taskId,
     contextId,

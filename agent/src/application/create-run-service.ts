@@ -48,9 +48,11 @@ import {
   resolveModel,
 } from '../infrastructure/model-registry.js';
 import type { ExternalAuth } from './parent/external-identity-resolver.js';
+import type { TransactionManager } from '../infrastructure/mysql/transaction-manager.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { RunQueueAdapter } from '../bootstrap/container-run-queue.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
 
 export const CREATE_RUN_OPERATION = 'create_run';
 export const DEFAULT_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -216,43 +218,20 @@ function normalizeRequestedModel(modelId, messages) {
 
 export class CreateRunService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  generateId: Loose;
-  now: Loose;
-  runQueue: Loose;
-  stateMachine: Loose;
-  queueName: Loose;
-  idempotencyTtlMs: Loose;
-  maxProvisionRetries: Loose;
-  defaultProvider: Loose;
-  source: Loose;
+  tx: TransactionManager;
+  createRepositories: typeof createRepositoryBundle;
+  generateId: () => string;
+  now: () => Date;
+  runQueue: RunQueueAdapter;
+  stateMachine: typeof runStateMachine;
+  queueName: string;
+  idempotencyTtlMs: number;
+  maxProvisionRetries: number;
+  defaultProvider: string | undefined;
+  source: string;
 
   /**
-   * @param {{
-   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => {
-   *     organizations: any,
-   *     externalRefs: any,
-   *     catalog: any,
-   *     conversations: any,
-   *     sessions: any,
-   *     messages: any,
-   *     runs: any,
-   *     runEvents: any,
-   *     idempotency: any,
-   *     outbox: any,
-   *   },
-   *   generateId: () => string,
-   *   now?: () => Date,
-   *   runQueue: { enqueue: (ref: { runId: string, orgId: string, traceId: string }, options?: object) => Promise<unknown> },
-   *   runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine,
-   *   queueName?: string,
-   *   idempotencyTtlMs?: number,
-   *   maxProvisionRetries?: number,
-   *   defaultProvider?: string,
-   *   source?: string,
-   * }} deps
+   * @param {{ transactionManager: TransactionManager, createRepositories: typeof createRepositoryBundle, generateId: () => string, now?: () => Date, runQueue: RunQueueAdapter, runStateMachine?: typeof runStateMachine, queueName?: string, idempotencyTtlMs?: number, maxProvisionRetries?: number, defaultProvider?: string, source?: string, }} deps
    */
   constructor(deps) {
     if (!deps?.transactionManager?.run) {
@@ -551,7 +530,7 @@ export class CreateRunService {
         contentJson,
       });
 
-      await repos.runs.create({
+      const runCreateInput = {
         runId,
         orgId: scope.orgId,
         userId: scope.userId,
@@ -567,9 +546,10 @@ export class CreateRunService {
         traceFlags: ctx.traceFlags,
         traceParentSpanId: ctx.spanId,
         nextEventSequence: 0,
-      });
+      };
+      await repos.runs.create(runCreateInput);
 
-      const acceptedEvent = await repos.runEvents.append({
+      const acceptedEventInput = {
         eventId,
         runId,
         orgId: scope.orgId,
@@ -585,7 +565,8 @@ export class CreateRunService {
           traceId: ctx.traceId,
           traceState: ctx.traceState,
         spanId: ctx.spanId,
-      });
+      };
+      const acceptedEvent = await repos.runEvents.append(acceptedEventInput);
 
       await repos.outbox.insert({
         outboxId,
@@ -643,7 +624,7 @@ export class CreateRunService {
       };
     });
 
-    // MySQL commit completed before any queue / HTTP response path.
+    // MySQL commit completed before queue / HTTP response path.
     if (committed.kind === 'replay_invalid') {
       // Corrupt stored idempotency data: do not invent fake run ids.
       throw new ValidationError(

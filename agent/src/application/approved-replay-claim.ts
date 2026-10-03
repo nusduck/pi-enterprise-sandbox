@@ -18,21 +18,21 @@
  * 不是「历史兼容」，而是拒绝；参数指纹不一致一律拒绝。
  */
 import { approvalIdOf } from '../runtime/policy/approval-id.js';
+import type { PendingApproval } from '../runtime/policy/pre-execute.js';
 import { integrityFingerprint } from '../infrastructure/mysql/repositories/tool-execution-repository.js';
 
-/** 过渡期宽松类型：仓储与记录器多数还是 JS 类，形状由各自模块负责。 */
-type Loose = any;
+interface ReplayRepos { approvals: { listByRunId(runId: string, scope: { orgId: string; userId: string }): Promise<Array<{ approvalId: string; toolExecutionId: string; status: unknown }>> }; toolExecutions: { getById(id: string, scope: { orgId: string; userId: string }): Promise<{ toolExecutionId: string; toolCallId: string; toolName: string; status: unknown; _argsIntegrity?: unknown } | null> }; }
 
 /** SHA-256 十六进制。形状不对的指纹按缺失处理，不做「尽力而为」的比较。 */
 const ARGS_INTEGRITY_RE = /^[0-9a-f]{64}$/i;
 
 export interface ApprovedReplayClaimDeps {
-  readonly tx: { run: <T>(fn: (trx: Loose) => Promise<T>) => Promise<T> };
-  readonly createRepositories: (trx: Loose) => Loose;
+  readonly tx: { run: <T>(fn: (trx: unknown) => Promise<T>) => Promise<T> };
+  readonly createRepositories: (trx: unknown) => ReplayRepos;
   readonly runId: string;
-  readonly scope: Loose;
+  readonly scope: { orgId: string; userId: string };
   /** 治理记录器：`recordToolStarted` 就是认领所在的那笔事务。 */
-  readonly recorder: { recordToolStarted: (input: Loose) => Promise<unknown> };
+  readonly recorder: { recordToolStarted: (input: { toolCallId: string; toolName: string; args: unknown; approvalId: string }) => Promise<unknown> };
 }
 
 /** 指纹是否可用于比较——不可用时调用方必须重新要一次人工决定。 */
@@ -52,8 +52,8 @@ export function createApprovedReplayClaim(deps: ApprovedReplayClaimDeps) {
       toolName: string,
       _digest: unknown,
       args: Record<string, unknown> | null | undefined,
-    ) => {
-      const found = await tx.run(async (trx: Loose) => {
+    ): Promise<PendingApproval | null> => {
+      const found = await tx.run(async (trx: unknown) => {
         const repos = createRepositories(trx);
         const approvals = await repos.approvals.listByRunId(runId, scope);
         const wanted = integrityFingerprint(args ?? {});
@@ -77,18 +77,18 @@ export function createApprovedReplayClaim(deps: ApprovedReplayClaimDeps) {
       return {
         id: approvalIdOf(String(found.exec.toolCallId ?? '')),
         toolName,
-        sourceDigest: found.exec._argsIntegrity,
+        sourceDigest: found.exec._argsIntegrity as string, // 上文 usableIntegrity 守卫已收窄,此处恒为指纹串
         argsCanonical: JSON.stringify(args ?? {}),
-        argsIntegrity: found.exec._argsIntegrity,
+        argsIntegrity: found.exec._argsIntegrity as string, // 上文 usableIntegrity 守卫已收窄,此处恒为指纹串
         durableApprovalId: found.approval.approvalId,
         toolExecutionId: found.exec.toolExecutionId,
         toolCallId: found.exec.toolCallId,
         status: 'APPROVED',
         runStatusHint: 'WAITING_APPROVAL',
-      } as never;
+      };
     },
 
-    consume: async (claim: Loose) => {
+    consume: async (claim: { argsIntegrity?: unknown; args: unknown; toolCallId: string; toolName: string; approvalId: string }) => {
       const expected = claim.argsIntegrity;
       if (!usableIntegrity(expected)) {
         throw new Error('approved replay has no valid durable args integrity fingerprint');

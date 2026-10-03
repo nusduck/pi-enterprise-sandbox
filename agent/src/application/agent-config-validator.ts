@@ -84,8 +84,6 @@ export type AgentConfigValidation = {
   readonly capabilityRevision: string;
 };
 
-type Loose = any;
-
 const TOP_LEVEL_V1_KEYS = Object.freeze([
   'schemaVersion',
   'systemPrompt',
@@ -504,16 +502,16 @@ export class AgentConfigValidator {
       }
       const temperature = policy.temperature;
       if (temperature !== undefined && temperature !== null && temperature !== '') {
-        const supportsTemperature = Boolean((resolvedModel as Loose)?.supports_temperature);
+        const supportsTemperature = Boolean((resolvedModel as ModelEntry & { supports_temperature?: unknown })?.supports_temperature); // ModelEntry无此适配器扩展字段，按可选扩展断言
         if (!supportsTemperature) {
           errors.push(diagnostic('modelPolicy.temperature', 'MODEL_TEMPERATURE_UNSUPPORTED', 'temperature is not supported by the current model adapter'));
         } else if (typeof temperature !== 'number' || !Number.isFinite(temperature)) {
           errors.push(diagnostic('modelPolicy.temperature', 'MODEL_TEMPERATURE_INVALID', 'temperature must be a finite number'));
         } else {
-          const min = Number.isFinite(Number((resolvedModel as Loose)?.temperature_min))
-            ? Number((resolvedModel as Loose).temperature_min) : 0;
-          const max = Number.isFinite(Number((resolvedModel as Loose)?.temperature_max))
-            ? Number((resolvedModel as Loose).temperature_max) : 2;
+          const min = Number.isFinite(Number((resolvedModel as ModelEntry & { temperature_min?: unknown })?.temperature_min)) // 同上，温度下限为适配器扩展字段
+            ? Number((resolvedModel as ModelEntry & { temperature_min?: unknown }).temperature_min) : 0; // 同上，扩展字段读取需断言
+          const max = Number.isFinite(Number((resolvedModel as ModelEntry & { temperature_max?: unknown })?.temperature_max)) // 同上，温度上限为适配器扩展字段
+            ? Number((resolvedModel as ModelEntry & { temperature_max?: unknown }).temperature_max) : 2; // 同上，扩展字段读取需断言
           if (temperature < min || temperature > max) {
             errors.push(diagnostic('modelPolicy.temperature', 'MODEL_TEMPERATURE_OUT_OF_RANGE', `temperature must be between ${min} and ${max}`));
           } else {

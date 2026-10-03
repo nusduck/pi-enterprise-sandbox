@@ -10,9 +10,13 @@ import { ExternalIdentityResolver } from './parent/external-identity-resolver.js
 import { OwnerScopedNotFoundError, ValidationError, assertDomainRunId, requireAuth } from './errors.js';
 import { assertUlid, isUlid } from '../domain/shared/ulid.js';
 import { isTerminalRunStatus } from '../domain/run/run-status.js';
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { mapRunRow } from '../infrastructure/mysql/repositories/run-repository.js';
+import type { mapRunEvent } from '../infrastructure/mysql/row-mappers.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type Repos = ReturnType<typeof createRepositoryBundle>;
+type RunRow = ReturnType<typeof mapRunRow>;
+type RunEventRow = ReturnType<typeof mapRunEvent>;
 
 /**
  * Project a durable run_events row to the SSE envelope used by BFF/frontend:
@@ -22,7 +26,7 @@ type Loose = any;
  * @param row — mapped RunEvent
  * @returns {{ sequence: number, event: object, ts: number, eventId?: string, event_id?: string }}
  */
-export function projectRunEventToSseEnvelope(row: Record<string, any>) {
+export function projectRunEventToSseEnvelope(row: RunEventRow) {
   const sequence = Number(row.sequenceNo);
   const payload =
     row.payloadJson && typeof row.payloadJson === 'object'
@@ -36,7 +40,7 @@ export function projectRunEventToSseEnvelope(row: Record<string, any>) {
     ...(eventId ? { event_id: eventId } : {}),
     ...payload,
   };
-  // Prefer durable row type over any payload collision.
+  // Prefer durable row type over payload collisions.
   event.type = row.eventType;
   if (eventId) event.event_id = eventId;
   // Do not re-run a status machine here — payload status is already durable.
@@ -51,23 +55,12 @@ export function projectRunEventToSseEnvelope(row: Record<string, any>) {
 
 export class RunEventQueryService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  createRepositories: Loose;
-  db: Loose;
-  defaultProvider: Loose;
+  createRepositories: typeof createRepositoryBundle;
+  db: Parameters<typeof createRepositoryBundle>[0] | null;
+  defaultProvider: string | undefined;
 
-  /**
-   * @param {{
-   *   createRepositories: (db?: any) => {
-   *     organizations: any,
-   *     externalRefs: any,
-   *     runs: any,
-   *     runEvents: any,
-   *   },
-   *   db?: any,
-   *   defaultProvider?: string,
-   * }} deps
-   */
-  constructor(deps: { createRepositories: (db?: any) => { organizations: any, externalRefs: any, runs: any, runEvents: any, }, db?: any, defaultProvider?: string, }) {
+  /** @param {{ createRepositories: typeof createRepositoryBundle, db?: Parameters<typeof createRepositoryBundle>[0], defaultProvider?: string, }} deps */
+  constructor(deps: { createRepositories: typeof createRepositoryBundle, db?: Parameters<typeof createRepositoryBundle>[0], defaultProvider?: string, }) {
     if (typeof deps?.createRepositories !== 'function') {
       throw new Error('RunEventQueryService requires createRepositories');
     }
@@ -90,10 +83,7 @@ export class RunEventQueryService {
   /**
    * Resolve trusted external subjects → internal owner scope, then load run.
    * Cross-tenant / unknown run → OwnerScopedNotFoundError (404).
-   *
-   * @param runId
-   * @param auth
-   * @returns {Promise<{ run: object, scope: { orgId: string, userId: string }, repos: object }>}
+   * @returns {Promise<{ run: RunRow, scope: { orgId: string, userId: string }, repos: Repos }>}
    */
   async #loadOwnedRun(runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }) {
     requireAuth(auth);

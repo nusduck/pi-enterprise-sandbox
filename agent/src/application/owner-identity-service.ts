@@ -7,13 +7,13 @@
  */
 import { ExternalIdentityResolver, type ExternalAuth } from './parent/external-identity-resolver.js';
 
-type Loose = any;
+type ResolverDeps = ConstructorParameters<typeof ExternalIdentityResolver>[0];
 
 export class OwnerIdentityService {
-  readonly db: Loose;
-  readonly createRepositories: (db: Loose) => Loose;
+  readonly db: unknown;
+  readonly createRepositories: (db: unknown) => ResolverDeps;
 
-  constructor(deps: { db: Loose; createRepositories: (db: Loose) => Loose }) {
+  constructor(deps: { db: unknown; createRepositories: (db: unknown) => ResolverDeps }) {
     if (!deps?.db || typeof deps.createRepositories !== 'function') {
       throw new Error('OwnerIdentityService requires db and createRepositories');
     }

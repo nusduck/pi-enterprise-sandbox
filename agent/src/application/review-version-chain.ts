@@ -11,8 +11,7 @@
  * **大小与时间**在 exec 的产物记录里。exec 取不到时留 `null`，界面显示「—」——不猜。
  */
 import type { ReviewArtifactMeta } from '../infrastructure/sandbox/internal-review-http.js';
-
-type Loose = any;
+import type { ReviewEventRecord, ReviewItemRecord } from '../infrastructure/mysql/repositories/review-repository.js';
 
 export interface ReviewVersionEntry {
   artifact_id: string;
@@ -32,8 +31,8 @@ export interface ReviewVersionEntry {
  * 少一行。
  */
 export function buildVersionChains(input: {
-  items: readonly Loose[];
-  events: readonly Loose[];
+  items: readonly ReviewItemRecord[];
+  events: readonly ReviewEventRecord[];
   taskCreatedAt: string | null;
 }): Map<number, ReviewVersionEntry[]> {
   const byItem = new Map<number, { artifactId: string; actorUserId: string | null; createdAt: string | null }[]>();

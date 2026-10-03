@@ -50,8 +50,7 @@ import { collectStartSkillDiagnostics } from './run-skill-diagnostics.js';
 // Re-exported: callers and tests import the loop from here.
 export { createSerialTimeoutLoop };
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type ExecuteRunRepos = { runs: import('../infrastructure/mysql/repositories/run-repository.js').RunRepository; approvals: import('../infrastructure/mysql/repositories/approval-repository.js').ApprovalRepository; toolExecutions: import('../infrastructure/mysql/repositories/tool-execution-repository.js').ToolExecutionRepository; interactions: import('../infrastructure/mysql/repositories/interaction-repository.js').InteractionRepository; runEvents: import('../infrastructure/mysql/repositories/run-event-repository.js').RunEventRepository; outbox: import('../infrastructure/outbox/outbox-repository.js').OutboxRepository }; type ExecuteRunRow = Awaited<ReturnType<ExecuteRunRepos['runs']['requireByIdForOrg']>>; type RunWithEphemeral = ExecuteRunRow & { approvalResume?: unknown; interactionResume?: unknown };
 
 /** Default cancel poll interval while executor runs (injectable). */
 export const DEFAULT_CANCEL_POLL_INTERVAL_MS = 100;
@@ -75,7 +74,7 @@ export class LeaseBusyError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   name: string;
   code: string;
-  runId: Loose;
+  runId: string;
 
   constructor(runId: string) {
     super(`Run lease busy for ${runId}; delayed retry`);
@@ -87,18 +86,18 @@ export class LeaseBusyError extends Error {
 
 export class ExecuteRunService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  leaseManager: Loose;
-  cancelSignal: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db: unknown) => ExecuteRunRepos;
+  leaseManager: { acquire(runId: string, ownerToken: string): Promise<boolean>; renew(runId: string, ownerToken: string): Promise<boolean>; release(runId: string, ownerToken: string): Promise<boolean>; renewIntervalMs?: number };
+  cancelSignal: { isRequested(runId: string): Promise<boolean> } | null;
   sharedExecutor: import('./run-executor.js').RunExecutor | null;
-  runExecutorFactory: Loose;
-  generateId: Loose;
-  now: Loose;
-  stateMachine: Loose;
-  leaseRenewIntervalMs: Loose;
-  cancelPollIntervalMs: Loose;
-  resolveSkillDiagnostics: Loose; // run.started 诊断来源（可选；缺省/失败记空数组）。
+  runExecutorFactory: import('./run-executor.js').RunExecutorFactory | null;
+  generateId: () => string;
+  now: () => Date;
+  stateMachine: typeof runStateMachine;
+  leaseRenewIntervalMs: number;
+  cancelPollIntervalMs: number;
+  resolveSkillDiagnostics: ((input: { run: unknown; scope: { orgId: string; userId: string } }) => Promise<unknown>) | null; // run.started 诊断来源（可选；缺省/失败记空数组）。
 
   /**
    * @param {{
@@ -370,7 +369,7 @@ export class ExecuteRunService {
       executor,
     } = ctx;
 
-    let run = await this.tx.run(async (trx) => {
+    let run: RunWithEphemeral = await this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       return repos.runs.requireByIdForOrg(runId, orgId, { forUpdate: true });
     });
@@ -774,7 +773,7 @@ export class ExecuteRunService {
             stateMachine: this.stateMachine,
           });
         });
-        if (parked.missing) {
+        if ('missing' in parked && parked.missing) {
           return {
             status: run.status,
             runId: run.runId,
@@ -783,7 +782,7 @@ export class ExecuteRunService {
             error: 'Run not found during parked cancel',
           };
         }
-        if (parked.advanced) {
+        if ('advanced' in parked && parked.advanced) {
           run = parked.run;
           // Fall through to normal cancel path for the advanced status.
         } else {

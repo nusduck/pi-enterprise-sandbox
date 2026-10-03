@@ -26,8 +26,6 @@ import {
   isPlaceholderConversationTitle,
 } from './conversation-title.js';
 
-type Loose = any;
-
 /** 与会话列表展示一致的上限（conversation-service normalizeTitle）。 */
 const MAX_TITLE_CHARS = 500;
 /** 判定「首条提问派生的标题」时读的消息条数；首条用户消息总在最前面。 */
@@ -43,7 +41,7 @@ export function latestProviderTitle(events: readonly SessionEventLike[]): string
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
     if (event?.type !== 'session/title') continue;
-    const data = event.data as { title?: unknown; source?: { kind?: unknown } } | undefined;
+    const data = event.data as { title?: unknown; source?: { kind?: unknown } } | undefined; // SessionEventLike.data为unknown，按session/title事件形状收窄
     if (data?.source?.kind !== 'provider') continue;
     const title = typeof data.title === 'string' ? data.title.replace(/\s+/g, ' ').trim() : '';
     if (title) return title.slice(0, MAX_TITLE_CHARS);
@@ -52,8 +50,8 @@ export function latestProviderTitle(events: readonly SessionEventLike[]): string
 }
 
 export function createSessionTitleProjector(deps: {
-  transactionManager: { run: <T>(fn: (trx: Loose) => Promise<T>) => Promise<T> };
-  createRepositories: (db: Loose) => Loose;
+  transactionManager: { run: <T>(fn: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>;
   log?: (message: string) => void;
 }) {
   const log = deps.log ?? ((message: string) => console.warn(message));

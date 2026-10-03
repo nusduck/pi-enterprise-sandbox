@@ -39,8 +39,7 @@ import type {
   RoleSource,
 } from '../infrastructure/mysql/repositories/member-role-repository.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
 
 /** 与 `AuthSubjects` 兼容的最小形状（BFF 服务端写入的 `X-Acting-*`）。 */
 export interface MemberRoleActor {
@@ -92,9 +91,9 @@ const lastAdmin = () => new MemberRoleError(409, 'LAST_ADMIN', 'Cannot revoke th
 const pinnedByDeployment = () => new MemberRoleError(409, 'ROLE_PINNED_BY_DEPLOYMENT', 'This administrator is pinned by the deployment (SANDBOX_AUTH_ADMIN_USERNAMES)');
 
 export interface MemberRoleServiceDeps {
-  readonly db: Loose;
-  readonly createRepositories: (db?: Loose) => Loose;
-  readonly transactionManager: { run: <T>(work: (trx: Loose) => Promise<T>) => Promise<T> };
+  readonly db: import('../infrastructure/mysql/transaction-manager.js').DbExecutor;
+  readonly createRepositories: (db?: import('../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>;
+  readonly transactionManager: { run: <T>(work: (trx: import('../infrastructure/mysql/transaction-manager.js').DbExecutor) => Promise<T>) => Promise<T> };
   /**
    * 当前进程的 `SANDBOX_AUTH_ADMIN_USERNAMES`（大小写归一后）。
    *
@@ -107,7 +106,7 @@ export interface MemberRoleServiceDeps {
 }
 
 export class MemberRoleService {
-  readonly db: Loose;
+  readonly db: import('../infrastructure/mysql/transaction-manager.js').DbExecutor;
   readonly createRepositories: MemberRoleServiceDeps['createRepositories'];
   readonly transactionManager: MemberRoleServiceDeps['transactionManager'];
   readonly pinned: ReadonlySet<string>;
@@ -118,7 +117,7 @@ export class MemberRoleService {
    * `createRepositories()` 会构造整套仓储（几十个对象），而 `me` 每请求都要读一次角色；
    * 每次新建就是每请求几十个对象。事务里仍然按 trx 现建（那才是必须的）。
    */
-  #baseRepos: Loose = null;
+  #baseRepos: ReturnType<typeof createRepositoryBundle> | null = null;
 
   constructor(deps: MemberRoleServiceDeps) {
     if (!deps?.db) throw new Error('MemberRoleService requires db');
@@ -145,7 +144,7 @@ export class MemberRoleService {
     return Boolean(name) && this.pinned.has(name);
   }
 
-  #repos(): Loose {
+  #repos(): ReturnType<typeof createRepositoryBundle> {
     if (!this.#baseRepos) this.#baseRepos = this.createRepositories(this.db);
     return this.#baseRepos;
   }
@@ -197,7 +196,7 @@ export class MemberRoleService {
     };
   }
 
-  async #view(repos: Loose, orgId: string, member: MemberRow): Promise<MemberView> {
+  async #view(repos: ReturnType<typeof createRepositoryBundle>, orgId: string, member: MemberRow): Promise<MemberView> {
     return this.#present(member, await repos.memberRoles.listRoles(orgId, member.userId));
   }
 
@@ -210,7 +209,7 @@ export class MemberRoleService {
     // 未知的 role 过滤条件不做「忽略」，因为静默忽略会让人以为筛过了。
     if (query.role && !isKnownRole(query.role)) throw roleUnknown();
     const repos = this.#repos();
-    const { members, nextCursor } = await repos.memberRoles.listMembers(owner.orgId, query);
+    const { members, nextCursor } = await repos.memberRoles.listMembers(owner.orgId, { ...query, limit: query.limit as number | null | undefined }); // 仓储内resolveMemberListLimit本就对任意输入做Number()归一，断言仅收敛MemberListQuery声明形状
     const byUser = await repos.memberRoles.listRolesForUsers(
       owner.orgId,
       members.map((m: MemberRow) => m.userId),

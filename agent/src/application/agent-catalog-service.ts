@@ -54,8 +54,8 @@ import {
   presentAccess,
 } from './agent-access-service.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
+import type { mapAgentDefinition, mapAgentVersion } from '../infrastructure/mysql/repositories/agent-catalog-repository.js';
 
 /** 建版本时最多重试的次数——只用于 (agent_id, version_no) 的并发抢号。 */
 const MAX_VERSION_ATTEMPTS = 3;
@@ -96,8 +96,8 @@ function normalizeDescription(value: unknown): string | null {
 
 /** 目录对外的 Agent 视图。`active_version_no` 让 UI 不必再查一次版本表。 */
 export function presentAgent(
-  definition: Record<string, any>,
-  activeVersion: Record<string, any> | null = null,
+  definition: ReturnType<typeof mapAgentDefinition>,
+  activeVersion: ReturnType<typeof mapAgentVersion> | null = null,
 ) {
   return {
     agent_id: definition.agentId,
@@ -113,7 +113,7 @@ export function presentAgent(
   };
 }
 
-export function presentAgentVersion(version: Record<string, any>) {
+export function presentAgentVersion(version: ReturnType<typeof mapAgentVersion>) {
   return {
     agent_version_id: version.agentVersionId,
     agent_id: version.agentId,
@@ -127,17 +127,17 @@ export function presentAgentVersion(version: Record<string, any>) {
 
 export class AgentCatalogService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  db: Loose;
-  generateId: Loose;
-  now: Loose;
+  tx: import('../infrastructure/mysql/transaction-manager.js').TransactionManager;
+  createRepositories: (db?: import('../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>;
+  db: import('../infrastructure/mysql/transaction-manager.js').DbExecutor;
+  generateId: () => string;
+  now: () => Date;
   configValidator: AgentConfigValidator;
 
   constructor(deps: {
-    transactionManager: Loose,
-    createRepositories: Loose,
-    db: Loose,
+    transactionManager: import('../infrastructure/mysql/transaction-manager.js').TransactionManager,
+    createRepositories: (db?: import('../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => ReturnType<typeof createRepositoryBundle>,
+    db: import('../infrastructure/mysql/transaction-manager.js').DbExecutor,
     generateId: () => string,
     now?: () => Date,
     /**
@@ -160,7 +160,7 @@ export class AgentCatalogService {
     this.configValidator = deps.configValidator ?? new AgentConfigValidator();
   }
 
-  async #resolveOwner(auth: CatalogAuth, repos: Loose) {
+  async #resolveOwner(auth: CatalogAuth, repos: ReturnType<typeof createRepositoryBundle>) {
     const resolver = new ExternalIdentityResolver({
       organizations: repos.organizations,
       externalRefs: repos.externalRefs,
@@ -179,7 +179,7 @@ export class AgentCatalogService {
   }
 
   /** 跨租户与不存在返回同一个 404：存在性本身不能泄漏。 */
-  async #requireOwnedAgent(repos: Loose, owner: Loose, agentId: unknown) {
+  async #requireOwnedAgent(repos: ReturnType<typeof createRepositoryBundle>, owner: { orgId: string }, agentId: unknown) {
     if (!isUlid(agentId)) {
       throw new OwnerScopedNotFoundError('Agent not found', {
         resource: 'agent_definitions',
@@ -205,7 +205,7 @@ export class AgentCatalogService {
    * 显式传 `null` 表示「我读到的是还没有活跃版本」，与「我没传」不是一回事，
    * 所以两者必须分开判断，不能用 `?? null` 抹平。
    */
-  #assertExpectedActiveVersion(definition: Loose, expected: unknown) {
+  #assertExpectedActiveVersion(definition: ReturnType<typeof mapAgentDefinition>, expected: unknown) {
     if (expected === undefined) return;
     const current = definition.activeVersionId ?? null;
     const wanted = expected === null || expected === '' ? null : String(expected);
@@ -254,7 +254,7 @@ export class AgentCatalogService {
    * 就被判成「没这个版本」，而不是等到 Run 解析才静默排除。`currentDigest` 取自
    * `org_skills` 的当前指针，供 UI 默认选中（**不影响已钉住的版本**，D3）。
    */
-  async #orgSkillEntries(repos: Loose, orgId: string): Promise<OrgSkillEntry[]> {
+  async #orgSkillEntries(repos: ReturnType<typeof createRepositoryBundle>, orgId: string): Promise<OrgSkillEntry[]> {
     const rows = await repos.orgSkills.listForOrg({ orgId });
     return rows.flatMap((group) => group.versions
       .filter((version) => version.status !== 'revoked')
@@ -276,7 +276,7 @@ export class AgentCatalogService {
    * `validateSkillPolicySemantics`：只在一处判，另一处就会把「保存成功但起 Run 必失败」
    * 的配置写进库。这里依赖 `refreshSkills()` 已经刷过目录投影，所以是 async。
    */
-  async #validateConfig(config: unknown, repos: Loose, orgId: string): Promise<Record<string, unknown>> {
+  async #validateConfig(config: unknown, repos: ReturnType<typeof createRepositoryBundle>, orgId: string): Promise<Record<string, unknown>> {
     if (config == null) return defaultAgentConfigJson();
     if (typeof config !== 'object' || Array.isArray(config)) {
       throw new ValidationError('config must be an object');
@@ -332,7 +332,7 @@ export class AgentCatalogService {
    * 目标之后被停用或删除由 spawn 在运行时再判一次，这里只挡写错的名字。
    */
   async #unknownDelegationTargets(
-    repos: Loose,
+    repos: ReturnType<typeof createRepositoryBundle>,
     orgId: string,
     configJson: Record<string, unknown>,
   ): Promise<Array<{ path: string, code: string, message: string }>> {
@@ -351,7 +351,7 @@ export class AgentCatalogService {
     return out;
   }
 
-  async #assertDelegationTargets(repos: Loose, orgId: string, configJson: Record<string, unknown>) {
+  async #assertDelegationTargets(repos: ReturnType<typeof createRepositoryBundle>, orgId: string, configJson: Record<string, unknown>) {
     const [first] = await this.#unknownDelegationTargets(repos, orgId, configJson);
     if (first) {
       throw new ValidationError(`${first.path}: ${first.message}`, { code: first.code });
@@ -377,14 +377,14 @@ export class AgentCatalogService {
    * 「保存、预览、执行各自猜语义」。
    */
   async #reviewVsA2aDiagnostic(
-    repos: Loose,
+    repos: ReturnType<typeof createRepositoryBundle>,
     orgId: string,
     agentId: string,
     configJson: Record<string, unknown>,
   ): Promise<AgentConfigDiagnostic | null> {
     if (parseDeliveryPolicy(configJson.deliveryPolicy).policy?.mode !== 'review') return null;
     const credentials = await repos.a2aCredentials.listByOrg(orgId, { agentId });
-    const active = (credentials as Loose[]).filter(
+    const active = credentials.filter(
       (credential) => String(credential?.status ?? '').toLowerCase() === 'active',
     );
     if (active.length === 0) return null;
@@ -398,7 +398,7 @@ export class AgentCatalogService {
   }
 
   async #assertNoA2aExposureForReview(
-    repos: Loose,
+    repos: ReturnType<typeof createRepositoryBundle>,
     orgId: string,
     agentId: string,
     configJson: Record<string, unknown>,
@@ -504,11 +504,11 @@ export class AgentCatalogService {
       if (err instanceof OwnerScopedNotFoundError) return { agents: [] };
       throw err;
     }
-    const listed = await repos.catalog.listDefinitionsByOrg(owner.orgId, {
+    const listed: ReturnType<typeof mapAgentDefinition>[] = await repos.catalog.listDefinitionsByOrg(owner.orgId, {
       limit: opts.limit ?? 50,
     });
     // 受限智能体只列给被授予的成员（admin 看全部）；用不了的不出现在选择器里。
-    const definitions = await filterUsableAgents<Loose>(repos, owner.orgId, listed, {
+    const definitions = await filterUsableAgents(repos, owner.orgId, listed, {
       userId: owner.userId,
       role: auth.role,
     });
@@ -537,7 +537,7 @@ export class AgentCatalogService {
    */
   async setAccess(auth: CatalogAuth, agentId: string, body: unknown) {
     this.#requireAdmin(auth);
-    return this.tx.run(async (trx: Loose) => {
+    return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const owner = await this.#resolveOwner(auth, repos);
       const definition = await this.#requireOwnedAgent(repos, owner, agentId);
@@ -575,7 +575,7 @@ export class AgentCatalogService {
       agent: presentAgent(
         definition,
         versions.find(
-          (v: Loose) => v.agentVersionId === definition.activeVersionId,
+          (v) => v.agentVersionId === definition.activeVersionId,
         ) ?? null,
       ),
       versions: versions.map(presentAgentVersion),
@@ -600,7 +600,7 @@ export class AgentCatalogService {
       owner.orgId,
     );
 
-    return this.tx.run(async (trx: Loose) => {
+    return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const owner = await this.#resolveOwner(auth, repos);
       await this.#assertDelegationTargets(repos, owner.orgId, configJson);
@@ -677,7 +677,7 @@ export class AgentCatalogService {
     let lastConflict: unknown = null;
     for (let attempt = 0; attempt < MAX_VERSION_ATTEMPTS; attempt += 1) {
       try {
-        return await this.tx.run(async (trx: Loose) => {
+        return await this.tx.run(async (trx) => {
           const repos = this.createRepositories(trx);
           const owner = await this.#resolveOwner(auth, repos);
           let definition = await this.#requireOwnedAgent(repos, owner, agentId);
@@ -739,7 +739,7 @@ export class AgentCatalogService {
     opts: { expectedActiveVersionId?: unknown } = {},
   ) {
     this.#requireAdmin(auth);
-    return this.tx.run(async (trx: Loose) => {
+    return this.tx.run(async (trx) => {
       const repos = this.createRepositories(trx);
       const owner = await this.#resolveOwner(auth, repos);
       const definition = await this.#requireOwnedAgent(repos, owner, agentId);

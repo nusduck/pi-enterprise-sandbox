@@ -22,14 +22,12 @@
 
 import { assertUlid } from '../domain/shared/ulid.js';
 
-type Loose = any;
-
 /** 一次注入最多带上多少个任务，避免一轮提示词被历史决定撑爆。 */
 export const REVIEW_INJECTION_MAX_TASKS = 5;
 
 export interface ReviewContextInjectionInput {
-  readonly transactionManager: { run: <T>(work: (trx: Loose) => Promise<T>) => Promise<T> };
-  readonly createRepositories: (db?: Loose) => Loose;
+  readonly transactionManager: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  readonly createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>;
   readonly conversationId: string;
   readonly orgId: string;
   readonly userId: string;
@@ -48,7 +46,7 @@ export interface ReviewContextInjectionInput {
 export async function buildReviewContextInjection(
   input: ReviewContextInjectionInput,
 ): Promise<string | null> {
-  return await input.transactionManager.run(async (trx: Loose) => {
+  return await input.transactionManager.run(async (trx: unknown) => {
     const repos = input.createRepositories(trx);
     if (!repos.reviews || typeof repos.reviews.listPendingContextInjection !== 'function') {
       return null;
@@ -67,7 +65,7 @@ export async function buildReviewContextInjection(
       const claimed = await repos.reviews.markContextInjected(task.reviewTaskId, input.runId);
       if (claimed !== 1) continue;
       const items = await repos.reviews.listItems(task.reviewTaskId);
-      const lines = items.map((item: Loose) =>
+      const lines = items.map((item) =>
         item.currentArtifactId === item.originalArtifactId
           ? `- ${item.name}`
           : `- ${item.name}（经审核员修订，修订版在工作区 \`审核版/${item.name}\`，后续修改以它为准）`,

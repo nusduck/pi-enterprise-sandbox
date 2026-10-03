@@ -104,39 +104,36 @@ import { buildRunPolicyResolver, buildRunRiskResolver } from './tool-risk-resolv
 import { createInteractionRequester } from './interaction-requester.js';
 import { createApprovedReplayClaim } from './approved-replay-claim.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const UI_ASSISTANT_ENTRY_PREFIX = 'ui:assistant:';
 
 export class DshRunExecutor {
-  // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  sessionLockManager: Loose;
-  dshRuntimeFactory: Loose;
-  sessionAdapter: Loose;
-  modelResolver: Loose;
-  promptImageLoader: Loose;
-  requestAuthResolver: Loose;
-  workspaceResolver: Loose;
-  sandboxSessionProvisioner: Loose;
-  generateId: Loose;
-  now: Loose;
-  projector: Loose;
-  recoveryService: Loose;
-  sessionLockRenewIntervalMs: Loose;
+  // 注入依赖的形状以 DshRunExecutorDeps 为准（JS 类的宽松残留收敛在 deps 定义处）。
+  tx: DshRunExecutorDeps['transactionManager'];
+  createRepositories: DshRunExecutorDeps['createRepositories'];
+  sessionLockManager: DshRunExecutorDeps['sessionLockManager'];
+  dshRuntimeFactory: DshRunExecutorDeps['dshRuntimeFactory'];
+  sessionAdapter: DshRunExecutorDeps['sessionAdapter'];
+  modelResolver: DshRunExecutorDeps['modelResolver'];
+  promptImageLoader: DshRunExecutorDeps['promptImageLoader'];
+  requestAuthResolver: DshRunExecutorDeps['requestAuthResolver'];
+  workspaceResolver: DshRunExecutorDeps['workspaceResolver'];
+  sandboxSessionProvisioner: DshRunExecutorDeps['sandboxSessionProvisioner'];
+  generateId: DshRunExecutorDeps['generateId'];
+  now: DshRunExecutorDeps['now'];
+  projector: DshRunExecutorDeps['projector'];
+  recoveryService: DshRunExecutorDeps['recoveryService'];
+  sessionLockRenewIntervalMs: DshRunExecutorDeps['sessionLockRenewIntervalMs'];
   skillRootsForRun: (
     identity: Record<string, unknown>,
     skillPolicy?: unknown,
   ) => unknown[] | Promise<unknown[]>;
   /** 运维层风险表（`config/agent/tool-risk.json` / `TOOL_RISK_POLICY_*`）。 */
-  riskOverrides: Loose;
+  riskOverrides: DshRunExecutorDeps['riskOverrides'];
   /** 子 Agent 的 durable 面（ADR 0009 D6 / 计划 H5）。 */
-  subagentSpawnPort: Loose;
-  eventProjectionMode: Loose;
-  steerPollIntervalMs: Loose;
-  toolBudget: Loose;
+  subagentSpawnPort: DshRunExecutorDeps['subagentSpawnPort'];
+  eventProjectionMode: DshRunExecutorDeps['eventProjectionMode'];
+  steerPollIntervalMs: DshRunExecutorDeps['steerPollIntervalMs'];
+  toolBudget: DshRunExecutorDeps['toolBudget'];
   _lockToken: string | null;
   _lockedSessionId: string | null;
   _lockRenewLoop: ReturnType<typeof createSerialRenewLoop> | null;
@@ -148,7 +145,7 @@ export class DshRunExecutor {
   _governanceRecorder: FencedToolGovernanceRecorder | null;
   _pendingInteractionToolCallIds: Set<string>;
   /** 本 Run 的停泊端口。每次 execute() 重建；未开跑时为 null。 */
-  _runSuspensionPort: Loose;
+  _runSuspensionPort: { onDurableApprovalPending: (pending: Record<string, unknown>) => void; onDurableInteractionPending: (pending: Record<string, unknown>) => void } | null;
   _steerController: DurableSteerController | null;
   _disposed: boolean;
   _lockLost: boolean;
@@ -706,7 +703,7 @@ export class DshRunExecutor {
         ...(this.subagentSpawnPort
           ? {
               runServices: buildRunServices({
-                spawnPort: this.subagentSpawnPort,
+                spawnPort: this.subagentSpawnPort as Parameters<typeof buildRunServices>[0]['spawnPort'], // Deps侧是宽松Record而消费者要具体入参，运行时真实服务两者都满足
                 parentRunId: runId,
                 tenant: { orgId: eventContext.orgId, userId: eventContext.userId },
                 delegation: boundVersion.delegation,

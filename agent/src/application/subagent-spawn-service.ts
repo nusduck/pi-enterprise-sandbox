@@ -45,9 +45,6 @@ import {
   MAX_SUBAGENT_DEPTH,
 } from '../infrastructure/dsh/subagent-constants.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Run source recorded for every child (runs.source, VARCHAR(32)). */
 export const SUBAGENT_RUN_SOURCE = 'subagent';
 
@@ -63,7 +60,7 @@ export const DEFAULT_RESULT_SUMMARY_CHARS = 4_000;
 export class SubagentLimitError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   name: string;
-  code: Loose;
+  code: string;
 
   constructor(code: string, message: string) {
     super(message);
@@ -74,22 +71,22 @@ export class SubagentLimitError extends Error {
 
 export class SubagentSpawnService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  generateId: Loose;
-  now: Loose;
-  runQueue: Loose;
-  stateMachine: Loose;
-  queueName: Loose;
-  maxDepth: Loose;
-  maxConcurrent: Loose;
-  idempotencyTtlMs: Loose;
-  resultSummaryChars: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>;
+  generateId: () => string;
+  now: () => Date;
+  runQueue: { enqueue: (ref: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown> };
+  stateMachine: import('../domain/run/run-state-machine.js').RunStateMachine;
+  queueName: string;
+  maxDepth: number;
+  maxConcurrent: number;
+  idempotencyTtlMs: number;
+  resultSummaryChars: number;
 
   /**
    * @param {{
-   *   transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> },
-   *   createRepositories: (db: any) => any,
+   *   transactionManager: { run: (fn: (trx: unknown) => Promise<unknown>) => Promise<unknown> },
+   *   createRepositories: (db?: unknown) => object,
    *   generateId: () => string,
    *   now?: () => Date,
    *   runQueue: { enqueue: (ref: object, options?: object) => Promise<unknown> },
@@ -101,7 +98,7 @@ export class SubagentSpawnService {
    *   resultSummaryChars?: number,
    * }} deps
    */
-  constructor(deps: { transactionManager: { run: (fn: (trx: any) => Promise<any>) => Promise<any> }, createRepositories: (db: any) => any, generateId: () => string, now?: () => Date, runQueue: { enqueue: (ref: Record<string, any>, options?: Record<string, any>) => Promise<unknown> }, runStateMachine?: Record<string, any>, queueName?: string, maxDepth?: number, maxConcurrent?: number, idempotencyTtlMs?: number, resultSummaryChars?: number, }) {
+  constructor(deps: { transactionManager: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> }, createRepositories: (db?: unknown) => ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, generateId: () => string, now?: () => Date, runQueue: { enqueue: (ref: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown> }, runStateMachine?: import('../domain/run/run-state-machine.js').RunStateMachine, queueName?: string, maxDepth?: number, maxConcurrent?: number, idempotencyTtlMs?: number, resultSummaryChars?: number, }) {
     if (!deps?.transactionManager?.run) {
       throw new Error('SubagentSpawnService requires transactionManager.run');
     }
@@ -350,7 +347,7 @@ export class SubagentSpawnService {
         traceFlags: parent.traceFlags,
         traceParentSpanId: parentSpanId,
         nextEventSequence: 0,
-      });
+      } as Parameters<import('../infrastructure/mysql/repositories/run-repository.js').RunRepository['create']>[0] & { traceState: string | null; traceFlags: string | null; traceParentSpanId: string | null }); // create入参类型滞后：实现已持久化trace三字段，传参保留原逻辑不断言会TS2353
 
       const acceptedEvent = await repos.runEvents.append({
         eventId,
@@ -370,7 +367,7 @@ export class SubagentSpawnService {
         },
         traceId: parent.traceId,
         traceState: parent.traceState,
-      });
+      } as Parameters<import('../infrastructure/mysql/repositories/run-event-repository.js').RunEventRepository['append']>[0] & { traceState: string | null }); // append签名无traceState（实现亦不持久化，事件行无此列），传参保留原逻辑
 
       await repos.outbox.insert({
         outboxId,
@@ -514,7 +511,7 @@ export class SubagentSpawnService {
  * a missing agent and an inactive one all produce the same error — existence
  * must not leak (AGENTS.md §2).
  */
-async function resolveDelegationTarget(repos: Loose, orgId: string, name: string) {
+async function resolveDelegationTarget(repos: ReturnType<typeof import('../bootstrap/container-env.js').createRepositoryBundle>, orgId: string, name: string) {
   const unavailable = () =>
     new SubagentLimitError(
       'DELEGATION_TARGET_UNAVAILABLE',
@@ -560,9 +557,9 @@ function childConversationTitle(label: string | null, task: string) {
  * @returns {string}
  */
 function assistantText(message: unknown) {
-  const content = (message as { contentJson?: unknown })?.contentJson;
+  const content = (message as { contentJson?: unknown })?.contentJson; // 消息行为unknown，按contentJson形状收窄
   if (!content || typeof content !== 'object') return '';
-  const text = (content as { text?: unknown }).text;
+  const text = (content as { text?: unknown }).text; // 已判为对象，按text字段收窄
   return typeof text === 'string' ? text.trim() : '';
 }
 

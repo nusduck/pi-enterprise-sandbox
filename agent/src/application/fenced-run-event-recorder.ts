@@ -23,22 +23,21 @@ import {
 } from './event-envelope.js';
 import { createPromiseTail } from './promise-tail.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type FencedEventRepos = { sessions: import('../infrastructure/mysql/repositories/agent-session-repository.js').AgentSessionRepository; runEvents: import('../infrastructure/mysql/repositories/run-event-repository.js').RunEventRepository; outbox: import('../infrastructure/outbox/outbox-repository.js').OutboxRepository };
 
 export class FencedRunEventRecorder {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  tx: Loose;
-  createRepositories: Loose;
-  generateId: Loose;
-  context: Loose;
-  executionFenceToken: Loose;
-  now: Loose;
-  emit: Loose;
-  isLockLost: Loose;
+  tx: { run: <T>(work: (trx: unknown) => Promise<T>) => Promise<T> };
+  createRepositories: (db: unknown) => FencedEventRepos;
+  generateId: () => string;
+  context: RunEventContext;
+  executionFenceToken: number;
+  now: () => Date;
+  emit: ((envelope: CanonicalRunEventEnvelope) => Promise<void> | void) | null;
+  isLockLost: () => boolean;
   _seenDedupeKeys: Set<string>;
   _pendingDedupe: Map<any, any>;
-  _tail: Loose;
+  _tail: ReturnType<typeof createPromiseTail>;
   _sequenceHint: number;
 
   /**

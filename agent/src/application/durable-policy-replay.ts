@@ -9,9 +9,6 @@
 
 import { TOOL_EXECUTION_STATUS } from '../domain/tool/tool-execution-status.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /**
  * Durable policy state conflict — enterprise-policy maps to block.
  * Does not claim PR-09 resume; prevents allow bypass of prior deny/pending.
@@ -20,10 +17,10 @@ export class DurablePolicyConflictError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   name: string;
   code: string;
-  reasonCode: Loose;
-  toolExecution: Loose;
+  reasonCode: string;
+  toolExecution: Record<string, unknown> | null;
 
-  constructor(message: string, meta: { reasonCode?: string, toolExecution?: Record<string, any> } = {}) {
+  constructor(message: string, meta: { reasonCode?: string, toolExecution?: Record<string, unknown> } = {}) {
     super(message);
     this.name = 'DurablePolicyConflictError';
     this.code = 'POLICY_DURABLE_CONFLICT';
@@ -47,7 +44,7 @@ export class DurablePolicyConflictError extends Error {
  *   policyFingerprint: string,
  * }} next
  */
-export function assertCompatiblePolicyReplay(toolExecution: Record<string, any>, next: { decision: string, desiredStatus: string, errorCode?: string | null, policyFingerprint: string, }) {
+export function assertCompatiblePolicyReplay(toolExecution: Record<string, unknown>, next: { decision: string, desiredStatus: string, errorCode?: string | null, policyFingerprint: string, }) {
   const status = toolExecution.status;
   const decision = next.decision;
   const nextPf = next.policyFingerprint

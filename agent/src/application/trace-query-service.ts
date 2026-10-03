@@ -1,22 +1,21 @@
 /** Owner-scoped durable Trace query service (MySQL is the restart authority). */
 
-import { ExternalIdentityResolver } from './parent/external-identity-resolver.js';
+import { ExternalIdentityResolver, type ExternalAuth } from './parent/external-identity-resolver.js';
 import { OwnerScopedNotFoundError, ValidationError, assertDomainRunId, requireAuth } from './errors.js';
 import {
   normalizeTraceId,
   normalizeSpanId,
 } from '../infrastructure/mysql/repositories/trace-span-repository.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+interface TraceRepos { organizations: ConstructorParameters<typeof ExternalIdentityResolver>[0]['organizations']; externalRefs: ConstructorParameters<typeof ExternalIdentityResolver>[0]['externalRefs']; runs: { getById(runId: string, scope: { orgId: string; userId: string }, opts?: { forUpdate?: boolean }): Promise<{ runId: string; traceId: string } | null>; listByTraceId?(traceId: string, scope: { orgId: string; userId: string }, opts?: { limit: number }): Promise<Array<{ runId: string }>>; }; traceSpans: { materializeRunFacts(run: { runId: string; traceId: string }, scope: { orgId: string; userId: string }): Promise<unknown>; listByRun(runId: string, traceId: string, scope: { orgId: string; userId: string }, opts: { limit: number; cursor: string | null; includePageInfo: boolean }): Promise<unknown>; }; }
 
 export class TraceQueryService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  createRepositories: Loose;
-  db: Loose;
-  defaultProvider: Loose;
+  createRepositories: (db?: unknown) => TraceRepos;
+  db: unknown;
+  defaultProvider: string | undefined;
 
-  constructor(deps: { createRepositories: (db?: any) => any, db?: any, defaultProvider?: string }) {
+  constructor(deps: { createRepositories: (db?: unknown) => TraceRepos, db?: unknown, defaultProvider?: string }) {
     if (typeof deps?.createRepositories !== 'function') {
       throw new Error('TraceQueryService requires createRepositories');
     }
@@ -25,7 +24,7 @@ export class TraceQueryService {
     this.defaultProvider = deps.defaultProvider;
   }
 
-  async #owner(auth, repos) {
+  async #owner(auth: ExternalAuth, repos: TraceRepos) {
     requireAuth(auth);
     const resolver = new ExternalIdentityResolver(
       {
@@ -46,7 +45,7 @@ export class TraceQueryService {
     }
   }
 
-  async #loadRun(runIdRaw, auth) {
+  async #loadRun(runIdRaw: unknown, auth: ExternalAuth) {
     if (typeof runIdRaw !== 'string' || !runIdRaw.trim()) {
       throw new ValidationError('runId is required');
     }
@@ -72,7 +71,7 @@ export class TraceQueryService {
    * worker restart is safe: materializeRunFacts reads only durable MySQL rows
    * and upserts deterministic span identities.
    */
-  async listForRun({ runId, auth, limit = 500, cursor = null }) {
+  async listForRun({ runId, auth, limit = 500, cursor = null }: { runId: string; auth: ExternalAuth; limit?: number; cursor?: string | null }) {
     const { run, scope, repos, runId: id } = await this.#loadRun(runId, auth);
     await repos.traceSpans.materializeRunFacts(run, scope);
     let normalizedCursor = null;
@@ -83,12 +82,12 @@ export class TraceQueryService {
         throw new ValidationError('cursor must be a non-zero W3C span id');
       }
     }
-    const page = await repos.traceSpans.listByRun(
+    const page = (await repos.traceSpans.listByRun(
       id,
       normalizeTraceId(run.traceId),
       scope,
       { limit, cursor: normalizedCursor, includePageInfo: true },
-    );
+    )) as { spans: Array<unknown>; truncated?: unknown; nextCursor?: unknown }; // includePageInfo 恒为 true,恒返回分页对象而非数组
     // includePageInfo above is unconditional, so listByRun always returns the
     // page object ({ spans, truncated, nextCursor }), never a bare array.
     const spans = page.spans;
@@ -107,7 +106,7 @@ export class TraceQueryService {
   }
 
   /** Query by trace id while still requiring an owner and an owned Run. */
-  async listByTrace({ traceId: rawTraceId, auth, limit = 500 }) {
+  async listByTrace({ traceId: rawTraceId, auth, limit = 500 }: { traceId: unknown; auth: ExternalAuth; limit?: number }) {
     let traceId;
     try {
       traceId = normalizeTraceId(rawTraceId);

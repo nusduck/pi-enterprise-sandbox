@@ -18,8 +18,7 @@ import { OwnerScopedNotFoundError, ValidationError } from './errors.js';
 import { DEFAULT_AGENT_DEFINITION_NAME } from '../infrastructure/mysql/repositories/agent-catalog-repository.js';
 import type { AgentVisibility } from '../infrastructure/mysql/repositories/agent-access-repository.js';
 
-/** 过渡期宽松类型：仓储工厂产物的形状由各自模块负责。 */
-type Loose = any;
+import type { createRepositoryBundle } from '../bootstrap/container-env.js';
 
 export interface AgentAccessActor {
   readonly userId: string;
@@ -44,7 +43,7 @@ export function isRestricted(definition: { visibility?: unknown } | null | undef
 
 /** 这个调用者能不能用这个智能体（调用方已确认同 org）。 */
 export async function canUseAgent(
-  repos: Loose,
+  repos: Pick<ReturnType<typeof createRepositoryBundle>, 'agentAccess'>,
   definition: { agentId: string; visibility?: unknown },
   actor: AgentAccessActor,
 ): Promise<boolean> {
@@ -56,7 +55,7 @@ export async function canUseAgent(
 }
 
 export async function assertAgentUsable(
-  repos: Loose,
+  repos: Pick<ReturnType<typeof createRepositoryBundle>, 'agentAccess'>,
   definition: { agentId: string; visibility?: unknown },
   actor: AgentAccessActor,
 ): Promise<void> {
@@ -65,7 +64,7 @@ export async function assertAgentUsable(
 
 /** 列表过滤：一次查出授予集合，不逐个回表。 */
 export async function filterUsableAgents<T extends { agentId: string; visibility?: unknown }>(
-  repos: Loose,
+  repos: Pick<ReturnType<typeof createRepositoryBundle>, 'agentAccess'>,
   orgId: string,
   definitions: readonly T[],
   actor: AgentAccessActor,
@@ -82,7 +81,7 @@ export async function filterUsableAgents<T extends { agentId: string; visibility
  * 名单里每个人都必须是本 org 的活跃成员；未知的人不做「忽略」，整单 422。
  */
 export async function normalizeAccessInput(
-  repos: Loose,
+  repos: Pick<ReturnType<typeof createRepositoryBundle>, 'agentAccess'>,
   orgId: string,
   definition: { name: string },
   body: unknown,
