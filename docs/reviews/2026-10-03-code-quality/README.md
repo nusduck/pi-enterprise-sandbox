@@ -36,8 +36,8 @@ Redis replay 退役、网络模式删除、前端重设计等多次重建，留�
 | 重复实现 | 合并为一处，行为不变；有分叉的先补测试钉住期望行为 |
 | 注释 / 命名漂移（Python 路径、Pi 引擎、计划阶段编号） | 改写为现状，不改行为 |
 | 安全护栏、denylist、脱敏兜底里的历史路径 | **保留**（防绕过），只改注释 |
-| 已入库数据的升级路径（无 `schemaVersion` 的旧 Agent 配置、未过期的无 sid JWT） | **已删除（开发阶段无存量数据，见本 PR）**：8 个 `agent_version` 的 `config_json` 全部带 `schemaVersion`；sid 引入（#74，2026-10-02）已过 24h JWT TTL，不存在未过期的无 sid JWT |
-| 前端不调用、但 `api.md` 记为公开接口的 BFF 路由 | 待产品确认是否有前端以外的客户端，确认前不删 |
+| 已入库数据的升级路径（无 `schemaVersion` 的旧 Agent 配置、未过期的无 sid JWT） | **已删除（开发阶段无存量数据，#106）**：8 个 `agent_version` 的 `config_json` 全部带 `schemaVersion`；sid 引入（#74，2026-10-02）已过 24h JWT TTL，不存在未过期的无 sid JWT |
+| 前端不调用、但 `api.md` 记为公开接口的 BFF 路由 | 已删除（产品确认无外部客户端）：conv-scoped 建 Run、extensions diagnostics、approvals 详情、processes read/kill、files upload，以及建 Run/游标/环境变量/roles 的兼容别名；`GET /api/processes/{id}` 前端在用而保留，时间线多拼写回退因历史数据而保留 |
 | `type Loose = any` 的大面积收紧 | 本轮不做（收益低、牵涉面大），只收敛重复声明 |
 | 行数棘轮里的「单调用方小模块」 | 不并回（是为满足棘轮的有意拆分） |
 

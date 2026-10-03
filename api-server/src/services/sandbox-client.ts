@@ -102,7 +102,6 @@ export interface SandboxClient {
   listProcesses(sessionId: string, query?: Record<string, any>): Promise<any>;
   getProcess(sessionId: string, processId: string): Promise<any>;
   getProcessLogs(sessionId: string, processId: string, query?: Record<string, any>): Promise<any>;
-  readProcess(sessionId: string, processId: string, query?: Record<string, any>): Promise<any>;
   processAction(sessionId: string, processId: string, action: string, body?: Record<string, any>): Promise<any>;
   checkReady(): Promise<DownstreamReadiness>;
 }
@@ -259,18 +258,6 @@ export function createSandboxClient({
       const qs = params.toString();
       const resp = await sbFetch(
         `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/logs${qs ? `?${qs}` : ''}`,
-      );
-      return resp.json();
-    },
-
-    async readProcess(sessionId: string, processId: string, query: Record<string, any> = {}) {
-      const params = new URLSearchParams();
-      if (query['stream']) params.set('stream', query['stream']);
-      if (query['cursor']) params.set('cursor', query['cursor']);
-      if (query['limit']) params.set('limit', query['limit']);
-      const qs = params.toString();
-      const resp = await sbFetch(
-        `/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/read${qs ? `?${qs}` : ''}`,
       );
       return resp.json();
     },

@@ -16,10 +16,10 @@ describe('resolveAuthEnabled', () => {
     assert.equal(resolveAuthEnabled({}), false);
   });
 
-  it('reads AUTH_ENABLED over SANDBOX_AUTH_ENABLED', () => {
+  it('reads only AUTH_ENABLED (retired SANDBOX_AUTH_ENABLED alias is ignored)', () => {
     assert.equal(resolveAuthEnabled({ AUTH_ENABLED: 'true' }), true);
     assert.equal(resolveAuthEnabled({ AUTH_ENABLED: 'false', SANDBOX_AUTH_ENABLED: 'true' }), false);
-    assert.equal(resolveAuthEnabled({ SANDBOX_AUTH_ENABLED: 'true' }), true);
+    assert.equal(resolveAuthEnabled({ SANDBOX_AUTH_ENABLED: 'true' }), false);
   });
 });
 
@@ -34,9 +34,10 @@ describe('isProtectedApiPath', () => {
     assert.equal(isProtectedApiPath('/api/conversations'), true);
     assert.equal(isProtectedApiPath('/api/runs'), true);
     assert.equal(isProtectedApiPath('/api/cron-jobs'), true);
-    assert.equal(isProtectedApiPath('/api/extensions/diagnostics'), true);
+    assert.equal(isProtectedApiPath('/api/extensions/diagnostics'), false);
     assert.equal(isProtectedApiPath('/api/capabilities/tools'), true);
     assert.equal(isProtectedApiPath('/api/files/upload'), true);
+    assert.equal(isProtectedApiPath('/api/files/download'), true);
     assert.equal(isProtectedApiPath('/api/datasets'), true);
     assert.equal(
       isProtectedApiPath('/api/conversations/conversation-id/datasets'),

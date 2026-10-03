@@ -153,14 +153,17 @@ async function createConversation(base, title) {
 
 async function createRun(base, conversationId, idempotencyKey, content) {
   const response = await fetch(
-    `${base}/api/conversations/${encodeURIComponent(conversationId)}/runs`,
+    `${base}/api/runs`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': idempotencyKey,
       },
-      body: JSON.stringify({ message: { content } }),
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        messages: [{ role: 'user', content }],
+      }),
     },
   );
   if (response.status !== 202) {

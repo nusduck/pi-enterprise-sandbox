@@ -411,7 +411,7 @@ sendMessage(text)
 ensureSession → POST /api/sessions/ensure（创建/复用 Conversation + Session）
   ↓
 attachment draft: queued → uploading → uploaded | failed
-  ├── POST /api/files/upload?session_id=xxx (+ Idempotency-Key)
+  ├── POST /api/conversations/{id}/datasets?session_id=xxx (+ Idempotency-Key)
   ├── 不自动发送聊天
   └── 可移除 / 失败重试；上传中或失败时禁用发送
       （剪贴板图片没有文件名，按嗅探到的 MIME 命名为 `pasted-image-<时间戳>-<序号>.<ext>`，

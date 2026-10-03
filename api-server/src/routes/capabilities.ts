@@ -17,17 +17,6 @@ import { config, UPLOAD_MAX_BYTES } from '../config.js';
 /** 本人的申请列表；创建与撤回的形状见 `handleSkillShareRequests`。 */
 const LIST_PATH = '/api/capabilities/skills/share-requests';
 
-export async function handleExtensionDiagnostics(parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
-  const traceId = req?.traceId || null;
-  try {
-    const auth = await resolveTrustedAuth(req);
-    const profileId = parsedUrl.searchParams.get('profile_id') || 'coding-agent';
-    sendJson(res, 200, await getAgentExtensionDiagnostics(profileId, { auth, traceId }));
-  } catch (error) {
-    sendError(res, error, traceId);
-  }
-}
-
 export async function handleCapabilityRegistry(kind: string, parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
   const traceId = req?.traceId || null;
   try {

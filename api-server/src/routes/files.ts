@@ -1,16 +1,18 @@
 /**
- * Routes: file download / upload / artifact-download proxy to Sandbox.
+ * Routes: file download / artifact-download proxy to Sandbox.
  *
- * Upload streams the inbound request (or a temp-file spill) to Sandbox so large
- * multipart bodies are never held fully in the Node heap.
+ * Dataset uploads still stream the inbound request (or a temp-file spill) to
+ * Sandbox so large bodies are never held fully in the Node heap — shared
+ * helpers below (`spillRequestToTempFile`, `discardRequestBody`,
+ * `resolveUploadTraceId`, `mapUploadErrorBody`) serve that path.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as sb from '../services/sandbox-client.js';
-import { config, AUTH_HEADER, UPLOAD_MAX_BYTES } from '../config.js';
+import { config, AUTH_HEADER } from '../config.js';
 import {
   authorizeSandboxSession,
   requireSessionWorkspaceId,
@@ -489,168 +491,6 @@ export async function handleArtifactDownload(
   } finally {
     if (req) req.off('close', onClose);
     if (!res.writableEnded) res.end();
-  }
-}
-
-/**
- * POST /api/files/upload?session_id=xxx
- * Stream multipart body to sandbox (temp-file spill; no full heap buffer).
- */
-export async function handleFileUpload(
-  parsedUrl: URL,
-  req: IncomingMessage & ReqWithTrace,
-  res: ServerResponse,
-): Promise<void> {
-  const sessionId = parsedUrl.searchParams.get('session_id');
-  const traceId = resolveUploadTraceId(req);
-
-  if (!sessionId) {
-    discardRequestBody(req, res);
-    sendJsonWithTrace(res, 400, { error: 'session_id required' }, traceId);
-    return;
-  }
-
-  const contentType = req.headers['content-type'] || 'application/octet-stream';
-  const idem =
-    req.headers['idempotency-key'] || req.headers['Idempotency-Key'] || null;
-
-  // Prefer Content-Length based limit (~50MB file + multipart overhead)
-  const maxBytes = UPLOAD_MAX_BYTES;
-  const declared = parseInt(String(req.headers['content-length'] || '0'), 10);
-  if (declared > maxBytes) {
-    // Drain/destroy so the client is not stuck sending a rejected body.
-    discardRequestBody(req, res);
-    sendJsonWithTrace(
-      res,
-      413,
-      { error: 'Payload too large', code: 'attachment_too_large' },
-      traceId,
-    );
-    return;
-  }
-
-  let sessionAccess;
-  let workspaceId: string;
-  try {
-    sessionAccess = await authorizeSandboxSession(sessionId, req, { traceId });
-    workspaceId = requireSessionWorkspaceId(sessionAccess);
-  } catch (err: any) {
-    discardRequestBody(req, res);
-    const status = Number(err?.status) || 500;
-    sendJsonWithTrace(
-      res,
-      status,
-      {
-        error: status >= 500 ? 'File service unavailable' : err.message,
-        code: err?.code,
-      },
-      traceId,
-    );
-    return;
-  }
-
-  let spill: { dir: string; filePath: string; size: number } | null = null;
-  try {
-    // Stream inbound body to temp file (not heap Buffer.concat)
-    spill = await spillRequestToTempFile(req, maxBytes);
-  } catch (err: any) {
-    if (err && (err.status === 413 || err.code === 'attachment_too_large')) {
-      sendJsonWithTrace(
-        res,
-        413,
-        {
-          error: err.message || 'Payload too large',
-          code: 'attachment_too_large',
-        },
-        traceId,
-      );
-      return;
-    }
-    console.error('[files] upload spill failed:', err);
-    sendJsonWithTrace(res, 500, { error: 'Upload failed' }, traceId);
-    return;
-  }
-
-  try {
-    const size = spill.size || (await stat(spill.filePath)).size;
-    // Propagate the same trace id so browser/BFF/sandbox share one id
-    const headers = sandboxProxyHeaders(
-      req,
-      {
-        'Content-Type': contentType,
-        'Content-Length': String(size),
-        'X-Trace-Id': traceId,
-      },
-      sessionAccess.sandboxAuth,
-    );
-    if (idem) {
-      headers['Idempotency-Key'] = String(idem);
-    }
-
-    // Stream file to sandbox via fetch (Readable stream body)
-    const bodyStream = createReadStream(spill.filePath);
-    const sanRes = await fetchSandboxBounded(
-      `${config.SANDBOX_BASE_URL}/sessions/${encodeURIComponent(workspaceId)}/files/upload`,
-      {
-        method: 'POST',
-        headers,
-        body: bodyStream,
-        duplex: 'half',
-      } as RequestInit,
-      UPLOAD_RESPONSE_TIMEOUT_MS,
-    );
-
-    const text = await sanRes.text();
-    let data: any;
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch {
-      data = { error: text || 'Invalid sandbox response' };
-    }
-
-    const status = sanRes.status === 201 || sanRes.ok ? (sanRes.status || 201) : sanRes.status;
-    const sandboxTrace = sanRes.headers.get('x-trace-id') || traceId;
-
-    if (!sanRes.ok) {
-      // Normalize 400 size errors to 413 when sandbox still returns 400 for size
-      let mappedStatus = status;
-      const code =
-        (data && data.detail && data.detail.code) ||
-        (data && data.code) ||
-        '';
-      if (
-        status === 400 &&
-        (code === 'attachment_too_large' || code === 'workspace_quota_exceeded')
-      ) {
-        mappedStatus = 413;
-      }
-      sendJsonWithTrace(
-        res,
-        mappedStatus,
-        mapUploadErrorBody(mappedStatus, data, sandboxTrace),
-        sandboxTrace,
-      );
-      return;
-    }
-
-    // Echo sandbox payload; ensure trace is always present for correlation
-    const successBody =
-      data && typeof data === 'object'
-        ? { ...data, trace_id: data.trace_id || sandboxTrace }
-        : data;
-    sendJsonWithTrace(res, status === 200 ? 201 : status, successBody, sandboxTrace);
-  } catch (err: any) {
-    console.error('[files] upload proxy failed:', err);
-    sendJsonWithTrace(
-      res,
-      500,
-      { error: err.message || 'Upload failed' },
-      traceId,
-    );
-  } finally {
-    if (spill?.dir) {
-      rm(spill.dir, { recursive: true, force: true }).catch(() => {});
-    }
   }
 }
 

@@ -3,7 +3,10 @@
  *
  * 用例来自跨包夹具 `tests/fixtures/contracts/platform-roles-v1.json`：Agent 侧的
  * 同形实现读**同一组**用例（design `docs/design/rbac-roles.md` §4.3 要求两份实现
- * 由同形的测试夹具锁定一致）。这里只补夹具表达不了的形状（`actingRole` 字段名与
+ * 由同形的测试夹具锁定一致）。BFF 只保留有生产调用者的子集
+ * （`parseRoleSet` / `hasRole` / `formatActingRole` + 常量），`primaryRole` /
+ * `isKnownRole` / `ROLE_REVIEWER` 已随无调用导出删除，只在 Agent 侧覆盖。
+ * 这里只补夹具表达不了的形状（`actingRole` 字段名与
  * `BFF_DEV_ACTING_ROLE` 的解析）。
  */
 import { describe, it } from 'node:test';
@@ -14,12 +17,9 @@ import {
   KNOWN_ROLES,
   NO_ROLE,
   ROLE_ADMIN,
-  ROLE_REVIEWER,
   formatActingRole,
   hasRole,
-  isKnownRole,
   parseRoleSet,
-  primaryRole,
 } from '../src/domain/roles.js';
 import { resolveDevelopmentActingIdentity } from '../src/config.js';
 
@@ -46,12 +46,6 @@ describe('platform roles (shared contract fixture)', () => {
     });
   }
 
-  for (const c of fixture.primaryRole) {
-    it(`primaryRole: ${c.name}`, () => {
-      assert.equal(primaryRole(c.input), c.expected);
-    });
-  }
-
   for (const c of fixture.actingRole) {
     it(`formatActingRole: ${c.name}`, () => {
       assert.equal(formatActingRole(c.input), c.expected);
@@ -60,16 +54,9 @@ describe('platform roles (shared contract fixture)', () => {
 });
 
 describe('platform roles (bff shapes)', () => {
-  it('isKnownRole 只认白名单，大小写不敏感', () => {
-    assert.equal(isKnownRole('admin'), true);
-    assert.equal(isKnownRole(' REVIEWER '), true);
-    assert.equal(isKnownRole('user'), false);
-    assert.equal(isKnownRole(undefined), false);
-  });
-
   it('hasRole 认 TrustedAuthContext 的 actingRole 字段', () => {
     assert.equal(hasRole({ actingRole: 'admin,reviewer' }, ROLE_ADMIN), true);
-    assert.equal(hasRole({ actingRole: 'admin,reviewer' }, ROLE_REVIEWER), true);
+    assert.equal(hasRole({ actingRole: 'admin,reviewer' }, 'reviewer'), true);
     assert.equal(hasRole({ actingRole: 'reviewer' }, ROLE_ADMIN), false);
     assert.equal(hasRole({ actingRole: null }, ROLE_ADMIN), false);
     assert.equal(hasRole({}, ROLE_ADMIN), false);

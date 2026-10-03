@@ -75,20 +75,6 @@ export async function handleGetProcessLogs(processId: string, parsedUrl: URL, re
   }
 }
 
-export async function handleReadProcess(processId: string, parsedUrl: URL, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
-  try {
-    const sessionId = requiredSessionId(parsedUrl.searchParams.get('session_id'));
-    const { client, workspaceId } = await clientFor(sessionId, req);
-    json(res, 200, await client.readProcess(workspaceId, processId, {
-      stream: parsedUrl.searchParams.get('stream'),
-      cursor: parsedUrl.searchParams.get('cursor'),
-      limit: parsedUrl.searchParams.get('limit'),
-    }));
-  } catch (err: any) {
-    sendError(res, err, req?.traceId);
-  }
-}
-
 export async function handleProcessAction(
   processId: string,
   action: string,
@@ -105,10 +91,10 @@ export async function handleProcessAction(
         data: body?.data || '',
         eof: Boolean(body?.eof),
       });
-    } else if (action === 'signal' || action === 'kill') {
-      // `kill` 未指定信号时发 SIGKILL（名实一致）；`signal` 仍默认 SIGTERM。
+    } else if (action === 'signal') {
+      // `signal` 未指定信号时默认 SIGTERM；兼容别名 `kill` 已删除。
       result = await client.processAction(workspaceId, processId, 'signal', {
-        signal: body?.signal || (action === 'kill' ? 'SIGKILL' : 'SIGTERM'),
+        signal: body?.signal || 'SIGTERM',
       });
     } else if (action === 'cancel') {
       result = await client.processAction(workspaceId, processId, 'cancel');

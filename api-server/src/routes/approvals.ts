@@ -4,7 +4,6 @@
 import type { ServerResponse } from 'node:http';
 import {
   decideAgentApproval,
-  getAgentApproval,
   listAgentApprovals,
 } from '../services/agent-client.js';
 import { resolveTrustedAuth, type ReqWithTrace } from '../application/run-access-service.js';
@@ -22,21 +21,6 @@ export async function handleListApprovals(parsedUrl: URL, res: ServerResponse, r
     json(res, 200, result);
   } catch (err: any) {
     console.error('[approvals] list:', err.message);
-    sendError(res, err, req?.traceId);
-  }
-}
-
-/** GET /api/approvals/:id — owner-scoped Agent MySQL detail. */
-export async function handleGetApproval(approvalId: string, res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {
-  try {
-    const auth = await resolveTrustedAuth(req);
-    const result = await getAgentApproval(approvalId, {
-      auth,
-      traceId: req?.traceId,
-    });
-    json(res, 200, result);
-  } catch (err: any) {
-    console.error('[approvals] get:', err.message);
     sendError(res, err, req?.traceId);
   }
 }

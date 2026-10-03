@@ -1,7 +1,6 @@
 /**
  * Run control routes (ADR §4.7 / §10 / plan §18 PR-10):
  *   POST /api/runs
- *   POST /api/conversations/:conversationId/runs
  *   GET  /api/runs/:id
  *   GET  /api/runs/:id/events  (SSE proxy — Agent MySQL+Redis replay)
  *   POST /api/runs/:id/steer|follow-up|cancel
@@ -110,54 +109,33 @@ export function readIdempotencyKeyHeader(req: IncomingMessage | ReqWithTrace | n
 
 export interface CreateRunBody {
   messages?: any[];
-  message?: any;
   conversation_id?: string | null;
   agent_id?: string | null;
-  agentId?: string | null;
   agent_profile_id?: string;
-  agentProfileId?: string;
   model_id?: string;
-  modelId?: string;
   budget?: any;
   [key: string]: any;
 }
 
 /**
- * Normalize create body. Supports plan §18.3 `message.content[]` and legacy
- * `messages[]`. Optional conversationId binds the run to a conversation.
+ * Normalize create body. Only `messages[]` (snake_case) is accepted: the
+ * frontend is the sole API client and never sends the retired plan §18.3
+ * `message.content[]` shape or camelCase id aliases.
  */
-export function normalizeCreateRunBody(body: CreateRunBody, opts: { conversationId?: string | null } = {}): any {
-  let messages = body?.messages;
-  if ((!Array.isArray(messages) || messages.length === 0) && body?.message) {
-    const msg = body.message;
-    if (typeof msg === 'string' && msg.trim()) {
-      messages = [{ role: 'user', content: msg.trim() }];
-    } else if (msg && typeof msg === 'object') {
-      const content = msg.content ?? msg.text;
-      if (typeof content === 'string' && content.trim()) {
-        messages = [{ role: 'user', content: content.trim() }];
-      } else if (Array.isArray(content) && content.length > 0) {
-        const textParts = content
-          .filter((p: any) => p && (p.type === 'text' || typeof p.text === 'string'))
-          .map((p: any) => String(p.text || ''))
-          .filter(Boolean);
-        const text = textParts.join('\n').trim();
-        if (text) messages = [{ role: 'user', content: text }];
-      }
-    }
-  }
+export function normalizeCreateRunBody(body: CreateRunBody): any {
+  const messages = body?.messages;
   if (!Array.isArray(messages) || messages.length === 0) {
-    return { error: 'messages array is required (or message.content text)' };
+    return { error: 'messages array is required' };
   }
-  const conversationId = opts.conversationId || body.conversation_id || null;
+  const conversationId = body.conversation_id || null;
   return {
     messages,
     conversation_id: conversationId,
     // 首轮消息就是"建会话"，所以 Agent 的选择在这条路上透传。归属与活跃版本
     // 由 agent/ 判定，BFF 不校验（AGENTS.md §1）。
-    agent_id: body.agent_id || body.agentId || undefined,
-    agent_profile_id: body.agent_profile_id || body.agentProfileId || undefined,
-    model_id: body.model_id || body.modelId || undefined,
+    agent_id: body.agent_id || undefined,
+    agent_profile_id: body.agent_profile_id || undefined,
+    model_id: body.model_id || undefined,
     budget: body.budget || undefined,
   };
 }
@@ -166,9 +144,8 @@ export async function handleCreateRun(
   body: any,
   res: ServerResponse,
   req: ReqWithTrace | null = null,
-  routeOpts: { conversationId?: string | null } = {},
 ): Promise<void> {
-  const normalized = normalizeCreateRunBody(body, routeOpts);
+  const normalized = normalizeCreateRunBody(body);
   if (normalized.error) {
     json(res, 400, { error: normalized.error });
     return;
@@ -327,7 +304,7 @@ export async function proxySseUpstream({
 
 /**
  * GET /api/runs/:id/events — ownership check then proxy Agent hybrid SSE.
- * Cursor: afterSequence / after_sequence / after + Last-Event-ID (seq or ULID).
+ * Cursor: after_sequence + Last-Event-ID (seq or ULID).
  * Disconnect aborts only the proxy — never cancels the Run (plan §12.4).
  */
 export async function handleRunEvents(

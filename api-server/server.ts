@@ -12,7 +12,7 @@ import {
   effectiveConfig,
 } from './src/config.js';
 import { handleLiveness, handleReadiness } from './src/routes/status.js';
-import { handleFileDownload, handleFileUpload, handleArtifactDownload } from './src/routes/files.js';
+import { handleFileDownload, handleArtifactDownload } from './src/routes/files.js';
 import {
   handleListConversations,
   handleGetConversation,
@@ -30,7 +30,6 @@ import {
 } from './src/routes/datasets.js';
 import {
   handleDecideApproval,
-  handleGetApproval,
   handleListApprovals,
 } from './src/routes/approvals.js';
 import {
@@ -54,11 +53,9 @@ import {
   handleGetProcessLogs,
   handleListProcesses,
   handleProcessAction,
-  handleReadProcess,
 } from './src/routes/processes.js';
 import {
   handleCapabilityRegistry,
-  handleExtensionDiagnostics,
   handleSkillDraftUpload,
   handleSkillMutation,
   handleSkillShareRequests,
@@ -297,10 +294,6 @@ const server = http.createServer(async (rawReq, res) => {
       return;
     }
 
-    if (req.method === 'GET' && path === '/api/extensions/diagnostics') {
-      await handleExtensionDiagnostics(parsedUrl, res, req);
-      return;
-    }
     {
       const capability = path.match(/^\/api\/capabilities\/(skills|mcp|tools|models)$/);
       if (req.method === 'GET' && capability) {
@@ -560,27 +553,13 @@ const server = http.createServer(async (rawReq, res) => {
         await handleDecideApproval(approvalId, parsed, res, req);
         return;
       }
-      const apprDetailMatch = path.match(/^\/api\/approvals\/([^/]+)$/);
-      if (req.method === 'GET' && apprDetailMatch) {
-        await handleGetApproval(
-          decodeURIComponent(apprDetailMatch[1]!),
-          res,
-          req,
-        );
-        return;
-      }
+      // `GET /api/approvals/{id}` 已删除：前端只用列表 + decide，产品确认无外部客户端。
     }
 
     // ── Run control (ADR §4.7 / §10 / plan §18 PR-10) ──
     {
-      // plan §18.3 — POST /api/conversations/{id}/runs
-      const convRuns = path.match(/^\/api\/conversations\/([^/]+)\/runs$/);
-      if (req.method === 'POST' && convRuns) {
-        const conversationId = decodeURIComponent(convRuns[1]!);
-        const parsed = await readJsonBody(req, { maxBytes: config.JSON_BODY_LIMIT_BYTES });
-        await handleCreateRun(parsed, res, req, { conversationId });
-        return;
-      }
+      // 会话作用域的建 Run 别名路由已删除：唯一调用方是前端，而前端只用
+      // `POST /api/runs`（body 带 conversation_id），产品确认无外部客户端。
       const convFollowUps = path.match(
         /^\/api\/conversations\/([^/]+)\/follow-ups$/,
       );
@@ -668,7 +647,9 @@ const server = http.createServer(async (rawReq, res) => {
     }
     {
       const processMatch = path.match(
-        /^\/api\/processes\/([^/]+)(?:\/(logs|read|stdin|signal|cancel|kill))?$/,
+        // `read`（logs 的旧游标形状）与 `kill`（signal 的兼容别名）已删除；
+        // 进程详情 `{id}`（status）前端进程控制台在用，保留。
+        /^\/api\/processes\/([^/]+)(?:\/(logs|stdin|signal|cancel))?$/,
       );
       if (processMatch) {
         const processId = decodeURIComponent(processMatch[1]!);
@@ -681,14 +662,10 @@ const server = http.createServer(async (rawReq, res) => {
           await handleGetProcessLogs(processId, parsedUrl, res, req);
           return;
         }
-        if (req.method === 'GET' && action === 'read') {
-          await handleReadProcess(processId, parsedUrl, res, req);
-          return;
-        }
 
         if (
           req.method === 'POST' &&
-          (action === 'stdin' || action === 'signal' || action === 'cancel' || action === 'kill')
+          (action === 'stdin' || action === 'signal' || action === 'cancel')
         ) {
           const parsed = await readJsonBody(req, {
             maxBytes: config.JSON_BODY_LIMIT_BYTES,
@@ -708,12 +685,6 @@ const server = http.createServer(async (rawReq, res) => {
     // ── GET /api/files/artifact-download — artifact deliverable proxy (P7) ──
     if (req.method === 'GET' && path === '/api/files/artifact-download') {
       await handleArtifactDownload(parsedUrl, res, req);
-      return;
-    }
-
-    // ── POST /api/files/upload — streaming upload proxy (no full heap buffer) ──
-    if (req.method === 'POST' && path === '/api/files/upload') {
-      await handleFileUpload(parsedUrl, req, res);
       return;
     }
 

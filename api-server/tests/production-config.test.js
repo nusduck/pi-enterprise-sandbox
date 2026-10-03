@@ -100,14 +100,16 @@ describe('validateProductionConfig', () => {
     }
   });
 
-  it('accepts SANDBOX_AUTH_ENABLED as auth signal', () => {
-    assert.doesNotThrow(() =>
-      validateProductionConfig({
-        DEPLOYMENT_ENV: 'production',
-        AGENT_INTERNAL_TOKEN: STRONG,
-        SANDBOX_API_TOKEN: STRONG,
-        SANDBOX_AUTH_ENABLED: 'true',
-      }),
+  it('rejects the retired SANDBOX_AUTH_ENABLED alias as auth signal', () => {
+    assert.throws(
+      () =>
+        validateProductionConfig({
+          DEPLOYMENT_ENV: 'production',
+          AGENT_INTERNAL_TOKEN: STRONG,
+          SANDBOX_API_TOKEN: STRONG,
+          SANDBOX_AUTH_ENABLED: 'true',
+        }),
+      /AUTH_ENABLED/,
     );
   });
 });
@@ -123,7 +125,7 @@ describe('effectiveConfig redaction', () => {
       AGENT_BASE_URL: 'http://agent:4100',
       AGENT_INTERNAL_TOKEN: 'agent-secret-value',
       AUTH_ENABLED: true,
-      APPROVAL_ENABLED: true,
+      APPROVAL_MODE: 'ask',
     });
     const text = JSON.stringify(snap);
     assert.equal(snap.SANDBOX_API_TOKEN, '***');
@@ -167,7 +169,8 @@ describe('isWeakSecret + resolveAuthEnabled', () => {
   it('resolves auth enabled', () => {
     assert.equal(resolveAuthEnabled({ AUTH_ENABLED: 'true' }), true);
     assert.equal(resolveApprovalMode({}), 'ask');
-    assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'deny');
+    assert.equal(resolveApprovalMode({ APPROVAL_MODE: 'deny' }), 'deny');
+    assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'ask');
   });
 
   it('resolves a positive configurable Dataset upload byte limit', () => {

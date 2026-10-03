@@ -251,7 +251,6 @@ services:
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?Set AGENT_INTERNAL_TOKEN for production}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
-      SANDBOX_AUTH_ENABLED: ${SANDBOX_AUTH_ENABLED:-true}
     # ── Production resource limits ──────────────────────────────────
     deploy:
       resources:

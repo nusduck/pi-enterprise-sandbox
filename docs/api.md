@@ -52,12 +52,10 @@ Base URL: `http://host:4000`
 
 ### `POST /api/runs` — 创建 Agent Run（PR-10 / plan §18.3）
 
-等价路由：`POST /api/conversations/{conversation_id}/runs`（路径上的 conversation 优先）。
-
 **必须**携带 `Idempotency-Key`。相同 key + 相同请求体幂等重放；key 冲突返回 409。
 
 ```json
-// Request（legacy messages[] 或 plan message.content[]）
+// Request（messages[] + snake_case；已退役 plan message.content[] 与 camelCase 别名）
 { "messages": [{ "role": "user", "content": "写一个 Python 脚本" }], "conversation_id": "optional", "agent_profile_id": "coding-agent" }
 ```
 
@@ -76,7 +74,7 @@ Base URL: `http://host:4000`
 ### `GET /api/runs/{run_id}/events` — SSE Replay（PR-10）
 
 ```http
-GET /api/runs/{run_id}/events?afterSequence=17
+GET /api/runs/{run_id}/events?after_sequence=17
 Accept: text/event-stream
 Last-Event-ID: 01K...   # 或历史 sequence 数字
 ```
@@ -84,7 +82,7 @@ Last-Event-ID: 01K...   # 或历史 sequence 数字
 连接流程（Agent 权威；BFF 做 ownership + 字节代理）：
 
 1. BFF / Agent 校验 Run ownership（跨用户/跨租户 **404** fail-closed）
-2. MySQL `run_events` 按 sequence 重放 `afterSequence` / Last-Event-ID 之后的历史
+2. MySQL `run_events` 按 sequence 重放 `after_sequence` / Last-Event-ID 之后的历史
 3. 切换 Redis `run:stream:{runId}` 实时加速
 4. watermark + MySQL catch-up 消除订阅建立竞态（禁止跳号）
 5. sequence 单调去重；Redis 故障回退 MySQL poll
@@ -106,7 +104,7 @@ data: {"sequence":18,"event":{...},"ts":...,"eventId":"01K..."}
 `GET /api/runs/{id}` 还返回 `started_at`、`completed_at`（兼容字段
 `finished_at`）、`error`、`last_event_id` 与可用时的 `model_id` / `usage`；时间字段统一为 ISO 8601。Run 列表同样可包含模型与 token usage 的轻量投影，来源是 durable 事件，不是进程内计数器。
 
-`GET /api/extensions/diagnostics` 返回 Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。MCP 工具以 `mcp__{serverName}__{toolName}` 出现在 `tools` / `registry.mcp_tools`。
+`GET /api/capabilities/{skills,mcp,tools,models}` 从 Agent diagnostics 投影能力清单：Extension Package、Agent Profile、Tool/MCP allowlist 和供应链审计状态，不含凭据。MCP 工具以 `mcp__{serverName}__{toolName}` 出现在 `tools` / `registry.mcp_tools`。（直出整份 diagnostics 的 `GET /api/extensions/diagnostics` 已删除，前端只用能力清单。）
 
 **2026-08-31（ADR 0009 D9）起，这份就绪度是 DSH 工具注册表的投影**，不再是自建 adapter 的探测快照：一台 MCP 服务器 = overlay 里一个 `@deepseek-ai/dsh-mcp-client` 实例，它注册到 `ctx.tools` 上的东西就是模型看得见的东西，所以 `/ready` 与模型工具面不可能不一致。连接、退避重连与 `notifications/tools/list_changed` 重新同步由该插件负责；**配置变更（`MCP_SERVERS_JSON`）须重启 Agent** 才会生效（boot 时按环境叠进插件树，不必重跑 `npm run gen:patch`）。工具名超长或含非法字符时出厂包会规范化并追加 12 位十六进制哈希，风险表因此必须有 `mcp__<server>__*` 前缀条目——漏配会落到 `high`（要审批），不会落到放行。响应在兼容既有 `extensions` / `tools` / `skills` / `mcp_servers` 字段的同时，增加：
 
@@ -386,7 +384,6 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` `POST` | `/api/conversations` | 列出 / 创建 Conversation；列表带 `limit` / `cursor` / `q`，返回 `{ conversations, next_cursor }`（见「列表分页」） |
 | `GET` `DELETE` | `/api/conversations/{id}` | 详情 / 删除 |
 | `GET` | `/api/conversations/{id}/events` | 会话完整时间线（**一次性 JSON，不是 SSE**，见下） |
-| `POST` | `/api/conversations/{id}/runs` | 在指定 Conversation 下创建 Run |
 | `POST` | `/api/conversations/{id}/follow-ups` | 追问；当前 Run 未结束时新 Run 保持 `QUEUED`，结束后按提交顺序自动执行 |
 | `GET` `POST` | `/api/conversations/{id}/datasets` | 列出 / 上传 Dataset |
 | `POST` | `/api/conversations/{id}/artifact-imports` | 跨会话导入已有 Artifact |
@@ -400,7 +397,6 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/runs/{id}/resume-approval` | 审批后恢复 |
 | `POST` | `/api/runs/{id}/interactions/{iid}/respond` | 回答 `ask_user` |
 | `GET` | `/api/approvals` | 待审批列表；`status` / `limit` / `cursor`，返回 `{ approvals, next_cursor }`（见「列表分页」） |
-| `GET` | `/api/approvals/{id}` | 审批详情 |
 | `POST` | `/api/approvals/{id}/decide` | 批准 / 拒绝 |
 | `GET` | `/api/artifacts` | 带 `session_id`：该会话的产物；不带：产物库（本人所有会话，`q` / `kind` / `cursor` / `limit`） |
 | `GET` | `/api/reviews` | 审核任务列表（**reviewer**）；`status` = 逗号分隔的状态子集（`PENDING` / `IN_REVIEW` / `APPROVED` / `REJECTED`，未知值 422 `REVIEW_INPUT_INVALID`；历史页签传 `APPROVED,REJECTED`），`mine=true` 只看自己领取的，另有 `cursor` / `limit` |
@@ -413,8 +409,8 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/datasets` | Dataset 列表 |
 | `GET` | `/api/processes` | 长进程列表；必传 `session_id`，可按 `run_id` / `status` 筛选 |
 | `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
-| `GET` | `/api/processes/{id}/logs\|read` | 进程输出（游标读）；必传 `session_id` |
-| `POST` | `/api/processes/{id}/stdin\|signal\|cancel\|kill` | 进程控制；JSON body 必传 `session_id` |
+| `GET` | `/api/processes/{id}/logs` | 进程输出（游标读）；必传 `session_id` |
+| `POST` | `/api/processes/{id}/stdin\|signal\|cancel` | 进程控制；JSON body 必传 `session_id` |
 | `GET` | `/api/agents` | 当前用户可用的智能体（Agent 目录；受限智能体只列给被授权成员与 admin） |
 | `POST` | `/api/agents` | 新建智能体，自带 v1 并指向它（**admin**） |
 | `GET` `POST` | `/api/agents/{id}/versions` | 版本线 / 建新版本（**admin**） |
@@ -447,13 +443,11 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/api/capabilities/skills/share-requests` | 本人的共享申请列表 |
 | `POST` | `/api/capabilities/skills/{name}/share-requests` | 对本人**已启用**版本发起共享申请（body `{ note? }`） |
 | `POST` | `/api/capabilities/skills/share-requests/{id}/withdraw` | 撤回本人 `pending` 的申请 |
-| `GET` | `/api/extensions/diagnostics` | Extension / Profile / allowlist 状态 |
 | `GET` | `/api/a2a/config` | A2A 配置（**admin**） |
 | `POST` | `/api/a2a/credentials` | 签发 A2A 凭据（**admin**） |
 | `POST` | `/api/a2a/credentials/{id}/rotate\|revoke` | 轮换 / 吊销（**admin**） |
 | `GET` | `/api/files/artifact-download` | 交付物下载（`session_id` + `artifact_id`） |
 | `GET` | `/api/files/download` | 按路径下载 workspace 文件 |
-| `POST` | `/api/files/upload` | 上传附件（multipart 流式代理） |
 | `POST` | `/api/sessions/ensure` | 确保 Conversation + Sandbox Session 绑定 |
 | `GET` | `/health/live` `/health/ready` | 探针 |
 
@@ -595,7 +589,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 
 | 入口 | 何时生效 |
 |------|---------|
-| `POST /api/runs` / `/api/conversations/{id}/runs` | `conversation_id` 为空时——首轮消息就是"建会话" |
+| `POST /api/runs` | `conversation_id` 为空时——首轮消息就是"建会话" |
 | `POST /api/conversations` | 显式建会话 |
 | `POST /api/sessions/ensure` | 不带 `conversation_id` 时 |
 
@@ -612,9 +606,9 @@ assistant 行或 `thinking` 字段。
 exec 公共适配器查询或控制；返回给浏览器时仍投影原 `session_id`。不存在或
 跨租户访问统一返回 404。`logs` 返回 `next_offset`、`completed`、`truncated`、
 `log_total`；进程详情含 `process_id`、`run_id`、`status`、`command` 和时间字段。
-`kill` 未指定信号时发送 `SIGKILL`（立即终止），`signal` 未指定时发送 `SIGTERM`；
-两者都可以在 body 传 `signal` 指定信号（允许 `SIGTERM` / `SIGKILL` / `SIGINT` /
-`SIGHUP`）。只有终止类信号（`SIGTERM` / `SIGKILL`）会结束作业并转 `stopping`；
+`signal` 未指定时发送 `SIGTERM`，也可以在 body 传 `signal` 指定信号（允许
+`SIGTERM` / `SIGKILL` / `SIGINT` / `SIGHUP`；兼容别名 `kill` 已删除，直接用
+`signal`）。只有终止类信号（`SIGTERM` / `SIGKILL`）会结束作业并转 `stopping`；
 `SIGINT` / `SIGHUP` 只按 pid / pgid / 启动身份校验后投递给进程组（可被进程
 trap 捕获处理），不结束作业、不改状态。需要「先 TERM、超时再 KILL」的升级语义使用 `cancel`。Agent 不提供
 `/internal/processes*` 路由。
@@ -760,14 +754,14 @@ AgentVersion 引用账本**决定：被该版本钉在系统层的名字记 `sys
 | 端点 | 说明 |
 |------|------|
 | `GET /api/files/artifact-download?session_id=xxx&artifact_id=yyy` | **Agent 交付物下载**（代理到 Sandbox artifact download） |
-| `GET /api/files/download?session_id=xxx&path=yyy` | 按路径下载 workspace 文件（上传文件等非交付物场景） |
-| `POST /api/files/upload?session_id=xxx` | 上传附件 (multipart，流式代理) |
+| `GET /api/files/download?session_id=xxx&path=yyy` | 按路径下载 workspace 文件 |
 | `POST /api/sessions/ensure` | 创建/复用 Conversation + Sandbox Session（供上传前准备，不发消息） |
 | `POST /api/conversations/{id}/artifact-imports` | 将当前用户已有 Artifact 导入目标会话 workspace；不创建新 Artifact |
 
 - Artifact 下载代理到 `GET /sessions/{id}/artifacts/{aid}/download`
-- 路径下载 / 上传代理到 `/sessions/{id}/files/download` 与 `/sessions/{id}/files/upload`；
-  三条代理都先把 `session_id` 换成 `workspace_id` 再跳转（见下节公共面的 `{id}` 说明）
+- 路径下载代理到 `/sessions/{id}/files/download`；
+  附件上传走 `POST /api/conversations/{id}/datasets`（见数据集节），不再经过 `/api/files/*`；
+  代理都先把 `session_id` 换成 `workspace_id` 再跳转（见下节公共面的 `{id}` 说明）
 - 上传支持 `Idempotency-Key` 与 `X-Trace-Id` 请求头；BFF 流式落盘后转发，不整包进堆内存
 - 超限返回 **413**，业务码见下方 Attachment 约定
 
@@ -801,7 +795,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   internal plane 使用短期 HMAC claim（scope、owner、run/session、body
   digest），不接受一个永不过期的全局 token 作为执行授权
 - exec 的 public 探针豁免认证：`/health`, `/ready`；浏览器认证只存在于 BFF `/api/auth/*`
-- **可选用户归属**（BFF `AUTH_ENABLED=true`；`SANDBOX_AUTH_ENABLED` 仅保留为 BFF 的旧配置别名）:
+- **可选用户归属**（BFF `AUTH_ENABLED=true`，默认关闭；退役的 `SANDBOX_AUTH_ENABLED` 别名 BFF 已不再读取）:
   - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 撤销当前 sid 后清 Cookie（失败契约见认证章节）。
   - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 经 Agent `/internal/auth/me` 验证后写入可信 `X-Acting-*` 上下文。
   - BFF→exec compatibility adapters 只发送服务 `X-API-Key` + 已验证的 `X-Acting-User-Id` / `X-Acting-Organization-Id` / `X-Acting-Role`；exec 不接收浏览器 JWT。
@@ -809,7 +803,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
   - **服务 Token alone 不是终端用户**：不能替代 BFF/Agent 注入的 actor；跨用户/跨组织资源统一 fail-closed
   - 跨用户/跨组织访问 Conversation 返回 **404**（不泄露资源是否存在）
   - 旧数据迁移绑定 `user_bootstrap` / `org_bootstrap`；新用户默认加入 bootstrap org
-  - BFF `AUTH_ENABLED`（默认同 `SANDBOX_AUTH_ENABLED`）保护 `/api/conversations`、`/api/runs`、Extension diagnostics、文件/产物路由；`/health/*` 与 `/api/auth/*` 保持公开
+  - BFF `AUTH_ENABLED` 保护 `/api/conversations`、`/api/runs`、能力清单、文件/产物路由；`/health/*` 与 `/api/auth/*` 保持公开
 
 
 ### `/internal/v1/*` — Agent 专用执行平面

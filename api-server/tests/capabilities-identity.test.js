@@ -23,7 +23,9 @@ const { getAgentExtensionDiagnostics, mutateAgentSkill, uploadAgentSkillDraft } 
 
 describe('capability diagnostics identity forwarding', () => {
   it('handlers accept req and resolve trusted auth before agent call', () => {
-    assert.match(capabilitiesSrc, /export async function handleExtensionDiagnostics\(/);
+    // `GET /api/extensions/diagnostics` 已删除；能力清单经由 registry 投影同一份
+    // Agent diagnostics，前端只用 registry。
+    assert.doesNotMatch(capabilitiesSrc, /export async function handleExtensionDiagnostics\(/);
     assert.match(capabilitiesSrc, /export async function handleCapabilityRegistry\(/);
     assert.match(capabilitiesSrc, /resolveTrustedAuth\(req\)/);
     assert.match(capabilitiesSrc, /getAgentExtensionDiagnostics\(profileId, \{ auth, traceId \}\)/);
@@ -33,8 +35,8 @@ describe('capability diagnostics identity forwarding', () => {
     assert.match(capabilitiesSrc, /uploadAgentSkillDraft\(req, filename, \{ auth, traceId \}\)/);
   });
 
-  it('server passes req into capability and diagnostics handlers', () => {
-    assert.match(serverSrc, /handleExtensionDiagnostics\(parsedUrl, res, req\)/);
+  it('server passes req into capability handlers', () => {
+    assert.doesNotMatch(serverSrc, /handleExtensionDiagnostics\(parsedUrl, res, req\)/);
     assert.match(serverSrc, /handleCapabilityRegistry\(capability\[1\]!?, parsedUrl, res, req\)/);
     assert.match(serverSrc, /handleSkillMutation/);
     assert.match(serverSrc, /handleSkillDraftUpload\(parsedUrl, res, req\)/);
