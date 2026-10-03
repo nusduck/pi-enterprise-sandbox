@@ -96,6 +96,7 @@ try {
 }
 
 const server = listenHono(runtime.app, port);
+runtime.startMcpWorkspaceGc();
 
 const shutdown = (): void => {
   // 先摘除就绪，LB 不再派新请求；在途请求由 server.close 等待结束。

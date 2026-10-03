@@ -65,7 +65,7 @@ export function loadMcpSettings(env: Env = process.env): McpSettings {
     redisUrl: str(env, 'SANDBOX_MCP_REDIS_URL', str(env, 'REDIS_URL', '')),
     clientId: str(env, 'SANDBOX_MCP_CLIENT_ID', 'upagent'),
     tenantId: str(env, 'SANDBOX_MCP_TENANT_ID', 'default'),
-    contextTtlSeconds: positiveInt(env, 'SANDBOX_MCP_CONTEXT_TTL_SECONDS', 7 * 24 * 3600),
+    contextTtlSeconds: positiveInt(env, 'SANDBOX_MCP_CONTEXT_TTL_SECONDS', 3 * 24 * 3600),
     lockTtlSeconds: positiveInt(env, 'SANDBOX_MCP_LOCK_TTL_SECONDS', 15),
     artifactTtlSeconds: positiveInt(env, 'SANDBOX_MCP_ARTIFACT_TTL_SECONDS', 24 * 3600),
     maxTimeoutSeconds: positiveInt(env, 'SANDBOX_MCP_MAX_TIMEOUT_SECONDS', 300),

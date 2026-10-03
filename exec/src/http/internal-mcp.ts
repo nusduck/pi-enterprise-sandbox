@@ -56,6 +56,8 @@ export interface InternalMcpDeps extends GuardedExecutionDeps {
   readonly maxCommandLength?: number;
   readonly maxFileSizeBytes?: number;
   readonly maxTimeoutSeconds?: number;
+  /** 记录 MCP 工作区活动，供闲置回收使用（`workspace/mcp-workspace-gc.ts`）。 */
+  readonly workspaceActivity?: { touch(workspaceId: string): Promise<void> };
 }
 
 const DEFAULTS = {
@@ -157,6 +159,7 @@ export function registerInternalMcpRoutes(app: Hono, deps: InternalMcpDeps): voi
     const sandboxSessionId = requireFormalId(payload['sandbox_session_id'], 'sandbox_session_id');
     const workspaceId = requireFormalId(payload['workspace_id'], 'workspace_id');
     await deps.workspaceManager.initWorkspace(workspaceId);
+    await deps.workspaceActivity?.touch(workspaceId);
     return {
       // MCP facade 是单租户外部客户端，用 session 身份当归属维度。
       orgId: sandboxSessionId,
