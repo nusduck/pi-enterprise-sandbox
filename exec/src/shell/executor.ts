@@ -504,11 +504,12 @@ function adaptLiveHandle(handle: LiveProcessHandle, mode: SandboxMode): ShellPro
       return { mode, denied: false };
     },
     readOutput: () => handle.readOutput(),
-    kill: () => handle.kill(),
+    kill: (signal?: 'SIGKILL') => handle.kill(signal),
     writeStdin: (data: string, eof: boolean) => handle.writeStdin(data, eof),
   } as ShellProcess & {
     pid: number | null;
     pgid: number | null;
+    kill(signal?: 'SIGKILL'): boolean;
     writeStdin(data: string, eof: boolean): void;
   };
 }

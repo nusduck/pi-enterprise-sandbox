@@ -117,9 +117,10 @@ export interface JobProcessHandle {
   readonly pgid?: number | undefined;
   /**
    * 请求终止。必须同步、幂等；最终必须让 {@link done} 落定
-   * （对齐上游 `JobHooks.cancel` 的约定）。
+   * （对齐上游 `JobHooks.cancel` 的约定）。`signal` 是调用方请求的终止信号：
+   * `SIGKILL` 时生产者应直接强杀，不走 SIGTERM 宽限；其余按生产者默认。
    */
-  cancel(reason?: string): void;
+  cancel(reason?: string, signal?: NodeJS.Signals): void;
   /** 进程释放资源后 resolve；不会 reject（生产者把异常吞成 failed）。 */
   readonly done: Promise<JobProcessOutcome>;
   /** 增量读取；省略等于"只有最终输出"的作业。 */

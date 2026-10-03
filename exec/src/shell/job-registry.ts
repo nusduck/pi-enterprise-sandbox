@@ -681,7 +681,7 @@ export class MySqlJobRegistry {
     // namespace init 等），这与 Python 版 `Popen.terminate()` + 进程组语义
     // 对齐，比裸 `process.kill(pid)` 更精确。
     try {
-      live.handle.cancel(`signal ${signal}`);
+      live.handle.cancel(`signal ${signal}`, signal);
     } catch (err) {
       const msg = redactPhysicalRoots(err instanceof Error ? err.message : String(err), physicalRoots);
       throw new Error(msg);

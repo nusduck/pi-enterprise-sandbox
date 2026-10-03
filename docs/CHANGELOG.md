@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 进程 SIGKILL 不再先发 SIGTERM
+
+- 进程控制台 / `signal` 接口请求 `SIGKILL` 时，exec 直接对整个进程组强杀，不再先走 SIGTERM 加 3 秒宽限；终态记录也随之是 `killed: SIGKILL`（此前一律记成 `killed: SIGTERM`，看起来像没按请求的信号执行）。`SIGTERM` 与取消的行为不变。
+
 ### Changed — 远端委派（HiAgent / A2A）默认不再需要审批
 
 - `delegate_to_remote_agent` 平台默认风险从 `high` 调为 `medium`，模型调用登记的远端智能体时直接发出，不再弹审批卡。远端仍只能是运维在 `A2A_REMOTE_AGENTS_JSON` 登记、且 Agent 配置 `delegation.remoteAgents` 授权的那些；需要人工把关的 Agent 可在 `toolPolicy.riskLevels` 里把它调回 `high`。自行维护 `TOOL_RISK_POLICY_PATH`/`TOOL_RISK_POLICY_JSON` 的部署要同步修改该条目，否则仍按原值审批。
