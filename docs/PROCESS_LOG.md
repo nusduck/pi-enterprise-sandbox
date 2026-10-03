@@ -1290,3 +1290,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Action：** 在 `dsh-sim` 隔离栈增加 `cross-worker-job` 场景：Worker A 创建后台 bash，Worker B 在同一会话里调用模型侧 `job_list`/`job_output`，再从 B Pod 用生产 `ExecRpcClient` 查询 exec 权威状态/输出。修正假模型对跨 Run 首轮的识别后重跑，记录 Pod 来源、工具账本和直接 RPC 对照。
 - **STATUS IDs：** C7 保持 `partial`；确认模型侧跨副本读旧 job 的代码缺口可在本地真实链路复现。没有改生产路径，也没有验证 exec 自身重启后的句柄/日志恢复。
 - **结果：** 模型侧列表为空、输出为空且状态占位；exec 直接查询同一 job 则返回 `completed` 与预期输出。详见[证据](evidence/2026-10-03-c7-cross-worker-model-jobs-repro.md)。
+
+## 2026-10-03 — C7 模型侧跨 Worker job 查询修复
+
+- **Why：** 红灯证明远端 RPC 结果被同步 DSH JobRegistry 适配器丢弃，模型工具收到的是本进程内存视图或占位值。
+- **Action：** exec 增加带现有 HMAC 绑定的 owner 作用域 job list；Agent 替换模型 job 工具的执行函数为 awaited RPC，同时复用上游的 schema、渲染、完成通知和唤醒预算；移除远端作业的伪快照返回。
+- **STATUS IDs：** C7 仍为 `partial`：跨 Worker 的模型 `job_list`/`job_output`/`job_kill` 真机 5/5 通过（kill 前删除原 Worker Pod）；exec 重启后的内存日志缓冲与活句柄恢复未解决。见[证据](evidence/2026-10-03-c7-cross-worker-model-jobs-fix.md)。

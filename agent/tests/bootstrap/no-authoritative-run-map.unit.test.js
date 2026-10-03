@@ -274,6 +274,20 @@ const TRANSIENT_MAP_WHITELIST = Object.freeze([
     scope: 'instance',
   },
   {
+    rel: 'runtime/providers/remote-jobs.ts',
+    match: /private\s+readonly\s+readCursors\s*=\s*new\s+Map/,
+    purpose:
+      'Instance-local model output cursor; exec remains authoritative for job status and buffered output',
+    scope: 'instance',
+  },
+  {
+    rel: 'runtime/providers/remote-jobs.ts',
+    match: /const\s+byId\s*=\s*new\s+Map/,
+    purpose:
+      'Call-local merge index for local producer jobs and exec owner-scoped snapshots; discarded after one list response',
+    scope: 'local',
+  },
+  {
     rel: 'runtime/policy/install.ts',
     match: /const\s+replayOf\s*=\s*new\s+Map\s*(?:<[^;\n(){}]*>)?\s*\(/,
     purpose:
@@ -614,9 +628,11 @@ describe('no authoritative in-process Run Map (B3)', () => {
     // 2026-10-01: 49 → 51（审核工作台的版本表拆出 `review-version-chain.ts`）：
     // 一次投影里的版本链结果与 exec 元数据索引，函数局部、返回即丢；
     // 权威是 `review_events` 与 exec 的产物记录。
+    // 2026-10-03: 51 → 53（C7 跨 Worker 作业查询）：实例级输出游标缓存与
+    // 一次 list 调用的合并索引；作业事实仍以 exec 为权威。
     assert.equal(
       TRANSIENT_MAP_WHITELIST.length,
-      51,
+      53,
       'whitelist size drift — update STATUS B3 inventory evidence if intentional',
     );
   });

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 模型侧跨 Worker 查询后台作业
+
+- `job_list`、`job_output`、`job_kill` 现等待 exec 的权威作业响应；跨 Worker 查询不再返回空列表、空输出或伪造的运行状态。exec 新增按租户与工作区过滤的内部作业列表路由。
+
 ### Fixed — 部分模型上游的流式工具调用丢失工具名
 
 - 有的 OpenAI 兼容上游（vLLM 风格，调用 id 形如 `chatcmpl-tool-…`）会在首个分片之后的每个 tool_calls 分片里

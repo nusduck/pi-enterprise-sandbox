@@ -70,6 +70,7 @@ export class RemoteJobs extends JobRegistry {
   private readonly doneListeners = new Set<(snap: JobSnapshot, owner: Agent | undefined) => void>();
   private readonly changedListeners = new Set<(owner: Agent | undefined) => void>();
   private readonly controllers = new Set<string>();
+  private readonly readCursors = new Map<JobId, string>();
 
   constructor(ctx: Context, options: Partial<RemoteJobsOptions> = {}) {
     super(ctx as unknown as never);
@@ -149,24 +150,54 @@ export class RemoteJobs extends JobRegistry {
       .map(snapshotOf);
   }
 
+  /** Model tools must await exec; the inherited sync interface is only for local producers. */
+  async listAuthoritative(caller?: Agent): Promise<JobSnapshot[]> {
+    const remote = await this.rpc.post<Record<string, never>, JobSnapshot[]>(
+      '/internal/v1/jobs/list', {}, this.roots,
+    );
+    const byId = new Map<JobId, JobSnapshot>(this.list(caller).map((snap) => [snap.id, snap]));
+    for (const snap of remote) byId.set(snap.id, snap);
+    return [...byId.values()];
+  }
+
+  async getAuthoritative(id: JobId, caller?: Agent): Promise<JobSnapshot> {
+    const entry = this.entries.get(id);
+    if (entry !== undefined && entry.kind !== 'bash') return this.get(id, caller);
+    return this.rpc.post<{ id: JobId }, JobSnapshot>('/internal/v1/jobs/status', { id }, this.roots);
+  }
+
+  async readAuthoritative(id: JobId, caller?: Agent): Promise<JobRead> {
+    const entry = this.entries.get(id);
+    if (entry !== undefined && entry.kind !== 'bash') return this.read(id, caller);
+    const cursor = this.readCursors.get(id);
+    const read = await this.rpc.post<{ id: JobId; cursor?: string }, JobRead & { nextCursor?: string }>(
+      '/internal/v1/jobs/read', { id, ...(cursor !== undefined ? { cursor } : {}) }, this.roots,
+    );
+    if (read.nextCursor !== undefined) this.readCursors.set(id, read.nextCursor);
+    return { text: read.text, snapshot: read.snapshot } as JobRead;
+  }
+
+  async killAuthoritative(id: JobId, caller?: Agent, reason?: string): Promise<{ outcome: 'requested' | 'already-finished'; snapshot: JobSnapshot }> {
+    const entry = this.entries.get(id);
+    if (entry !== undefined && entry.kind !== 'bash') {
+      const outcome = this.kill(id, caller, reason);
+      return { outcome, snapshot: this.get(id, caller) };
+    }
+    const before = await this.getAuthoritative(id, caller);
+    if (isTerminal(before.status)) return { outcome: 'already-finished', snapshot: before };
+    const snapshot = await this.rpc.post<{ id: JobId }, JobSnapshot>(
+      '/internal/v1/jobs/kill', { id }, this.roots,
+    );
+    return { outcome: 'requested', snapshot };
+  }
+
   override get(id: JobId, caller?: Agent): JobSnapshot {
     const entry = this.entries.get(id);
     if (entry !== undefined) {
       this.assertAccess(entry, caller);
       return snapshotOf(entry);
     }
-    // 同步契约：真实网络在后台预热，同步返回占位快照；调用方重试一次即可拿到远端权威
-    void this.rpc
-      .post<{ id: JobId }, JobSnapshot>('/internal/v1/jobs/status', { id }, this.roots)
-      .catch(() => undefined);
-    return {
-      id,
-      kind: 'bash',
-      label: String(id),
-      status: 'running',
-      startedAt: Date.now(),
-      reported: false,
-    } as unknown as JobSnapshot;
+    throw new Error(`job ${id} is not local; use getAuthoritative`);
   }
 
   override read(id: JobId, caller?: Agent): JobRead {
@@ -182,13 +213,7 @@ export class RemoteJobs extends JobRegistry {
       if (isTerminal(entry.status)) entry.reported = true;
       return { text, snapshot: snapshotOf(entry) } as JobRead;
     }
-    void this.rpc
-      .post<{ id: JobId }, unknown>('/internal/v1/jobs/read', { id }, this.roots)
-      .catch(() => undefined);
-    return {
-      text: '',
-      snapshot: this.get(id),
-    } as unknown as JobRead;
+    throw new Error(`job ${id} is not local; use readAuthoritative`);
   }
 
   override kill(id: JobId, caller?: Agent, reason?: string): 'requested' | 'already-finished' {
@@ -205,10 +230,7 @@ export class RemoteJobs extends JobRegistry {
       this.notifyChanged(entry.owner);
       return 'requested';
     }
-    void this.rpc
-      .post<{ id: JobId }, unknown>('/internal/v1/jobs/kill', { id }, this.roots)
-      .catch(() => undefined);
-    return 'requested';
+    throw new Error(`job ${id} is not local; use killAuthoritative`);
   }
 
   override async wait(id: JobId, timeoutMs: number, caller?: Agent, signal?: AbortSignal): Promise<JobSnapshot> {
@@ -263,7 +285,7 @@ export class RemoteJobs extends JobRegistry {
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 200));
     }
-    return this.get(id, caller);
+    return this.getAuthoritative(id, caller);
   }
 
   override onJobDone(listener: (snapshot: JobSnapshot, owner: Agent | undefined) => void): () => void {

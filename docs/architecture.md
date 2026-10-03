@@ -203,7 +203,7 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 | `read` `write` `edit` `read_image` | 出厂 `dsh-tool-fs` |
 | `glob` `grep` | 自建 `remote-fs-search`，**注册名与出厂 `dsh-tool-fs-search` 逐字一致** |
 | `bash` | 出厂 `dsh-tool-bash` |
-| `job_list` `job_output` `job_kill` | 出厂 `dsh-tool-jobs` |
+| `job_list` `job_output` `job_kill` | 自建 `remote-job-tools` 保留出厂工具 schema 与完成通知，执行时等待 exec 权威响应 |
 | `todo_write` | 出厂 `dsh-tool-todo` |
 | `skill` | 出厂 `dsh-tool-skill` |
 | `subagent` | 出厂 `dsh-tool-subagent`（one-shot） |

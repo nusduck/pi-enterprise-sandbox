@@ -13,7 +13,7 @@
 //   same-session   同一会话第一个 Run 在跑时连发两个 follow-up：保持 QUEUED，第一个结束后按提交顺序执行
 //   rolling-restart 在途 Run 时 rollout restart：原副本 SIGTERM 后排空完成，不重放
 //   redis-outage   暂停专用 Redis：Worker 与 Agent HTTP 都摘流量，恢复后自动就绪且 Run 可用
-//   cross-worker-job A 的后台 bash 由 B 的模型侧 job_list/job_output 查询；修复前预期失败，需显式点名
+//   cross-worker-job A 的后台 bash 由 B 的模型侧 job_list/job_output/job_kill 查询并取消；需显式点名
 //
 // 有界关停（K4，默认 150s 排空 / 180s 宽限；只在点名时跑）：对承载 Run 的 Worker Pod 发 SIGTERM，
 // 核对退出码与时刻、排空期间是否还领取新 Run、账本与副作用：
@@ -394,6 +394,19 @@ const scenarios = {
         Array.isArray(listed) && listed.some((row) => row.id === jobId) &&
         typeof output?.text === 'string' && output.text.includes(`C7_${bgId}`),
         { ...other, listed, output });
+      await kubectl('delete', 'pod', originPod, '--wait=false');
+      const killId = `c7kill-${tag}`;
+      const encoded = Buffer.from(jobId, 'utf8').toString('base64');
+      const probe = await submit(c, convId, killId, `job-kill jobid=${encoded}`);
+      const killFinal = await waitTerminal(c, probe.runId);
+      const killEntry = (await llm.entries(killId))[0];
+      await refreshIpNames();
+      const killPod = podOf(killEntry?.remote);
+      const killed = (await toolResultRows(probe.runId)).find((row) => row.name === 'job_kill')?.result?.$payload?.value;
+      record(S, 'other_worker_can_kill_old_job',
+        killFinal === 'SUCCEEDED' && killPod !== originPod &&
+        killed?.job?.id === jobId && killed?.outcome === 'cancellation-requested',
+        { originPod, killPod, killFinal, killed });
     }
   },
   async 'exactly-once'(S) {

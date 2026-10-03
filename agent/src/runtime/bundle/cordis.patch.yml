@@ -11,14 +11,13 @@
 #   2. `name` 指向 `../src/*.js`，而源码是 .ts、产物在 dist/。
 # manifest.ts 让这两种都写不出来（替换只有 replaceFactory() 一个入口）。
 
-# 凭据：只读环境变量实现替换 dsh-credentials-local。出厂那个没有租户维度，
-# 且热重载设置文件——多租户下是配置漂移面（ADR 0007「必须移除的行」）。
-- id: credentials
+# 模型侧 job 工具等待 exec 权威结果；保留出厂工具 schema 与完成通知。
+- id: tool-jobs
   disabled: true
 
 - insert:
-    - id: enterprise-credentials
-      name: '../providers/env-credentials.js'
+    - id: enterprise-remote-job-tools
+      name: '../providers/remote-job-tools.js'
       config: {}
 
 # 模型目录：固定路由名 deepseek-official（包自占），指向自有网关，协议与官方一致。
@@ -195,6 +194,16 @@
 - insert:
     - id: delegate-to-remote-agent
       name: '../providers/delegate-to-remote-agent.js'
+      config: {}
+
+# 凭据：只读环境变量实现替换 dsh-credentials-local。出厂那个没有租户维度，
+# 且热重载设置文件——多租户下是配置漂移面（ADR 0007「必须移除的行」）。
+- id: credentials
+  disabled: true
+
+- insert:
+    - id: enterprise-credentials
+      name: '../providers/env-credentials.js'
       config: {}
 
 # 子 Agent：原生 trusted same-process 对不上，退回 durable 队列面。

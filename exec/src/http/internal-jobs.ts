@@ -30,6 +30,17 @@ function ownerFrom(envelope: unknown): { orgId: string; userId: string; workspac
 }
 
 export function registerInternalJobsRoutes(app: Hono, deps: InternalJobsDeps): void {
+  app.post('/internal/v1/jobs/list', async (c) => {
+    try {
+      const { envelope } = await parseBody(c);
+      const owner = ownerFrom(envelope);
+      return c.json({ ok: true, data: await deps.jobRegistry.list(owner) });
+    } catch (err) {
+      const wire = toWireError(err, { physicalRoots: [] });
+      return c.json({ ok: false, error: wire }, (wire.code === 'ENVELOPE_INVALID' ? 400 : 500) as never);
+    }
+  });
+
   app.post('/internal/v1/jobs/status', async (c) => {
     try {
       const { envelope, payload } = await parseBody(c);
