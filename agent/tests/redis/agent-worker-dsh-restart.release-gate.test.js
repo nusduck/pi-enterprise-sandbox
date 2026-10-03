@@ -378,6 +378,7 @@ async function runInWorkspaceViaInternalPlane(ids, fenceToken, command) {
     runId: ids.runId,
     fenceToken,
     physicalRoots: ['/var/sandbox/workspaces', '/var/sandbox/tmp'],
+    systemSkills: [],
   });
   await rpc.post('/internal/v1/sessions/ensure', { workspaceId: ids.workspaceId }, []);
   return rpc.post(

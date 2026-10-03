@@ -1314,3 +1314,10 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Why：** 产品确认接受“进程随 exec 重启结束、输出持久化”的边界；plan §32 未要求进程跨执行面重启存活，此前 STATUS 把它列为 C7 缺口。
 - **Action：** 新增 ADR 0017，STATUS C7 去掉该缺口。
 - **STATUS IDs：** C7 仍为 `partial`，剩余缺口只有模型侧重启后立即读取的空增量（未定位）。
+
+## 2026-10-03 — C1/C6 本地 gate 补证与 Worker 重启复跑
+
+- **Why：** 用户指出 Worker 更换与并发可以在隔离环境验证；重新审视此前把剩余 gate 说成只能在生产执行的错误判断。
+- **Action：** 在现有 Compose sandbox 里用生产执行器与真实 bwrap 跑多行 Python；在独立 MySQL 库跑 8 个并发建会话与 Workspace 重复绑定拒绝；复跑专用 Worker 重启 gate。首次重启 gate 的正对照因测试辅助漏传 `systemSkills` 失败，修复测试辅助后 5/5 通过，并把 C1 绑定断言加入 MySQL 集成用例。
+- **STATUS IDs：** C1、C6 `partial → done`；G2 保持 `done` 并补本次复跑；C7 保持 `partial`，不因 G2 通过而关闭（剩余缺口见上方 C7 条目）。
+- **验证与边界：** 隔离 MySQL 3/3，重启 gate 5/5，容器内 Python/bwrap 探针通过；假模型只用于重启 gate，C6 走生产执行器入口而非 Agent/HTTP，均不是目标环境验收。详见[证据](evidence/2026-10-03-c1-c6-restart-local-gates.md)。
