@@ -309,8 +309,8 @@ async function newConversation(c) {
 async function submit(c, convId, id, mode) {
   const r = await c(
     'POST',
-    `/api/conversations/${convId}/runs`,
-    { messages: [{ role: 'user', content: `[[SIM id=${id} mode=${mode}]] 按系统安排执行。` }] },
+    '/api/runs',
+    { conversation_id: convId, messages: [{ role: 'user', content: `[[SIM id=${id} mode=${mode}]] 按系统安排执行。` }] },
     { 'Idempotency-Key': `sim-${id}` },
   );
   return { status: r.s, runId: r.b?.run_id || r.b?.runId, body: r.b };
