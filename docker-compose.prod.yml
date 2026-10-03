@@ -177,8 +177,6 @@ services:
       DBPM_DB_NAME: ${DBPM_DB_NAME:?Set DBPM_DB_NAME for production}
       DBPM_DB_USER_NAME: ${MYSQL_USER:-sandbox}
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:?Set SANDBOX_API_TOKEN for production}
-      SANDBOX_APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
-      SANDBOX_APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       # 内部面（/internal/v1/*）唯一的闸门是 HMAC keyring：缺 keyring / kid 时
       # exec 拒绝启动。jti 防重放与它专用的 Redis 已按 ADR 0008 D8 退役。
       SANDBOX_INTERNAL_HMAC_KEYRING: ${SANDBOX_INTERNAL_HMAC_KEYRING:?Set SANDBOX_INTERNAL_HMAC_KEYRING for production}

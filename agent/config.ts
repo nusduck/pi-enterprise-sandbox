@@ -62,52 +62,6 @@ export function resolvePolicyProfile(env = process.env) {
   return requested;
 }
 
-/** Supported approval behavior for approval_required policy results. */
-export const APPROVAL_MODES = Object.freeze({
-  ASK: 'ask',
-  AUTO_APPROVE: 'auto_approve',
-  DENY: 'deny',
-});
-
-function nonEmptyEnv(env, key) {
-  const value = env?.[key];
-  return value != null && String(value).trim() !== '' ? String(value).trim() : null;
-}
-
-function parseLegacyApprovalEnabled(value) {
-  if (typeof value === 'boolean') return value;
-  const raw = String(value).trim().toLowerCase();
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  throw new Error(`Invalid APPROVAL_ENABLED=${value}; expected true or false`);
-}
-
-/**
- * Resolve the global approval policy. Default is ask. Legacy booleans map
- * true → ask and false → deny, so disabling the ask switch never broadens
- * permissions. auto_approve is explicit and intended only for development.
- * @param [env]
- */
-export function resolveApprovalMode(env: NodeJS.ProcessEnv | Record<string, string|boolean|undefined> = process.env) {
-  const explicit = nonEmptyEnv(env, 'APPROVAL_MODE') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_MODE');
-  if (explicit) {
-    const mode = explicit.toLowerCase().replaceAll('-', '_');
-    // @ts-expect-error 未校验string传入闭合联合，运行时需窄化守卫，存活代码先用expect-error收敛 —— TS2345: Argument of type 'string' is not assignable to parameter of 
-    if (Object.values(APPROVAL_MODES).includes(mode)) return mode;
-    throw new Error(
-      `Invalid APPROVAL_MODE=${explicit}; expected ask|auto_approve|deny`,
-    );
-  }
-
-  const legacy = nonEmptyEnv(env, 'APPROVAL_ENABLED') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_ENABLED');
-  if (legacy != null) {
-    return parseLegacyApprovalEnabled(legacy)
-      ? APPROVAL_MODES.ASK
-      : APPROVAL_MODES.DENY;
-  }
-  return APPROVAL_MODES.ASK;
-}
-
 /**
  * @param [env]
  * @returns {'development' | 'production'}
@@ -163,7 +117,6 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv | Record<string,
   const sandboxToken = String(env.SANDBOX_API_TOKEN || '').trim();
   const productionSkillRoots = resolveSkillRoots(env);
   const requestedProfile = requestedPolicyProfile(env);
-  const approvalMode = resolveApprovalMode(env);
   const a2aPublicBaseUrl = String(env.A2A_PUBLIC_BASE_URL || '').trim();
   const a2aDownloadSecret = String(
     env.A2A_ARTIFACT_DOWNLOAD_SECRET || '',
@@ -224,10 +177,6 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv | Record<string,
   }
   if (requestedProfile === 'balanced') {
     errors.push('SANDBOX_POLICY_PROFILE=balanced is forbidden in production (use strict)');
-  }
-
-  if (approvalMode === APPROVAL_MODES.AUTO_APPROVE) {
-    errors.push('APPROVAL_MODE=auto_approve is forbidden in production (use ask or deny)');
   }
 
   if (!a2aPublicBaseUrl) {
@@ -312,7 +261,6 @@ export function effectiveConfig(cfg: typeof config = config) {
     MODEL_CONTEXT_WINDOW: cfg.MODEL_CONTEXT_WINDOW,
     MODEL_MAX_TOKENS: cfg.MODEL_MAX_TOKENS,
     MODEL_REGISTRY_PATH: cfg.MODEL_REGISTRY_PATH || process.env.MODEL_REGISTRY_PATH || '<default>',
-    APPROVAL_MODE: cfg.APPROVAL_MODE,
     POLICY_PROFILE: cfg.POLICY_PROFILE,
     SKILLS_ROOT: cfg.SKILLS_ROOT,
     SKILLS_AUDIT_LOG: cfg.SKILLS_AUDIT_LOG ? '<set>' : '<empty>',
@@ -454,7 +402,6 @@ export const config = {
     String(process.env.AGENT_ALLOW_UNAUTHENTICATED_INTERNAL || '')
       .trim()
       .toLowerCase() === 'true',
-  APPROVAL_MODE: resolveApprovalMode(),
   /** strict by default; balanced only activates with effective required bwrap. */
   POLICY_PROFILE: resolvePolicyProfile(),
   /** External MCP servers owned by Agent Runtime/MCP Gateway, never Sandbox. */

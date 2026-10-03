@@ -649,20 +649,15 @@ cd frontend && npm run build && ls dist/
 
 ## 安全治理（Agent DSH policy + Exec 双重强制）
 
-开发时默认开启人审：
-
-```bash
-# 全局默认：高风险工具暂停，等待人工决定
-APPROVAL_MODE=ask
-```
+开发时默认开启人审：高风险工具暂停，等待人工决定（没有全局开关）。
 
 - **Agent 层**：`agent/src/runtime/policy/` 在 DSH 工具管线挂载风险表、参数守卫、审批、审计与 Run 收敛保护；外部副作用审批写入 MySQL durable ledger。
 - **Exec 层**：TypeScript `/internal/v1/*` handlers 独立校验 owner、HMAC claim、路径、hard-deny 与 Bubblewrap 隔离；普通 workspace bash/python/node 不进入审批。
-- **审批模式**：`ask`（默认）创建 durable approval 并暂停；`deny` 明确拒绝
-  `approval_required` 且不创建审批；`auto_approve` 仅用于明确受控的研发旁路并写
-  bypass 审计，生产配置拒绝该模式。旧 `APPROVAL_ENABLED=true|false` 在 Agent 侧
-  仍分别映射到 `ask|deny`（BFF 已不再读取旧布尔别名，只认 `APPROVAL_MODE`）。
-  所有模式都保留 hard_deny（如 `sudo`、`rm -rf /`）。
+- **审批决定**：已删除，无全局审批开关。`APPROVAL_MODE` / `APPROVAL_ENABLED` /
+  `SANDBOX_APPROVAL_*`（含 `auto_approve` / `deny` 语义）从未驱动审批决策，
+  现已从 agent 与 BFF 配置、compose、`.env.example` 中整体删除。高风险工具的
+  暂停/人审由 Agent MySQL durable approval ledger + 平台工具风险表决定。
+  危险命令（如 `sudo`、`rm -rf /`）由 exec 独立硬拒，始终生效。
 - **定向测试**：
 
 ```bash

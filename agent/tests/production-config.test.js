@@ -12,7 +12,6 @@ import {
   isWeakSecret,
   effectiveConfig,
   resolveProductSystemPrompt,
-  resolveApprovalMode,
 } from '../config.js';
 import * as agentConfig from '../config.js';
 
@@ -173,36 +172,6 @@ describe('validateProductionConfig', () => {
     );
   });
 
-  it('rejects explicit auto approval in production', () => {
-    assert.throws(
-      () =>
-        validateProductionConfig({
-          DEPLOYMENT_ENV: 'production',
-          AGENT_INTERNAL_TOKEN: STRONG,
-          SANDBOX_API_TOKEN: STRONG,
-          LLMIO_BASE_URL: 'https://llm.example.com/v1',
-          APPROVAL_MODE: 'auto_approve',
-          ...A2A_PROD,
-        }),
-      /APPROVAL_MODE=auto_approve/,
-    );
-  });
-
-  it('accepts explicit ask and deny modes in production', () => {
-    for (const APPROVAL_MODE of ['ask', 'deny']) {
-      assert.doesNotThrow(() =>
-        validateProductionConfig({
-          DEPLOYMENT_ENV: 'production',
-          AGENT_INTERNAL_TOKEN: STRONG,
-          SANDBOX_API_TOKEN: STRONG,
-          LLMIO_BASE_URL: 'https://llm.example.com/v1',
-          APPROVAL_MODE,
-          ...A2A_PROD,
-        }),
-      );
-    }
-  });
-
   it('requires a safe A2A origin and artifact secret in production', () => {
     assert.throws(
       () =>
@@ -242,11 +211,6 @@ describe('validateProductionConfig', () => {
         }),
       /A2A_ARTIFACT_DOWNLOAD_SECRET is weak/,
     );
-  });
-
-  it('resolves the safe default and legacy false mapping', () => {
-    assert.equal(resolveApprovalMode({}), 'ask');
-    assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'deny');
   });
 });
 
@@ -297,7 +261,6 @@ describe('effectiveConfig redaction', () => {
       MODEL_ID: 'm',
       MODEL_CONTEXT_WINDOW: 1,
       MODEL_MAX_TOKENS: 2,
-      APPROVAL_ENABLED: true,
       SKILLS_ROOT: '/x',
       SKILLS_AUDIT_LOG: '',
       PRODUCT_SYSTEM_PROMPT: 'FULL SECRET PROMPT WITH CONFIDENTIAL',

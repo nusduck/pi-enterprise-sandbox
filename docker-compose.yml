@@ -271,9 +271,6 @@ services:
       BFF_DEV_ACTING_USER_ID: ${BFF_DEV_ACTING_USER_ID:-local-development-user}
       BFF_DEV_ACTING_ORGANIZATION_ID: ${BFF_DEV_ACTING_ORGANIZATION_ID:-local-development-org}
       BFF_DEV_ACTING_ROLE: ${BFF_DEV_ACTING_ROLE:-user}
-      # BFF 只读 APPROVAL_MODE（默认 ask）；退役的 APPROVAL_ENABLED /
-      # SANDBOX_APPROVAL_* 布尔别名 BFF 不再读取（Agent 侧仍解析，见 agent 服务）。
-      APPROVAL_MODE: ${APPROVAL_MODE:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       PORT: 4000
     restart: unless-stopped
@@ -433,8 +430,6 @@ services:
       # Remote A2A agents this Agent may call (docs/design/a2a-remote-delegation.md).
       # Credentials are referenced by env var name (authTokenRef) and come from env_file.
       A2A_REMOTE_AGENTS_JSON: ${A2A_REMOTE_AGENTS_JSON:-}
-      APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
-      APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       SKILLS_ROOT: /home/sandbox/skill
       SKILLS_USER_ROOT: /home/sandbox/skill-user
       SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
@@ -569,8 +564,6 @@ services:
       # Remote A2A agents this Agent may call (docs/design/a2a-remote-delegation.md).
       # Credentials are referenced by env var name (authTokenRef) and come from env_file.
       A2A_REMOTE_AGENTS_JSON: ${A2A_REMOTE_AGENTS_JSON:-}
-      APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
-      APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       SKILLS_ROOT: /home/sandbox/skill
       SKILLS_USER_ROOT: /home/sandbox/skill-user
       SKILLS_AUDIT_LOG: ${SKILLS_AUDIT_LOG:-}
@@ -733,8 +726,6 @@ services:
       # 空值 = 拒绝全部内部面请求；非法 CIDR = 拒绝启动。开发默认放行回环与私网段
       # （Compose 网络在 Docker Desktop 为 172.x，在 OrbStack 为 192.168.x）。
       EXEC_INTERNAL_ALLOW_CIDR: ${EXEC_INTERNAL_ALLOW_CIDR:-127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      SANDBOX_APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
-      SANDBOX_APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       # Match agent/agent-worker service key (dev placeholder; prod :? override).
       SANDBOX_API_TOKEN: ${SANDBOX_API_TOKEN:-dev_only_sandbox_api_token_not_for_prod_32b}
       LANG: C.UTF-8

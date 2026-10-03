@@ -10,7 +10,6 @@ import {
   effectiveConfig,
   isWeakSecret,
   resolveAuthEnabled,
-  resolveApprovalMode,
   resolveDevelopmentActingIdentity,
   resolveDatasetUploadMaxBytes,
 } from '../src/config.js';
@@ -72,34 +71,6 @@ describe('validateProductionConfig', () => {
     );
   });
 
-  it('rejects explicit auto approval in production', () => {
-    assert.throws(
-      () =>
-        validateProductionConfig({
-          DEPLOYMENT_ENV: 'production',
-          AGENT_INTERNAL_TOKEN: STRONG,
-          SANDBOX_API_TOKEN: STRONG,
-          AUTH_ENABLED: 'true',
-          APPROVAL_MODE: 'auto_approve',
-        }),
-      /APPROVAL_MODE=auto_approve/,
-    );
-  });
-
-  it('accepts explicit ask and deny modes in production', () => {
-    for (const APPROVAL_MODE of ['ask', 'deny']) {
-      assert.doesNotThrow(() =>
-        validateProductionConfig({
-          DEPLOYMENT_ENV: 'production',
-          AGENT_INTERNAL_TOKEN: STRONG,
-          SANDBOX_API_TOKEN: STRONG,
-          AUTH_ENABLED: 'true',
-          APPROVAL_MODE,
-        }),
-      );
-    }
-  });
-
   it('rejects the retired SANDBOX_AUTH_ENABLED alias as auth signal', () => {
     assert.throws(
       () =>
@@ -125,7 +96,6 @@ describe('effectiveConfig redaction', () => {
       AGENT_BASE_URL: 'http://agent:4100',
       AGENT_INTERNAL_TOKEN: 'agent-secret-value',
       AUTH_ENABLED: true,
-      APPROVAL_MODE: 'ask',
     });
     const text = JSON.stringify(snap);
     assert.equal(snap.SANDBOX_API_TOKEN, '***');
@@ -168,9 +138,6 @@ describe('isWeakSecret + resolveAuthEnabled', () => {
 
   it('resolves auth enabled', () => {
     assert.equal(resolveAuthEnabled({ AUTH_ENABLED: 'true' }), true);
-    assert.equal(resolveApprovalMode({}), 'ask');
-    assert.equal(resolveApprovalMode({ APPROVAL_MODE: 'deny' }), 'deny');
-    assert.equal(resolveApprovalMode({ APPROVAL_ENABLED: 'false' }), 'ask');
   });
 
   it('resolves a positive configurable Dataset upload byte limit', () => {

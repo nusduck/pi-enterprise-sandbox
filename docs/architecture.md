@@ -480,11 +480,15 @@ Exec internal plane (TypeScript)
 **Exec 不信任 Agent 侧的策略结论**：上面两层是独立的，agent 侧策略被绕过也不等于
 执行面放行。
 
-| 策略结果 | `APPROVAL_MODE=ask` | `APPROVAL_MODE=deny` | `APPROVAL_MODE=auto_approve` |
-|----------|----------------------|-----------------------|-----------------------------------|
-| `allow` | 直接执行 | 直接执行 | 直接执行 |
-| `require_approval` | 暂停等人审 | **明确拒绝，不创建审批** | 执行 + bypass 审计 |
-| `hard_deny` | 拒绝 | **仍拒绝** | **仍拒绝** |
+| 策略结果 | 实际行为 |
+|----------|--------------------------------------|
+| `allow` | 直接执行 |
+| `require_approval` | 创建 durable approval 并暂停，等待人工决定 |
+| `hard_deny` | 拒绝（exec 危险命令硬拒，始终生效） |
+
+> 已删除，无全局审批开关：`APPROVAL_MODE` / `APPROVAL_ENABLED` /
+> `SANDBOX_APPROVAL_*`（含 `auto_approve` / `deny` 语义）从未驱动上表，
+> 现已从配置中整体删除。审批只由工具风险表与 Agent 配置 `toolPolicy` 决定。
 
 - 读工具（`read`/`read_image`/`glob`/`grep`）可并行；Workspace 写操作按 Agent Session/workspace 串行。是否审批取决于外部副作用策略，而不是 `bash` 这一工具名。
 - **Skill 树只能通过声明的入口脚本执行**：`bash` 的命令一旦提到任何 Skill 路径，
