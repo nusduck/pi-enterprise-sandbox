@@ -1296,3 +1296,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Why：** 红灯证明远端 RPC 结果被同步 DSH JobRegistry 适配器丢弃，模型工具收到的是本进程内存视图或占位值。
 - **Action：** exec 增加带现有 HMAC 绑定的 owner 作用域 job list；Agent 替换模型 job 工具的执行函数为 awaited RPC，同时复用上游的 schema、渲染、完成通知和唤醒预算；移除远端作业的伪快照返回。
 - **STATUS IDs：** C7 仍为 `partial`：跨 Worker 的模型 `job_list`/`job_output`/`job_kill` 真机 5/5 通过（kill 前删除原 Worker Pod）；exec 重启后的内存日志缓冲与活句柄恢复未解决。见[证据](evidence/2026-10-03-c7-cross-worker-model-jobs-fix.md)。
+
+## 2026-10-03 — C7 跨 Worker job 工具复审修正
+
+- **Why：** 复审修复提交时发现三处与出厂语义不一致：模型 `job_kill` 本 Worker 起的 bash 作业不再置 `reported`，结算时会多发一条完成通知（空闲时多唤醒一轮）；替换 `execute` 绕过了出厂 `defineTool` 的参数校验；进程级单例上的读游标表无上限。
+- **Action：** kill/读到终态时对本地条目置 `reported`；补 `wait`/`timeout_ms`/`reason` 校验；游标表按插入序封顶 1024。回归用例在修复前失败、修复后通过。architecture 写明 bash 作业可见范围是会话工作区，以及已结束输出的 5 分钟内存保留边界。
+- **STATUS IDs：** C7 仍为 `partial`（exec 重启后输出与活句柄恢复另行处理）。见[证据](evidence/2026-10-03-c7-cross-worker-review-fixes.md)。

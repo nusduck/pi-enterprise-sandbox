@@ -50,3 +50,43 @@ test('model job tools await exec results across workers and propagate failures',
   failRead = true;
   await assert.rejects(definitions.get('job_output').execute({ job_id: snap.id }, exec));
 });
+
+test('model kill of a locally started bash job suppresses the completion notice; invalid args are rejected', async () => {
+  const snap = { id: 'x', kind: 'bash', label: 'sleep', status: 'running', startedAt: 1, reported: false };
+  const calls: string[] = [];
+  const fetchImpl = (async (url: string | URL | Request) => {
+    const path = String(url);
+    calls.push(path);
+    return new Response(JSON.stringify({ ok: true, data: { ...snap, id: started } }));
+  }) as typeof fetch;
+  const jobs = new RemoteJobs(new Context(), {
+    baseUrl: 'http://exec', keyring: { test: Buffer.from('0'.repeat(32)).toString('base64url') },
+    activeKid: 'test', orgId: 'org', userId: 'user', workspaceId: 'ws',
+    runId: 'run', fenceToken: 1, systemSkills: [], physicalRoots: [], fetchImpl,
+  });
+  let settle: (outcome: { status: 'killed' }) => void = () => undefined;
+  const started = jobs.start({
+    kind: 'bash', label: 'sleep',
+    run: () => ({ done: new Promise((resolve) => { settle = resolve; }), cancel: () => undefined }),
+  } as any);
+  const notices: boolean[] = [];
+  jobs.onJobDone((done) => notices.push(done.reported));
+  const definitions = new Map<string, any>();
+  apply({
+    jobs,
+    tools: { register: (definition: any) => { definitions.set(definition.name, definition); return () => undefined; } },
+    systemPrompt: { section: () => undefined },
+    on: () => undefined,
+  } as any, {});
+  const exec = { agent: undefined, signal: undefined };
+  const killed = await definitions.get('job_kill').execute({ job_id: started }, exec);
+  assert.equal(killed.outcome, 'cancellation-requested');
+  assert.ok(calls.some((path) => path.endsWith('/jobs/kill')));
+  settle({ status: 'killed' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(notices, [true]);
+
+  await assert.rejects(definitions.get('job_output').execute({ job_id: started, wait: true, timeout_ms: 'soon' }, exec), /invalid timeout_ms/);
+  await assert.rejects(definitions.get('job_output').execute({ job_id: started, wait: 'yes' }, exec), /invalid wait/);
+  await assert.rejects(definitions.get('job_kill').execute({ job_id: started, reason: 7 }, exec), /invalid reason/);
+});

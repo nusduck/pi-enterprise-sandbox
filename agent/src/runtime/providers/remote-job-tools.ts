@@ -23,6 +23,15 @@ function jobId(value: unknown): JobId {
   return value as JobId;
 }
 
+// 替换 execute 会绕过出厂 defineTool 包装里的参数校验，这里补上同等约束。
+function optional(args: Record<string, unknown>, key: string, type: 'boolean' | 'number' | 'string'): void {
+  const value = args[key];
+  if (value === undefined) return;
+  if (typeof value !== type || (type === 'number' && !(Number.isFinite(value) && (value as number) > 0))) {
+    throw new Error(`invalid ${key}`);
+  }
+}
+
 function retainTail(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text) <= maxBytes) return text;
   const marker = '[output truncated]\n';
@@ -54,6 +63,8 @@ export function apply(ctx: Context & Record<string, any>, config: Config = {}): 
         } else if (definition.name === 'job_output') {
           execute = async (args: { job_id: string; wait?: boolean; timeout_ms?: number }, exec: { agent: any; signal?: AbortSignal }) => {
             const id = jobId(args.job_id);
+            optional(args as Record<string, unknown>, 'wait', 'boolean');
+            optional(args as Record<string, unknown>, 'timeout_ms', 'number');
             if (args.wait === true) {
               const cap = config.maxWaitTimeoutMs ?? 600_000;
               const timeout = Math.min(args.timeout_ms ?? config.waitTimeoutMs ?? 30_000, cap);
@@ -67,7 +78,9 @@ export function apply(ctx: Context & Record<string, any>, config: Config = {}): 
           };
         } else if (definition.name === 'job_kill') {
           execute = async (args: { job_id: string; reason?: string }, exec: { agent: any }) => {
-            const result = await jobs.killAuthoritative(jobId(args.job_id), exec.agent, args.reason);
+            const id = jobId(args.job_id);
+            optional(args as Record<string, unknown>, 'reason', 'string');
+            const result = await jobs.killAuthoritative(id, exec.agent, args.reason);
             if (result.snapshot.outputLimitBytes !== undefined) {
               remoteLimits.set(exec, result.snapshot.outputLimitBytes);
             }

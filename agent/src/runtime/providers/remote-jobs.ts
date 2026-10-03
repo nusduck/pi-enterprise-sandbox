@@ -43,6 +43,8 @@ interface RemoteJobEntry {
   output?: string;
 }
 
+const MAX_READ_CURSORS = 1024;
+
 function isTerminal(status: JobStatus): boolean {
   return status === 'completed' || status === 'killed' || status === 'failed';
 }
@@ -173,7 +175,9 @@ export class RemoteJobs extends JobRegistry {
     const read = await this.rpc.post<{ id: JobId; cursor?: string }, JobRead & { nextCursor?: string }>(
       '/internal/v1/jobs/read', { id, ...(cursor !== undefined ? { cursor } : {}) }, this.roots,
     );
-    if (read.nextCursor !== undefined) this.readCursors.set(id, read.nextCursor);
+    if (read.nextCursor !== undefined) this.rememberCursor(id, read.nextCursor);
+    // 本 Worker 起的作业：与出厂 read 一致，读到终态即视为已报告，抑制重复的完成通知。
+    if (entry !== undefined && isTerminal(read.snapshot.status)) entry.reported = true;
     return { text: read.text, snapshot: read.snapshot } as JobRead;
   }
 
@@ -184,11 +188,23 @@ export class RemoteJobs extends JobRegistry {
       return { outcome, snapshot: this.get(id, caller) };
     }
     const before = await this.getAuthoritative(id, caller);
+    // 与出厂 kill 一致：模型主动处理过的作业不再发完成通知（否则结算时会多唤醒一轮）。
+    if (entry !== undefined) entry.reported = true;
     if (isTerminal(before.status)) return { outcome: 'already-finished', snapshot: before };
     const snapshot = await this.rpc.post<{ id: JobId }, JobSnapshot>(
       '/internal/v1/jobs/kill', { id }, this.roots,
     );
     return { outcome: 'requested', snapshot };
+  }
+
+  /** 游标只是续读提示，丢了从头读；进程级单例上按插入序封顶，避免长跑 Worker 无界增长。 */
+  private rememberCursor(id: JobId, cursor: string): void {
+    this.readCursors.delete(id);
+    this.readCursors.set(id, cursor);
+    if (this.readCursors.size > MAX_READ_CURSORS) {
+      const oldest = this.readCursors.keys().next().value;
+      if (oldest !== undefined) this.readCursors.delete(oldest);
+    }
   }
 
   override get(id: JobId, caller?: Agent): JobSnapshot {
