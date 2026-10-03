@@ -1135,10 +1135,10 @@ export class ExecuteRunService {
       const interaction = [...interactions].reverse().find(
         (item) =>
           item.status === INTERACTION_STATUS.RESOLVED &&
-          [
+          ([
             INTERACTION_RESUME_PHASE.CLAIMED,
             INTERACTION_RESUME_PHASE.APPLIED,
-          ].includes(item.resumePhase),
+          ] as readonly string[]).includes(item.resumePhase), // reason: 行字段是 string
       );
       if (!interaction) return { ok: false };
       if (interaction.resumePhase === INTERACTION_RESUME_PHASE.APPLIED) {

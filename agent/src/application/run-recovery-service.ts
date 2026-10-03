@@ -331,7 +331,7 @@ export class RunRecoveryService {
           { forUpdate: true },
         );
         const active = [...interactions].reverse().find((candidate) =>
-          [INTERACTION_STATUS.PENDING, INTERACTION_STATUS.RESOLVED].includes(
+          ([INTERACTION_STATUS.PENDING, INTERACTION_STATUS.RESOLVED] as readonly string[]).includes( // reason: 行字段是 string
             candidate.status,
           ),
         );
@@ -656,10 +656,10 @@ export class RunRecoveryService {
           const continuation = [...interactions].reverse().find(
             (item) =>
               item.status === INTERACTION_STATUS.RESOLVED &&
-              [
+              ([
                 INTERACTION_RESUME_PHASE.CLAIMED,
                 INTERACTION_RESUME_PHASE.APPLIED,
-              ].includes(item.resumePhase),
+              ] as readonly string[]).includes(item.resumePhase), // reason: 行字段是 string
           );
           if (continuation) {
             const tool = await repos.toolExecutions.getById(

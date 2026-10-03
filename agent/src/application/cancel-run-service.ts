@@ -285,7 +285,7 @@ export class CancelRunService {
           transitionedToCancelling = true;
 
         } else {
-          const reloaded = ('current' in toCancelling && toCancelling.current) ??
+          const reloaded = ('current' in toCancelling ? toCancelling.current : undefined) ??
             (await repos.runs.requireById(runId, scope));
           status = reloaded.status;
           transitionedToCancelling = status === RUN_STATUS.CANCELLING || status === RUN_STATUS.CANCELLED;

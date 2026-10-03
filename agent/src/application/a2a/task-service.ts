@@ -155,7 +155,7 @@ export class A2aTaskService {
       const parent = await this.#loadOwnedTask(input.principal, taskId);
       const parentRun = await this.#loadOwnedRun(input.principal, parent.runId);
       // In-flight tasks cannot accept a parallel follow-up message.
-      if (!CONTINUABLE_RUN_STATUSES.has(parentRun.status)) {
+      if (!(CONTINUABLE_RUN_STATUSES as ReadonlySet<string>).has(parentRun.status)) { // reason: 行状态是 string，集合按字面量声明
         throw new A2aTaskError('Unsupported operation', {
           code: 'TASK_BUSY',
           rpc: A2A_RPC_ERROR.UNSUPPORTED,

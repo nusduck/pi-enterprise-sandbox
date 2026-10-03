@@ -13,15 +13,8 @@ import type { Knex } from 'knex';
 import { MemberRoleService } from '../application/member-role-service.js';
 
 type DbExecutor = Knex | Knex.Transaction;
-type RepositoryBundleLike = {
-  readonly runs: unknown;
-  readonly runEvents: unknown;
-  readonly outbox: unknown;
-  readonly approvals: unknown;
-  readonly toolExecutions: unknown;
-  readonly interactions: unknown;
-};
-type RepositoryFactory = (db?: DbExecutor) => RepositoryBundleLike;
+// 仓储工厂的形状以消费方 MemberRoleService 的构造签名为准。
+type RepositoryFactory = ConstructorParameters<typeof MemberRoleService>[0]['createRepositories'];
 type TransactionRunner = { run: <T>(work: (trx: Knex.Transaction) => Promise<T>) => Promise<T> };
 
 export interface MemberRoleServiceWiring {

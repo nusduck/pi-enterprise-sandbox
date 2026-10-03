@@ -78,7 +78,8 @@ const REPLAY_ENQUEUE_STATUSES = new Set([
 
 export type CreateRunResponse = {
   runId: string;
-  status: 'ACCEPTED';
+  /** 新建时为 ACCEPTED；幂等重放返回的是幂等记录里存下的响应，按字符串读取。 */
+  status: string;
   conversationId: string;
   eventsUrl: string;
   agentSessionId?: string;
