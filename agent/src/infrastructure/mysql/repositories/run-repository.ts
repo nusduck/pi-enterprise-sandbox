@@ -23,9 +23,6 @@ import {
 import { InvalidRunStatusError } from '../../../domain/run/errors.js';
 import { normalizeW3cTracestate } from '../../sandbox/trace-context.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Default / max page size for list helpers. */
 export const RUN_LIST_DEFAULT_LIMIT = 50;
 export const RUN_LIST_MAX_LIMIT = 200;
@@ -239,8 +236,8 @@ type OwnerScope = { orgId: string; userId: string };
 
 export class RunRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('RunRepository requires a knex executor');

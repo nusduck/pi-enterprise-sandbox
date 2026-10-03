@@ -8,9 +8,7 @@
 
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
-
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+import type { Knex } from 'knex';
 
 const DEFINITIONS = 'tbl_agsvc_agent_definitions';
 const GRANTS = 'tbl_agsvc_agent_user_grants';
@@ -28,10 +26,10 @@ export interface AgentGrantRow {
 }
 
 export class AgentAccessRepository {
-  db: Loose;
+  db: Knex | Knex.Transaction;
   now: () => Date;
 
-  constructor(db: Loose, { now = () => new Date() }: { now?: () => Date } = {}) {
+  constructor(db: Knex | Knex.Transaction, { now = () => new Date() }: { now?: () => Date } = {}) {
     if (!db) throw new Error('AgentAccessRepository requires a knex executor');
     this.db = db;
     this.now = now;
@@ -49,7 +47,7 @@ export class AgentAccessRepository {
     const rows = await this.db(GRANTS)
       .where({ org_id: assertUlid(orgId, 'orgId'), user_id: assertUlid(userId, 'userId') })
       .select('agent_id');
-    return new Set(rows.map((row: Loose) => String(row.agent_id)));
+    return new Set(rows.map((row: Record<string, unknown>) => String(row.agent_id)));
   }
 
   async listGrants(agentId: string): Promise<AgentGrantRow[]> {
@@ -59,7 +57,7 @@ export class AgentAccessRepository {
       .where('g.agent_id', assertUlid(agentId, 'agentId'))
       .orderBy('g.created_at', 'asc')
       .select('g.user_id', 'ac.username', 'ac.display_name', 'u.display_name as user_display_name', 'g.created_at');
-    return rows.map((row: Loose) => ({
+    return rows.map((row: Record<string, unknown>) => ({
       userId: String(row.user_id),
       username: row.username == null ? null : String(row.username),
       displayName:
@@ -76,7 +74,7 @@ export class AgentAccessRepository {
       .where({ org_id: assertUlid(orgId, 'orgId'), status: 'active' })
       .whereIn('user_id', userIds.map((id) => assertUlid(id, 'userId')))
       .select('user_id');
-    return new Set(rows.map((row: Loose) => String(row.user_id)));
+    return new Set(rows.map((row: Record<string, unknown>) => String(row.user_id)));
   }
 
   /**

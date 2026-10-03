@@ -6,9 +6,6 @@ import { NotFoundError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 import type { KeysetPosition } from '../../../application/keyset-cursor.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const CRON_JOB_LIST_DEFAULT_LIMIT = 100;
 export const CRON_JOB_RUN_LIST_DEFAULT_LIMIT = 50;
 export const CRON_JOB_LIST_MAX_LIMIT = 200;
@@ -86,8 +83,8 @@ type OwnerScope = { orgId: string; userId: string };
 
 export class CronJobRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('CronJobRepository requires a knex executor');
@@ -171,8 +168,8 @@ export class CronJobRepository {
     if (opts.before) {
       const at = toMysqlDateTime(opts.before.sortValue);
       const id = assertUlid(opts.before.key, 'cursor.cronJobId');
-      query = query.andWhere((w: Loose) => {
-        w.where('created_at', '<', at).orWhere((w2: Loose) => {
+      query = query.andWhere((w: import('knex').Knex.QueryBuilder) => {
+        w.where('created_at', '<', at).orWhere((w2: import('knex').Knex.QueryBuilder) => {
           w2.where('created_at', '=', at).andWhere('cron_job_id', '<', id);
         });
       });

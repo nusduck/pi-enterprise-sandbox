@@ -1,7 +1,6 @@
 import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { toMysqlDateTime } from '../row-mappers.js';
-
-type Loose = any;
+import type { Knex } from 'knex';
 
 export interface SkillEnablementRow {
   readonly name: string;
@@ -11,7 +10,15 @@ export interface SkillEnablementRow {
   readonly enabledByUserId: string;
 }
 
-function mapRow(row: Loose): SkillEnablementRow {
+interface SkillEnablementDbRow {
+  skill_name: unknown;
+  content_digest: unknown;
+  file_count: unknown;
+  total_bytes: unknown;
+  enabled_by_user_id: unknown;
+}
+
+function mapRow(row: SkillEnablementDbRow): SkillEnablementRow {
   return {
     name: String(row.skill_name),
     contentDigest: String(row.content_digest),
@@ -23,7 +30,7 @@ function mapRow(row: Loose): SkillEnablementRow {
 
 export class SkillEnablementRepository {
   constructor(
-    private readonly db: Loose,
+    private readonly db: Knex,
     private readonly opts: { now?: () => Date; generateId?: () => string } = {},
   ) {
     if (!db) throw new Error('SkillEnablementRepository requires a knex executor');

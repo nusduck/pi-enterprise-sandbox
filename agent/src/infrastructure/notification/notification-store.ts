@@ -7,10 +7,39 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { Knex } from 'knex';
 import { formatDateTime, toMysqlDateTime } from '../mysql/row-mappers.js';
 import { sanitizeOutboxError } from '../outbox/sanitize-error.js';
 
-type Loose = any;
+/** knex 行投影的最小形状：只含本文件实际读取的列。 */
+type RunContextRow = {
+  run_id: unknown;
+  org_id: unknown;
+  user_id: unknown;
+  parent_run_id: unknown;
+  status: unknown;
+  conversation_id: unknown;
+  conversation_title: unknown;
+  created_at: unknown;
+  completed_at: unknown;
+  display_name: unknown;
+  email: unknown;
+  notify_run_complete?: unknown;
+  notify_review_result?: unknown;
+  notify_review_pending?: unknown;
+  notify_run_waiting?: unknown;
+  cron_job_id?: unknown;
+  job_name?: unknown;
+  notify_policy?: unknown;
+};
+
+/** 待我审核候选收件人查询的最小行形状。 */
+type ReviewPendingRow = {
+  user_id: unknown;
+  display_name: unknown;
+  email: unknown;
+  notify_review_pending?: unknown;
+};
 
 export const DELIVERY_STATUS = Object.freeze({
   SENDING: 'sending',
@@ -82,7 +111,7 @@ const USER_PREF_COLUMNS = [
   'u.notify_run_waiting',
 ] as const;
 
-function mapRunContext(row: Loose): RunNotificationContext {
+function mapRunContext(row: RunContextRow): RunNotificationContext {
   return {
     runId: String(row.run_id),
     orgId: String(row.org_id),
@@ -103,10 +132,10 @@ function mapRunContext(row: Loose): RunNotificationContext {
 }
 
 export class NotificationStore {
-  db: Loose;
+  db: Knex;
   now: () => Date;
 
-  constructor(db: Loose, { now = () => new Date() }: { now?: () => Date } = {}) {
+  constructor(db: Knex, { now = () => new Date() }: { now?: () => Date } = {}) {
     if (!db) throw new Error('NotificationStore requires a knex executor');
     this.db = db;
     this.now = now;
@@ -115,7 +144,7 @@ export class NotificationStore {
   async loadRunContext(runId: string, scope: { orgId: string; userId: string }): Promise<RunNotificationContext | null> {
     const row = await this.db('tbl_agsvc_runs as r')
       .join('tbl_agsvc_users as u', 'u.user_id', 'r.user_id')
-      .leftJoin('tbl_agsvc_conversations as c', function joinConversation(this: Loose) {
+      .leftJoin('tbl_agsvc_conversations as c', function joinConversation(this: Knex.JoinClause) {
         this.on('c.conversation_id', '=', 'r.conversation_id').andOn('c.org_id', '=', 'r.org_id');
       })
       .where({ 'r.run_id': runId, 'r.org_id': scope.orgId, 'r.user_id': scope.userId })
@@ -147,7 +176,7 @@ export class NotificationStore {
       .join('tbl_agsvc_cron_jobs as j', 'j.cron_job_id', 'jr.cron_job_id')
       .join('tbl_agsvc_runs as r', 'r.run_id', 'jr.run_id')
       .join('tbl_agsvc_users as u', 'u.user_id', 'j.user_id')
-      .leftJoin('tbl_agsvc_conversations as c', function joinConversation(this: Loose) {
+      .leftJoin('tbl_agsvc_conversations as c', function joinConversation(this: Knex.JoinClause) {
         this.on('c.conversation_id', '=', 'r.conversation_id').andOn('c.org_id', '=', 'r.org_id');
       })
       .where({ 'jr.run_id': runId, 'j.org_id': scope.orgId, 'j.user_id': scope.userId })
@@ -184,8 +213,8 @@ export class NotificationStore {
    * 不是发起人本人的成员（U8 职责分离）。只读账本，不做任何写入。
    */
   async listReviewPendingRecipients(orgId: string, requesterUserId: string): Promise<ReviewPendingRecipient[]> {
-    const rows: Loose[] = await this.db('tbl_agsvc_member_roles as mr')
-      .join('tbl_agsvc_organization_memberships as m', function joinMembership(this: Loose) {
+    const rows: ReviewPendingRow[] = await this.db('tbl_agsvc_member_roles as mr')
+      .join('tbl_agsvc_organization_memberships as m', function joinMembership(this: Knex.JoinClause) {
         this.on('m.org_id', '=', 'mr.org_id').andOn('m.user_id', '=', 'mr.user_id');
       })
       .join('tbl_agsvc_users as u', 'u.user_id', 'mr.user_id')

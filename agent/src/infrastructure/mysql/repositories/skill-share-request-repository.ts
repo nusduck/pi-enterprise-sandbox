@@ -28,8 +28,7 @@
 import { physicalTableName } from '../schema-tables.js';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
 import type { KeysetPosition } from '../../../application/keyset-cursor.js';
-
-type Loose = any;
+import type { Knex } from 'knex';
 
 const REQUESTS = physicalTableName('skill_share_requests');
 
@@ -64,7 +63,21 @@ export class ShareRequestError extends Error {
   }
 }
 
-function mapRow(row: Loose): ShareRequestRow {
+interface ShareRequestDbRow {
+  request_id: unknown;
+  org_id: unknown;
+  requester_user_id: unknown;
+  skill_name: unknown;
+  content_digest: unknown;
+  note: unknown;
+  status: unknown;
+  decided_by_user_id: unknown;
+  decided_at: unknown;
+  decision_note: unknown;
+  created_at: unknown;
+}
+
+function mapRow(row: ShareRequestDbRow): ShareRequestRow {
   const raw = String(row.status);
   const status: ShareRequestStatus = raw === 'approved'
     || raw === 'rejected'
@@ -93,7 +106,7 @@ const TERMINAL: readonly ShareRequestStatus[] = ['approved', 'rejected', 'withdr
 
 export class SkillShareRequestRepository {
   constructor(
-    private readonly db: Loose,
+    private readonly db: Knex,
     private readonly opts: { now?: () => Date; generateId?: () => string } = {},
   ) {
     if (!db) throw new Error('SkillShareRequestRepository requires a knex executor');
@@ -125,7 +138,7 @@ export class SkillShareRequestRepository {
   }): Promise<ShareRequestRow> {
     const requestId = this.id();
     const now = toMysqlDateTime(this.now());
-    return this.db.transaction(async (trx: Loose) => {
+    return this.db.transaction(async (trx: Knex.Transaction) => {
       await trx(REQUESTS)
         .where({
           org_id: input.orgId,
@@ -180,13 +193,13 @@ export class SkillShareRequestRepository {
     if (input.before) {
       const at = toMysqlDateTime(input.before.sortValue);
       const id = String(input.before.key);
-      query = query.andWhere((w: Loose) => {
-        w.where('created_at', '<', at).orWhere((w2: Loose) => {
+      query = query.andWhere((w: Knex.QueryBuilder) => {
+        w.where('created_at', '<', at).orWhere((w2: Knex.QueryBuilder) => {
           w2.where('created_at', '=', at).andWhere('request_id', '<', id);
         });
       });
     }
-    const rows: Loose[] = await query
+    const rows: ShareRequestDbRow[] = await query
       .orderBy('created_at', 'desc')
       .orderBy('request_id', 'desc')
       .limit(Math.max(1, Math.min(Number(input.limit) || 200, 500)));
@@ -198,7 +211,7 @@ export class SkillShareRequestRepository {
     orgId: string;
     requesterUserId: string;
   }): Promise<ShareRequestRow[]> {
-    const rows: Loose[] = await this.db(REQUESTS)
+    const rows: ShareRequestDbRow[] = await this.db(REQUESTS)
       .where({
         org_id: String(input.orgId),
         requester_user_id: String(input.requesterUserId),
@@ -221,8 +234,8 @@ export class SkillShareRequestRepository {
     decidedByUserId: string;
     note?: string;
   }): Promise<ShareRequestRow> {
-    return this.db.transaction(async (trx: Loose) => {
-      const existing: Loose = await trx(REQUESTS)
+    return this.db.transaction(async (trx: Knex.Transaction) => {
+      const existing: ShareRequestDbRow = await trx(REQUESTS)
         .where({ request_id: String(input.requestId) })
         .forUpdate()
         .first();
@@ -266,8 +279,8 @@ export class SkillShareRequestRepository {
    * @returns 是否真的退回了
    */
   async reopenApproval(input: { requestId: string; decidedByUserId: string }): Promise<boolean> {
-    return this.db.transaction(async (trx: Loose) => {
-      const existing: Loose = await trx(REQUESTS)
+    return this.db.transaction(async (trx: Knex.Transaction) => {
+      const existing: ShareRequestDbRow = await trx(REQUESTS)
         .where({ request_id: String(input.requestId) })
         .forUpdate()
         .first();
@@ -291,8 +304,8 @@ export class SkillShareRequestRepository {
     requestId: string;
     requesterUserId: string;
   }): Promise<ShareRequestRow> {
-    return this.db.transaction(async (trx: Loose) => {
-      const existing: Loose = await trx(REQUESTS)
+    return this.db.transaction(async (trx: Knex.Transaction) => {
+      const existing: ShareRequestDbRow = await trx(REQUESTS)
         .where({ request_id: String(input.requestId) })
         .forUpdate()
         .first();

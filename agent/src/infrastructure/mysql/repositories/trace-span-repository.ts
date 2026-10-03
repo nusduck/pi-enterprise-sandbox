@@ -38,9 +38,7 @@ export {
   runRootSpanId,
   serializeTraceAttributes,
 } from './trace-span-projections.js';
-
-/** 过渡期宽松类型：注入的 knex executor 仍是 JS 侧对象。 */
-type Loose = any;
+import type { Knex } from 'knex';
 
 /** Owner-scoped 查询的租户边界。 */
 type OwnerScope = { orgId: string; userId: string };
@@ -80,11 +78,11 @@ async function assertParentChain(db, { traceId, spanId, parentSpanId, runId, sco
 
 export class TraceSpanRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
+  db: Knex | Knex.Transaction;
+  now: () => Date;
 
   /** @param {import('knex').Knex | import('knex').Knex.Transaction} db */
-  constructor(db: Loose, opts: { now?: () => Date } = {}) {
+  constructor(db: Knex | Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('TraceSpanRepository requires a knex executor');
     this.db = db;
     this.now = opts.now ?? (() => new Date());

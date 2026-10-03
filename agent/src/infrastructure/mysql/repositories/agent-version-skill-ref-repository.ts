@@ -11,10 +11,28 @@
  */
 import { physicalTableName } from '../schema-tables.js';
 import { toMysqlDateTime } from '../row-mappers.js';
-
-type Loose = any;
+import type { Knex } from 'knex';
 
 const REFS = physicalTableName('agent_version_skill_refs');
+
+/** 引用账本的行形状：只含本文件实际访问的字段。 */
+interface SkillRefDbRow {
+  agent_version_id: unknown;
+  org_id: unknown;
+  scope: unknown;
+  skill_name: unknown;
+  content_digest: unknown;
+}
+
+/** insertForVersion 组装的插入行。 */
+interface SkillRefInsertRow {
+  agent_version_id: string;
+  org_id: string;
+  scope: string;
+  skill_name: string;
+  content_digest: string;
+  created_at: string;
+}
 
 /** 被引用的层。**没有 `user`**：用户层随调用者变化，不随 AgentVersion 固定。 */
 export type SkillRefScope = 'system' | 'org';
@@ -29,7 +47,7 @@ export interface AgentVersionSkillRef {
 
 export class AgentVersionSkillRefRepository {
   constructor(
-    private readonly db: Loose,
+    private readonly db: Knex | Knex.Transaction,
     private readonly opts: { now?: () => Date } = {},
   ) {
     if (!db) throw new Error('AgentVersionSkillRefRepository requires a knex executor');
@@ -59,7 +77,7 @@ export class AgentVersionSkillRefRepository {
     // 调用方本不该给出重复项，但这里不该因此让整个版本创建失败——静默取第一个，
     // 因为重复项在任何解释下都指向同一个引用。
     const seen = new Set<string>();
-    const rows: Loose[] = [];
+    const rows: SkillRefInsertRow[] = [];
     for (const ref of input.refs) {
       const key = `${ref.scope}\u0000${ref.name}`;
       if (seen.has(key)) continue;
@@ -89,7 +107,7 @@ export class AgentVersionSkillRefRepository {
     contentDigest: string;
     limit?: number;
   }): Promise<string[]> {
-    let q: Loose = this.db(REFS)
+    let q: Knex.QueryBuilder = this.db(REFS)
       .where({
         org_id: String(input.orgId),
         scope: 'org',
@@ -100,7 +118,7 @@ export class AgentVersionSkillRefRepository {
     if (input.limit !== undefined) {
       q = q.limit(Math.max(1, Math.min(Number(input.limit) || 100, 500)));
     }
-    const rows: Loose[] = await q;
+    const rows: SkillRefDbRow[] = await q;
     return rows.map((row) => String(row.agent_version_id));
   }
 
@@ -111,7 +129,7 @@ export class AgentVersionSkillRefRepository {
    * （`isReferenced`）——后者在版本多的 org 上是 N+1。
    */
   async listReferencedDigests(input: { orgId: string }): Promise<Map<string, Set<string>>> {
-    const rows: Loose[] = await this.db(REFS)
+    const rows: SkillRefDbRow[] = await this.db(REFS)
       .where({ org_id: String(input.orgId), scope: 'org' })
       .select('skill_name', 'content_digest');
     const out = new Map<string, Set<string>>();
@@ -145,7 +163,7 @@ export class AgentVersionSkillRefRepository {
 
   /** 一个 AgentVersion 的全部引用（审计与测试）。 */
   async listForVersion(agentVersionId: string): Promise<AgentVersionSkillRef[]> {
-    const rows: Loose[] = await this.db(REFS)
+    const rows: SkillRefDbRow[] = await this.db(REFS)
       .where({ agent_version_id: String(agentVersionId) })
       .orderBy([{ column: 'scope', order: 'asc' }, { column: 'skill_name', order: 'asc' }]);
     return rows.map((row) => ({

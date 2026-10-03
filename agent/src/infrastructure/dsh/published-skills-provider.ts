@@ -15,9 +15,17 @@
  */
 import path from 'node:path';
 import { FileSystemSkillProvider } from '@deepseek-ai/dsh-skill-filesystem';
+import type { Context } from '@deepseek-ai/cordis';
+import type {
+  SkillCandidate,
+  SkillLookupOptions,
+  SkillProvider,
+  SkillProviderControl,
+} from '@deepseek-ai/dsh-skill';
 import type { PublishedSkillRootEntry } from '../../skills/run-skills.js';
 
-type Loose = any;
+/** filesystem provider 的 locator 实际形状（仅 directory/path 两个字符串字段）：此处只读 directory 做归属校验。 */
+type FilesystemSkillLocator = { directory?: unknown; path?: unknown };
 
 /** exec 挂载已启用包的逻辑根（exec `AGENT_USER_SKILL_PATH`）。 */
 export const USER_SKILL_LOGICAL_ROOT = '/home/sandbox/skill-user';
@@ -42,11 +50,11 @@ function withLogicalPaths<T extends object>(
 }
 
 export function createPublishedSkillsProvider(
-  ctx: Loose,
-  control: Loose,
+  ctx: Context,
+  control: SkillProviderControl,
   versions: readonly PublishedSkillRootEntry[],
   opts: { providerName?: string; logicalRoot?: string } = {},
-): Loose {
+): SkillProvider & { dispose: () => Promise<void> } {
   const providerName = opts.providerName ?? 'run-published';
   // org 层挂在 `/home/sandbox/skill-org/<name>`（ADR 0015 D5），必须与 exec 的
   // `AGENT_ORG_SKILL_PATH` 一致；否则模型按 resourceBase 去 `read` 会被围栏拒。
@@ -61,18 +69,18 @@ export function createPublishedSkillsProvider(
     watch: false,
   });
   /** 最近一次 list 的原始候选：get 只能加载这里面的名字。 */
-  const originals = new Map<string, Loose>();
+  const originals = new Map<string, SkillCandidate>();
 
   return {
     name: providerName,
-    async list(options: Loose) {
+    async list(options: SkillLookupOptions) {
       const raw = await inner.list(options);
-      const candidates: readonly Loose[] = Array.isArray(raw) ? raw : raw.candidates;
-      const listed: Loose[] = [];
+      const candidates: readonly SkillCandidate[] = Array.isArray(raw) ? raw : raw.candidates;
+      const listed: SkillCandidate[] = [];
       originals.clear();
       for (const candidate of candidates) {
         const version = byName.get(candidate?.name);
-        const directory = candidate?.locator?.directory;
+        const directory = (candidate?.locator as FilesystemSkillLocator | undefined)?.directory; // 原因：locator 是 provider 私有句柄，此处仅读 directory 做归属校验
         if (version === undefined || typeof directory !== 'string') continue;
         if (path.resolve(directory) !== path.resolve(version.packageDir)) continue;
         originals.set(version.name, candidate);
@@ -80,7 +88,7 @@ export function createPublishedSkillsProvider(
       }
       return Array.isArray(raw) ? listed : { candidates: listed, complete: raw.complete };
     },
-    async get(candidate: Loose, options: Loose) {
+    async get(candidate: SkillCandidate, options: SkillLookupOptions) {
       const version = byName.get(candidate?.name);
       const original = originals.get(candidate?.name);
       if (version === undefined || original === undefined) return undefined;
@@ -105,10 +113,10 @@ export function createPublishedSkillsProvider(
  * 那种情况根本不注册这个包装，直接给裸 provider）。
  */
 export function createFilteredSystemSkillsProvider(
-  ctx: Loose,
-  control: Loose,
+  ctx: Context,
+  control: SkillProviderControl,
   input: { root: string; names: readonly string[]; providerName?: string },
-): Loose {
+): SkillProvider & { dispose: () => Promise<void> } {
   const providerName = input.providerName ?? 'run-filesystem';
   const allowed = new Set(input.names);
   const inner = new FileSystemSkillProvider(ctx, control, {
@@ -120,32 +128,32 @@ export function createFilteredSystemSkillsProvider(
     watch: false,
   });
   /** 最近一次 list 通过名单的候选：get 只能加载这里面的名字。 */
-  const originals = new Map<string, Loose>();
+  const originals = new Map<string, SkillCandidate>();
 
   /** 候选的目录名是不是本 Run 名单里的包。 */
-  function allowedCandidate(candidate: Loose): boolean {
-    const directory = candidate?.locator?.directory;
+  function allowedCandidate(candidate: SkillCandidate): boolean {
+    const directory = (candidate?.locator as FilesystemSkillLocator | undefined)?.directory; // 原因：locator 是 provider 私有句柄，此处仅读 directory 做名单校验
     if (typeof directory !== 'string') return false;
     return allowed.has(path.basename(directory));
   }
 
   return {
     name: providerName,
-    async list(options: Loose) {
+    async list(options: SkillLookupOptions) {
       const raw = await inner.list(options);
-      const candidates: readonly Loose[] = Array.isArray(raw) ? raw : raw.candidates;
-      const listed: Loose[] = [];
+      const candidates: readonly SkillCandidate[] = Array.isArray(raw) ? raw : raw.candidates;
+      const listed: SkillCandidate[] = [];
       originals.clear();
       for (const candidate of candidates) {
         if (!allowedCandidate(candidate)) continue;
-        const directory = candidate.locator.directory as string;
+        const directory = (candidate.locator as FilesystemSkillLocator).directory as string; // 原因：allowedCandidate 刚校验过 directory 为字符串，此处仅补类型
         const name = path.basename(directory);
         originals.set(name, candidate);
         listed.push(candidate);
       }
       return Array.isArray(raw) ? listed : { candidates: listed, complete: raw.complete };
     },
-    async get(candidate: Loose, options: Loose) {
+    async get(candidate: SkillCandidate, options: SkillLookupOptions) {
       const name = typeof candidate?.name === 'string' ? candidate.name : '';
       const original = originals.get(name);
       if (original === undefined) return undefined;

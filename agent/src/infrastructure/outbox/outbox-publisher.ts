@@ -35,9 +35,6 @@ import {
 } from './stream-mapper.js';
 import { DEFAULT_CLAIM_BATCH_SIZE } from './outbox-status.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export type RunEventStreamLike = { append: ( runId: string, fields: { eventId: string, sequence: string, type: string, payload: string, createdAt: string, }, ) => Promise<unknown>, };
 
 export type ClaimEligibility = import('./eligibility.js').ClaimEligibility;
@@ -51,13 +48,13 @@ export type OutboxRepositoryLike = {
 
 export class OutboxPublisher {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  repository: Loose;
-  stream: Loose;
-  batchSize: Loose;
-  maxPasses: Loose;
-  idleDelayMs: Loose;
-  eligibility: Loose;
-  sleep: Loose;
+  repository: OutboxRepositoryLike;
+  stream: RunEventStreamLike;
+  batchSize: number;
+  maxPasses: number;
+  idleDelayMs: number;
+  eligibility: ClaimEligibility | null;
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   _lifecycle: AbortController | null;
   _loopPromise: Promise<{ passes: number, totals: PublishTotals }> | null;
   _passInFlight: boolean;

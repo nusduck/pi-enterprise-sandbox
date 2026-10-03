@@ -14,9 +14,6 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 import { mapInteraction, toMysqlDateTime } from '../row-mappers.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
@@ -72,8 +69,8 @@ type OwnerScope = { orgId: string; userId: string };
 
 export class InteractionRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('InteractionRepository requires a knex executor');

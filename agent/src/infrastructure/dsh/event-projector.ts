@@ -33,9 +33,6 @@ import {
   summarizeToolResult,
 } from '../../lib/event-redaction.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const PROJECTOR_EVENT_TYPES = Object.freeze([
   'message.delta',
   'message.completed',
@@ -61,7 +58,7 @@ export const PROJECTOR_EVENT_TYPES = Object.freeze([
  */
 export class PlatformEventProjector {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  maxString: Loose;
+  maxString: number;
 
   constructor(opts: { maxString?: number } = {}) {
     this.maxString = opts.maxString ?? DEFAULT_MAX_STRING;

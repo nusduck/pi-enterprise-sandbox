@@ -40,9 +40,8 @@ import { bindAgentVersionConfig } from './agent-version-bindings.js';
 import { readHostArgumentDeclarations } from '../../domain/agent/mcp-host-arguments.js';
 import { readMcpServersFromEnv } from '../../runtime/plugins/mcp-entries.js';
 import { dshProviderRoute, reasoningEffortsForRoute } from './reasoning-efforts.js';
-
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+import type { Context } from '@deepseek-ai/cordis';
+import type { ImageMediaType } from '@deepseek-ai/dsh-attachment';
 
 /**
  * Skill mounts live in the Agent container, while ctx.fs is the remote
@@ -52,14 +51,14 @@ type Loose = any;
  * host filesystem; its roots are fixed, read-only mounts (system plus the
  * already identity-scoped user directory), not arbitrary workspace paths.
  */
-function localSkillContext(agentCtx: Loose): Loose {
+function localSkillContext(agentCtx: Context): Context {
   return {
     logger: agentCtx?.logger ?? console,
     get(name: string) {
       if (name === 'fs') return undefined;
       return typeof agentCtx?.get === 'function' ? agentCtx.get(name) : undefined;
     },
-  };
+  } as Context; // 原因：刻意窄化的门面，只暴露 logger/get 并屏蔽 ctx.fs，FileSystemSkillProvider 仅用这两处
 }
 
 export { PINNED_DSH_VERSION } from './constants.js';
@@ -167,7 +166,7 @@ export function parentIdForAppend(
 }
 
 async function toUserMessage(
-  ctx: Loose,
+  ctx: Context,
   text: unknown,
   options?: { images?: unknown[] },
 ) {
@@ -200,7 +199,7 @@ async function toUserMessage(
       }
       const attachment = await attachments.saveImage({
         data: Buffer.from(data, 'base64'),
-        mediaType,
+        mediaType: mediaType as ImageMediaType, // 原因：附件存储在运行时内校验媒体类型，非法值仍由其拒绝，此处仅补类型
         ...(typeof value.name === 'string' && value.name.trim()
           ? { name: value.name.trim() }
           : {}),
@@ -734,7 +733,7 @@ export function createDshRuntimeFactory(opts: Record<string, any> = {}) {
 
 export class DshRuntimeFactory {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  _inner: Loose;
+  _inner: ReturnType<typeof createDshRuntimeFactory>;
 
   constructor(opts = {}) {
     this._inner = createDshRuntimeFactory(opts);

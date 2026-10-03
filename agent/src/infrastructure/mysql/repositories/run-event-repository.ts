@@ -19,9 +19,6 @@ import {
   SequenceAllocationError,
 } from '../errors.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 function isTraceProjectionConvergeError(err) {
   const message = String(err?.message ?? '');
   return (
@@ -62,8 +59,12 @@ export function parseLastInsertId(rawResult: unknown) {
 
 export class RunEventRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  traceSpans: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  traceSpans: {
+    projectRunEvent: Function;
+    advanceRunProjectionWatermark?: Function;
+    forExecutor?: Function;
+  } | null;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { traceSpans?: { projectRunEvent: Function, advanceRunProjectionWatermark?: Function } | null } = {}) {
     if (!db) throw new Error('RunEventRepository requires a knex executor');

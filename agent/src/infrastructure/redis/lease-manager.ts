@@ -9,9 +9,6 @@ import { LEASE_TTL_MS, LEASE_RENEW_INTERVAL_MS, runLeaseKey } from './constants.
 import { LeaseError } from './errors.js';
 import { assertOwnerToken, assertRunId } from './validation.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 /** Renew only if current value equals owner token. Returns 1 on success, 0 otherwise. */
 const RENEW_LUA = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -38,9 +35,9 @@ export type RedisLike = {
 
 export class LeaseManager {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  redis: Loose;
-  ttlMs: Loose;
-  renewIntervalMs: Loose;
+  redis: RedisLike;
+  ttlMs: number;
+  renewIntervalMs: number;
 
   constructor(redis: RedisLike, options: { ttlMs?: number, renewIntervalMs?: number } = {}) {
     if (!redis || typeof redis.set !== 'function' || typeof redis.eval !== 'function') {

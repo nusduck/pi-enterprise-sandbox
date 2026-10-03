@@ -48,12 +48,18 @@ import {
   REVIEW_NOTIFICATION_KIND_RELEASED,
   buildReviewDecisionEmail,
 } from './review-notification-email.js';
-import { DELIVERY_STATUS, recipientHash, type NotificationStore } from './notification-store.js';
+import { DELIVERY_STATUS, recipientHash, type CronRunNotificationContext, type NotificationStore } from './notification-store.js';
 import { isPermanentMailError, type Mailer } from './smtp-mailer.js';
+import type { OutboxRepository } from '../outbox/outbox-repository.js';
+import type { ReviewItemRecord } from '../mysql/repositories/review-repository.js';
+import type { createRepositoryBundle } from '../../bootstrap/container-env.js';
 
 export const NOTIFICATION_KIND_RUN_TERMINAL = 'run_terminal';
 
-type Loose = any;
+/** 仓储容器：复用 ServiceContainer 实际返回的 bundle 类型。 */
+type Repositories = ReturnType<typeof createRepositoryBundle>;
+/** knex 执行器：与 OutboxRepository / createRepositoryBundle 的入参一致。 */
+type DbExecutor = import('knex').Knex | import('knex').Knex.Transaction;
 
 type ClaimedRow = {
   outboxId: string;
@@ -110,10 +116,10 @@ function textOf(value: unknown): string {
 }
 
 export class NotificationDispatcher {
-  outbox: Loose;
+  outbox: OutboxRepository;
   store: NotificationStore;
-  createRepositories: (db: Loose) => Loose;
-  db: Loose;
+  createRepositories: (db: DbExecutor) => Repositories;
+  db: DbExecutor;
   mailer: Mailer | null;
   config: EmailNotificationConfig;
   generateId: () => string;
@@ -121,10 +127,10 @@ export class NotificationDispatcher {
   log: (message: string) => void;
 
   constructor(deps: {
-    outbox: Loose;
+    outbox: OutboxRepository;
     store: NotificationStore;
-    createRepositories: (db: Loose) => Loose;
-    db: Loose;
+    createRepositories: (db: DbExecutor) => Repositories;
+    db: DbExecutor;
     mailer: Mailer | null;
     config: EmailNotificationConfig;
     generateId: () => string;
@@ -334,7 +340,7 @@ export class NotificationDispatcher {
     };
   }
 
-  async #cronTerminalRecipient(cron: Loose): Promise<HandlerResult> {
+  async #cronTerminalRecipient(cron: CronRunNotificationContext): Promise<HandlerResult> {
     const policy = String(cron.notifyPolicy ?? 'failure');
     // D2：failure 指终态为 FAILED 或 CANCELLED；never 直接结清；未知值 fail-closed 结清。
     if (policy === 'never') return { settle: 'policy_skipped', fail: false };
@@ -423,7 +429,7 @@ export class NotificationDispatcher {
     const runCtx = await this.store.loadRunContext(task.runId, { orgId, userId: requesterUserId });
     if (!runCtx) return { settle: 'not_found', fail: true, error: 'run not found for review notification scope' };
 
-    const items: Loose[] = await repos.reviews.listItems(task.reviewTaskId);
+    const items: ReviewItemRecord[] = await repos.reviews.listItems(task.reviewTaskId);
     const messageBase = {
       title: runCtx.conversationTitle,
       requesterDisplayName: runCtx.displayName,
@@ -472,7 +478,7 @@ export class NotificationDispatcher {
       approved,
       title: ctx.conversationTitle,
       displayName: ctx.displayName,
-      artifactNames: items.map((item: Loose) => String(item.name)),
+      artifactNames: items.map((item: ReviewItemRecord) => String(item.name)),
       feedback: task.feedback,
       conversationUrl: `${this.#liveConfig().publicWebBaseUrl}/c/${encodeURIComponent(ctx.conversationId)}`,
     });

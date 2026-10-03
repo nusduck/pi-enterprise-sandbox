@@ -16,9 +16,6 @@ import { toMysqlDateTime, formatDateTime } from '../row-mappers.js';
 import { ConflictError } from '../errors.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const EXTERNAL_PROVIDER_MAX_LEN = 64;
 export const EXTERNAL_SUBJECT_MAX_LEN = 255;
 
@@ -66,8 +63,8 @@ export function mapConversationExternalRef(row: Record<string, unknown>) {
 
 export class ExternalReferenceRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) {

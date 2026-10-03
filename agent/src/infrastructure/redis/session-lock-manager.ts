@@ -22,9 +22,6 @@ import {
   assertOwnerToken,
 } from './validation.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 const SESSION_LOCK_RENEW_LUA = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
   return redis.call("PEXPIRE", KEYS[1], ARGV[2])
@@ -144,10 +141,10 @@ export function createSerialRenewLoop(opts: { intervalMs: number, tick: () => Pr
 
 export class SessionLockManager {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  redis: Loose;
-  ttlMs: Loose;
-  renewIntervalMs: Loose;
-  createRenewLoop: Loose;
+  redis: RedisLike;
+  ttlMs: number;
+  renewIntervalMs: number;
+  createRenewLoop: typeof createSerialRenewLoop;
 
   /**
    * @param redis

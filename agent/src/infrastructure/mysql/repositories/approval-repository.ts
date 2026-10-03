@@ -28,9 +28,6 @@ import { redactPayload } from '../../../lib/event-redaction.js';
 import { TOOL_EXECUTION_CHILD_SELECT } from './tool-execution-repository.js';
 import type { KeysetPosition } from '../../../application/keyset-cursor.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 const MAX_REQUEST_JSON_BYTES = 64 * 1024;
 
 /** Child-only select for owner-joined approvals (avoid Run column collisions). */
@@ -52,8 +49,8 @@ function boundRequestJson(value: unknown) {
 
 export class ApprovalRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
-  now: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
+  now: () => Date;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction, opts: { now?: () => Date } = {}) {
     if (!db) throw new Error('ApprovalRepository requires a knex executor');
@@ -152,8 +149,8 @@ export class ApprovalRepository {
     if (opts.before) {
       const at = toMysqlDateTime(opts.before.sortValue);
       const id = assertUlid(opts.before.key, 'cursor.approvalId');
-      query = query.andWhere((w: Loose) => {
-        w.where('a.created_at', '<', at).orWhere((w2: Loose) => {
+      query = query.andWhere((w: import('knex').Knex.QueryBuilder) => {
+        w.where('a.created_at', '<', at).orWhere((w2: import('knex').Knex.QueryBuilder) => {
           w2.where('a.created_at', '=', at).andWhere('a.approval_id', '<', id);
         });
       });

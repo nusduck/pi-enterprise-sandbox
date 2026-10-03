@@ -19,10 +19,9 @@
  * design §7.1：撤销过的摘要不允许再次发布（防止原样回流）。判定放在 `publishVersion`
  * 里、锁内进行，所以它与并发发布互斥。
  */
+import type { Knex } from 'knex';
 import { physicalTableName } from '../schema-tables.js';
 import { formatDateTime, toMysqlDateTime } from '../row-mappers.js';
-
-type Loose = any;
 
 const VERSIONS = physicalTableName('org_skill_versions');
 const SKILLS = physicalTableName('org_skills');
@@ -63,7 +62,30 @@ export interface OrgSkillNameRow {
   readonly versions: readonly OrgSkillVersionRow[];
 }
 
-function mapVersion(row: Loose): OrgSkillVersionRow {
+/** org_skill_versions 表查询行的最小形状（只含 mapVersion 实际访问的列，列值类型用 unknown）。 */
+interface OrgSkillVersionDbRow {
+  version_id: unknown;
+  org_id: unknown;
+  skill_name: unknown;
+  content_digest: unknown;
+  file_count: unknown;
+  total_bytes: unknown;
+  description: unknown;
+  origin_kind: unknown;
+  origin_user_id: unknown;
+  origin_request_id: unknown;
+  status: unknown;
+  published_by_user_id: unknown;
+  published_at: unknown;
+}
+
+/** org_skills 指针表查询行的最小形状（只含实际访问的列，列值类型用 unknown）。 */
+interface OrgSkillPointerDbRow {
+  skill_name: unknown;
+  current_digest: unknown;
+}
+
+function mapVersion(row: OrgSkillVersionDbRow): OrgSkillVersionRow {
   return {
     versionId: String(row.version_id),
     orgId: String(row.org_id),
@@ -98,7 +120,7 @@ export class OrgSkillError extends Error {
 
 export class OrgSkillRepository {
   constructor(
-    private readonly db: Loose,
+    private readonly db: Knex,
     private readonly opts: { now?: () => Date; generateId?: () => string } = {},
   ) {
     if (!db) throw new Error('OrgSkillRepository requires a knex executor');
@@ -143,7 +165,7 @@ export class OrgSkillRepository {
    */
   async listBindableVersions(input: { orgId: string }): Promise<OrgSkillVersionRow[]> {
     const orgId = requireOrgId(input);
-    const rows: Loose[] = await this.db(VERSIONS)
+    const rows: OrgSkillVersionDbRow[] = await this.db(VERSIONS)
       .where({ org_id: orgId })
       .whereIn('status', ['active', 'deprecated'])
       .orderBy([{ column: 'skill_name', order: 'asc' }, { column: 'published_at', order: 'desc' }]);
@@ -163,7 +185,7 @@ export class OrgSkillRepository {
     excludeAuthorUserId?: string;
   }): Promise<Set<string>> {
     const orgId = requireOrgId(input);
-    const rows: Loose[] = await this.db(VERSIONS)
+    const rows: OrgSkillVersionDbRow[] = await this.db(VERSIONS)
       .where({ org_id: orgId })
       // `whereNotIn` 而不是 `whereNot`：两者语义等价（都是「status 不等于 revoked」），
       // 而这是测试替身支持的写法——替身缺的方法会让这条查询在单测里直接崩。
@@ -184,12 +206,12 @@ export class OrgSkillRepository {
   /** 本 org 的全部 org 层名字与版本（管理员列表）。 */
   async listForOrg(input: { orgId: string }): Promise<OrgSkillNameRow[]> {
     const orgId = requireOrgId(input);
-    const versions: Loose[] = await this.db(VERSIONS)
+    const versions: OrgSkillVersionDbRow[] = await this.db(VERSIONS)
       .where({ org_id: orgId })
       .orderBy([{ column: 'skill_name', order: 'asc' }, { column: 'published_at', order: 'desc' }]);
-    const pointers: Loose[] = await this.db(SKILLS).where({ org_id: orgId });
+    const pointers: OrgSkillPointerDbRow[] = await this.db(SKILLS).where({ org_id: orgId });
     const current = new Map<string, string>(
-      pointers.map((row: Loose) => [String(row.skill_name), String(row.current_digest ?? '')]),
+      pointers.map((row: OrgSkillPointerDbRow) => [String(row.skill_name), String(row.current_digest ?? '')]),
     );
     const byName = new Map<string, OrgSkillVersionRow[]>();
     for (const row of versions.map(mapVersion)) {
@@ -233,10 +255,10 @@ export class OrgSkillRepository {
     expectedOriginUserId?: string;
   }): Promise<OrgSkillVersionRow> {
     const orgId = requireOrgId(input);
-    return this.db.transaction(async (trx: Loose) => {
+    return this.db.transaction(async (trx: Knex.Transaction) => {
       await this.lockName(trx, orgId, input.name);
       if (input.expectedOriginUserId !== undefined) {
-        const taken: Loose[] = await trx(VERSIONS).where({
+        const taken: OrgSkillVersionDbRow[] = await trx(VERSIONS).where({
           org_id: orgId,
           skill_name: input.name,
         }).whereNotIn('status', ['revoked']);
@@ -250,7 +272,7 @@ export class OrgSkillRepository {
           );
         }
       }
-      const existing: Loose = await trx(VERSIONS).where({
+      const existing: OrgSkillVersionDbRow | undefined = await trx(VERSIONS).where({
         org_id: orgId,
         skill_name: input.name,
         content_digest: input.contentDigest,
@@ -289,7 +311,7 @@ export class OrgSkillRepository {
       };
       await trx(VERSIONS).insert(row);
       // 首次发布时指针默认指向这一版；已经有 current 就不动（升级是显式动作）。
-      const pointer: Loose = await trx(SKILLS).where({
+      const pointer: OrgSkillPointerDbRow | undefined = await trx(SKILLS).where({
         org_id: orgId,
         skill_name: input.name,
       }).first();
@@ -308,7 +330,7 @@ export class OrgSkillRepository {
     updatedByUserId: string;
   }): Promise<void> {
     const orgId = requireOrgId(input);
-    await this.db.transaction(async (trx: Loose) => {
+    await this.db.transaction(async (trx: Knex.Transaction) => {
       await this.lockName(trx, orgId, input.name);
       await this.setCurrentIn(trx, orgId, input.name, input.contentDigest, input.updatedByUserId);
     });
@@ -329,8 +351,8 @@ export class OrgSkillRepository {
     changedByUserId: string;
   }): Promise<OrgSkillVersionRow> {
     const orgId = requireOrgId(input);
-    return this.db.transaction(async (trx: Loose) => {
-      const existing: Loose = await trx(VERSIONS).where({
+    return this.db.transaction(async (trx: Knex.Transaction) => {
+      const existing: OrgSkillVersionDbRow | undefined = await trx(VERSIONS).where({
         org_id: orgId,
         skill_name: input.name,
         content_digest: input.contentDigest,
@@ -370,7 +392,7 @@ export class OrgSkillRepository {
    * 首次发布时行还不存在，先 `INSERT … ON DUPLICATE KEY UPDATE` 造一个空指针再锁——
    * 少了占位，两个并发首发布会各自走「不存在」分支，靠唯一键其中一个报错而不是排队。
    */
-  private async lockName(trx: Loose, orgId: string, name: string): Promise<void> {
+  private async lockName(trx: Knex.Transaction, orgId: string, name: string): Promise<void> {
     await trx(SKILLS).insert({
       org_skill_id: this.id(),
       org_id: orgId,
@@ -383,7 +405,7 @@ export class OrgSkillRepository {
   }
 
   private async setCurrentIn(
-    trx: Loose,
+    trx: Knex.Transaction,
     orgId: string,
     name: string,
     contentDigest: string,

@@ -8,8 +8,8 @@
  */
 
 export type ClaimEligibility = {
-  aggregateTypes?: string[];
-  eventTypes?: string[];
+  aggregateTypes?: readonly string[];
+  eventTypes?: readonly string[];
   includePayloadRunId?: boolean;
 };
 

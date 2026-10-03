@@ -10,9 +10,6 @@ import {
 import { normalizeBaseUrl } from './transport-base-url.js';
 import { createTraceHeaders } from './trace-context.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const ARTIFACT_DOWNLOAD_HTU = '/internal/v1/artifacts/download';
 export const ARTIFACT_DOWNLOAD_SCOPE = 'sandbox.artifacts.download';
 export const ARTIFACT_DOWNLOAD_TOOL = 'artifact.download';
@@ -24,7 +21,7 @@ const HEADER_VALUE_MAX_LENGTH = 1024;
 
 export class InternalArtifactDownloadError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
+  code: string;
 
   constructor(code, message, extra = {}) {
     super(message);

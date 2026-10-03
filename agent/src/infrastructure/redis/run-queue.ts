@@ -32,9 +32,6 @@ import {
   SpanKind,
 } from '../telemetry.js';
 
-/** 过渡期宽松类型：bullmq / ioredis 侧对象仍走 JS 形状。 */
-type Loose = any;
-
 /** 队列 key 前缀默认值：hash tag 让同一队列的全部 key 落到同一 slot（ADR 0011 D9）。 */
 export const DEFAULT_AGENT_RUN_QUEUE_PREFIX = '{bull}';
 
@@ -68,7 +65,7 @@ export function resolveRunQueuePrefix(raw?: string | null) {
  */
 function disposeBullmqErrorGuard(target: Record<string, any> | null | undefined) {
   try {
-    const cleanup = (target as Loose)?.[REDIS_ERROR_GUARD_CLEANUP];
+    const cleanup = (target as { [k: symbol]: (() => void) | undefined })?.[REDIS_ERROR_GUARD_CLEANUP]; // 清理键是symbol，只能用符号索引类型读取 guard 挂的清理函数
     if (typeof cleanup === 'function') cleanup();
   } catch {
     // Teardown remains best-effort and idempotent.

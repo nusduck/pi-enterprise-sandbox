@@ -11,12 +11,9 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { mapMessage, toMysqlDateTime } from '../row-mappers.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export class MessageRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction) {
     if (!db) throw new Error('MessageRepository requires a knex executor');

@@ -24,9 +24,18 @@
 import { AGGREGATE_TYPE_REVIEW, EVENT_TYPE_REVIEW_DECIDED, EVENT_TYPE_REVIEW_SNAPSHOT } from '../outbox/outbox-status.js';
 import { REVIEW_JOB_CLAIM_ELIGIBILITY } from '../outbox/eligibility.js';
 import { MATERIAL_SNAPSHOT_STATUS } from '../mysql/repositories/review-repository.js';
+import type { ReviewMaterialRecord, ReviewRepository, ReviewTaskRecord } from '../mysql/repositories/review-repository.js';
+import type { OutboxRepository } from '../outbox/outbox-repository.js';
+import type { createRepositoryBundle } from '../../bootstrap/container-env.js';
+import type { Knex } from 'knex';
 import { InternalReviewError, type InternalReviewTransport } from '../sandbox/internal-review-http.js';
 
-type Loose = any;
+/** 仓储容器：复用 ServiceContainer 实际返回的 bundle 类型。 */
+type Repositories = ReturnType<typeof createRepositoryBundle>;
+/** outbox 认领行的形状：与 OutboxRepository.claimBatch 返回元素一致。 */
+type ClaimedRow = Awaited<ReturnType<OutboxRepository['claimBatch']>>[number];
+/** 用户附件行：与 ReviewRepository.listUserAttachmentsUpToRun 返回元素一致。 */
+type ReviewAttachment = Awaited<ReturnType<ReviewRepository['listUserAttachmentsUpToRun']>>[number];
 
 export type ReviewJobOutcome =
   | 'snapshot_ready'
@@ -38,24 +47,24 @@ export type ReviewJobOutcome =
   | 'failed';
 
 export interface ReviewPublisherDeps {
-  readonly outbox: Loose;
+  readonly outbox: OutboxRepository;
   /**
    * 仓储工厂。**必须同时给 `db`**：`ServiceContainer.createRepositories(db?)` 在
    * `db` 为 undefined 时回落到容器自己的 knex，而 worker 进程里那条路径会抛
    * `ServiceContainer MySQL not started`（2026-10-01 真机验收踩到过：放行行被认领后
    * 卡在 PUBLISHING，产物永远不放行）。显式传执行器让这条依赖看得见。
    */
-  readonly createRepositories: (db: Loose) => Loose;
-  readonly db: Loose;
+  readonly createRepositories: (db: Knex) => Repositories;
+  readonly db: Knex;
   readonly transport: InternalReviewTransport;
   readonly log?: (message: string) => void;
   readonly batchSize?: number;
 }
 
 export class ReviewPublisher {
-  readonly #outbox: Loose;
-  readonly #createRepositories: (db: Loose) => Loose;
-  readonly #db: Loose;
+  readonly #outbox: OutboxRepository;
+  readonly #createRepositories: (db: Knex) => Repositories;
+  readonly #db: Knex;
   readonly #transport: InternalReviewTransport;
   readonly #log: (message: string) => void;
   readonly #batchSize: number;
@@ -74,7 +83,7 @@ export class ReviewPublisher {
   }
 
   async publishOnce(): Promise<{ claimed: number; outcomes: ReviewJobOutcome[] }> {
-    const claimed: Loose[] = await this.#outbox.claimBatch({
+    const claimed: ClaimedRow[] = await this.#outbox.claimBatch({
       limit: this.#batchSize,
       eligibility: REVIEW_JOB_CLAIM_ELIGIBILITY,
     });
@@ -86,7 +95,7 @@ export class ReviewPublisher {
     return { claimed: claimed.length, outcomes };
   }
 
-  async #handle(row: Loose): Promise<ReviewJobOutcome> {
+  async #handle(row: ClaimedRow): Promise<ReviewJobOutcome> {
     const repos = this.#createRepositories(this.#db);
     const payload = (row.payloadJson ?? {}) as Record<string, unknown>;
     const reviewTaskId = typeof payload['reviewTaskId'] === 'string' ? payload['reviewTaskId'] : row.aggregateId;
@@ -124,9 +133,9 @@ export class ReviewPublisher {
   }
 
   /** 材料快照：逐个补齐；单个失败不影响其余（每个材料是独立的一行状态）。 */
-  async #snapshot(repos: Loose, task: Loose, row: Loose): Promise<ReviewJobOutcome> {
+  async #snapshot(repos: Repositories, task: ReviewTaskRecord, row: ClaimedRow): Promise<ReviewJobOutcome> {
     const materials = await repos.reviews.listMaterials(task.reviewTaskId);
-    const pending = materials.filter((material: Loose) =>
+    const pending = materials.filter((material: ReviewMaterialRecord) =>
       material.snapshotStatus !== MATERIAL_SNAPSHOT_STATUS.READY && !material.snapshotArtifactId);
     if (pending.length === 0) {
       await this.#outbox.markPublished(row.outboxId, row.claimToken);
@@ -141,8 +150,8 @@ export class ReviewPublisher {
       userId: task.requesterUserId,
       triggeringMessageId: (await this.#runFor(repos, task))?.triggeringMessageId ?? '',
     });
-    const byAttachment = new Map<string, Loose>(
-      attachments.map((attachment: Loose) => [String(attachment.attachmentId), attachment]),
+    const byAttachment = new Map<string, ReviewAttachment>(
+      attachments.map((attachment: ReviewAttachment) => [String(attachment.attachmentId), attachment]),
     );
     const identity = await this.#identityFor(repos, task);
 
@@ -199,7 +208,7 @@ export class ReviewPublisher {
   }
 
   /** 放行/驳回：状态变更 + （有修订时的）导入工作区。两者都幂等。 */
-  async #decided(repos: Loose, task: Loose, payload: Record<string, unknown>, row: Loose): Promise<ReviewJobOutcome> {
+  async #decided(repos: Repositories, task: ReviewTaskRecord, payload: Record<string, unknown>, row: ClaimedRow): Promise<ReviewJobOutcome> {
     const updates = Array.isArray(payload['updates'])
       ? (payload['updates'] as { artifactId?: unknown; visibility?: unknown }[])
           .map((update) => ({
@@ -233,12 +242,12 @@ export class ReviewPublisher {
     return 'released';
   }
 
-  async #runFor(repos: Loose, task: Loose): Promise<Loose | null> {
+  async #runFor(repos: Repositories, task: ReviewTaskRecord) {
     return await repos.runs.getById(task.runId, { orgId: task.orgId, userId: task.requesterUserId });
   }
 
   /** exec 侧签名信封需要的身份（工作区与会话来自 AgentSession）。 */
-  async #identityFor(repos: Loose, task: Loose) {
+  async #identityFor(repos: Repositories, task: ReviewTaskRecord) {
     const scope = { orgId: task.orgId, userId: task.requesterUserId };
     const session = await repos.sessions.getById(task.agentSessionId, scope);
     const run = await this.#runFor(repos, task);

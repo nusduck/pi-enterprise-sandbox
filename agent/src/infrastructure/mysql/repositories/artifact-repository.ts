@@ -7,9 +7,6 @@ import { applyOwnerScope, requireOwnerScope } from '../ownership.js';
 import { formatDateTime } from '../row-mappers.js';
 import { assertUlid } from '../../../domain/shared/ulid.js';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export function mapArtifact(row: Record<string, unknown>) {
   return {
     artifactId: String(row.artifact_id),
@@ -31,7 +28,7 @@ export function mapArtifact(row: Record<string, unknown>) {
 
 export class ArtifactRepository {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  db: Loose;
+  db: import('knex').Knex | import('knex').Knex.Transaction;
 
   constructor(db: import('knex').Knex | import('knex').Knex.Transaction) {
     if (!db) throw new Error('ArtifactRepository requires a knex executor');
