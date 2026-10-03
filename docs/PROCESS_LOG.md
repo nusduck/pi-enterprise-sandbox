@@ -1283,3 +1283,10 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **核对：** 复查 `agent/src/runtime/providers/remote-jobs.ts`：非本进程作业的 `get`/`read`/`kill` 发出
   exec RPC 后丢弃响应并返回占位值；exec 孤儿回收 G7 已有单独真机证据，不等于 C7 的句柄与日志恢复。
   本次是文档与证据整理，不重跑六套业务测试或容器链路。
+
+## 2026-10-03 — C7 模型侧跨 Worker job 查询复现
+
+- **Why：** 用户指出双 Worker 可在本地 K8s 双 Pod 验证，不必等生产部署。
+- **Action：** 在 `dsh-sim` 隔离栈增加 `cross-worker-job` 场景：Worker A 创建后台 bash，Worker B 在同一会话里调用模型侧 `job_list`/`job_output`，再从 B Pod 用生产 `ExecRpcClient` 查询 exec 权威状态/输出。修正假模型对跨 Run 首轮的识别后重跑，记录 Pod 来源、工具账本和直接 RPC 对照。
+- **STATUS IDs：** C7 保持 `partial`；确认模型侧跨副本读旧 job 的代码缺口可在本地真实链路复现。没有改生产路径，也没有验证 exec 自身重启后的句柄/日志恢复。
+- **结果：** 模型侧列表为空、输出为空且状态占位；exec 直接查询同一 job 则返回 `completed` 与预期输出。详见[证据](evidence/2026-10-03-c7-cross-worker-model-jobs-repro.md)。

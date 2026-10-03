@@ -11,6 +11,8 @@
 //                   `step-<k>`；第 n 个工具结果回来后回文本。用来构造「一个 Run 含多次长工具」。
 //   mode=sub        标记里带 `cmd=<base64>`：第一轮回一个前台 subagent 调用，子任务 prompt 为解码后的文本
 //                   （可再带一个 SIM 标记驱动子 Run）；子任务结果回来后回文本。
+//   mode=bg         第一轮回后台 bash，立即输出 C7 标记后继续运行。
+//   mode=job-read   标记里带 `jobid=<base64>`：第一轮调用 job_list 与 job_output 读已有后台作业。
 // 没有工具的请求（DSH 每轮另发的标题生成）立即回固定文本，不计入模型轮次。
 //
 // 控制面（同端口）：GET /_sim/log、POST /_sim/release {id}、POST /_sim/reset。
@@ -76,6 +78,30 @@ function subagentCall(id, prompt) {
         name: 'subagent',
         arguments: { description: `sim ${id} child`, prompt, run_in_background: false },
       },
+    ],
+  };
+}
+
+function backgroundCall(id) {
+  return {
+    toolCalls: [{
+      id: `call_${id}_bg_${seq}`,
+      name: 'bash',
+      arguments: {
+        command: `echo C7_${id}; sleep 90`,
+        description: `sim ${id} background`,
+        run_in_background: true,
+      },
+    }],
+  };
+}
+
+function jobReadCalls(id, encodedJobId) {
+  const jobId = Buffer.from(encodedJobId, 'base64').toString('utf8');
+  return {
+    toolCalls: [
+      { id: `call_${id}_list_${seq}`, name: 'job_list', arguments: {} },
+      { id: `call_${id}_output_${seq}`, name: 'job_output', arguments: { job_id: jobId } },
     ],
   };
 }
@@ -177,6 +203,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (mode === 'sub' && toolResults === 0 && cmd) {
     return send(res, body, subagentCall(id, Buffer.from(cmd, 'base64').toString('utf8')));
+  }
+  if (mode === 'bg' && toolResults === 0) return send(res, body, backgroundCall(id));
+  // 同一 Conversation 的前一轮已有 bash 工具结果；用本标记的请求次数判断新 Run 的首轮。
+  if (mode === 'job-read' && log.filter((item) => item.id === id).length === 1 && p.jobid) {
+    return send(res, body, jobReadCalls(id, p.jobid));
   }
   if (toolResults > 0 || mode === 'text') return send(res, body, { content: `done ${id}` });
   if (mode === 'tool') return send(res, body, toolCall(id));
