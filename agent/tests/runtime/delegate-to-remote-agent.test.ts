@@ -91,11 +91,33 @@ describe('delegate_to_remote_agent authorization', () => {
 });
 
 describe('delegate_to_remote_agent risk', () => {
-  it('is an external tool that needs approval by default, unlike delegate_to_agent', () => {
+  it('stays classified external but is allowed without approval by default (2026-10-03 product decision)', () => {
     assert.equal(classifyTool('delegate_to_remote_agent'), 'external_high');
-    assert.equal(decideFromRiskTable('delegate_to_remote_agent').decision, 'require_approval');
+    const decision = decideFromRiskTable('delegate_to_remote_agent');
+    assert.equal(decision.decision, 'allow');
+    assert.equal(decision.riskLevel, 'medium');
+    // 对照：同一分类里没有平台覆盖的工具（MCP）仍然要审批。
+    assert.equal(decideFromRiskTable('mcp__github__create_pr').decision, 'require_approval');
     assert.equal(classifyTool('delegate_to_agent'), 'local_low');
     assert.equal(decideFromRiskTable('delegate_to_agent').decision, 'allow');
+  });
+
+  it('the shipped platform risk table allows it, and an AgentVersion can still raise it back to approval', async () => {
+    const { buildRunRiskResolver } = await import('../../src/application/tool-risk-resolver.js');
+    const { readFileSync } = await import('node:fs');
+    const platform = JSON.parse(
+      readFileSync(new URL('../../../config/agent/tool-risk.json', import.meta.url), 'utf8'),
+    );
+    const level = buildRunRiskResolver(platform, null)('delegate_to_remote_agent');
+    assert.equal(decideFromRiskTable('delegate_to_remote_agent', () => level).decision, 'allow');
+    const raised = buildRunRiskResolver(platform, {
+      configJson: { toolPolicy: { riskLevels: { delegate_to_remote_agent: 'high' } } },
+    })('delegate_to_remote_agent');
+    assert.equal(raised, 'high');
+    assert.equal(
+      decideFromRiskTable('delegate_to_remote_agent', () => raised).decision,
+      'require_approval',
+    );
   });
 });
 

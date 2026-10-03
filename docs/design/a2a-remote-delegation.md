@@ -106,12 +106,15 @@ ADR 0010 保留自建服务端的三条理由（跨进程续传、多租户审�
 `DELEGATION_REMOTE_AGENT_UNKNOWN`）；运行时再校验一次（清单可能随重启变化）。
 AgentVersion 里**不接受**地址、凭据、超时（与 `mcpServers` 的 `MCP_FORBIDDEN_V1_KEYS` 同理）。
 
-### D4 模型入口 `delegate_to_remote_agent`，默认需要审批
+### D4 模型入口 `delegate_to_remote_agent`，默认不审批（2026-10-03 修订）
 
 参数：`agent`（远端 id）、`description`、`prompt`。
 
-- 风险分类为 `external_high`：它把本会话内容发到外部系统。平台默认
-  `high → require_approval`；租户只能再收紧。运维确需免审批时改 `tool-risk.json`。
+- 风险分类为 `external_high`：它把本会话内容发到外部系统。
+- 2026-10-03 产品决定默认不审批：平台风险表（`tool-risk.json` 与代码内置覆盖）把它定为
+  `medium → allow`。原稿默认 `high → require_approval`。远端清单仍只来自运维登记、
+  AgentVersion 白名单仍要授权；某个 Agent 需要人工把关时在 `toolPolicy.riskLevels` 调回 `high`
+  （租户只能收紧，不能低于平台）。
 - 模型**不能**提供 URL：地址只来自登记表，因此没有 SSRF 面。
 - 可调用的远端（名称 + 描述）与 `agent-delegation.md` D4 同一段系统提示一起列出。
 

@@ -324,7 +324,8 @@ WAITING_INPUT 与 WAITING_APPROVAL 现在共用 `run-recovery-parked-cancel.ts`�
 - 远端清单只来自 `A2A_REMOTE_AGENTS_JSON`（启动时解析，不合法拒绝启动）；AgentVersion 的
   `delegation.remoteAgents` 授权本 Agent 可调哪些 id，缺省不可调。两者都满足才发。
 - `delegate_to_remote_agent` 分类为 `external_high`（`tool-names.ts` 的 `EXTERNAL_HOST_TOOL_NAMES`），
-  平台默认需要审批；审批通过后才发出出站请求。
+  平台风险表默认 `medium`、不审批（2026-10-03 产品决定）；某个 Agent 需要审批时在其
+  `toolPolicy.riskLevels` 里调回 `high`，此时审批通过后才发出出站请求。
 - 发送时 `returnImmediately`，未终态则 `GetTask` 轮询（2 s 起退避到 15 s）直到终态或 `timeoutMs`；
   超时或父 Run 取消时尽力 `CancelTask`。`messageId` 由 `(runId, callId)` 派生，重试时远端可去重。
 - 所有出站经 `boundedFetch`：只发往 `cardUrl` 同源、不跟随重定向、单请求 30 s、响应 1 MiB 上限。
