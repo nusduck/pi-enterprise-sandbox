@@ -79,8 +79,9 @@ HOTSPOT_LINE_BUDGETS = {
     # identityRevision.ts（401/503 分流、切号重置、logout 撤销未确认），
     # 1_399 -> 1_369，预算收紧。
     "frontend/src/features/chat/ChatContext.tsx": 1_369,
-    # 2026-09-25 修历史回放游标（回放前不带 last_sequence）时合并注释，1_176 -> 1_175。
-    "frontend/src/features/chat/entityBridge.ts": 1_175,
+    # entityBridge.ts 于本次拆分后回到 1_000 行默认上限之下（纯投影拆到
+    # entityProjections.ts，durable trace 分页拆到 bridge/traceLoader.ts，
+    # 门面只保留类型与状态机），不再需要预算。
 }
 
 

@@ -7,28 +7,19 @@
  */
 import {
   createApproval,
-  createDataset,
   createEntityStore,
-  createProcess,
   createRun,
-  createTraceSpan,
-  cloneEntityStore,
   setActiveConversation,
   upsertApproval,
-  upsertArtifact,
   upsertDataset,
   upsertProcess,
   upsertRun,
-  upsertTraceSpan,
   setProcessListState,
   type ApprovalStatus,
   type DatasetEntity,
   type EntityStore,
   type ProcessEntity,
-  type ProcessStatus,
   type RunEntity,
-  type TraceSpanEntity,
-  type TraceSpanKind,
 } from '../../entities';
 import {
   createRunSSEManager,
@@ -39,7 +30,6 @@ import { rehydrateRun, rehydrateToolExecutions } from '../../shared/state/runRed
 import { normalizeToRuntimeEvent } from '../../shared/state/platformEventNormalize';
 import {
   getRun,
-  getRunTraceSpans as fetchRunTraceSpans,
   listRuns,
   listRunTools,
   type RunDetail,
@@ -47,159 +37,27 @@ import {
 import { listApprovals, type ApprovalListItem } from '../../shared/api/approvals';
 import { getConversationEvents } from '../../shared/api/client';
 import { listDatasets, type DatasetRow } from '../../shared/api/datasets';
-import { listProcesses, type ManagedProcess } from '../../shared/api/processes';
+import { listProcesses } from '../../shared/api/processes';
 import type { PersistedAgentEvent } from '../../shared/schemas/events';
 import { persistedEventPayload } from './persistedEventPayload';
 import { makeRuntimeEvent } from '../../shared/schemas/events';
 import type {
   RunTraceResponse,
-  TraceSpanWire,
 } from '../../shared/schemas/events';
-
-const TRACE_SPAN_KINDS = new Set<TraceSpanKind>([
-  'run',
-  'queue',
-  'model',
-  'tool',
-  'sandbox',
-  'mcp',
-  'artifact',
-  'session',
-  'a2a',
-  'error',
-  'other',
-]);
-const MAX_TRACE_PAGES = 100;
-
-function sameRunRevision(
-  left: RunEntity | undefined,
-  right: RunEntity | undefined,
-): boolean {
-  return (
-    Boolean(left) === Boolean(right) &&
-    left?.lastSequence === right?.lastSequence &&
-    left?.lastEventId === right?.lastEventId &&
-    left?.status === right?.status &&
-    left?.traceId === right?.traceId
-  );
-}
-
-function finiteNumber(value: unknown): number | null {
-  if (value == null) return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-/**
- * Backfill artifact.sessionId from the parent run's sandbox session.
- * Historical artifact.ready events may omit sandboxSessionId in context;
- * after Run DTO rehydrate supplies sandbox_session_id, chips still need it.
- */
-export function backfillArtifactSessionIds(store: EntityStore): EntityStore {
-  let next = store;
-  for (const art of Object.values(store.artifactsById)) {
-    if (art.sessionId) continue;
-    if (art.source !== 'submit_artifact') continue;
-    const run = art.runId ? store.runsById[art.runId] : null;
-    const sessionId = run?.sandboxSessionId || null;
-    if (!sessionId) continue;
-    next = upsertArtifact(next, { ...art, sessionId });
-  }
-  return next;
-}
-
-function traceAttributes(span: TraceSpanWire): Record<string, unknown> {
-  if (span.attributes && typeof span.attributes === 'object') {
-    return span.attributes;
-  }
-  if (typeof span.attributes_json === 'string') {
-    try {
-      const parsed = JSON.parse(span.attributes_json) as unknown;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
-/**
- * Apply a durable trace page. Complete responses replace the transient tree;
- * truncated pages are merged so a partial response cannot erase live spans.
- */
-export function rehydrateTraceSpans(
-  current: EntityStore,
-  runId: string,
-  response: RunTraceResponse,
-): EntityStore {
-  const run = current.runsById[runId];
-  if (!run) return current;
-  let next = cloneEntityStore(current);
-  const partial =
-    response.truncated === true ||
-    Boolean(response.nextCursor || response.next_cursor);
-  if (!partial) {
-    for (const [id, span] of Object.entries(next.traceSpansById)) {
-      if (span.runId === runId) delete next.traceSpansById[id];
-    }
-  }
-  const responseTraceId = String(response.traceId || response.trace_id || run.traceId || '');
-  next.runsById[runId] = {
-    ...run,
-    traceId: responseTraceId || run.traceId,
-    traceSpanIds: partial ? [...(run.traceSpanIds || [])] : [],
-  };
-
-  for (const wire of response.spans) {
-    const traceId = String(wire.traceId || wire.trace_id || responseTraceId || '');
-    const spanId = String(wire.spanId || wire.span_id || wire.id || '');
-    if (!spanId) continue;
-    const wireRunId = String(wire.runId || wire.run_id || runId);
-    if (wireRunId !== runId) continue;
-    const parentSpanId = wire.parentSpanId ?? wire.parent_span_id ?? null;
-    const id = traceId ? `${traceId}:${spanId}` : spanId;
-    const parentId = parentSpanId
-      ? traceId
-        ? `${traceId}:${String(parentSpanId)}`
-        : String(parentSpanId)
-      : null;
-    const rawKind = String(wire.kind || 'other') as TraceSpanKind;
-    const kind = TRACE_SPAN_KINDS.has(rawKind) ? rawKind : 'other';
-    const rawStatus = String(wire.status || 'running');
-    const status: TraceSpanEntity['status'] =
-      rawStatus === 'ok' || rawStatus === 'error' || rawStatus === 'cancelled'
-        ? rawStatus
-        : 'running';
-    const metadata = traceAttributes(wire);
-    next = upsertTraceSpan(
-      next,
-      createTraceSpan({
-        id,
-        runId,
-        orgId: String(wire.orgId || wire.org_id || '') || null,
-        userId: String(wire.userId || wire.user_id || '') || null,
-        parentId,
-        kind,
-        name: String(wire.name || kind),
-        status,
-        spanId,
-        durationMs: finiteNumber(wire.durationMs ?? wire.duration_ms),
-        tokens: finiteNumber(wire.tokens ?? wire.token_count),
-        cost: finiteNumber(wire.cost),
-        error:
-          status === 'error' && metadata.errorCode != null
-            ? String(metadata.errorCode)
-            : null,
-        metadata: Object.keys(metadata).length ? metadata : null,
-        startedAt: wire.startedAt ?? wire.started_at ?? null,
-        finishedAt: wire.finishedAt ?? wire.finished_at ?? null,
-      }),
-    );
-  }
-  return next;
-}
+import {
+  backfillArtifactSessionIds,
+  datasetRowToEntity,
+  processRowToEntity,
+  rehydrateTraceSpans,
+  sameRunRevision,
+} from './entityProjections';
+import { fetchDurableTrace, loadDurableTrace } from './bridge/traceLoader';
+export {
+  backfillArtifactSessionIds,
+  datasetRowToEntity,
+  processRowToEntity,
+  rehydrateTraceSpans,
+} from './entityProjections';
 
 export type EntityBridge = {
   manager: RunSSEManager;
@@ -261,87 +119,6 @@ export type EntityBridge = {
   /** Immediately update or insert a process entity in the store. */
   updateProcess: (entity: ProcessEntity) => void;
 };
-
-/** Convert the Sandbox/BFF Dataset wire row into the single UI entity shape. */
-export function datasetRowToEntity(
-  row: DatasetRow,
-  context: { conversationId?: string | null; sessionId?: string | null } = {},
-): DatasetEntity | null {
-  const id = String(row.dataset_id || row.id || '');
-  if (!id) return null;
-  const statusRaw = String(row.status || 'ready').toLowerCase();
-  const status =
-    statusRaw === 'failed'
-      ? 'failed'
-      : statusRaw === 'uploading' || statusRaw === 'pending'
-        ? 'uploading'
-        : 'ready';
-  return createDataset({
-    id,
-    conversationId:
-      String(row.conversation_id || context.conversationId || '') || null,
-    sessionId:
-      String(row.sandbox_session_id || context.sessionId || '') || null,
-    name: String(row.name || row.original_filename || id),
-    path: String(row.path || row.stored_relative_path || '') || null,
-    size:
-      typeof row.size === 'number'
-        ? row.size
-        : typeof row.size_bytes === 'number'
-          ? row.size_bytes
-          : null,
-    mimeType: row.mime_type != null ? String(row.mime_type) : null,
-    sha256: row.sha256 != null ? String(row.sha256) : null,
-    status,
-    progress: status === 'ready' ? 100 : null,
-    agentVisible: status === 'ready',
-    createdAt: row.created_at != null ? String(row.created_at) : null,
-    updatedAt: row.completed_at != null ? String(row.completed_at) : null,
-  });
-}
-
-const PROCESS_STATUSES = new Set<ProcessStatus>([
-  'created',
-  'running',
-  'waiting_input',
-  'completed',
-  'failed',
-  'cancel_requested',
-  'cancelled',
-  'timeout',
-  'orphaned',
-]);
-
-/**
- * Project a BFF managed-process row onto the entity shape. Sandbox and the
- * entity layer share one status vocabulary, so an unknown value means a newer
- * Sandbox — fall back to `created` rather than dropping the row.
- */
-export function processRowToEntity(
-  row: ManagedProcess,
-  context: { sessionId?: string | null } = {},
-): ProcessEntity | null {
-  const id = String(row.process_id || '');
-  if (!id) return null;
-  const rawStatus = String(row.status || '').trim().toLowerCase();
-  const status = PROCESS_STATUSES.has(rawStatus as ProcessStatus)
-    ? (rawStatus as ProcessStatus)
-    : 'created';
-  return createProcess({
-    id,
-    runId: String(row.run_id || ''),
-    sessionId:
-      String(row.sandbox_session_id || row.session_id || context.sessionId || '') ||
-      null,
-    toolExecutionId: row.execution_id != null ? String(row.execution_id) : null,
-    status,
-    command: row.command != null ? String(row.command) : null,
-    exitCode: typeof row.exit_code === 'number' ? row.exit_code : null,
-    startedAt: row.started_at != null ? String(row.started_at) : null,
-    finishedAt: row.finished_at != null ? String(row.finished_at) : null,
-    createdAt: row.created_at != null ? String(row.created_at) : null,
-  });
-}
 
 /**
  * Create the F2 entity bridge. Safe to construct once per ChatProvider.
@@ -524,82 +301,6 @@ export function createEntityBridge(
 
   function failRun(runId: string, message: string): void {
     applyLocalRunEvent(runId, 'run.failed', { message });
-  }
-
-  async function fetchDurableTrace(
-    runId: string,
-    expectedTraceId: string | null | undefined,
-  ): Promise<RunTraceResponse | null> {
-    // Older BFFs may omit trace_id from Run detail. Avoid a speculative request
-    // in that compatibility case; live spans remain available from SSE replay.
-    if (!expectedTraceId) return null;
-    let page = await fetchRunTraceSpans(runId);
-    const firstTraceId = page.traceId || page.trace_id || null;
-    if (firstTraceId && firstTraceId !== expectedTraceId) {
-      throw new Error('trace response changed trace id');
-    }
-    const firstRunId = page.runId || page.run_id || null;
-    if (firstRunId && firstRunId !== runId) {
-      throw new Error('trace response changed run id');
-    }
-    const aggregate: RunTraceResponse = {
-      ...page,
-      spans: [...page.spans],
-      truncated: page.truncated === true,
-      nextCursor: page.nextCursor ?? page.next_cursor ?? null,
-      next_cursor: page.next_cursor ?? page.nextCursor ?? null,
-    };
-    const seenCursors = new Set<string>();
-    let pageCount = 1;
-    while (
-      aggregate.truncated === true &&
-      aggregate.nextCursor &&
-      pageCount < MAX_TRACE_PAGES
-    ) {
-      const cursor = String(aggregate.nextCursor);
-      if (seenCursors.has(cursor)) break;
-      seenCursors.add(cursor);
-      page = await fetchRunTraceSpans(runId, { cursor });
-      const pageTraceId = page.traceId || page.trace_id || null;
-      const aggregateTraceId = aggregate.traceId || aggregate.trace_id || null;
-      if (pageTraceId && aggregateTraceId && pageTraceId !== aggregateTraceId) {
-        throw new Error('trace page changed trace id');
-      }
-      const pageRunId = page.runId || page.run_id || null;
-      const aggregateRunId = aggregate.runId || aggregate.run_id || null;
-      if (pageRunId && aggregateRunId && pageRunId !== aggregateRunId) {
-        throw new Error('trace page changed run id');
-      }
-      aggregate.spans.push(...page.spans);
-      aggregate.truncated = page.truncated === true;
-      aggregate.nextCursor = page.nextCursor ?? page.next_cursor ?? null;
-      aggregate.next_cursor = aggregate.nextCursor;
-      pageCount += 1;
-    }
-    // A hard page ceiling is an honest partial result, not permission to clear
-    // the live tree. The response schema exposes this state to the rehydrator.
-    if (aggregate.truncated && pageCount >= MAX_TRACE_PAGES) {
-      aggregate.nextCursor = aggregate.nextCursor || null;
-      aggregate.next_cursor = aggregate.nextCursor;
-    }
-    return aggregate;
-  }
-
-  async function loadDurableTrace(
-    next: EntityStore,
-    runId: string,
-  ): Promise<EntityStore> {
-    const expectedRun = next.runsById[runId];
-    const response = await fetchDurableTrace(
-      runId,
-      expectedRun?.traceId,
-    );
-    const latest = manager.getStore();
-    const currentRun = latest.runsById[runId];
-    if (!sameRunRevision(expectedRun, currentRun)) return latest;
-    // Rebase the target Run's trace projection onto the latest global store so
-    // an unrelated background Run cannot be rolled back by this HTTP request.
-    return response ? rehydrateTraceSpans(latest, runId, response) : latest;
   }
 
   function mapApprovalStatus(raw: unknown): ApprovalStatus {
@@ -801,7 +502,7 @@ export function createEntityBridge(
         /* Older BFFs may not expose snapshots; event replay remains usable. */
       }
       try {
-        store = await loadDurableTrace(store, runId);
+        store = await loadDurableTrace(manager, store, runId);
         if (expectedGeneration !== storeGeneration) return rehydrated;
       } catch {
         /* Older BFFs may not expose durable trace snapshots yet. */
@@ -928,7 +629,7 @@ export function createEntityBridge(
       }
 
       try {
-        store = await loadDurableTrace(manager.getStore(), runId);
+        store = await loadDurableTrace(manager, manager.getStore(), runId);
         if (expectedGeneration !== storeGeneration) return restored;
         manager.setStore(store);
       } catch {
