@@ -347,7 +347,7 @@ export class SubagentSpawnService {
         traceFlags: parent.traceFlags,
         traceParentSpanId: parentSpanId,
         nextEventSequence: 0,
-      } as Parameters<import('../infrastructure/mysql/repositories/run-repository.js').RunRepository['create']>[0] & { traceState: string | null; traceFlags: string | null; traceParentSpanId: string | null }); // create入参类型滞后：实现已持久化trace三字段，传参保留原逻辑不断言会TS2353
+      });
 
       const acceptedEvent = await repos.runEvents.append({
         eventId,
@@ -366,8 +366,7 @@ export class SubagentSpawnService {
           subagentDepth: depth + 1,
         },
         traceId: parent.traceId,
-        traceState: parent.traceState,
-      } as Parameters<import('../infrastructure/mysql/repositories/run-event-repository.js').RunEventRepository['append']>[0] & { traceState: string | null }); // append签名无traceState（实现亦不持久化，事件行无此列），传参保留原逻辑
+      });
 
       await repos.outbox.insert({
         outboxId,

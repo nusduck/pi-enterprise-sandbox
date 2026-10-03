@@ -74,7 +74,7 @@ export class A2aTaskService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   createRunService: import('../create-run-service.js').CreateRunService;
   getRunService: import('../get-run-service.js').GetRunService;
-  cancelRunService: { execute: (input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, reason?: string | null, idempotencyKey?: string | null }) => Promise<unknown> };
+  cancelRunService: { execute: (input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, reason?: string | null }) => Promise<unknown> };
   eventQueryService: import('../run-event-query-service.js').RunEventQueryService | null;
   createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => Repos;
   tx: import('../../infrastructure/mysql/transaction-manager.js').TransactionManager | null;
@@ -85,7 +85,7 @@ export class A2aTaskService {
   buildArtifactDownloadUri: ((input: Record<string, unknown>) => unknown) | null;
   requireAudit: boolean;
 
-  constructor(deps: { createRunService: import('../create-run-service.js').CreateRunService, getRunService: import('../get-run-service.js').GetRunService, cancelRunService: { execute: (input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, reason?: string | null, idempotencyKey?: string | null }) => Promise<unknown> }, eventQueryService?: import('../run-event-query-service.js').RunEventQueryService | null, createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => Repos, transactionManager?: import('../../infrastructure/mysql/transaction-manager.js').TransactionManager | null, db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null, generateId: () => string, now?: () => Date, defaultProvider?: string, buildArtifactDownloadUri?: ((input: Record<string, unknown>) => unknown) | null, requireAudit?: boolean, }) {
+  constructor(deps: { createRunService: import('../create-run-service.js').CreateRunService, getRunService: import('../get-run-service.js').GetRunService, cancelRunService: { execute: (input: { runId: string, auth: { provider?: string, externalOrgId: string, externalUserId: string }, reason?: string | null }) => Promise<unknown> }, eventQueryService?: import('../run-event-query-service.js').RunEventQueryService | null, createRepositories: (db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null) => Repos, transactionManager?: import('../../infrastructure/mysql/transaction-manager.js').TransactionManager | null, db?: import('../../infrastructure/mysql/transaction-manager.js').DbExecutor | null, generateId: () => string, now?: () => Date, defaultProvider?: string, buildArtifactDownloadUri?: ((input: Record<string, unknown>) => unknown) | null, requireAudit?: boolean, }) {
     if (!deps?.createRunService?.execute) {
       throw new Error('A2aTaskService requires createRunService');
     }
@@ -579,7 +579,6 @@ export class A2aTaskService {
       runId: mapping.runId,
       auth: this.#runAuth(input.principal),
       reason: input.reason || 'a2a_cancel',
-      idempotencyKey: `a2a-cancel-${mapping.a2aTaskId}`,
     });
 
     await this.#auditRequired({
@@ -895,7 +894,6 @@ export class A2aTaskService {
         runId,
         auth: this.#runAuth(principal),
         reason: meta.reason || 'a2a_mapping_failed',
-        idempotencyKey: `a2a-map-fail-cancel-${runId}`,
       });
     } catch {
       // Best-effort durable cancel; surface mapping failure regardless.

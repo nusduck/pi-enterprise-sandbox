@@ -467,16 +467,15 @@ export class CronJobService {
       }
       const ownerRole = await this.#ownerRole(repos, job.orgId, job.userId);
       if (job.agentId) await this.#assertAgentForOwner(job.agentId, job, repos, ownerRole);
-      // role 为冗余字段：execute 入参 auth 类型无 role 且实现不读它；经中间变量传入以保持运行时对象逐字一致（疑似缺陷，未修）。
-      const cronAuth = {
-        provider: job.authProvider,
-        externalOrgId: job.externalOrgId,
-        externalUserId: job.externalUserId,
-        role: ownerRole,
-      };
       const result = await this.createRunService.execute({
         messages: [{ role: 'user', content: job.prompt }],
-        auth: cronAuth,
+        // role 下游有消费者：CreateRun 把 auth 透传给 RunParentProvisioner，显式 Agent 时按它判可见范围。
+        auth: {
+          provider: job.authProvider,
+          externalOrgId: job.externalOrgId,
+          externalUserId: job.externalUserId,
+          role: ownerRole,
+        },
         traceId: traceId(),
         idempotencyKey: execution.idempotencyKey,
         agentId: job.agentId,

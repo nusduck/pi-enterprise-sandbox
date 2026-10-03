@@ -273,6 +273,7 @@ export class CreateRunService {
    *     displayName?: string | null,
    *     email?: string | null,
    *     orgName?: string | null,
+   *     role?: string | null,
    *   },
    *   traceId: string,
    *   traceState?: string | null,
@@ -286,7 +287,7 @@ export class CreateRunService {
    * }} input
    * @returns {Promise<CreateRunResponse>}
    */
-  async execute(input: { messages: unknown[], auth: { provider?: string, externalOrgId: string, externalUserId: string, externalConversationId?: string | null, displayName?: string | null, email?: string | null, orgName?: string | null, }, traceId: string, traceState?: string | null, traceFlags?: string | null, idempotencyKey: string, agentId?: string | null, agentProfileId?: string | null, modelId?: string | null, budget?: unknown, spanId?: string | null, }) {
+  async execute(input: { messages: unknown[], auth: { provider?: string, externalOrgId: string, externalUserId: string, externalConversationId?: string | null, displayName?: string | null, email?: string | null, orgName?: string | null, role?: string | null, }, traceId: string, traceState?: string | null, traceFlags?: string | null, idempotencyKey: string, agentId?: string | null, agentProfileId?: string | null, modelId?: string | null, budget?: unknown, spanId?: string | null, }) {
     if (!input || typeof input !== 'object') {
       throw new ValidationError('CreateRun input is required');
     }
@@ -564,8 +565,7 @@ export class CreateRunService {
           triggeringMessageId: messageId,
         },
           traceId: ctx.traceId,
-          traceState: ctx.traceState,
-        spanId: ctx.spanId,
+          spanId: ctx.spanId,
       };
       const acceptedEvent = await repos.runEvents.append(acceptedEventInput);
 

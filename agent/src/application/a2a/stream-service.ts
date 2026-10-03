@@ -46,7 +46,6 @@ export class A2aStreamService {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   taskService: import('./task-service.js').A2aTaskService;
   eventQuery: import('../run-event-query-service.js').RunEventQueryService;
-  getRunService: import('../get-run-service.js').GetRunService;
   runEventStream: import('../../infrastructure/redis/run-event-stream.js').RunEventStream | null;
   pollMs: number;
   heartbeatMs: number;
@@ -67,7 +66,6 @@ export class A2aStreamService {
    *     listEvents: Function,
    *     resolveEventSequence?: Function,
    *   },
-   *   getRunService: { execute: Function },
    *   runEventStream?: { readAfter: Function } | null,
    *   pollMs?: number,
    *   heartbeatMs?: number,
@@ -78,19 +76,15 @@ export class A2aStreamService {
    *   buildArtifactDownloadUri?: Function | null,
    * }} deps
    */
-  constructor(deps: { taskService: import('./task-service.js').A2aTaskService, eventQueryService: import('../run-event-query-service.js').RunEventQueryService, getRunService: import('../get-run-service.js').GetRunService, runEventStream?: import('../../infrastructure/redis/run-event-stream.js').RunEventStream | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, historyPageSize?: number, now?: () => number, sleep?: typeof sleepMs, buildArtifactDownloadUri?: ((input: Record<string, unknown>) => unknown) | null, }) {
+  constructor(deps: { taskService: import('./task-service.js').A2aTaskService, eventQueryService: import('../run-event-query-service.js').RunEventQueryService, runEventStream?: import('../../infrastructure/redis/run-event-stream.js').RunEventStream | null, pollMs?: number, heartbeatMs?: number, mysqlCatchupMs?: number, historyPageSize?: number, now?: () => number, sleep?: typeof sleepMs, buildArtifactDownloadUri?: ((input: Record<string, unknown>) => unknown) | null, }) {
     if (!deps?.taskService) {
       throw new Error('A2aStreamService requires taskService');
     }
     if (!deps?.eventQueryService?.listEvents) {
       throw new Error('A2aStreamService requires eventQueryService.listEvents');
     }
-    if (!deps?.getRunService?.execute) {
-      throw new Error('A2aStreamService requires getRunService');
-    }
     this.taskService = deps.taskService;
     this.eventQuery = deps.eventQueryService;
-    this.getRunService = deps.getRunService;
     this.runEventStream = deps.runEventStream ?? null;
     this.pollMs = deps.pollMs ?? DEFAULT_SSE_POLL_MS;
     this.heartbeatMs = deps.heartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
