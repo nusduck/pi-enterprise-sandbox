@@ -99,30 +99,6 @@ export function canonicalObject(
   return out;
 }
 
-/**
- * Shapes older snapshots used to name a model before `modelPolicy.modelId`
- * existed. They are read-only history; §3 of the integration plan only allows
- * upgrading one when it maps onto the current model catalog.
- */
-export const LEGACY_MODEL_REF_KEYS = Object.freeze([
-  'model',
-  'reference',
-  'modelRef',
-  'model_ref',
-  'id',
-]);
-
-/** Extract the model id a legacy reference names, or null when unreadable. */
-export function legacyModelReference(value: unknown): string | null {
-  if (typeof value === 'string') return value.trim() || null;
-  if (!isPlainObject(value)) return null;
-  for (const key of ['modelId', 'model_id', 'id', 'name']) {
-    const candidate = value[key];
-    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
-  }
-  return null;
-}
-
 export function modelIdOf(entry: ModelEntry | null | undefined): string | null {
   return entry?.model_id ? String(entry.model_id) : null;
 }

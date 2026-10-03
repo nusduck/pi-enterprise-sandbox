@@ -224,8 +224,9 @@ ID token 剩余有效期的较小值。到期重新走 SSO 跳转，最长认证
 退出调用 Agent 撤销 sid，再清 Cookie；即使上游 logout 不可达，已完成的本地撤销仍有效。
 退出契约：有效 sid 成功撤销返回 200 `{ok:true, revocation:"confirmed"}`；
 缺失/已过期/已撤销凭据幂等返回 200 `{ok:true, revocation:"not_required"}`。
-无效签名不作数据库写入。签名合法且尚未到期但缺 sid 的旧凭据不能撤销，
-返回 409 `LEGACY_SESSION_NOT_REVOCABLE`，仅清 Cookie，要求重新登录，不声称撤销已完成。
+无效签名不作数据库写入。签名合法但缺 sid 的旧凭据按普通无效会话处理，
+返回 401 `INVALID_TOKEN`（BFF 映射为 `not_required`），仅清 Cookie，要求重新登录，
+不声称撤销已完成。旧 409 `LEGACY_SESSION_NOT_REVOCABLE` 分支已删除。
 DB 故障或调用超时返回 503 `AUTH_REVOCATION_UNCONFIRMED`；BFF 仍清 Cookie，
 前端清理本机身份与旧流并显示“本机已退出，服务端会话撤销未确认”。
 因响应丢失无法确定 Cookie 是否已清时，前端也必须完成本机清理并提示未确认；
@@ -277,12 +278,11 @@ sso: {enabled, available, label}}, profile_policy}`。profile_policy 仅表示�
 | HTTP / 错误码（拟定） | 语义 |
 |----------------------|------|
 | 400 `SSO_STATE_INVALID` / `SSO_CALLBACK_INVALID` | 事务缺失、过期、绑定失败、重放或回调参数非法 |
-| 401 `SSO_TOKEN_INVALID` / `INVALID_TOKEN` | 上游 token 不合法，或应用会话无效/过期/已撤销 |
+| 401 `SSO_TOKEN_INVALID` / `INVALID_TOKEN`（含无 sid 旧凭据；退出面映射为 `not_required`） | 上游 token 不合法，或应用会话无效/过期/已撤销 |
 | 403 `SSO_ACCESS_DENIED` | 上游明确拒绝用户授权；不泄漏本地资源存在性 |
 | 404 `SSO_ACCESS_UNAVAILABLE` | 身份未获平台准入、无有效归属；通用提示，不回传其他租户信息 |
 | 409 `IDENTITY_BINDING_CONFLICT` | 需要本人/管理员处理的绑定冲突，不泄漏另一个账号内容 |
 | 422 `PROFILE_FIELD_NOT_EDITABLE` | 用户修改受 SSO 管理的资料字段 |
-| 409 `LEGACY_SESSION_NOT_REVOCABLE` | 无 sid 的旧凭据只完成本机退出；不能声明服务器已撤销 |
 | 503 `AUTH_REVOCATION_UNCONFIRMED` | 撤销 DB 失败/超时；Cookie 和本机状态已清，原凭据失效尚未确认 |
 | 503 `SSO_CONFIG_UNAVAILABLE` / `SSO_UPSTREAM_UNAVAILABLE` / `AUTH_STORE_UNAVAILABLE` | 配置、公司依赖或权威存储不可用；拒绝认证，不记成匿名成功 |
 

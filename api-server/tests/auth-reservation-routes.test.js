@@ -342,23 +342,29 @@ describe('auth reservation production routes', () => {
     assert.equal(logoutCalls().length, before);
   });
 
-  it('keeps the legacy 409 and still clears the Cookie', async () => {
+  it('maps a legacy 409 to 503 unconfirmed and still clears the Cookie', async () => {
     agentState.logoutStatus = 409;
     agentState.logoutBody = {
       error: 'Legacy session cannot be revoked',
       code: 'LEGACY_SESSION_NOT_REVOCABLE',
     };
-    const res = await fetch(`${base}/api/auth/logout`, {
-      method: 'POST',
-      headers: { Origin: base, Cookie: 'dsh_enterprise_session=legacy-token' },
-    });
-    assert.equal(res.status, 409);
-    const body = await res.json();
-    assert.equal(body.code, 'LEGACY_SESSION_NOT_REVOCABLE');
-    assert.ok(
-      res.headers.getSetCookie().some((value) => value.includes('Max-Age=0')),
-      'Cookie must be cleared even on 409',
-    );
+    try {
+      const res = await fetch(`${base}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Origin: base, Cookie: 'dsh_enterprise_session=legacy-token' },
+      });
+      assert.equal(res.status, 503);
+      const body = await res.json();
+      assert.equal(body.code, 'AUTH_REVOCATION_UNCONFIRMED');
+      assert.notEqual(body.ok, true);
+      assert.ok(
+        res.headers.getSetCookie().some((value) => value.includes('Max-Age=0')),
+        'Cookie must be cleared even on 503',
+      );
+    } finally {
+      agentState.logoutStatus = 200;
+      agentState.logoutBody = { ok: true, revocation: 'confirmed' };
+    }
   });
 
   it('maps a lost connection to 503 AUTH_REVOCATION_UNCONFIRMED and clears the Cookie', async () => {

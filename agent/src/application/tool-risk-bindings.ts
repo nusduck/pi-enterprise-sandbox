@@ -20,7 +20,6 @@
  */
 
 import { loadToolRiskPolicy } from '../infrastructure/dsh/tool-risk-policy.js';
-import { resolveToolNameAlias } from '../infrastructure/dsh/constants.js';
 import { parseAgentVersionConfigJson } from '../infrastructure/mcp/mcp-config-loader.js';
 import { buildMcpPolicyBindings } from '../infrastructure/mcp/mcp-policy-bindings.js';
 
@@ -65,30 +64,23 @@ export function readAgentVersionToolPolicy(agentVersion: unknown) {
 }
 
 /**
- * 把一张按工具名索引的表投影到当前工具名（ADR 0009 D4 的存量处置 / 计划 H1.6）。
+ * 把一张按工具名索引的表合并进决定表。**冲突取更严**：快照里同时写了
+ * `tools` 嵌套项与 flat 项时，只保留更严格的决定，避免旧字段把禁止放松成允许。
  *
- * `AgentVersion.configJson` 是 Run 创建时冻结的**不可变快照**，2026-08-31 之前建的
- * 那些里面存的是旧引擎工具名。不迁移、不回写——只在**读取**时投影一次。
- * 不处置的后果不是「少一条策略」，而是老 Run 静默全拒：分类器 fail-closed，
- * 旧名在新工具面上一个都命中不了。
- *
- * 三条规矩：
- * - `mcp__*` / `server::tool` / 前缀式 key 原样保留（它们不由我们命名）。
- * - 退役能力（`memory_*` 等）投影成 `null`，这里直接丢掉该条——风险表会在
- *   `decideFromRiskTable` 里给稳定的 `TOOL_RETIRED`，不需要 toolPolicy 再说一遍。
- * - **冲突取更严**：快照里同时写了旧名和新名，或同时写了 v1 的嵌套项与
- *   legacy flat 项时，投影后只保留更严格的决定，避免旧字段把禁止放松成允许。
+ * 注意：这里不再做旧引擎工具名到新名的投影（legacy 升级路径已删除）。
+ * 快照里的 key 原样保留；旧名不对应任何当前工具，运行时分类器 fail-closed
+ *（未知工具一律拒绝），不会静默获得授权。
  */
-function projectLegacyToolNames(
+function putStrictestDecisions(
+  target: Record<string, unknown>,
   table: Record<string, unknown>,
-  mode: 'decision' | 'value' = 'value',
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  const put = (projected: string, value: unknown) => {
-    const current = out[projected];
-    if (mode !== 'decision' || current === undefined) {
-      out[projected] = value;
-      return;
+): void {
+  for (const [rawKey, value] of Object.entries(table)) {
+    const toolName = String(rawKey).trim();
+    const current = target[toolName];
+    if (current === undefined) {
+      target[toolName] = value;
+      continue;
     }
     const currentRaw =
       current && typeof current === 'object' && !Array.isArray(current) &&
@@ -104,16 +96,9 @@ function projectLegacyToolNames(
       DECISION_RANK[String(nextRaw ?? '').trim().toLowerCase()] >
       DECISION_RANK[String(currentRaw ?? '').trim().toLowerCase()]
     ) {
-      out[projected] = value;
+      target[toolName] = value;
     }
-  };
-  for (const [rawKey, value] of Object.entries(table)) {
-    const key = String(rawKey).trim();
-    const projected = key.startsWith('mcp__') ? key : resolveToolNameAlias(key);
-    if (projected === null) continue; // 退役能力，交给风险表给理由码
-    put(projected, value);
   }
-  return out;
 }
 
 /**
@@ -141,53 +126,29 @@ export function buildAgentVersionToolRiskBindings(agentVersion: unknown, mcpBind
   const toolPolicy = readToolPolicy(agentVersion);
 
   /**
-   * Explicit decisions live either under `tools` or — for backwards
-   * compatibility with the flat `{ toolName: decision }` shape implied by the
-   * original engine dep — directly on toolPolicy.
+   * Explicit decisions live either under `tools` or — for the flat
+   * `{ toolName: decision }` shape — directly on toolPolicy. Both spellings
+   * merge with "stricter wins" so a flat entry cannot loosen a nested one.
    * @type {Record<string, unknown>}
    */
-  const decisions = {};
+  const decisions: Record<string, unknown> = {};
   if (
     toolPolicy.tools &&
     typeof toolPolicy.tools === 'object' &&
     !Array.isArray(toolPolicy.tools)
   ) {
-    Object.assign(
-      decisions,
-      projectLegacyToolNames(toolPolicy.tools as Record<string, unknown>, 'decision'),
-    );
+    putStrictestDecisions(decisions, toolPolicy.tools as Record<string, unknown>);
   }
   const flat: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(toolPolicy)) {
     if (key === 'tools' || RISK_FIELDS.includes(key)) continue;
     flat[key] = value;
   }
-  for (const [toolName, decision] of Object.entries(
-    projectLegacyToolNames(flat, 'decision'),
-  )) {
-    const current = decisions[toolName];
-    const currentRaw =
-      current && typeof current === 'object' && !Array.isArray(current) &&
-      Object.hasOwn(current as object, 'decision')
-        ? (current as Record<string, unknown>).decision
-        : current;
-    const nextRaw =
-      decision && typeof decision === 'object' && !Array.isArray(decision) &&
-      Object.hasOwn(decision as object, 'decision')
-        ? (decision as Record<string, unknown>).decision
-        : decision;
-    if (
-      current === undefined ||
-      DECISION_RANK[String(nextRaw ?? '').trim().toLowerCase()] >
-        DECISION_RANK[String(currentRaw ?? '').trim().toLowerCase()]
-    ) {
-      decisions[toolName] = decision;
-    }
-  }
+  putStrictestDecisions(decisions, flat);
 
   const riskRaw: Record<string, unknown> = {};
   if (toolPolicy.riskLevels != null) {
-    riskRaw.tools = projectLegacyToolNames(toolPolicy.riskLevels as Record<string, unknown>);
+    riskRaw.tools = { ...(toolPolicy.riskLevels as Record<string, unknown>) };
   }
   if (toolPolicy.riskApproval != null) riskRaw.riskApproval = toolPolicy.riskApproval;
   if (toolPolicy.classRiskLevels != null) {

@@ -139,15 +139,15 @@ describe('auth responses', () => {
     assert.equal(res.user?.username, 'alice');
   });
 
-  it('logout maps the 409 legacy contract to an ApiError with its code', async () => {
+  it('logout surfaces the error code from a failed logout', async () => {
     globalThis.fetch = (async () =>
-      jsonResponse({ error: 'legacy session', code: 'LEGACY_SESSION_NOT_REVOCABLE' }, 409)) as typeof fetch;
+      jsonResponse({ error: 'revocation unconfirmed', code: 'AUTH_REVOCATION_UNCONFIRMED' }, 503)) as typeof fetch;
     await assert.rejects(
       () => logout(),
       (err: unknown) => {
         assert.ok(err instanceof ApiError);
-        assert.equal((err as ApiError).status, 409);
-        assert.equal((err as ApiError).code, 'LEGACY_SESSION_NOT_REVOCABLE');
+        assert.equal((err as ApiError).status, 503);
+        assert.equal((err as ApiError).code, 'AUTH_REVOCATION_UNCONFIRMED');
         return true;
       },
     );

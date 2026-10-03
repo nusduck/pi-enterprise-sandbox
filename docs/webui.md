@@ -180,7 +180,8 @@ Runtime 状态只写 `EntityStore`：Run、增量 Message、Tool、Process、App
 - Thinking level 只列**当前适配器真的接受**的 reasoning effort（`deepseek-official`
   是 `off|low|high|max`）。历史配置里存着不再支持的值时保留原值并标为「不支持」，
   要求改掉后才能发布，不静默降级到别的档位。
-- legacy 配置升级到 `schemaVersion: 1` 时，无法映射的模型引用会阻止发布并列出待处理字段：
+- 缺 `schemaVersion` 的配置在校验面直接失败（`CONFIG_SCHEMA_VERSION_MISSING`），
+  旧模型引用等未知字段按 `CONFIG_UNKNOWN_FIELD` 报错：
   表单与 JSON 往返都不会把它们悄悄删掉。`skills`/`extensions`/`sandboxPolicy`/`a2a`
   已从 schema 移除，出现即按未知字段报错。
 - config 仍可直接编辑 JSON。解析规则在 `pages/settings/agentHelpers.ts`（纯函数，

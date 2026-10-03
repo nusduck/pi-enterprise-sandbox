@@ -190,7 +190,7 @@ test('P1 complete platform policy resolver is not replaced by the default risk t
   assert.equal((result as { kind: string }).kind, 'allow');
 });
 
-test('P1 legacy flat decisions cannot loosen nested or aliased decisions', () => {
+test('P1 flat decisions merge strictest; legacy aliases no longer project in risk bindings', () => {
   const config = {
     schemaVersion: 0,
     toolPolicy: {
@@ -209,7 +209,9 @@ test('P1 legacy flat decisions cannot loosen nested or aliased decisions', () =>
   const projected = buildAgentVersionToolRiskBindings({ configJson: config })
     .agentVersionToolPolicy as Record<string, unknown>;
   assert.equal(projected.bash, 'deny');
-  assert.equal(projected.glob, 'deny');
+  // flat 旧名不再投影：ls 与 glob 是两个独立条目，ls 不影响 glob 的决定。
+  assert.equal(projected.glob, 'allow');
+  assert.equal(projected.ls, 'deny');
 });
 
 test('P1 approved durable replay without an args integrity fingerprint fails closed', async () => {

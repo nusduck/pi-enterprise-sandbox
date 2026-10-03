@@ -58,10 +58,11 @@ describe('interpretLogoutResult', () => {
     assert.match(String(interpretLogoutResult({ ok: true }).warning), /撤销未确认/);
   });
 
-  it('gives distinct visible warnings for legacy 409 and unconfirmed 503', () => {
-    assert.match(unconfirmedLogoutWarning('LEGACY_SESSION_NOT_REVOCABLE'), /没有会话标识/);
+  it('gives the unconfirmed warning for 503 and the generic one otherwise', () => {
     assert.match(unconfirmedLogoutWarning('AUTH_REVOCATION_UNCONFIRMED'), /未确认撤销/);
     assert.match(unconfirmedLogoutWarning(null), /网络或服务故障/);
+    // 已删除的旧 409 码不再有专属文案，落到通用未确认提示。
+    assert.match(unconfirmedLogoutWarning('LEGACY_SESSION_NOT_REVOCABLE'), /网络或服务故障/);
   });
 });
 

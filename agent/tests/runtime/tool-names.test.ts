@@ -1,8 +1,8 @@
 /**
- * ADR 0009 D4 / 计划 H1：工具名的唯一事实源、平台层 fail-fast、存量 toolPolicy 的别名投影。
+ * ADR 0009 D4 / 计划 H1：工具名的唯一事实源、平台层 fail-fast、存量 toolPolicy 的直通语义。
  *
  * 这些用例的共同点是**空实现过不了**：
- * - 别名投影那条，如果 `projectLegacyToolNames` 原样返回，新名就取不到旧名的决定；
+ * - 直通那条，如果还留着旧名投影，新名就取不到旧名的决定；
  * - fail-fast 那条，如果断言没接上，非法 key 会静默通过；
  * - 退役理由码那条，如果不区分退役与未知，拿到的是 `UNKNOWN_TOOL`。
  */
@@ -90,31 +90,44 @@ function versionWith(toolPolicy: Record<string, unknown>) {
   return { configJson: { toolPolicy } };
 }
 
-test('H1.8 存量 toolPolicy 的旧名被投影成新名', () => {
+test('H1.8 存量 toolPolicy 的旧名不再投影成新名（原样保留、不授权）', () => {
   const bindings = buildAgentVersionToolRiskBindings(
     versionWith({ tools: { ls: 'deny', spawn_subagent: 'deny', ask_user: 'allow' } }),
   );
   const policy = bindings.agentVersionToolPolicy as Record<string, unknown>;
-  assert.equal(policy['glob'], 'deny', 'ls → glob');
-  assert.equal(policy['subagent'], 'deny', 'spawn_subagent → subagent');
-  assert.equal(policy[ASK_USER_TOOL_NAME], 'allow', 'ask_user → ask_user_question');
-  assert.equal('ls' in policy, false, '旧名不该留在投影结果里');
+  // 旧名原样保留：它们不对应任何当前工具，运行时分类器 fail-closed，
+  // 不会静默获得新名的授权。
+  assert.equal(policy['ls'], 'deny', 'ls 不再投影到 glob');
+  assert.equal(policy['spawn_subagent'], 'deny', 'spawn_subagent 不再投影到 subagent');
+  assert.equal(policy['ask_user'], 'allow', 'ask_user 不再投影到 ask_user_question');
+  assert.equal('glob' in policy, false, '旧名不能凭空给新名加决定');
+  assert.equal('subagent' in policy, false, '旧名不能凭空给新名加决定');
+  assert.equal(ASK_USER_TOOL_NAME in policy, false, '旧名不能凭空给新名加决定');
+  // 对照：当前名照常写入。
+  const current = buildAgentVersionToolRiskBindings(
+    versionWith({ tools: { glob: 'deny', subagent: 'deny', [ASK_USER_TOOL_NAME]: 'allow' } }),
+  ).agentVersionToolPolicy as Record<string, unknown>;
+  assert.equal(current['glob'], 'deny');
+  assert.equal(current['subagent'], 'deny');
+  assert.equal(current[ASK_USER_TOOL_NAME], 'allow');
 });
 
-test('H1.8 新旧名字冲突时取更严的决定，旧名不能放松新名', () => {
+test('H1.8 新旧名字不再合并：同义旧名不能影响新名的决定', () => {
   const bindings = buildAgentVersionToolRiskBindings(
     versionWith({ tools: { glob: 'allow', ls: 'deny' } }),
   );
   const policy = bindings.agentVersionToolPolicy as Record<string, unknown>;
-  assert.equal(policy['glob'], 'deny', '旧名不能把新名的禁止放松成允许');
+  assert.equal(policy['glob'], 'allow', '旧名 ls 与新名 glob 是两个独立条目');
+  assert.equal(policy['ls'], 'deny');
 });
 
-test('H1.8 退役能力不进投影结果（理由码由风险表给）', () => {
+test('H1.8 退役能力原样保留（是否可调用由风险表统一判定）', () => {
   const bindings = buildAgentVersionToolRiskBindings(
     versionWith({ tools: { memory_write: 'allow' } }),
   );
-  const policy = bindings.agentVersionToolPolicy;
-  assert.equal(policy === undefined || !('memory_write' in policy), true);
+  const policy = bindings.agentVersionToolPolicy as Record<string, unknown>;
+  assert.equal(policy['memory_write'], 'allow', '退役名不再被投影丢弃');
+  // 运行时仍不可调用：风险表给稳定的 TOOL_RETIRED（见 H1.9 用例）。
 });
 
 test('H1.8 mcp 名字原样穿过投影', () => {

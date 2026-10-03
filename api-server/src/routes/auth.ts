@@ -130,7 +130,7 @@ export async function handleAuthConfig(res: ServerResponse, req: ReqWithTrace | 
 /**
  * POST /api/auth/logout — revoke the current session, then always clear the
  * BFF Cookie. Classification is precise (design §5.2):
- * confirmed / not_required / 409 legacy / 503 unconfirmed. A failed or
+ * confirmed / not_required / 503 unconfirmed. A failed or
  * unconfirmable revocation never reports `{ok:true}`.
  */
 export async function handleLogout(res: ServerResponse, req: ReqWithTrace | null = null): Promise<void> {

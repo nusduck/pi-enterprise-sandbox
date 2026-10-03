@@ -51,13 +51,14 @@ describe('classifyLogoutResponse', () => {
     );
   });
 
-  it('keeps the legacy pre-sid session at 409', () => {
+  it('maps a legacy pre-sid 409 to 503 unconfirmed (no compat branch)', () => {
     const decision = classifyLogoutResponse({
       status: 409,
       body: { error: 'Legacy session cannot be revoked', code: 'LEGACY_SESSION_NOT_REVOCABLE' },
     });
-    assert.equal(decision.status, 409);
-    assert.equal(decision.body.code, 'LEGACY_SESSION_NOT_REVOCABLE');
+    assert.equal(decision.status, 503);
+    assert.equal(decision.body.code, 'AUTH_REVOCATION_UNCONFIRMED');
+    assert.notEqual(decision.body.ok, true);
   });
 
   it('does not turn an unrecognized upstream 200 into success', () => {

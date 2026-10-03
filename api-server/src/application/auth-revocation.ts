@@ -4,11 +4,13 @@
  * The locked contract (design `sso-integration-reservation.md` §5.2 / §6):
  *   - 200 `{ok:true, revocation:"confirmed"}`   — a valid `sid` was revoked.
  *   - 200 `{ok:true, revocation:"not_required"}` — no credential / bad
- *     signature / expired / already revoked; nothing to revoke.
- *   - 409 `LEGACY_SESSION_NOT_REVOCABLE`         — valid unexpired pre-`sid`
- *     JWT; local logout happened but server-side revocation cannot be claimed.
+ *     signature / expired / already revoked / sid-less token; nothing to revoke.
  *   - 503 `AUTH_REVOCATION_UNCONFIRMED`          — DB/upstream failure or
  *     timeout; must never be reported as `{ok:true}`.
+ *
+ * 无 sid 旧 JWT 的 409 兼容分支已删除：上游的 409 一律按未确认处理（503，
+ * fail-closed）。Agent 侧无 sid 令牌按普通无效会话处理（401 `INVALID_TOKEN`，
+ * 仍映射为 `not_required`，见下文）。
  *
  * Only the enumerated "nothing to revoke" classes map to success. Every other
  * upstream status (including 5xx, 404 and an unrecognized 200 body) is treated
@@ -63,19 +65,6 @@ export function classifyLogoutResponse(
     }
     // A 200 without a recognized revocation is not proof of revocation.
     return unconfirmed();
-  }
-
-  if (status === 409 && body.code === 'LEGACY_SESSION_NOT_REVOCABLE') {
-    return {
-      status: 409,
-      body: {
-        error:
-          typeof body.error === 'string' && body.error
-            ? body.error
-            : 'Legacy session cannot be revoked',
-        code: 'LEGACY_SESSION_NOT_REVOCABLE',
-      },
-    };
   }
 
   if (status === 401 && body.code === 'INVALID_TOKEN') {

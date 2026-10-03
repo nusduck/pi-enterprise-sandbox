@@ -36,13 +36,14 @@ describe('AgentConfigValidator', () => {
     assert.ok(result.errors.some((error) => error.code === 'MCP_TOOL_UNAVAILABLE'));
   });
 
-  it('does not upgrade an unmappable legacy model reference into a valid v1 config', () => {
+  it('rejects a config without schemaVersion instead of reading it as legacy', () => {
     const result = validator().validate({
       modelPolicy: { modelRef: 'legacy-model' },
       skills: ['saved-skill'],
     });
     assert.equal(result.valid, false);
-    assert.ok(result.errors.some((error) => error.code === 'LEGACY_MODEL_UNMAPPABLE'));
+    assert.ok(result.errors.some((error) => error.code === 'CONFIG_SCHEMA_VERSION_MISSING'));
+    assert.ok(result.errors.some((error) => error.code === 'CONFIG_UNKNOWN_FIELD'));
     assert.equal(result.normalizedConfig, undefined);
   });
 
@@ -93,23 +94,35 @@ describe('AgentConfigValidator accepted configurations', () => {
     assert.deepEqual(again.normalizedConfig, result.normalizedConfig);
   });
 
-  it('upgrades a legacy model reference that maps onto the catalog', () => {
+  it('rejects a schemaVersion-less model reference even when it names a real model', () => {
     const result = validator().validate({
       modelPolicy: { modelRef: 'deepseek-flash' },
     });
-    assert.deepEqual(result.errors, []);
-    assert.equal(result.valid, true);
-    assert.equal(result.normalizedConfig?.modelPolicy?.modelId, 'deepseek-flash');
-    assert.ok(result.warnings.some((warning) => warning.code === 'LEGACY_MODEL_MAPPED'));
+    assert.equal(result.valid, false);
+    assert.equal(result.normalizedConfig, undefined);
+    assert.ok(result.errors.some((error) => error.code === 'CONFIG_SCHEMA_VERSION_MISSING'));
+    assert.ok(result.errors.some((error) => error.code === 'CONFIG_UNKNOWN_FIELD'));
   });
 
-  it('blocks the upgrade of a legacy config whose fields v1 cannot execute', () => {
+  it('requires schemaVersion even when every other field is v1-valid', () => {
+    const result = validator().validate({
+      systemPrompt: 'You are a build assistant.',
+      modelPolicy: { modelId: 'deepseek-flash' },
+      toolPolicy: { tools: { bash: 'require_approval' } },
+    });
+    assert.equal(result.valid, false);
+    assert.equal(result.normalizedConfig, undefined);
+    assert.ok(result.errors.some((error) => error.code === 'CONFIG_SCHEMA_VERSION_MISSING'));
+  });
+
+  it('rejects a schemaVersion-less config whose fields v1 cannot execute', () => {
     const result = validator().validate({ skills: ['saved-skill'] });
     assert.equal(result.valid, false);
     assert.equal(result.normalizedConfig, undefined);
-    const blocked = result.errors.filter((error) => error.code === 'LEGACY_FIELD_REQUIRES_MIGRATION');
-    assert.deepEqual(blocked.map((error) => error.path), ['skills']);
-    assert.deepEqual(result.effectiveSummary.migration.blockedPaths, ['skills']);
+    assert.ok(result.errors.some((error) => error.code === 'CONFIG_SCHEMA_VERSION_MISSING'));
+    const unknown = result.errors.filter((error) => error.code === 'CONFIG_UNKNOWN_FIELD');
+    assert.deepEqual(unknown.map((error) => error.path), ['skills']);
+    assert.deepEqual(result.effectiveSummary.migration.blockedPaths, []);
   });
 
   it('rejects the removed skills/extensions/sandboxPolicy/a2a fields as unknown on v1', () => {

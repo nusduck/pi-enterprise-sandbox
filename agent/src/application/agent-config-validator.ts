@@ -13,7 +13,6 @@ import {
   type ModelEntry,
 } from '../infrastructure/model-registry.js';
 import {
-  LEGACY_MODEL_REF_KEYS,
   MCP_ENTRY_V1_KEYS,
   MCP_TOOL_POLICY_KEYS,
   MODEL_POLICY_V1_KEYS,
@@ -21,7 +20,6 @@ import {
   TOOL_POLICY_V1_KEYS,
   canonicalObject,
   decisionsOf,
-  legacyModelReference,
   loadHostArgumentDeclarations,
   loadPlatformMcpServers,
   modelIdOf,
@@ -418,41 +416,26 @@ export class AgentConfigValidator {
     const warnings: AgentConfigDiagnostic[] = [];
     const hasSchema = Object.hasOwn(config, 'schemaVersion');
     const schemaVersion = config.schemaVersion;
-    const legacy = !hasSchema;
-    if (hasSchema && schemaVersion !== AGENT_CONFIG_SCHEMA_VERSION) {
+    if (!hasSchema) {
+      // 开发阶段无存量旧配置：缺 schemaVersion 不再按 legacy 兼容读取，
+      // 直接 fail-closed。历史快照的冻结 JSON 由运行时绑定面只读，
+      // 不走这个写入/预览校验器。
+      errors.push(diagnostic(
+        'schemaVersion',
+        'CONFIG_SCHEMA_VERSION_MISSING',
+        'schemaVersion is required and must be 1',
+      ));
+    } else if (schemaVersion !== AGENT_CONFIG_SCHEMA_VERSION) {
       errors.push(diagnostic(
         'schemaVersion',
         'CONFIG_SCHEMA_VERSION_UNSUPPORTED',
         `schemaVersion must be ${AGENT_CONFIG_SCHEMA_VERSION}`,
       ));
     }
-    if (legacy) {
-      warnings.push(diagnostic(
-        'schemaVersion',
-        'LEGACY_CONFIG',
-        'Configuration has no schemaVersion and is read using legacy compatibility rules',
-      ));
-    }
-
-    // Fields a legacy snapshot carries that schemaVersion 1 has no home for.
-    // They are recorded so the UI can show a migration diff over the original
-    // JSON; they never silently survive an upgrade, because a normalized v1
-    // config that still contained them would be rejected by this same
-    // validator on the next save.
-    const migrationBlockers: AgentConfigDiagnostic[] = [];
-    const blockMigration = (path: string, message: string) => {
-      const entry = diagnostic(path, 'LEGACY_FIELD_REQUIRES_MIGRATION', message);
-      migrationBlockers.push(entry);
-      errors.push(entry);
-    };
 
     for (const key of Object.keys(config)) {
       if (TOP_LEVEL_V1_KEYS.includes(key)) continue;
-      if (legacy) {
-        blockMigration(key, `Legacy field "${key}" has no schemaVersion 1 equivalent; remove it or keep running the existing version`);
-      } else {
-        pushUnknown(errors, '', key);
-      }
+      pushUnknown(errors, '', key);
     }
 
     if (config.systemPrompt !== undefined && typeof config.systemPrompt !== 'string') {
@@ -464,42 +447,13 @@ export class AgentConfigValidator {
     const modelPolicy = config.modelPolicy;
     let normalizedModelPolicy: Record<string, unknown> = {};
     let resolvedModel: ModelEntry | null = null;
-    let legacyMappedModelId: string | null = null;
     if (modelPolicy !== undefined && !isPlainObject(modelPolicy)) {
       errors.push(diagnostic('modelPolicy', 'CONFIG_TYPE', 'modelPolicy must be an object'));
     } else {
       const policy = (modelPolicy as Record<string, unknown> | undefined) ?? {};
       for (const key of Object.keys(policy)) {
         if (MODEL_POLICY_V1_KEYS.includes(key)) continue;
-        // A legacy model reference is only readable as history. Upgrading it
-        // requires it to resolve to a model this platform can actually route;
-        // otherwise the upgrade is blocked instead of dropping the reference
-        // and silently falling back to the platform default.
-        if (legacy && LEGACY_MODEL_REF_KEYS.includes(key)) {
-          const referenced = legacyModelReference(policy[key]);
-          const mapped = referenced ? this.registry.get(referenced) : null;
-          if (mapped && mapped.enabled) {
-            warnings.push(diagnostic(
-              `modelPolicy.${key}`,
-              'LEGACY_MODEL_MAPPED',
-              `Legacy modelPolicy.${key} maps to "${mapped.model_id}"; the upgraded version pins that model id`,
-            ));
-            legacyMappedModelId = mapped.model_id;
-          } else {
-            const shown = referenced ?? '(unreadable reference)';
-            const entry = diagnostic(
-              `modelPolicy.${key}`,
-              'LEGACY_MODEL_UNMAPPABLE',
-              `Legacy model reference "${shown}" does not map to a model available on this platform; pick a supported modelId before upgrading`,
-            );
-            migrationBlockers.push(entry);
-            errors.push(entry);
-          }
-        } else if (legacy) {
-          blockMigration(`modelPolicy.${key}`, `Legacy field "modelPolicy.${key}" has no schemaVersion 1 equivalent; remove it or keep running the existing version`);
-        } else {
-          pushUnknown(errors, 'modelPolicy', key);
-        }
+        pushUnknown(errors, 'modelPolicy', key);
       }
 
       const requestedModelId = policy.modelId;
@@ -515,13 +469,6 @@ export class AgentConfigValidator {
             normalizedModelPolicy.modelId = candidate.model_id;
           }
         }
-      }
-      if (!resolvedModel && legacyMappedModelId) {
-        // A mapped legacy reference becomes an explicit v1 pin: the upgraded
-        // version must keep routing to the model the old snapshot named, not
-        // drift to whatever the platform default happens to be later.
-        resolvedModel = this.registry.get(legacyMappedModelId) ?? null;
-        if (resolvedModel) normalizedModelPolicy.modelId = resolvedModel.model_id;
       }
       if (!resolvedModel) {
         const defaultId = resolveDefaultModelId(this.registry);
@@ -583,8 +530,7 @@ export class AgentConfigValidator {
     } else if (isPlainObject(toolPolicy)) {
       for (const key of Object.keys(toolPolicy)) {
         if (!TOOL_POLICY_V1_KEYS.includes(key)) {
-          if (legacy) warnings.push(diagnostic(`toolPolicy.${key}`, 'LEGACY_FIELD_UNKNOWN', `Unknown legacy field "${key}" is preserved read-only`));
-          else pushUnknown(errors, 'toolPolicy', key);
+          pushUnknown(errors, 'toolPolicy', key);
         }
       }
       const rawTools = toolPolicy.tools;
@@ -682,8 +628,7 @@ export class AgentConfigValidator {
           if (MCP_FORBIDDEN_V1_KEYS.includes(key)) {
             errors.push(diagnostic(`${path}.${key}`, 'MCP_FIELD_NOT_SUPPORTED', `${key} is deployment-owned and cannot be saved in AgentVersion`));
           } else if (!MCP_ENTRY_V1_KEYS.includes(key)) {
-            if (legacy) warnings.push(diagnostic(`${path}.${key}`, 'LEGACY_FIELD_UNKNOWN', `Unknown legacy field "${key}" is preserved read-only`));
-            else pushUnknown(errors, path, key);
+            pushUnknown(errors, path, key);
           }
         }
         const serverId = entry.serverId;
@@ -756,8 +701,7 @@ export class AgentConfigValidator {
           const nested: Record<string, unknown> = {};
           for (const key of Object.keys(entry.toolPolicy)) {
             if (!MCP_TOOL_POLICY_KEYS.includes(key)) {
-              if (legacy) warnings.push(diagnostic(`${path}.toolPolicy.${key}`, 'LEGACY_FIELD_UNKNOWN', `Unknown legacy field "${key}" is preserved read-only`));
-              else pushUnknown(errors, `${path}.toolPolicy`, key);
+              pushUnknown(errors, `${path}.toolPolicy`, key);
             }
           }
           if (entry.toolPolicy.default !== undefined) {
@@ -897,11 +841,11 @@ export class AgentConfigValidator {
         configured: typeof config.systemPrompt === 'string' && config.systemPrompt.length > 0,
         chars: typeof config.systemPrompt === 'string' ? config.systemPrompt.length : 0,
       },
-      // The migration diff the admin has to resolve before this snapshot can
-      // become a schemaVersion 1 version. Empty for anything already on v1.
+      // legacy 升级路径已删除：没有 schemaVersion 一律校验失败，
+      // 不再有需要管理员逐项处理的迁移差集，该字段恒为空，仅保留形状。
       migration: {
-        schemaVersion: legacy ? null : AGENT_CONFIG_SCHEMA_VERSION,
-        blockedPaths: migrationBlockers.map((entry) => entry.path),
+        schemaVersion: hasSchema ? AGENT_CONFIG_SCHEMA_VERSION : null,
+        blockedPaths: [],
       },
     };
 
@@ -916,10 +860,9 @@ export class AgentConfigValidator {
     }
 
     // Everything a normalized config contains is a field schemaVersion 1 can
-    // execute. Legacy-only material never rides along: it was either empty
-    // (dropped with a warning) or it blocked the upgrade above, so a config
-    // returned here always re-validates as valid v1 without a round trip
-    // silently deleting anything the admin did not see.
+    // execute. Unknown fields are rejected above, so a config returned here
+    // always re-validates as valid v1 without a round trip silently deleting
+    // anything the admin did not see.
     const normalized: Record<string, unknown> = {
       schemaVersion: AGENT_CONFIG_SCHEMA_VERSION,
       systemPrompt: typeof config.systemPrompt === 'string' ? config.systemPrompt : '',

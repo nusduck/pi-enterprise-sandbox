@@ -110,7 +110,7 @@ export interface AgentLogoutResponse {
  * POST /internal/auth/logout — revoke the current `sid`.
  *
  * Resolves with the raw upstream status/body so the caller can classify
- * `confirmed` / `not_required` / legacy 409 precisely; transport failures
+ * `confirmed` / `not_required` / `unconfirmed` precisely; transport failures
  * (timeout, network) reject and must become `AUTH_REVOCATION_UNCONFIRMED`.
  * Non-2xx responses are intentionally *not* thrown here: the whole point of
  * the logout contract is that the failure class changes the browser result.

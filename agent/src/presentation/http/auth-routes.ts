@@ -79,7 +79,7 @@ export async function handleAuthRoute(input: {
       if (typeof browserAuthService.logout !== 'function') {
         json(res, 503, { error: 'Session revocation could not be confirmed', code: 'AUTH_REVOCATION_UNCONFIRMED' });
       } else {
-        // 退出契约的 confirmed/not_required/409/503 由服务的 BrowserAuthError 决定。
+        // 退出契约的 confirmed/not_required/401/503 由服务的 BrowserAuthError 决定。
         json(res, 200, await browserAuthService.logout(authorization));
       }
     } else if (action === 'ssoExchange') {
