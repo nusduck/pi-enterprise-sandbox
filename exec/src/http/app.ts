@@ -485,7 +485,12 @@ export function createExecAppFromEnv(
     store = new InMemoryJobStore();
   }
 
-  const jobRegistry = new MySqlJobRegistry(store);
+  const jobRegistry = new MySqlJobRegistry(store, {
+    // 作业输出同时落 `<controlRoot>/job-output`（`SANDBOX_CONTROL_ROOT` 经
+    // 上面的 `readControlPlaneRoots` 来，不新增环境变量）。控制根宿主持久挂载
+    // 且从不 bind 进 bwrap 沙箱（见 `job-output-store.ts` 头注释），模型够不到。
+    jobOutputDir: path.join(controlRoots.controlRoot, 'job-output'),
+  });
   const userSkillRoot = String(env['SANDBOX_USER_SKILLS_ROOT'] ?? '').trim();
   const systemSkillRoot = env['SANDBOX_SKILLS_ROOT'] ?? AGENT_SKILL_PATH;
   const bwrapExecutable = env['SANDBOX_BWRAP_PATH'] ?? '/usr/bin/bwrap';

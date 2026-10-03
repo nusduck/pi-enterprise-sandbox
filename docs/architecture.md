@@ -203,7 +203,7 @@ boot 之后 `ctx.tools.schemas()` 恰好等于 `runtime/policy/tool-names.ts` �
 | `read` `write` `edit` `read_image` | 出厂 `dsh-tool-fs` |
 | `glob` `grep` | 自建 `remote-fs-search`，**注册名与出厂 `dsh-tool-fs-search` 逐字一致** |
 | `bash` | 出厂 `dsh-tool-bash` |
-| `job_list` `job_output` `job_kill` | 自建 `remote-job-tools` 保留出厂工具 schema 与完成通知，执行时等待 exec 权威响应。bash 作业的可见范围是会话工作区（exec 按 org/user/workspace 校验，`job_list` 最多 100 条，含之前 Run 的作业），不再按调用方子会话区分；已结束作业的输出只在 exec 内存保留 5 分钟 |
+| `job_list` `job_output` `job_kill` | 自建 `remote-job-tools` 保留出厂工具 schema 与完成通知，执行时等待 exec 权威响应。bash 作业的可见范围是会话工作区（exec 按 org/user/workspace 校验，`job_list` 最多 100 条，含之前 Run 的作业），不再按调用方子会话区分；作业输出由 exec 落到控制根 `job-output/`，结束后与 exec 重启后仍可按游标续读（运行中最多丢最近约 1 秒）；输出确实已丢时 exec 返回 `outputUnavailable`，模型看到明确提示而不是“没有新输出” |
 | `todo_write` | 出厂 `dsh-tool-todo` |
 | `skill` | 出厂 `dsh-tool-skill` |
 | `subagent` | 出厂 `dsh-tool-subagent`（one-shot） |

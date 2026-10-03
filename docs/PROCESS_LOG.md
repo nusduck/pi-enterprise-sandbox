@@ -1302,3 +1302,9 @@ Each entry should say **what changed**, **why**, and **which STATUS IDs** it aff
 - **Why：** 复审修复提交时发现三处与出厂语义不一致：模型 `job_kill` 本 Worker 起的 bash 作业不再置 `reported`，结算时会多发一条完成通知（空闲时多唤醒一轮）；替换 `execute` 绕过了出厂 `defineTool` 的参数校验；进程级单例上的读游标表无上限。
 - **Action：** kill/读到终态时对本地条目置 `reported`；补 `wait`/`timeout_ms`/`reason` 校验；游标表按插入序封顶 1024。回归用例在修复前失败、修复后通过。architecture 写明 bash 作业可见范围是会话工作区，以及已结束输出的 5 分钟内存保留边界。
 - **STATUS IDs：** C7 仍为 `partial`（exec 重启后输出与活句柄恢复另行处理）。见[证据](evidence/2026-10-03-c7-cross-worker-review-fixes.md)。
+
+## 2026-10-03 — C7 后台作业输出落盘
+
+- **Why：** exec 的作业输出只在内存环形缓冲，结束 5 分钟后或 exec 重启后丢失，且无 live 条目时返回空文本、`lossy=false`，调用方分不清“没有新输出”和“输出已丢”。
+- **Action：** exec 把保留窗口落到控制根 `job-output/`（tmp + rename，定时器约每秒、read 节流、结算强制，同一作业串行），无 live 条目时从文件恢复游标语义，缺失/损坏返回 `outputUnavailable`；工作区删除按账本清文件。Agent 对 `outputUnavailable` 给模型明确提示。实现经 dsh worker 两轮，主线程复核补了串行化。
+- **STATUS IDs：** C7 仍为 `partial`。真机 BFF 日志 8/8、模型 `job_output` 6/8（2 次空增量未定位）。见[证据](evidence/2026-10-03-c7-job-output-persist.md)。

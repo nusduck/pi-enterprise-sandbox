@@ -172,13 +172,17 @@ export class RemoteJobs extends JobRegistry {
     const entry = this.entries.get(id);
     if (entry !== undefined && entry.kind !== 'bash') return this.read(id, caller);
     const cursor = this.readCursors.get(id);
-    const read = await this.rpc.post<{ id: JobId; cursor?: string }, JobRead & { nextCursor?: string }>(
+    const read = await this.rpc.post<{ id: JobId; cursor?: string }, JobRead & { nextCursor?: string; outputUnavailable?: boolean }>(
       '/internal/v1/jobs/read', { id, ...(cursor !== undefined ? { cursor } : {}) }, this.roots,
     );
     if (read.nextCursor !== undefined) this.rememberCursor(id, read.nextCursor);
     // 本 Worker 起的作业：与出厂 read 一致，读到终态即视为已报告，抑制重复的完成通知。
     if (entry !== undefined && isTerminal(read.snapshot.status)) entry.reported = true;
-    return { text: read.text, snapshot: read.snapshot } as JobRead;
+    // exec 明确说输出已丢（缓冲与落盘都不在）：告诉模型，别让它当成"没有新输出"。
+    const text = read.outputUnavailable === true && read.text === ''
+      ? '[output unavailable: the execution service no longer has this job\'s output]\n'
+      : read.text;
+    return { text, snapshot: read.snapshot } as JobRead;
   }
 
   async killAuthoritative(id: JobId, caller?: Agent, reason?: string): Promise<{ outcome: 'requested' | 'already-finished'; snapshot: JobSnapshot }> {

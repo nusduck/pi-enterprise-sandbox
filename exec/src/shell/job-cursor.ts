@@ -136,6 +136,24 @@ export interface StreamReadResult {
 }
 
 /**
+ * 环形缓冲的可持久化快照状态——给作业输出落盘用（见 `job-output-store.ts`）。
+ *
+ * 只存标量：`baseOffset` 是当前保留窗口第一个字节的绝对偏移
+ * （即内存里的 `droppedThrough`），窗口内容本身另存为一个二进制日志文件。
+ * 恢复时用 `StreamCursorBuffer.restore()` 把"同一组标量 + 同一段窗口字节"
+ * 装回一个新缓冲，`read(cursor, limit)` 的语义与落盘前完全一致
+ * （generation / dropped 判定只依赖这几个标量与窗口内容）。
+ */
+export interface StreamBufferSnapshotState {
+  readonly generation: number;
+  /** 当前保留窗口第一个字节的绝对偏移（内存实现里的 `droppedThrough`）。 */
+  readonly baseOffset: number;
+  /** 有史以来 append 过的绝对字节总数（内存实现里的 `total`）。 */
+  readonly total: number;
+  readonly truncated: boolean;
+}
+
+/**
  * 单个流（stdout+stderr 合并后的产物，或调用方选择的任意一路）的
  * 增量读缓冲区。生产者侧（`JobProcessHandle.readOutput()` 的实现）不断
  * `append()`；读者侧带着游标反复 `read()`，互不干扰。
@@ -246,6 +264,66 @@ export class StreamCursorBuffer {
   /** 保留窗口内的全部内容拼成一个字符串（用于快照/调试，不推进任何游标）。 */
   snapshotText(): string {
     return Buffer.concat(this.chunks.map((c) => c.data)).toString('utf8');
+  }
+
+  /** 当前状态的标量快照（窗口字节由 `snapshotText()` 另取）。 */
+  snapshotState(): StreamBufferSnapshotState {
+    return {
+      generation: this.generation,
+      baseOffset: this.droppedThrough,
+      total: this.total,
+      truncated: this.truncated,
+    };
+  }
+
+  /**
+   * 从"标量状态 + 窗口字节"重建一个只读用途的缓冲（落盘恢复路径）。
+   *
+   * 校验是 fail-closed 的：标量非法、窗口字节长度与
+   * `total - baseOffset` 对不上就抛错，调用方（`job-output-store.ts`）把它
+   * 视为"文件损坏"，绝不编造一个语义不对的缓冲。
+   * 重建后按当前 `maxBytes` 再做一次 `trim()`：落盘后上限配置被调小是
+   * 合法的，语义是"保留窗口变小、generation 前进"，与内存里直接调小
+   * 上限再 `append` 的行为一致。
+   */
+  static restore(
+    maxBytes: number,
+    state: StreamBufferSnapshotState,
+    window: Uint8Array | string,
+  ): StreamCursorBuffer {
+    const cap = Math.max(1, Math.trunc(maxBytes));
+    const generation = (state as { generation?: unknown } | null)?.generation;
+    const baseOffset = (state as { baseOffset?: unknown } | null)?.baseOffset;
+    const total = (state as { total?: unknown } | null)?.total;
+    const truncated = (state as { truncated?: unknown } | null)?.truncated;
+    if (
+      typeof generation !== 'number' ||
+      typeof baseOffset !== 'number' ||
+      typeof total !== 'number' ||
+      typeof truncated !== 'boolean' ||
+      !Number.isSafeInteger(generation) ||
+      !Number.isSafeInteger(baseOffset) ||
+      !Number.isSafeInteger(total) ||
+      generation < 0 ||
+      baseOffset < 0 ||
+      total < 0 ||
+      baseOffset > total
+    ) {
+      throw new Error('invalid stream buffer snapshot state');
+    }
+    const bytes = typeof window === 'string' ? Buffer.from(window, 'utf8') : Buffer.from(window);
+    if (bytes.length !== total - baseOffset) {
+      throw new Error('stream buffer snapshot window length mismatch');
+    }
+    const buf = new StreamCursorBuffer(cap);
+    buf.generation = generation;
+    buf.total = total;
+    buf.droppedThrough = baseOffset;
+    buf.truncated = truncated;
+    buf.chunks = bytes.length > 0 ? [{ absStart: baseOffset, data: bytes }] : [];
+    // 上限若被调小，在这里收敛（generation 按内存语义前进）。
+    buf.trim();
+    return buf;
   }
 
   initialCursor(): string {

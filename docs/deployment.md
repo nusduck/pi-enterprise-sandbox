@@ -808,7 +808,7 @@ curl -f http://localhost:4000/health/ready
 | `./.runtime/sandbox/workspaces` | `/var/sandbox/workspaces` | Agent Session 物理工作区 |
 | `./.runtime/sandbox/tmp` | `/var/sandbox/tmp` | Agent Session 私有持久化 `/tmp`（`tmp_{workspace_id}`） |
 | `./.runtime/sandbox/artifacts` | `/var/sandbox/artifacts` | 显式提交的 Artifact blob |
-| `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态 |
+| `./.runtime/sandbox/control` | `/var/sandbox/control` | Dataset staging 与控制面状态；`job-output/` 下是后台作业输出（每个作业一份 `<id>.log` + `<id>.meta.json`，上限同内存缓冲 500 KB，运行中约每秒落盘一次，工作区删除时一并清理；不挂进沙箱） |
 | `./.runtime/sandbox/skill-draft` | Agent `/home/sandbox/skill-draft` + exec `/var/sandbox/skill-draft` | owner-scoped Skill 草稿；Compose 显式打开 |
 | `agent_user_skills` | Agent `/home/sandbox/skill-user` + exec `:ro` | 已启用 Skill 的只读发布版本（按摘要分目录） |
 

@@ -820,7 +820,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `GET` | `/internal/v1/fs/stream-text` | 大文本流式读取 |
 | `POST` | `/internal/v1/fs/find\|grep` | `glob` / `grep` |
 | `POST` | `/internal/v1/shell/run\|start` | 前台 / 后台 `bash` |
-| `POST` | `/internal/v1/jobs/list\|status\|read\|kill\|signal\|stdin` | exec 作业查询与控制；`list` 按信封中的 org/user/workspace 过滤 |
+| `POST` | `/internal/v1/jobs/list\|status\|read\|kill\|signal\|stdin` | exec 作业查询与控制；`list` 按信封中的 org/user/workspace 过滤；`read` 在内存缓冲回收或 exec 重启后从落盘输出续读，输出缺失或损坏时返回 `lossy: true, outputUnavailable: true` |
 | `POST` | `/internal/v1/artifacts/submit` | `submit_artifact` |
 | `POST` | `/internal/v1/artifacts/download` | 交付物取回 |
 | `POST` | `/internal/v1/review/artifacts/snapshot` | 审核材料快照（恒 `withdrawn`，只供审核员读） |

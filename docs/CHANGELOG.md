@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 后台作业输出在 exec 重启后丢失
+
+- exec 把后台作业输出落到控制根 `job-output/`（运行中约每秒一次，结束时强制一次），作业结束 5 分钟后或 exec 重启后，进程日志与模型 `job_output` 仍能读到重启前的输出；读不到时明确返回 `outputUnavailable`，模型看到“输出不可用”提示。工作区删除时清理对应文件。
+
 ### Fixed — 模型侧跨 Worker 查询后台作业
 
 - `job_list`、`job_output`、`job_kill` 现等待 exec 的权威作业响应；跨 Worker 查询不再返回空列表、空输出或伪造的运行状态。exec 新增按租户与工作区过滤的内部作业列表路由。

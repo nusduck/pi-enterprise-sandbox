@@ -131,6 +131,11 @@ export function registerPublicSessionRoutes(app: Hono, deps: PublicSessionDeps):
         await deps.jobRegistry.kill(job.id, owner).catch(() => {});
       }
 
+      // 再删该工作区全部作业的落盘输出：作业 id 只从持久化账本里取
+      // （`deleteJobOutputsForOwner` 内部走 `store.listByOwner`，生产即 MySQL），
+      // 不按目录名猜。best-effort——删不掉不阻塞目录 GC。
+      await deps.jobRegistry.deleteJobOutputsForOwner(owner).catch(() => {});
+
       // 再删目录：工作区 + 配对 temp。路径只从会话上下文取，不碰请求原文。
       const workspaceRoot = own.workspace.workspaceRoot;
       const tempRoot = own.workspace.tempRoot;

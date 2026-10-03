@@ -182,6 +182,13 @@ export interface JobRead {
   readonly nextCursor: string;
   readonly truncated: boolean;
   readonly logTotal: number;
+  /**
+   * 落盘输出不可用——**只在**没有 live 条目、且落盘文件缺失或损坏时设置。
+   * 调用方据此区分"确实没有新输出"（本字段缺省、`text` 为空、
+   * `lossy` 为 false）和"输出已经丢了"（本字段为 true、`lossy` 为 true）。
+   * 有输出、或确实没有新增输出时永远不设置。
+   */
+  readonly outputUnavailable?: boolean | undefined;
   /** 不透明 spill 引用；真正路径经 `resolveSpillPath()` 换取。 */
   readonly stdoutSpillRef?: string | undefined;
   readonly stderrSpillRef?: string | undefined;
