@@ -158,17 +158,20 @@ describe('Agent catalog client', () => {
 });
 
 describe('create-run body carries the selected agent', () => {
-  it('passes agent_id through in both wire spellings', () => {
+  it('passes agent_id through in the snake_case spelling', () => {
     const snake = normalizeCreateRunBody({
       messages: [{ role: 'user', content: 'hi' }],
       agent_id: 'AGENT_ULID',
     });
+    assert.equal(snake.agent_id, 'AGENT_ULID');
+  });
+
+  it('drops the retired camelCase agentId alias', () => {
     const camel = normalizeCreateRunBody({
       messages: [{ role: 'user', content: 'hi' }],
       agentId: 'AGENT_ULID',
     });
-    assert.equal(snake.agent_id, 'AGENT_ULID');
-    assert.equal(camel.agent_id, 'AGENT_ULID');
+    assert.equal(camel.agent_id, undefined);
   });
 
   it('omits agent_id when the caller did not choose one', () => {

@@ -38,16 +38,12 @@ export interface DevelopmentActingIdentity {
 
 /**
  * Whether BFF should require browser Authorization on user-facing routes.
- * Aligns with SANDBOX_AUTH_ENABLED when AUTH_ENABLED is unset.
  */
 export function resolveAuthEnabled(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): boolean {
   if (env.AUTH_ENABLED != null && String(env.AUTH_ENABLED).trim() !== '') {
     return String(env.AUTH_ENABLED).toLowerCase() === 'true';
-  }
-  if (env.SANDBOX_AUTH_ENABLED != null && String(env.SANDBOX_AUTH_ENABLED).trim() !== '') {
-    return String(env.SANDBOX_AUTH_ENABLED).toLowerCase() === 'true';
   }
   return false;
 }
@@ -108,23 +104,16 @@ function nonEmptyEnv(
   return value != null && String(value).trim() !== '' ? String(value).trim() : null;
 }
 
-function parseLegacyApprovalEnabled(value: unknown): boolean {
-  if (typeof value === 'boolean') return value;
-  const raw = String(value).trim().toLowerCase();
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  throw new Error(`Invalid APPROVAL_ENABLED=${value}; expected true or false`);
-}
-
 /**
- * Resolve the global approval policy. Default is ask. Legacy booleans map
- * true → ask and false → deny, so disabling the ask switch never broadens
- * permissions. auto_approve is explicit and intended only for development.
+ * Resolve the global approval policy. Default is ask. Only `APPROVAL_MODE` is
+ * read — the retired `APPROVAL_ENABLED` / `SANDBOX_APPROVAL_*` booleans are
+ * Agent-side concerns (agent/config.ts still parses them) and no longer affect
+ * the BFF. auto_approve is explicit and intended only for development.
  */
 export function resolveApprovalMode(
   env: NodeJS.ProcessEnv | Record<string, unknown> = process.env,
 ): string {
-  const explicit = nonEmptyEnv(env, 'APPROVAL_MODE') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_MODE');
+  const explicit = nonEmptyEnv(env, 'APPROVAL_MODE');
   if (explicit) {
     const mode = explicit.toLowerCase().replaceAll('-', '_');
     if ((Object.values(APPROVAL_MODES) as readonly string[]).includes(mode)) return mode;
@@ -133,19 +122,7 @@ export function resolveApprovalMode(
     );
   }
 
-  const legacy = nonEmptyEnv(env, 'APPROVAL_ENABLED') || nonEmptyEnv(env, 'SANDBOX_APPROVAL_ENABLED');
-  if (legacy != null) {
-    return parseLegacyApprovalEnabled(legacy)
-      ? APPROVAL_MODES.ASK
-      : APPROVAL_MODES.DENY;
-  }
   return APPROVAL_MODES.ASK;
-}
-
-export function resolveApprovalEnabled(
-  env: NodeJS.ProcessEnv | Record<string, unknown> = process.env,
-): boolean {
-  return resolveApprovalMode(env) !== APPROVAL_MODES.DENY;
 }
 
 export function resolveDeploymentEnv(
@@ -204,7 +181,7 @@ export function validateProductionConfig(
   }
 
   if (!authEnabled) {
-    errors.push('AUTH_ENABLED (or SANDBOX_AUTH_ENABLED) must be true in production');
+    errors.push('AUTH_ENABLED must be true in production');
   }
 
   if (resolveApprovalMode(env) === APPROVAL_MODES.AUTO_APPROVE) {
@@ -233,7 +210,6 @@ export function effectiveConfig(cfg: typeof config = config): Record<string, unk
     AGENT_INTERNAL_TOKEN: cfg.AGENT_INTERNAL_TOKEN ? '***' : '<empty>',
     AUTH_ENABLED: cfg.AUTH_ENABLED,
     APPROVAL_MODE: cfg.APPROVAL_MODE,
-    APPROVAL_ENABLED: cfg.APPROVAL_ENABLED,
     JSON_BODY_LIMIT_BYTES: cfg.JSON_BODY_LIMIT_BYTES,
     DATASET_UPLOAD_MAX_BYTES: cfg.DATASET_UPLOAD_MAX_BYTES,
     CORS_ALLOWED_ORIGINS: cfg.CORS_ALLOWED_ORIGINS,
@@ -287,11 +263,11 @@ export const config = {
   AUTH_ENABLED: resolveAuthEnabled(),
   DEVELOPMENT_ACTING_IDENTITY: resolveDevelopmentActingIdentity(),
   /**
-   * Approval behavior for high-risk tools. Default ask. Legacy false maps to deny;
+   * Approval behavior for high-risk tools. Default ask;
    * auto_approve requires an explicit mode and is rejected in production.
+   * (BFF 自身不执行审批策略，只做生产校验与启动日志。)
    */
   APPROVAL_MODE: resolveApprovalMode(),
-  APPROVAL_ENABLED: resolveApprovalEnabled(),
   JSON_BODY_LIMIT_BYTES:
     parseInt(process.env.JSON_BODY_LIMIT_BYTES || '1048576', 10) || 1024 * 1024,
   DATASET_UPLOAD_MAX_BYTES: resolveDatasetUploadMaxBytes(),
@@ -333,7 +309,6 @@ export function isProtectedApiPath(path: string): boolean {
     path.startsWith('/api/cron-jobs') ||
     path.startsWith('/api/agents') ||
     path.startsWith('/api/admin') ||
-    path.startsWith('/api/extensions') ||
     path.startsWith('/api/capabilities') ||
     path.startsWith('/api/a2a') ||
     path.startsWith('/api/processes') ||

@@ -21,7 +21,7 @@
 cp .env.example .env
 # 编辑 .env：至少填入 LLMIO_BASE_URL / LLMIO_API_KEY；可选 SANDBOX_API_TOKEN
 # 多用户归属（默认关闭）: AUTH_ENABLED=true + SANDBOX_JWT_SECRET
-# SANDBOX_AUTH_ENABLED 仅是 BFF 的旧别名；JWT 凭据由 Agent 管理，exec 不读取。
+# 退役的 SANDBOX_AUTH_ENABLED 别名 BFF 已不再读取，不要再配置；JWT 凭据由 Agent 管理，exec 不读取。
 # 关闭鉴权即回退 open 单用户模式；ownership 列与 bootstrap 回填结果保留
 
 # 1. Python（只为跑 tests/ 的仓库卫生检查，不是执行面服务）
@@ -660,8 +660,9 @@ APPROVAL_MODE=ask
 - **Exec 层**：TypeScript `/internal/v1/*` handlers 独立校验 owner、HMAC claim、路径、hard-deny 与 Bubblewrap 隔离；普通 workspace bash/python/node 不进入审批。
 - **审批模式**：`ask`（默认）创建 durable approval 并暂停；`deny` 明确拒绝
   `approval_required` 且不创建审批；`auto_approve` 仅用于明确受控的研发旁路并写
-  bypass 审计，生产配置拒绝该模式。旧 `APPROVAL_ENABLED=true|false` 分别映射到
-  `ask|deny`。所有模式都保留 hard_deny（如 `sudo`、`rm -rf /`）。
+  bypass 审计，生产配置拒绝该模式。旧 `APPROVAL_ENABLED=true|false` 在 Agent 侧
+  仍分别映射到 `ask|deny`（BFF 已不再读取旧布尔别名，只认 `APPROVAL_MODE`）。
+  所有模式都保留 hard_deny（如 `sudo`、`rm -rf /`）。
 - **定向测试**：
 
 ```bash

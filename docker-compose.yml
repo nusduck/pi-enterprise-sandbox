@@ -271,9 +271,10 @@ services:
       BFF_DEV_ACTING_USER_ID: ${BFF_DEV_ACTING_USER_ID:-local-development-user}
       BFF_DEV_ACTING_ORGANIZATION_ID: ${BFF_DEV_ACTING_ORGANIZATION_ID:-local-development-org}
       BFF_DEV_ACTING_ROLE: ${BFF_DEV_ACTING_ROLE:-user}
-      APPROVAL_MODE: ${APPROVAL_MODE:-${SANDBOX_APPROVAL_MODE:-}}
+      # BFF 只读 APPROVAL_MODE（默认 ask）；退役的 APPROVAL_ENABLED /
+      # SANDBOX_APPROVAL_* 布尔别名 BFF 不再读取（Agent 侧仍解析，见 agent 服务）。
+      APPROVAL_MODE: ${APPROVAL_MODE:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-      APPROVAL_ENABLED: ${APPROVAL_ENABLED:-${SANDBOX_APPROVAL_ENABLED:-}}
       PORT: 4000
     restart: unless-stopped
     depends_on:

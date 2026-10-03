@@ -14,7 +14,6 @@ const {
   handleGetProcessLogs,
   handleListProcesses,
   handleProcessAction,
-  handleReadProcess,
 } = await import(`../src/routes/processes.js?test=${Date.now()}`);
 
 const PROCESS = 'bash-123456789abc';
@@ -47,14 +46,6 @@ before(() => {
         next_offset: 8,
         completed: false,
         truncated: false,
-      });
-    }
-    if (url.pathname.endsWith('/read')) {
-      return Response.json({
-        process_id: PROCESS,
-        cursor: url.searchParams.get('cursor'),
-        next_cursor: '0-9',
-        text: 'chunk',
       });
     }
     if (url.pathname.endsWith('/signal') || url.pathname.endsWith('/cancel')) {
@@ -107,7 +98,7 @@ test('BFF authorizes the session in Agent then lists exec-owned processes', asyn
   assert.ok(execCall.init.headers['X-Acting-Organization-Id']);
 });
 
-test('BFF preserves log/read cursors and session-scoped control payloads', async () => {
+test('BFF preserves log cursors and session-scoped control payloads', async () => {
   const logsResponse = responseCapture();
   await handleGetProcessLogs(
     PROCESS,
@@ -117,15 +108,6 @@ test('BFF preserves log/read cursors and session-scoped control payloads', async
   );
   assert.equal(logsResponse.status, 200);
   assert.ok(calls.some((item) => item.path.endsWith('/logs?offset=7&limit=50')));
-
-  const readResponse = responseCapture();
-  await handleReadProcess(
-    PROCESS,
-    new URL(`http://bff/api/processes/x/read?session_id=${SESSION}&stream=stderr&cursor=0-7&limit=64`),
-    readResponse,
-    request(),
-  );
-  assert.equal(JSON.parse(readResponse.body).cursor, '0-7');
 
   const signalResponse = responseCapture();
   await handleProcessAction(
@@ -139,23 +121,16 @@ test('BFF preserves log/read cursors and session-scoped control payloads', async
   assert.deepEqual(JSON.parse(signalCall.init.body), { signal: 'SIGKILL' });
 });
 
-test('kill without an explicit signal sends SIGKILL; signal keeps its SIGTERM default', async () => {
-  // 2026-08-26 实测：忽略 TERM 的循环在两次 `kill` 后仍在跑——`kill` 名不副实。
-  const killResponse = responseCapture();
-  await handleProcessAction(PROCESS, 'kill', { session_id: SESSION }, killResponse, request());
-  assert.equal(killResponse.status, 200);
-  const killCall = calls.findLast((item) => item.path.endsWith('/signal'));
-  assert.deepEqual(JSON.parse(killCall.init.body), { signal: 'SIGKILL' });
-
+test('signal keeps its SIGTERM default; retired kill alias is rejected', async () => {
   const termResponse = responseCapture();
   await handleProcessAction(PROCESS, 'signal', { session_id: SESSION }, termResponse, request());
   const termCall = calls.findLast((item) => item.path.endsWith('/signal'));
   assert.deepEqual(JSON.parse(termCall.init.body), { signal: 'SIGTERM' });
 
-  const explicit = responseCapture();
-  await handleProcessAction(PROCESS, 'kill', { session_id: SESSION, signal: 'SIGINT' }, explicit, request());
-  const explicitCall = calls.findLast((item) => item.path.endsWith('/signal'));
-  assert.deepEqual(JSON.parse(explicitCall.init.body), { signal: 'SIGINT' }, 'an explicit signal still wins');
+  // `kill` 已删除：handleProcessAction 走 405 防御分支，不再转发 signal。
+  const retired = responseCapture();
+  await handleProcessAction(PROCESS, 'kill', { session_id: SESSION }, retired, request());
+  assert.equal(retired.status, 405);
 });
 
 test('BFF requires session scope and preserves exec owner-scoped 404', async () => {

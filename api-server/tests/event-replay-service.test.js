@@ -22,16 +22,21 @@ const EVT = '01K0G2PAV8FPMVC9QHJG7JPN58';
 const RUN = '01K0G2PAV8FPMVC9QHJG7JPN53';
 
 describe('parseSseResumeCursor', () => {
-  it('parses afterSequence and after_sequence', () => {
-    const sp = new URLSearchParams('afterSequence=17');
+  it('parses the canonical after_sequence cursor', () => {
+    const sp = new URLSearchParams('after_sequence=17');
     assert.equal(parseSseResumeCursor({ searchParams: sp }).afterSequence, 17);
-    const sp2 = new URLSearchParams('after_sequence=9&after=3');
-    assert.equal(parseSseResumeCursor({ searchParams: sp2 }).afterSequence, 9);
+  });
+
+  it('ignores the retired afterSequence / after aliases', () => {
+    const sp = new URLSearchParams('afterSequence=17&after=9');
+    assert.equal(parseSseResumeCursor({ searchParams: sp }).afterSequence, 0);
+    const sp2 = new URLSearchParams('after_sequence=5&after=9&afterSequence=17');
+    assert.equal(parseSseResumeCursor({ searchParams: sp2 }).afterSequence, 5);
   });
 
   it('numeric Last-Event-ID raises afterSequence', () => {
     const c = parseSseResumeCursor({
-      searchParams: new URLSearchParams('after=5'),
+      searchParams: new URLSearchParams('after_sequence=5'),
       headers: { 'last-event-id': '12' },
     });
     assert.equal(c.afterSequence, 12);
@@ -42,7 +47,7 @@ describe('parseSseResumeCursor', () => {
   // `last-event-id` regardless of how the browser cased it.
   it('ULID Last-Event-ID is forwarded separately', () => {
     const c = parseSseResumeCursor({
-      searchParams: new URLSearchParams('afterSequence=4'),
+      searchParams: new URLSearchParams('after_sequence=4'),
       headers: { 'last-event-id': EVT },
     });
     assert.equal(c.afterSequence, 4);
@@ -92,7 +97,7 @@ describe('presentCreateRunAccepted', () => {
 });
 
 describe('normalizeCreateRunBody', () => {
-  it('accepts legacy messages[]', () => {
+  it('accepts messages[]', () => {
     const n = normalizeCreateRunBody({
       messages: [{ role: 'user', content: 'hi' }],
       conversation_id: 'c1',
@@ -102,22 +107,23 @@ describe('normalizeCreateRunBody', () => {
     assert.equal(n.conversation_id, 'c1');
   });
 
-  it('accepts plan §18.3 message.content text parts', () => {
+  it('rejects the retired message.content shape', () => {
     const n = normalizeCreateRunBody({
       message: {
         content: [{ type: 'text', text: '分析已上传数据' }],
       },
     });
-    assert.equal(n.error, undefined);
-    assert.equal(n.messages[0].content, '分析已上传数据');
+    assert.ok(n.error.includes('messages'));
   });
 
-  it('binds conversationId from route opts', () => {
-    const n = normalizeCreateRunBody(
-      { messages: [{ role: 'user', content: 'x' }] },
-      { conversationId: 'conv-route' },
-    );
-    assert.equal(n.conversation_id, 'conv-route');
+  it('rejects camelCase id aliases', () => {
+    const n = normalizeCreateRunBody({
+      messages: [{ role: 'user', content: 'x' }],
+      agentId: 'a1',
+      modelId: 'm1',
+    });
+    assert.equal(n.agent_id, undefined);
+    assert.equal(n.model_id, undefined);
   });
 
   it('rejects empty body', () => {
@@ -136,9 +142,10 @@ describe('readIdempotencyKeyHeader', () => {
 });
 
 describe('BFF PR-10 wiring (source contracts)', () => {
-  it('server mounts conversation-scoped create runs', () => {
+  it('server exposes only POST /api/runs for run creation', () => {
     const serverSrc = readFileSync(join(root, 'server.ts'), 'utf8');
-    assert.match(serverSrc, /\/api\/conversations\/.*\/runs/);
+    assert.match(serverSrc, /POST \/api\/runs/);
+    assert.doesNotMatch(serverSrc, /\/api\/conversations\/.*\/runs/);
     assert.match(serverSrc, /Last-Event-ID/);
   });
 

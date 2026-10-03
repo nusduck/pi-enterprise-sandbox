@@ -37,6 +37,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   托管作业，再删工作区目录与配对 temp（`{"removed": true/false}`）；审核工作区
   可删但多一道策略表创建组织绑定检查。agent 侧 `removeSessionWorkspace` 校验
   响应形状，非 2xx（含纯文本 404）抛可读错误，不再有空消息或 JSON 解析崩溃。
+### Removed — 无调用方的 BFF 端点与兼容别名
+- 产品确认除本仓库 frontend 外没有任何外部 API 客户端，以下路由/handler/别名删除（agent/exec 侧端点保留）：
+  `POST /api/conversations/{id}/runs`（只用 `POST /api/runs`）、
+  `GET /api/extensions/diagnostics`（能力清单走 `/api/capabilities/*` 投影）、
+  `GET /api/approvals/{id}`（只用列表 + decide）、
+  `GET /api/processes/{id}/read` 与 `POST .../kill`（`kill` 是 `signal` 的别名；进程详情 `{id}`、logs、stdin、signal、cancel 保留，前端进程控制台在用）、
+  `POST /api/files/upload`（附件上传走 `POST /api/conversations/{id}/datasets`）。
+- 建 Run 请求体只认 `messages[]` + snake_case：退役 `message.content[]` 形状与 `agentId` / `agentProfileId` / `modelId` 驼峰别名。
+- SSE 续传游标只认 `after_sequence` + `Last-Event-ID`：退役 `afterSequence` / `after` 别名；BFF 转发给 Agent 时也只发 `after_sequence`。
+- BFF 不再读取 `SANDBOX_AUTH_ENABLED`、`SANDBOX_APPROVAL_MODE`、`APPROVAL_ENABLED`、`SANDBOX_APPROVAL_ENABLED`
+ （`APPROVAL_MODE` 仍是 BFF 规范变量；Agent 侧继续解析旧布尔映射，不受影响）。
+  同步删除 `.env.example` / compose 中 BFF 侧的旧变量投影。
+- `api-server/src/domain/roles.ts` 删除无生产调用的导出（`ROLE_REVIEWER`、`isKnownRole`、`primaryRole`，
+  测试同步去掉对应断言；跨包夹具与 Agent 侧实现保留）。
+- 保留未删：`GET /api/processes/{id}`（前端进程控制台轮询状态在用）；
+  时间线事件的多拼写回退（Agent 历史信封含 `ts` / payload 透传的驼峰字段，删回退会破坏旧时间线加载）。
 ### Fixed — `AGENT_RUN_STREAM_MAXLEN` 生效
 
 - deployment.md 与 compose 都把它列为可调的 Run stream 近似 MAXLEN，但 `RunEventStream` 的两处装配从未传入，改了不生效，

@@ -10,7 +10,6 @@ process.env.AUTH_ENABLED = 'false';
 
 const {
   handleDecideApproval,
-  handleGetApproval,
   handleListApprovals,
 } = await import(`../src/routes/approvals.js?test=${Date.now()}`);
 
@@ -25,12 +24,6 @@ before(() => {
       return new Response(JSON.stringify({ approvals: [{ approval_id: APPROVAL }] }), {
         status: 200,
       });
-    }
-    if (url.pathname === `/internal/approvals/${APPROVAL}`) {
-      return new Response(
-        JSON.stringify({ approval_id: APPROVAL, status: 'pending', tool_name: 'bash' }),
-        { status: 200 },
-      );
     }
     if (
       url.pathname === `/internal/approvals/${APPROVAL}/decide` &&
@@ -47,11 +40,6 @@ before(() => {
         }),
         { status: 200 },
       );
-    }
-    if (url.pathname === '/internal/approvals/01K0G2PAV8FPMVC9QHJG7JPN59') {
-      return new Response(JSON.stringify({ error: 'Approval not found', code: 'NOT_FOUND' }), {
-        status: 404,
-      });
     }
     throw new Error(`unexpected fetch ${url}`);
   };
@@ -94,19 +82,6 @@ test('approval list forwards owner identity and filters to Agent MySQL', async (
   assert.equal(calls[0].path, '/internal/approvals?status=pending&limit=25');
   assert.ok(calls[0].init.headers['X-Acting-User-Id']);
   assert.ok(calls[0].init.headers['X-Acting-Organization-Id']);
-});
-
-test('approval detail forwards Agent response and preserves owner-scoped 404', async () => {
-  const found = responseCapture();
-  await handleGetApproval(APPROVAL, found, request());
-  assert.equal(found.status, 200);
-  assert.equal(JSON.parse(found.body).tool_name, 'bash');
-
-  const missing = responseCapture();
-  await handleGetApproval('01K0G2PAV8FPMVC9QHJG7JPN59', missing, request());
-  assert.equal(missing.status, 404);
-  assert.equal(JSON.parse(missing.body).code, 'NOT_FOUND');
-  assert.ok(calls.every((call) => !call.path.startsWith('/approvals')));
 });
 
 test('approval decision writes only through the Agent authority', async () => {

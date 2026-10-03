@@ -3,14 +3,15 @@
  * exec 公共面 `/sessions/:id/files/*` 的 `:id` 却是 workspace_id
  * （exec `requireOwnedSession()` 拿它派生物理工作区路径）。
  *
- * 修复前 download/upload 直接把 session id 塞进 URL：下载恒 404，
- * 上传静默写进一个没人读的幽灵工作区。这两条用例在修复前会失败。
+ * 修复前 download 直接把 session id 塞进 URL：下载恒 404。
+ * `POST /api/files/upload` 已删除（前端附件走会话 datasets 上传），
+ * 这里只保留下载路径的回归。
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { handleFileDownload, handleFileUpload } from '../src/routes/files.js';
+import { handleFileDownload } from '../src/routes/files.js';
 import { config } from '../src/config.js';
 
 const SESSION_ID = '01SESSION0000000000000000000';
@@ -60,24 +61,6 @@ function agentSessionResponse() {
   });
 }
 
-/** 最小 IncomingMessage 替身：上传路径要真的能被流式读干净。 */
-function uploadRequest(payload = 'hello') {
-  const req = new EventEmitter();
-  req.headers = { 'content-type': 'application/octet-stream' };
-  req.complete = false;
-  req.resume = () => {};
-  req.pause = () => {};
-  req.destroy = () => {};
-  req.traceId = null;
-  req.traceContext = null;
-  setImmediate(() => {
-    req.emit('data', Buffer.from(payload));
-    req.complete = true;
-    req.emit('end');
-  });
-  return req;
-}
-
 async function withStubbedFetch(handler, run) {
   const originalFetch = globalThis.fetch;
   const originalAuth = config.AUTH_ENABLED;
@@ -124,34 +107,6 @@ describe('file proxy id domain', () => {
         assert.ok(sandboxCall, 'sandbox download was never called');
         assert.ok(
           sandboxCall.url.includes(`/sessions/${WORKSPACE_ID}/files/download`),
-          `expected workspace-keyed URL, got ${sandboxCall.url}`,
-        );
-        assert.ok(!sandboxCall.url.includes(SESSION_ID));
-      },
-    );
-  });
-
-  it('uploads through the workspace_id, not the sandbox session id', async () => {
-    await withStubbedFetch(
-      (url) =>
-        url.includes(`/sessions/${WORKSPACE_ID}/files/upload`)
-          ? jsonResponse(
-              { attachment_id: 'att_1', path: 'uploads/a.txt', size: 5 },
-              201,
-            )
-          : null,
-      async (calls) => {
-        const res = new MockResponse();
-        await handleFileUpload(
-          new URL(`http://bff/api/files/upload?session_id=${SESSION_ID}`),
-          uploadRequest(),
-          res,
-        );
-        assert.equal(res.status, 201);
-        const sandboxCall = calls.find((call) => call.url.includes('/files/upload'));
-        assert.ok(sandboxCall, 'sandbox upload was never called');
-        assert.ok(
-          sandboxCall.url.includes(`/sessions/${WORKSPACE_ID}/files/upload`),
           `expected workspace-keyed URL, got ${sandboxCall.url}`,
         );
         assert.ok(!sandboxCall.url.includes(SESSION_ID));

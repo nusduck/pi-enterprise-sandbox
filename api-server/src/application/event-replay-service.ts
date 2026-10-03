@@ -3,7 +3,7 @@
  *
  * BFF does **not** own MySQL run_events or Redis streams. Agent is the replay
  * authority (MySQL history + Redis live). This module:
- *   - Parses public SSE resume cursors (afterSequence / Last-Event-ID)
+ *   - Parses the public SSE resume cursor (after_sequence / Last-Event-ID)
  *   - Documents ownership / fail-closed expectations
  *
  * Forbidden: process-local event buffer as the state source for recovery.
@@ -31,11 +31,11 @@ export function parseSseResumeCursor(input: ParseSseResumeCursorInput = {}): Sse
 
   let afterSequence = 0;
   if (params && typeof params.get === 'function') {
-    for (const key of ['afterSequence', 'after_sequence', 'after']) {
-      const raw = params.get(key);
-      if (raw != null && /^\d+$/.test(String(raw).trim())) {
-        afterSequence = Math.max(afterSequence, parseInt(String(raw).trim(), 10) || 0);
-      }
+    // 唯一的线格式游标键是 `after_sequence`（前端唯一在发的形状）；
+    // 退役的 `afterSequence` / `after` 别名不再解析。
+    const raw = params.get('after_sequence');
+    if (raw != null && /^\d+$/.test(String(raw).trim())) {
+      afterSequence = Math.max(afterSequence, parseInt(String(raw).trim(), 10) || 0);
     }
   }
 

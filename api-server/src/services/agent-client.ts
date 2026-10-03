@@ -676,17 +676,6 @@ export async function listAgentApprovals(
   return requestAgentApproval(pickListQuery(query, APPROVAL_LIST_KEYS), { auth, traceId });
 }
 
-/** Load one owner-scoped durable approval from Agent MySQL. */
-export async function getAgentApproval(
-  approvalId: string,
-  { auth = null, traceId = null }: { auth?: any; traceId?: string | null } = {},
-): Promise<any> {
-  return requestAgentApproval(`/${encodeURIComponent(approvalId)}`, {
-    auth,
-    traceId,
-  });
-}
-
 /**
  * @param {string} runId
  */
@@ -760,8 +749,8 @@ export async function listAgentEvents(
   url.searchParams.set('format', 'json');
   const after = Math.max(0, Number(query.afterSequence) || 0);
   if (after > 0) {
-    url.searchParams.set('after', String(after));
-    url.searchParams.set('afterSequence', String(after));
+    // Agent 内面三种键都认；BFF 只发 `after_sequence`（与浏览器→BFF 一致）。
+    url.searchParams.set('after_sequence', String(after));
   }
   // Default page size matches Agent query-service max so a single page covers
   // more history; conversation-timeline still paginates when needed.
@@ -803,8 +792,7 @@ export async function openAgentRunEvents(
   const qs = new URLSearchParams();
   const afterSeq = Math.max(0, Number(after) || 0);
   if (afterSeq > 0) {
-    qs.set('after', String(afterSeq));
-    qs.set('afterSequence', String(afterSeq));
+    qs.set('after_sequence', String(afterSeq));
   }
   const q = qs.toString();
   const url =
