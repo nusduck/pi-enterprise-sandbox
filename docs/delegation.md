@@ -106,8 +106,10 @@ git worktree remove .runtime/worktrees/<task>
 
 ## 6. 配置现状与已知注意点
 
-- dsh 两个档位（flash、pro）当前都绑到 `opencode` 提供商的同一个模型，**pro 与 flash
-  实际是同一模型**；这是会话级配置，随时可能变，用 `dsh_worker_config`（无参数）读取当前值。
+- dsh 两个档位走 `opencode-go` 提供商：`flash` 对应 `deepseek-v4.1-flash`，
+  `pro` 对应 `muse-spark-1.3-contributor`（两档已分化，不再是同一模型）；
+  这是会话级配置，随时可能变，用 `dsh_worker_config`（无参数）读取当前值。
+  `pro` 档只支持 effort `high`。
   自定义路由在首次调度前未验证，换路由后先派一个只读冒烟任务。
 - dsh 默认 effort 为 `max`，小任务会偏慢、偏费 token；确有必要再显式降档。
 - agy 的安装后冒烟验证是 `/agy:ask`（同步、零工具）。

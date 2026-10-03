@@ -33,8 +33,10 @@
 | `exec/` | TypeScript 执行面（`dist/main.js`） | **工作区与 /tmp 的字节、进程、Bubblewrap 隔离、产物快照** | 不存 Run 账本（`/agent-runs` 已删，勿重建） |
 | `exec/`（第二入口 `dist/mcp-main.js`） | 对外的 MCP facade，compose 里叫 `sandbox-mcp` | 外部 `context_id` → 沙箱身份的映射（Redis） | **够不到 `/internal/v1/*`**；只走 `/internal/mcp/v1/*` 窄桥 |
 
-> **`agent/src/runtime/`** 是 agent 私有的 DSH 组合层（provider / policy / projection），
+> **`agent/src/runtime/`** 是 agent 私有的 DSH 组合层（provider / policy），
 > 不是独立服务或对外公共 SDK：只有 `agent/` 消费它，与 Agent 源码一起编译。
+> 事件投影不在 `runtime/` 下：平台事件即 SSE 契约（ADR 0014），投影实现位于
+> `agent/src/infrastructure/dsh/event-projector.ts` 及 BFF 侧。
 > `contract/` 是 exec 与 agent 共用的 RPC 契约包。模型侧 MCP 由出厂
 > `@deepseek-ai/dsh-mcp-client` 承担（ADR 0009 H7 退役了自建的 MCP adapter），
 > server 清单**只来自进程环境变量 `MCP_SERVERS_JSON`**，不进提交的 YAML。

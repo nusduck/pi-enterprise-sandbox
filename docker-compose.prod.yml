@@ -20,7 +20,7 @@
 #   SANDBOX_API_TOKEN, AGENT_INTERNAL_TOKEN, SANDBOX_JWT_SECRET,
 #   DBPM_URL, DBPM_DB_NAME, DBPM_REDIS_DB_NAME, DBPM_REDIS_DB_USER_NAME
 # Optional but recommended:
-#   SANDBOX_CORS_ORIGINS, DOMAIN
+#   DOMAIN
 # Application DSNs/Redis URLs carry NO password (ADR 0011 D10): agent,
 # agent-worker, sandbox and sandbox-mcp fetch credentials from a real DBPM at
 # startup and refuse to start if a URL embeds one. MYSQL_PASSWORD /
@@ -189,9 +189,6 @@ services:
       SANDBOX_POLICY_PROFILE: strict
       SANDBOX_ISOLATION_BACKEND: bubblewrap
       SANDBOX_ISOLATION_REQUIRED: "true"
-      SANDBOX_CORS_ORIGINS: ${SANDBOX_CORS_ORIGINS:?Set SANDBOX_CORS_ORIGINS for production (no wildcard)}
-      SANDBOX_CORS_ALLOW_CREDENTIALS: ${SANDBOX_CORS_ALLOW_CREDENTIALS:-true}
-      SANDBOX_DEBUG: "false"
     depends_on: !override
       mysql:
         condition: service_healthy

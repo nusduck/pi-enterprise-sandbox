@@ -57,8 +57,8 @@ dsh-enterprise-sandbox/
 │   ├── worker.ts         ← BullMQ worker
 │   ├── src/application/  ← Run、Session、审批、A2A 应用服务
 │   ├── src/infrastructure/dsh/ ← 与组合层的接线
-│   ├── src/runtime/      ← DSH 组合层（provider / policy / projection）
-│   │                        agent 私有，不是独立服务
+│   ├── src/runtime/      ← DSH 组合层（provider / policy；agent 私有，不是独立服务）
+│   │                        事件投影见 src/infrastructure/dsh/event-projector.ts（ADR 0014）
 │   └── Dockerfile
 ├── contract/             ← @dsh/contract：exec ↔ agent runtime 的 RPC 信封、HMAC、错误码
 ├── exec/                 ← 执行面 + MCP facade（TypeScript，取代原 Python sandbox/）
@@ -123,10 +123,12 @@ SANDBOX_BASE_URL=http://localhost:8081
 | `SANDBOX_AUTH_ALLOW_PUBLIC_REGISTER` | `true` | Agent 公开自注册；生产必须 `false`（管理员预置 / 邀请制） |
 | `SANDBOX_AUTH_ADMIN_USERNAMES` | _(空)_ | 管理员用户名白名单，逗号分隔、大小写不敏感 |
 
-`SANDBOX_AUTH_ADMIN_USERNAMES` 是 admin 角色的**唯一**来源。注册接口忽略客户端提交的
-`role` 与 `organization_id`，所以没有这份名单就永远产生不出第一个管理员，
-`/api/a2a/config` 等管理面会一直 403 `ADMIN_REQUIRED`。名单内的用户名注册即为 admin；
-已存在的账号在下次 login 或 `/auth/me` 时提升，从名单移除则降级回 user。
+`SANDBOX_AUTH_ADMIN_USERNAMES` 只做首个管理员的**引导与锁定**（逗号分隔，大小写不敏感），
+不是 admin 角色的唯一来源。角色权威是 MySQL `tbl_agsvc_member_roles`，由 admin 在
+「成员与角色」页授予/撤销：名单内账号在登录或 `/auth/me` 时若本 org 还没有它的 admin
+授予就补一条（`source=bootstrap`）并记审计，界面上显示为「部署锁定」；**从名单移除不会
+自动降级**，授予留在库里，需由 admin 在界面撤销。注册接口忽略客户端提交的
+`role` 与 `organization_id`。名单为空则不引导任何人，既有 admin 不受影响。
 
 `BFF_DEV_ACTING_ROLE` 只对 `AUTH_ENABLED=false` 的开发身份生效，不会提升真实用户。
 
@@ -155,15 +157,15 @@ SANDBOX_BASE_URL=http://localhost:8081
 Sandbox **不再**按空闲 TTL 后台清会话/工作区（旧 `SANDBOX_SESSION_TTL_*` /
 `SANDBOX_CLEANUP_INTERVAL_*` / draft·conversation·audit TTL 配置已移除，设置了也会被忽略）。
 
-工作区磁盘回收路径：用户删除/归档 **conversation** → Agent fail-soft 调用
-`DELETE /sessions/{sandbox_session_id}` → 删除物理 workspace + 配对 temp。
+公共面没有删除整个 Session 的路由（`DELETE /sessions/{id}` 不存在），文件删除只支持
+按路径（`DELETE /sessions/{id}/files?path=`）。
 
 ### 网络策略（入站 vs 出站分离）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SANDBOX_ALLOWED_CLIENT_CIDRS` | loopback + 私网 | **入站** Sandbox HTTP 来源 CIDR；空 = 拒绝全部 |
-| `SANDBOX_TRUSTED_PROXY_CIDRS` | _(空)_ | 可信反向代理；默认忽略 `X-Forwarded-For` |
+| `EXEC_INTERNAL_ALLOW_CIDR` | loopback + 私网 | **入站**内部面（`/internal/v1/*`）来源 CIDR；空 = 拒绝全部 |
+| `CORS_ALLOWED_ORIGINS` | _(空)_ | BFF 跨域：允许携带会话 Cookie 的精确 Origin（逗号分隔）；同源留空 |
 
 Compose：`backend_internal`（`internal: true`）与 `service_egress`；Sandbox 仅挂 `backend_internal`，无 `NET_ADMIN`/`NET_RAW`，不使用 container-wide iptables。
 
@@ -208,16 +210,18 @@ Redis 只保存队列、lease、stream、取消信号等运行态；**不是** R
 
 ### Skill
 
-Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。Skill 分三层
+Agent **支持零 Skill 启动**（基础工具 read/write/edit/bash/…）。Skill 分四层
 （详见 [skills/README.md](skills/README.md)）：
 
 | 层 | 路径 | 内容 | 可见范围 | 可写 |
 |----|------|------|----------|------|
 | 系统 | `/home/sandbox/skill` | 本仓库 `./skills` 自带的 package | 所有人 | 否 |
+| 组织共享 | `/home/sandbox/skill-org/<name>` | 本 org 管理员发布、按摘要分版本的 package（ADR 0015） | 本 org 内被 `skillPolicy.org` 钉住的 Run | 否 |
 | 草稿 | `/home/sandbox/skill-draft/<orgId>/<userId>` | 模型为当前用户编写的 package | 仅该用户本人；不进 prompt | 是 |
 | 已启用 | `/home/sandbox/skill-user/<orgId>/<userId>` | 人工启用后从草稿复制的发布副本 | 仅该用户本人 | 否 |
 
-每个 Run 只扫描系统层和调用者自己的已启用层；非空
+每个 Run 只扫描系统层、本 org 共享层（按 `skillPolicy.org` 钉住的包）与调用者自己的
+已启用层；非空
 `AgentVersion.configJson.skills` 可进一步收窄模型可见的 Skill。模型用普通
 `write` / `bash` 修改草稿，用户在 Capabilities 页启用或停用；模型侧没有
 `skill_install/create/edit/uninstall` 变更工具。启用时 Agent 校验并写

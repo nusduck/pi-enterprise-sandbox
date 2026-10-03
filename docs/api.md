@@ -409,7 +409,7 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `POST` | `/api/reviews/{id}/items/{no}/revisions?base_revision=` | 上传修订版（**原始字节 body**，文件名走 `X-Filename`，不是 multipart）（**reviewer**） |
 | `POST` | `/api/reviews/{id}/approve` `reject` | 通过 / 驳回；body `{ base_revision, note?, feedback? }`，驳回必须给 `feedback`（**reviewer**） |
 | `GET` | `/api/reviews/{id}/materials/{mid}/download` | 下载材料快照（**reviewer**） |
-| `GET` | `/api/reviews/{id}/items/{no}/download` | 下载该交付物的当前版本（任一版本都可下载，含已撤回的）（**reviewer**） |
+| `GET` | `/api/reviews/{id}/artifacts/{aid}/download` | 下载该交付物的任一版本（`aid` 为交付物 artifact ID，含已撤回的）（**reviewer**） |
 | `GET` | `/api/datasets` | Dataset 列表 |
 | `GET` | `/api/processes` | 长进程列表；必传 `session_id`，可按 `run_id` / `status` 筛选 |
 | `GET` | `/api/processes/{id}` | 进程详情；必传 `session_id` |
@@ -458,6 +458,26 @@ Agent 模型侧权威清单工具：`capabilities`（`action=list|search|describ
 | `GET` | `/health/live` `/health/ready` | 探针 |
 
 `/api/a2a/*` 要求 `actingRole === 'admin'`，否则 403 `ADMIN_REQUIRED`。
+
+#### Agent A2A 协议端点
+
+上面是 BFF 的 A2A 管理面。Agent 进程自身对外提供标准 A2A 协议服务
+（`agent/src/presentation/a2a/http-handler.ts`），凭据走
+`Authorization: Bearer <a2a_api_credential>`：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/.well-known/agent-card.json` | 根 Agent Card |
+| `POST` | `/a2a` | 根卡通告的凭据路由端点（JSON-RPC 2.0） |
+| `GET` | `/a2a/agents/{agentId}/.well-known/agent-card.json` | 指定智能体的 Agent Card（无元数据时 404） |
+| `POST` | `/a2a/agents/{agentId}` | 指定智能体的 JSON-RPC 2.0 端点 |
+| `GET` | `/a2a/artifacts/download?token=…` | 产物字节下载（token 校验见 `artifact-download.ts`） |
+
+#### Agent 内部端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/internal/agent-runs/rehydrate-waiting` | 重启后唤醒带已决响应的交互：枚举持久化的 `WAITING_INPUT` 事实，只唤醒已有 resolved response 的交互（`agent/src/bootstrap/create-http-server.ts`） |
 
 #### Agent 目录（多 Agent 选择）
 
@@ -778,7 +798,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 - 兼容适配器认证: exec 公共会话面校验 `X-API-Key`（常量时间比较，不匹配 401），调用方只有 BFF 与 agent；正式 Agent
   internal plane 使用短期 HMAC claim（scope、owner、run/session、body
   digest），不接受一个永不过期的全局 token 作为执行授权
-- exec 的 public 探针豁免认证：`/health`, `/ready`, `/metrics`；浏览器认证只存在于 BFF `/api/auth/*`
+- exec 的 public 探针豁免认证：`/health`, `/ready`；浏览器认证只存在于 BFF `/api/auth/*`
 - **可选用户归属**（BFF `AUTH_ENABLED=true`；`SANDBOX_AUTH_ENABLED` 仅保留为 BFF 的旧配置别名）:
   - 浏览器终端用户：`POST /api/auth/register|login` 后由 BFF 写入 `HttpOnly; SameSite=Lax` 会话 Cookie；JWT 不暴露给前端 JavaScript。`POST /api/auth/logout` 撤销当前 sid 后清 Cookie（失败契约见认证章节）。
   - 非浏览器 API 客户端仍可使用 `Authorization: Bearer <jwt>`；BFF 经 Agent `/internal/auth/me` 验证后写入可信 `X-Acting-*` 上下文。
@@ -812,6 +832,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 | `POST` | `/internal/v1/review/artifacts/meta` | 按 id **批量**取元数据（名称 / 大小 / `createdByKind` / 时间，**不含字节**，跨 org 与不存在的 id 跳过） |
 | `POST` | `/internal/v1/review/artifacts/revision` | 审核员修订上传（新产物 + `revision_of` 链，恒 `held`） |
 | `POST` | `/internal/v1/review/artifacts/visibility` | 放行 / 撤回状态变更（单事务、幂等，只接受 `held → released\|withdrawn`） |
+| `POST` | `/internal/v1/review/artifacts/import` | 修订版导入发起人工作区的 `审核版/`（design §5.3 第 3 步） |
 | — | `/internal/mcp/v1/*` | `sandbox-mcp` facade（独立部署，见 [`sandbox-mcp.md`](./sandbox-mcp.md)） |
 
 `/internal/v1/review/*` 是**审核流程**的面，与上面那组**模型工具**的面刻意分开：它的作用域是
@@ -819,7 +840,7 @@ Base URL: `http://sandbox:8081`（Docker 内网）
 设置的目标值（允许改回待审等于给了撤销放行的口子）。完整流程见
 [design/agent-output-review.md](design/agent-output-review.md) §5–§6。
 
-这五个端点**发生在 Run 之外**（领取、上传修订、通过/驳回都可能在原 Run 终态之后很久），所以
+这六个端点**发生在 Run 之外**（领取、上传修订、通过/驳回都可能在原 Run 终态之后很久），所以
 它们签发的内部令牌允许 `run_id` 与 `execution_fence_token` **同时为 null**——这是绑定表里唯一
 允许这种形状的路径族（`allowNullRun`），其余路径仍然要求 Run 信封与 fence。exec 侧按同一口径
 校验，**不是**把 fence 校验整体关掉。
@@ -896,17 +917,15 @@ socket 目录回收，每个连接记一条只含元数据的审计日志（`eve
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `DELETE` | `/sessions/{session_id}` | 按保留策略清理该 Session 的私有存储 |
-| — | `/sessions/{id}/files/*` | 见下方 Files |
+| — | `/sessions/{id}/files/*` | 见下方 Files（删除走 `DELETE /sessions/{id}/files?path=`，仅支持删除文件路径） |
 | `GET` `POST` | `/sessions/{id}/datasets` | 列出 / 创建 Dataset |
 | `GET` | `/sessions/{id}/datasets/{did}` | Dataset 详情 |
 | `GET` | `/sessions/{id}/datasets/{did}/content` | 流式取内容 |
-| `POST` | `/sessions/{id}/datasets/{did}/abort` | 中止上传 |
 | — | `/sessions/{id}/artifacts/*` | 见下方 Artifacts |
 | `GET` | `/sessions/{id}/processes/{pid}` | 进程状态（owner 校验） |
 | `GET` | `/sessions/{id}/processes/{pid}/logs\|read` | 进程输出（偏移 / 游标） |
 | `POST` | `/sessions/{id}/processes/{pid}/signal\|stdin\|cancel` | 进程控制 |
-| `GET` | `/health` `/ready` `/metrics` | 探针与指标 |
+| `GET` | `/health` `/ready` | 探针 |
 
 ---
 
@@ -920,13 +939,14 @@ socket 目录回收，每个连接记一条只含元数据的审计日志（`eve
 | `POST` | `/sessions/{id}/files/grep` | **结构化 grep**（字面/受限正则） |
 | `GET` | `/sessions/{id}/files/read?path=&offset=&limit=` | 读取文件 |
 | `POST` | `/sessions/{id}/files/read` | 读取文件（POST body） |
-| `POST` | `/sessions/{id}/files/write` | 写入文件 |
-| `POST` | `/sessions/{id}/files/edit` | 按锚点编辑文件 |
-| `POST` | `/sessions/{id}/files/apply_patch` | 应用补丁 |
 | `GET` | `/sessions/{id}/files/preview?path=` | 预览文件前 40 行 |
 | `GET` | `/sessions/{id}/files/download?path=` | 下载文件 |
 | `DELETE` | `/sessions/{id}/files?path=` | 删除文件 |
 | `POST` | `/sessions/{id}/files/upload` | 上传附件 (multipart，隔离路径) |
+
+> 公共面只读（文件读取 / 预览 / 下载 / 结构化搜索 + 附件上传与文件删除）：
+> 写入 / 编辑 / 补丁操作只收口在 HMAC 内部面（`/internal/v1/fs/*`），公共面没有
+> `write` / `edit` / `apply_patch` 路由。
 
 #### Structured search (`ls` / `find` / `grep`)
 
@@ -1009,16 +1029,6 @@ Agent 工具 `ls` / `find` / `grep` 覆盖 SDK 本地同名工具，全部转发
 | `upload_incomplete` | 500 | 提交失败 |
 
 同一 `Idempotency-Key` 重试返回同一 `attachment_id` / `path`，不生成第二份文件。
-
-#### `POST /sessions/{id}/files/write`
-
-```json
-// Request
-{ "path": "test.txt", "content": "hello world" }
-
-// Response (201)
-{ "path": "test.txt", "size": 11, "mime_type": "text/plain" }
-```
 
 #### `GET /sessions/{id}/files/read?path=test.txt`
 
