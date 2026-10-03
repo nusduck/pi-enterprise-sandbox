@@ -165,3 +165,23 @@ test('no live handle: non-terminating signal still throws JobControlUnavailableE
     await settleKill(reg, h);
   }
 });
+
+test('terminating signal is passed to handle.cancel so SIGKILL can skip the SIGTERM grace', async () => {
+  const store = new InMemoryJobStore();
+  const reg = new MySqlJobRegistry(store);
+  const h = spawnRealHandle(`while true; do sleep 0.2; done`);
+  const seen: Array<NodeJS.Signals | undefined> = [];
+  const original = h.cancel.bind(h);
+  (h as { cancel: JobProcessHandle['cancel'] }).cancel = (reason, signal) => {
+    seen.push(signal);
+    original(reason, signal);
+  };
+  const snap = await reg.start({ kind: 'bash', label: 'kill-arg', owner, physicalRoots: [], run() { return h; } });
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    await reg.signal(snap.id, owner, 'SIGKILL');
+    assert.deepEqual(seen, ['SIGKILL']);
+  } finally {
+    await settleKill(reg, h);
+  }
+});

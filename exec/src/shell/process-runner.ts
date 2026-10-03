@@ -297,7 +297,8 @@ export interface LiveProcessHandle {
   signal: NodeJS.Signals | null;
   done: Promise<void>;
   readOutput(): { readonly delta: string; readonly lossy: boolean };
-  kill(): boolean;
+  /** 缺省 SIGTERM → 宽限 → SIGKILL；传 `SIGKILL` 时直接强杀整个进程组。 */
+  kill(signal?: 'SIGKILL'): boolean;
   writeStdin(data: string, eof: boolean): void;
 }
 
@@ -363,10 +364,11 @@ export function startBackground(
   };
 
   let killRequested = false;
-  proc.kill = () => {
+  proc.kill = (signal) => {
     if (proc.status !== 'running') return false;
     killRequested = true;
-    void terminateWithGrace(child, graceMs);
+    if (signal === 'SIGKILL') killGroup(child, 'SIGKILL');
+    else void terminateWithGrace(child, graceMs);
     return true;
   };
 

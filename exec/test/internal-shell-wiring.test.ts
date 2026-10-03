@@ -37,6 +37,7 @@ const ENVELOPE = {
 
 interface Harness {
   readonly app: Hono;
+  readonly jobRegistry: MySqlJobRegistry;
   readonly cleanup: () => Promise<void>;
 }
 
@@ -53,9 +54,10 @@ async function makeHarness(
     tempBaseRoot: join(base, 'tmp'),
   });
   const app = new Hono();
+  const jobRegistry = new MySqlJobRegistry(new InMemoryJobStore());
   registerInternalShellRoutes(app, {
     workspaceManager,
-    jobRegistry: new MySqlJobRegistry(new InMemoryJobStore()),
+    jobRegistry,
     systemSkillRoot: join(base, 'skills'),
     enabledSkillPackagesFor: () => [],
     systemSkillPackagesFor: () => [],
@@ -65,7 +67,7 @@ async function makeHarness(
     ...(overrides.childQuota !== undefined ? { childQuota: overrides.childQuota } : {}),
     quotaStore: overrides.quotaStore ?? new InMemoryQuotaStore(),
   });
-  return { app, cleanup: () => rm(base, { recursive: true, force: true }) };
+  return { app, jobRegistry, cleanup: () => rm(base, { recursive: true, force: true }) };
 }
 
 /** 带系统名单（空数组 = 一个系统包都不挂）发一个内部请求，与新 Agent 的形状一致。 */
@@ -395,6 +397,40 @@ test('start: workdir/env/stdin 传到执行器；timeoutMs 被拒绝', async () 
     assert.equal(target?.envOverrides['A'], 'b');
     assert.equal(target?.maxProcessCount, DEFAULT_SHELL_RESOURCE_LIMITS.maxProcessCount);
   } finally {
+    await h.cleanup();
+  }
+});
+
+test('start: SIGKILL 请求原样交给进程句柄（直接强杀，不走 SIGTERM 宽限）；SIGTERM 仍走默认', async () => {
+  const h = await makeHarness();
+  const originalStart = IsolatedShellExecutor.prototype.start;
+  const kills: Array<string | undefined> = [];
+  IsolatedShellExecutor.prototype.start = function () {
+    const handle = {
+      status: 'running' as const,
+      exitCode: null,
+      signal: null,
+      done: new Promise<void>(() => {}),
+      sandbox: { mode: 'workspace-write' as const, denied: false },
+      readOutput: () => ({ delta: '', lossy: false }),
+      kill: (signal?: 'SIGKILL') => {
+        kills.push(signal);
+        return true;
+      },
+    };
+    return handle as ShellProcess;
+  };
+  try {
+    for (const id of ['bash-sig-kill', 'bash-sig-term']) {
+      const res = await post(h.app, '/internal/v1/shell/start', { command: 'sleep 30', id });
+      assert.equal(res.status, 200);
+    }
+    const owner = { orgId: ENVELOPE.orgId, userId: ENVELOPE.userId, workspaceId: ENVELOPE.workspaceId };
+    await h.jobRegistry.signal('bash-sig-kill', owner, 'SIGKILL');
+    await h.jobRegistry.signal('bash-sig-term', owner, 'SIGTERM');
+    assert.deepEqual(kills, ['SIGKILL', undefined]);
+  } finally {
+    IsolatedShellExecutor.prototype.start = originalStart;
     await h.cleanup();
   }
 });

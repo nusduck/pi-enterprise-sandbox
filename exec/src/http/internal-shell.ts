@@ -266,14 +266,16 @@ export function registerInternalShellRoutes(app: Hono, deps: InternalShellDeps):
             const live = handle as typeof handle & {
               pid?: number | null;
               pgid?: number | null;
+              // 本仓库执行器的扩展：SIGKILL 直接强杀；出厂 ShellProcess.kill() 无参（拒绝句柄同样忽略参数）。
+              kill(signal?: 'SIGKILL'): boolean;
               writeStdin?: (data: string, eof: boolean) => void;
             };
             const output = redactingReader(() => handle.readOutput(), session.mounts);
             return {
               pid: live.pid ?? null,
               pgid: live.pgid ?? undefined,
-              cancel: () => {
-                void handle.kill();
+              cancel: (_reason, signal) => {
+                live.kill(signal === 'SIGKILL' ? 'SIGKILL' : undefined);
               },
               done: handle.done
                 // 采样器与数据源转发必须跟着作业收尾——不论正常结束、被杀还是 spawn 失败。
