@@ -266,7 +266,7 @@ export function createSandboxClient({ traceId = null, traceState = null, auth = 
      * 同一套会话鉴权：服务 `X-API-Key` + 已校验的 `X-Acting-*`，见 `headers()`）。
      * 响应形状 `{ removed: boolean }` 在这里做运行时断言：形状不对就抛可读错误，
      * 不能把 `undefined` 流到下游调用方。
-     * @param sessionId sandbox_session_id (AgentSession-bound)
+     * @param sessionId workspace id（AgentSession.workspaceId；exec 以它为 `/sessions/:id` 路径段）
      */
     async removeSessionWorkspace(sessionId: string): Promise<{ removed: boolean }> {
       const encoded = encodeURIComponent(sessionId);
