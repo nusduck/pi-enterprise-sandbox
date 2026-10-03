@@ -609,7 +609,7 @@ exec 不取任何 Redis 口令：它不连 Redis（replay 实例已于 2026-09-1
 | `AGENT_RUN_QUEUE_PREFIX` | 空 = `{bull}` | BullMQ key 前缀，HTTP 与 Worker 必须一致；必须含非空 hash tag，否则拒绝启动。Redis 被多环境复用时用环境独立值（如 `{dsh-test-bull}`）。改值前按 [队列 prefix 切换 runbook](runbooks/run-queue-prefix-switch.md) 停准入、drain |
 | `AGENT_RUN_LEASE_TTL_MS` | `30000` | Worker lease TTL（ms） |
 | `AGENT_RUN_LEASE_RENEW_INTERVAL_MS` | `10000` | Lease 续约间隔（ms） |
-| `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN` |
+| `AGENT_RUN_STREAM_MAXLEN` | `10000` | Run stream 近似 `MAXLEN`（100–1000000；非法值回退默认并告警） |
 | `AGENT_WORKER_CONCURRENCY` | `4` | Worker 的并发**总预算**（ADR 0012）。不是每层各一份——它按深度分层切分，见下文。必须 ≥ `AGENT_SUBAGENT_MAX_DEPTH + 1`，否则拒绝启动 |
 | `AGENT_SUBAGENT_MAX_DEPTH` | `2` | 允许的最大子任务嵌套深度。同时决定队列层数（`0..N`）与保留槽数量 |
 | `AGENT_WORKER_PROBE_PORT` | `4101` | Worker 探针 listener 端口（`/health`、`/ready`，见 [Health Checks](#health-checks)）；非 1–65535 整数拒绝启动 |

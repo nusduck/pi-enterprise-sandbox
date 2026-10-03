@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `AGENT_RUN_STREAM_MAXLEN` 生效
+
+- deployment.md 与 compose 都把它列为可调的 Run stream 近似 MAXLEN，但 `RunEventStream` 的两处装配从未传入，改了不生效，
+  始终是默认 10000。现在两处都按该变量设置；非法或越界（[100, 1000000] 之外）时回退默认值并告警。
+
 ### Fixed — 取消进程后状态停在 stopping
 
 - 进程控制台取消（或 signal 终止类信号）一个很快退出的进程时，作业已结算为 `killed`，随后的 `stopping` 写入把终态覆盖了，

@@ -16,6 +16,25 @@ export const LEASE_RENEW_INTERVAL_MS = 10_000;
 /** Approximate max entries retained per run stream (XADD MAXLEN ~). */
 export const RUN_STREAM_MAXLEN = 10_000;
 
+const RUN_STREAM_MAXLEN_MIN = 100;
+const RUN_STREAM_MAXLEN_MAX = 1_000_000;
+
+/**
+ * `AGENT_RUN_STREAM_MAXLEN`（deployment.md 运行时变量表）。未设置用默认值；非法或越界（[100, 1_000_000] 之外）
+ * 回退默认值并告警——不抛错：两处装配都在 try 里，抛错会让 stream 被静默置空，比用默认值更糟。
+ */
+export function runStreamMaxLenFromEnv(
+  env: Record<string, string | undefined>,
+  warn: (message: string) => void = (m) => console.warn(m),
+): number {
+  const raw = String(env.AGENT_RUN_STREAM_MAXLEN ?? '').trim();
+  if (raw === '') return RUN_STREAM_MAXLEN;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= RUN_STREAM_MAXLEN_MIN && n <= RUN_STREAM_MAXLEN_MAX) return n;
+  warn(`[agent] AGENT_RUN_STREAM_MAXLEN=${raw} is not an integer in [${RUN_STREAM_MAXLEN_MIN}, ${RUN_STREAM_MAXLEN_MAX}]; using ${RUN_STREAM_MAXLEN}`);
+  return RUN_STREAM_MAXLEN;
+}
+
 /**
  * Cancel signal TTL (ms). Signal-only; MySQL remains fact source for cancel intent.
  * Long enough to outlive typical run + recovery windows.
