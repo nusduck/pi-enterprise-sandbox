@@ -15,8 +15,6 @@
 
 import { createHash } from 'node:crypto';
 
-/** ToolRequestHashError 的 code 固定为字符串，由构造器传入。 */
-
 export const TOOL_REQUEST_HASH_VERSION = 1;
 export const TOOL_NAME_MAX_LEN = 255;
 

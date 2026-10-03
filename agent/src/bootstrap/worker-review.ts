@@ -24,17 +24,11 @@ import { NotificationDispatcher } from '../infrastructure/notification/notificat
 import { createSmtpMailer } from '../infrastructure/notification/smtp-mailer.js';
 import { ReviewPublisher } from '../infrastructure/review/review-publisher.js';
 import { createReviewTransportFromEnv } from './review-wiring.js';
+import type { createRepositoryBundle } from './container-env.js';
 
 type DbExecutor = Knex | Knex.Transaction;
-type RepositoryBundleLike = {
-  readonly runs: unknown;
-  readonly runEvents: unknown;
-  readonly outbox: unknown;
-  readonly approvals: unknown;
-  readonly toolExecutions: unknown;
-  readonly interactions: unknown;
-};
-type RepositoryFactory = (db?: DbExecutor) => RepositoryBundleLike;
+// 两个消费者都要完整仓储包（ReviewPublisher / NotificationDispatcher 的构造签名）。
+type RepositoryFactory = (db: DbExecutor) => ReturnType<typeof createRepositoryBundle>;
 
 export function startReviewLoop(opts: {
   knex: DbExecutor;
