@@ -16,6 +16,7 @@
  * 传输，继续跑只会把行反复重试到失败。
  */
 
+import type { Knex } from 'knex';
 import { OutboxRepository } from '../infrastructure/outbox/outbox-repository.js';
 import { resolveEmailNotificationConfig } from '../infrastructure/notification/email-config.js';
 import { NotificationStore } from '../infrastructure/notification/notification-store.js';
@@ -23,13 +24,16 @@ import { NotificationDispatcher } from '../infrastructure/notification/notificat
 import { createSmtpMailer } from '../infrastructure/notification/smtp-mailer.js';
 import { ReviewPublisher } from '../infrastructure/review/review-publisher.js';
 import { createReviewTransportFromEnv } from './review-wiring.js';
+import type { createRepositoryBundle } from './container-env.js';
 
-type Loose = any;
+type DbExecutor = Knex | Knex.Transaction;
+// 两个消费者都要完整仓储包（ReviewPublisher / NotificationDispatcher 的构造签名）。
+type RepositoryFactory = (db: DbExecutor) => ReturnType<typeof createRepositoryBundle>;
 
 export function startReviewLoop(opts: {
-  knex: Loose;
+  knex: DbExecutor;
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  createRepositories: (db?: Loose) => Loose;
+  createRepositories: RepositoryFactory;
   generateId: () => string;
   now?: () => Date;
   log?: (level: 'info' | 'error', message: string) => void;

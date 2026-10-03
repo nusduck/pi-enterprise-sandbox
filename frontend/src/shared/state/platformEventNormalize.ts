@@ -189,7 +189,7 @@ export function capSeenEventIds(
  * - RuntimeEvent snake_case envelope
  * - PlatformEventEnvelope camelCase (eventId / sequence / type / data / context)
  * - BFF relay { sequence, event, ts }
- * - Loose { type, ...fields }
+ * - Untyped { type, ...fields }
  */
 export function normalizeToRuntimeEvent(
   raw: unknown,

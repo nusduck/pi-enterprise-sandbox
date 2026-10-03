@@ -11,10 +11,72 @@
  * 在下面各自注明。
  */
 
-/** 松散领域输入：camelCase 或 snake_case 都可能。 */
-type Loose = Record<string, any>;
+/** 松散领域输入：camelCase 或 snake_case 都可能，统一按未知记录读。 */
+type JsonRecord = Record<string, unknown>;
+interface CreateRunLike extends JsonRecord {
+  readonly runId?: unknown;
+  readonly status?: unknown;
+  readonly conversationId?: unknown;
+  readonly eventsUrl?: unknown;
+  readonly agentSessionId?: unknown;
+  readonly sandboxSessionId?: unknown;
+  readonly queueWarning?: unknown;
+  readonly replayed?: unknown;
+}
+interface PendingLike extends JsonRecord {
+  readonly interactionId?: unknown;
+  readonly interactionType?: unknown;
+  readonly title?: unknown;
+  readonly message?: unknown;
+  readonly options?: unknown;
+  readonly status?: unknown;
+}
+interface GetRunLike extends JsonRecord {
+  readonly pendingInput?: unknown;
+  readonly pending_input?: unknown;
+  readonly completedAt?: unknown;
+  readonly completed_at?: unknown;
+  readonly nextEventSequence?: unknown;
+  readonly next_event_sequence?: unknown;
+  readonly modelId?: unknown;
+  readonly model_id?: unknown;
+  readonly usage?: unknown;
+  readonly tokenUsage?: unknown;
+  readonly token_usage?: unknown;
+  readonly sandboxSessionId?: unknown;
+  readonly runId?: unknown;
+  readonly status?: unknown;
+  readonly conversationId?: unknown;
+  readonly agentSessionId?: unknown;
+  readonly orgId?: unknown;
+  readonly userId?: unknown;
+  readonly traceId?: unknown;
+  readonly attempt?: unknown;
+  readonly statusReason?: unknown;
+  readonly cancelRequestedAt?: unknown;
+  readonly createdAt?: unknown;
+  readonly updatedAt?: unknown;
+  readonly startedAt?: unknown;
+  readonly lastEventId?: unknown;
+}
+interface ToolLike extends JsonRecord {
+  readonly status?: unknown;
+  readonly toolExecutionId?: unknown;
+  readonly toolCallId?: unknown;
+  readonly runId?: unknown;
+  readonly agentSessionId?: unknown;
+  readonly toolName?: unknown;
+  readonly toolSource?: unknown;
+  readonly riskLevel?: unknown;
+  readonly argumentsJson?: unknown;
+  readonly resultJson?: unknown;
+  readonly errorCode?: unknown;
+  readonly startedAt?: unknown;
+  readonly completedAt?: unknown;
+  readonly createdAt?: unknown;
+}
 
-export function presentCreateRunResponse(result: Loose): Record<string, unknown> {
+export function presentCreateRunResponse(result: CreateRunLike): Record<string, unknown> {
   const sandboxSessionId =
     result.sandboxSessionId ?? result.sandbox_session_id ?? result.session_id ?? null;
   // One spelling per field: snake_case, matching the rest of the public wire.
@@ -31,8 +93,10 @@ export function presentCreateRunResponse(result: Loose): Record<string, unknown>
   };
 }
 
-export function presentGetRunResponse(run: Loose): Record<string, unknown> {
-  const pending = run.pendingInput || run.pending_input || null;
+export function presentGetRunResponse(run: GetRunLike): Record<string, unknown> {
+  const pendingRaw = run.pendingInput || run.pending_input || null;
+  const pending: PendingLike | null =
+    typeof pendingRaw === 'object' && pendingRaw !== null ? (pendingRaw as PendingLike) : null; // reason: 外来双拼写对象，按记录读取前先确认是对象
   const pendingInput = pending
     ? {
         interaction_id: pending.interactionId || pending.interaction_id || null,
@@ -97,7 +161,7 @@ const PUBLIC_TOOL_STATUS: Readonly<Record<string, string>> = Object.freeze({
   UNKNOWN: 'unknown',
 });
 
-export function presentToolExecutionResponse(tool: Loose): Record<string, unknown> {
+export function presentToolExecutionResponse(tool: ToolLike): Record<string, unknown> {
   const status = PUBLIC_TOOL_STATUS[String(tool.status)] || 'unknown';
   return {
     tool_execution_id: tool.toolExecutionId,

@@ -6,8 +6,10 @@
  * roots and an owner-scoped Sandbox client combine into one manager.
  */
 
-/** 过渡期宽松类型：容器与仓储仍是 JS，编造精确类型会谎报现状。 */
-type Loose = any;
+/** createSkillManager 返回的最小形状：本模块只读 userSkillRoot 判定是否可用。 */
+interface SkillManagerLike {
+  readonly userSkillRoot?: unknown;
+}
 
 /**
  * 每个 Run 的上下文。只列本模块用得到的字段。
@@ -30,7 +32,7 @@ export interface RunContextLike {
 export type SkillManagerFactory = (
   runContext: RunContextLike | null | undefined,
   lifecycleDeps?: { getAgentSession?: () => unknown },
-) => Loose;
+) => SkillManagerLike | null;
 
 /**
  * Build a per-Run SkillManager factory for the skill-lifecycle extension.
@@ -56,7 +58,7 @@ export async function buildSkillManagerFactory(
     const sandboxSessionId = String(runContext?.sandboxSessionId || '').trim();
     const workspaceId = String(runContext?.workspaceId || sandboxSessionId).trim();
     if (orgId == null || userId == null || !sandboxSessionId) return null;
-    let manager: Loose;
+    let manager: SkillManagerLike;
     try {
       const sandboxClient = createSandboxClient({
         traceId: runContext?.traceId,

@@ -1,8 +1,38 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { authSubjectsFromRequest, requireAuthSubjects, json } from './request-response.js';
 import { mapErrorToHttp } from './error-mapper.js';
+import type {
+  OrgSkillAdminRequest,
+  OrgSkillAdminResponse,
+} from '../../application/org-skill-admin-service.js';
+import type {
+  ShareHttpRequest,
+  ShareHttpResponse,
+} from '../../application/skill-share-service.js';
 
-type Loose = any;
+interface SkillRouteErrorMeta {
+  readonly statusCode?: unknown;
+  readonly code?: unknown;
+}
+export interface ExtensionDiagnosticsHandler {
+  (options?: { auth?: object | null; [key: string]: unknown }): Promise<unknown>;
+}
+export interface MutateSkillHandler {
+  (input: { action: string; name: string; auth: unknown }): Promise<unknown>;
+}
+export interface UploadSkillDraftHandler {
+  (input: { auth: unknown; filename: string; archiveBytes: Buffer }): Promise<unknown>;
+}
+export interface SkillShareResult {
+  readonly status: number;
+  readonly body: unknown;
+}
+export interface SkillShareHandler {
+  (input: ShareHttpRequest): Promise<ShareHttpResponse | null>;
+}
+export interface OrgSkillAdminHandler {
+  (input: OrgSkillAdminRequest): Promise<OrgSkillAdminResponse>;
+}
 
 /**
  * 把 org 层操作的错误映射成 HTTP。
@@ -52,9 +82,9 @@ function readBuffer(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
       bytes += chunk.length;
       if (bytes > maxBytes) {
         settled = true;
-        const err = new Error('Skill archive exceeds size limit');
-        (err as any).statusCode = 413;
-        (err as any).code = 'SKILL_ARCHIVE_TOO_LARGE';
+        const err = new Error('Skill archive exceeds size limit') as Error & { statusCode?: number; code?: string }; // reason: 413 与业务码是错误契约的一部分，随错误一起传递
+        err.statusCode = 413;
+        err.code = 'SKILL_ARCHIVE_TOO_LARGE';
         reject(err);
         return;
       }
@@ -74,13 +104,13 @@ export async function handleSkillRoute(input: {
   res: ServerResponse;
   parsedUrl: URL;
   path: string;
-  getExtensionDiagnostics?: Loose;
-  mutateSkill?: Loose;
-  uploadSkillDraft?: Loose;
+  getExtensionDiagnostics?: ExtensionDiagnosticsHandler;
+  mutateSkill?: MutateSkillHandler;
+  uploadSkillDraft?: UploadSkillDraftHandler;
   /** org 层管理员操作面（ADR 0015 §7.2）。省略时这些路由返回 501。 */
-  orgSkillAdmin?: Loose;
+  orgSkillAdmin?: OrgSkillAdminHandler;
   /** 共享申请与审批流程（ADR 0015 §7.2/§7.3）。省略时这些路由返回 501。 */
-  skillShare?: Loose;
+  skillShare?: SkillShareHandler;
 }): Promise<boolean> {
   const { req, res, parsedUrl, path } = input;
   if (req.method === 'GET' && path === '/internal/extensions/diagnostics') {
@@ -118,10 +148,12 @@ export async function handleSkillRoute(input: {
       json(res, 201, result);
     } catch (error) {
       console.error('[agent-http] Skill draft upload failed:', error);
-      const status = (error as any)?.statusCode || 400;
+      const meta = error as SkillRouteErrorMeta | null; // reason: 上传失败的 HTTP 状态与业务码由调用方约定在错误对象上
+      const statusCode = typeof meta?.statusCode === 'number' ? meta.statusCode : 400;
+      const status = statusCode;
       json(res, status, {
-        error: (error as Error)?.message || 'Failed to upload Skill draft',
-        code: (error as any)?.code || 'SKILL_DRAFT_UPLOAD_FAILED',
+        error: error instanceof Error ? error.message : 'Failed to upload Skill draft',
+        code: typeof meta?.code === 'string' && meta.code ? meta.code : 'SKILL_DRAFT_UPLOAD_FAILED',
       });
     }
     return true;

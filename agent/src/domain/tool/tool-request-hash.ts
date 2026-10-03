@@ -15,9 +15,6 @@
 
 import { createHash } from 'node:crypto';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
-
 export const TOOL_REQUEST_HASH_VERSION = 1;
 export const TOOL_NAME_MAX_LEN = 255;
 
@@ -26,7 +23,7 @@ const ASCII_KEY_RE = /^[\x20-\x7E]+$/;
 
 export class ToolRequestHashError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
+  code: string;
 
   constructor(message: string, code: string = 'TOOL_REQUEST_HASH_INVALID') {
     super(message);
@@ -93,14 +90,13 @@ export function assertToolRequestToolName(toolName: string) {
  * @param stack
  * @returns {string}
  */
-function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
+function canonicalizeValue(value: unknown, stack: Set<object>) {
   if (value === null) return 'null';
 
-  const t = typeof value;
-  if (t === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
 
-  if (t === 'string') {
-    if (hasLoneSurrogate((value as string))) {
+  if (typeof value === 'string') {
+    if (hasLoneSurrogate(value)) {
       throw new ToolRequestHashError(
         'string contains lone Unicode surrogate',
         'TOOL_REQUEST_HASH_LONE_SURROGATE',
@@ -109,7 +105,7 @@ function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
     return JSON.stringify(value);
   }
 
-  if (t === 'number') {
+  if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
       throw new ToolRequestHashError(
         'number must be finite (no NaN/Infinity)',
@@ -131,23 +127,23 @@ function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
     return String(value);
   }
 
-  if (t === 'bigint') {
+  if (typeof value === 'bigint') {
     throw new ToolRequestHashError(
       'BigInt is not allowed',
       'TOOL_REQUEST_HASH_BIGINT',
     );
   }
 
-  if (t === 'undefined' || t === 'function' || t === 'symbol') {
+  if (typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol') {
     throw new ToolRequestHashError(
-      `type ${t} is not allowed`,
+      `type ${typeof value} is not allowed`,
       'TOOL_REQUEST_HASH_BAD_TYPE',
     );
   }
 
-  if (t !== 'object') {
+  if (typeof value !== 'object') {
     throw new ToolRequestHashError(
-      `unsupported type ${t}`,
+      `unsupported type ${typeof value}`,
       'TOOL_REQUEST_HASH_BAD_TYPE',
     );
   }
@@ -171,7 +167,7 @@ function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
     );
   }
 
-  const objRef = (value as Record<string, any>);
+  const objRef: object = value;
   if (stack.has(objRef)) {
     throw new ToolRequestHashError(
       'cyclic structure is not allowed',
@@ -182,7 +178,7 @@ function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
   if (Array.isArray(value)) {
     stack.add(objRef);
     try {
-      const parts = value.map((v) => canonicalizeValue(v, stack));
+      const parts = value.map((v: unknown) => canonicalizeValue(v, stack));
       return `[${parts.join(',')}]`;
     } finally {
       stack.delete(objRef);
@@ -200,7 +196,7 @@ function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
 
   stack.add(objRef);
   try {
-    const obj = (value as Record<string, unknown>);
+    const obj = value as Record<string, unknown>; // reason: 已校验 plain-object 原型，按未知值记录读键
     const keys = Object.keys(obj);
     for (const k of keys) {
       if (typeof k !== 'string' || !ASCII_KEY_RE.test(k)) {
@@ -234,7 +230,7 @@ function canonicalizeValue(value: unknown, stack: Set<Record<string, any>>) {
 export function canonicalToolRequestJsonV1(input: { toolName: string, args?: unknown }) {
   const toolName = assertToolRequestToolName(input.toolName);
   const args = input.args === undefined ? {} : input.args;
-  const stack = new Set();
+  const stack = new Set<object>();
   const argsJson = canonicalizeValue(args, stack);
   // Fixed key order for envelope: args, tool, v (ASCII sort) — but we emit
   // exact contract field order via manual construction matching the envelope

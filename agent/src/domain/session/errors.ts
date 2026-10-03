@@ -3,14 +3,13 @@
  * State machine never writes storage; callers map these to application errors.
  */
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+/** 会话状态机错误携带的字段：按构造器 meta 的实际形状声明。 */
 
 export class InvalidSessionTransitionError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  from: Loose;
-  to: Loose;
+  from: string;
+  to: string;
 
   constructor(from: string, to: string, message?: string) {
     super(
@@ -27,7 +26,7 @@ export class InvalidSessionTransitionError extends Error {
 export class InvalidSessionStatusError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  status: Loose;
+  status: unknown;
 
   constructor(status: unknown, message?: string) {
     super(
@@ -43,9 +42,9 @@ export class InvalidSessionStatusError extends Error {
 export class SessionFenceConflictError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
   code: string;
-  agentSessionId: Loose;
-  expectedToken: Loose;
-  actualToken: Loose;
+  agentSessionId: string | null;
+  expectedToken: number | null;
+  actualToken: number | null;
 
   constructor(message: string, meta: { agentSessionId?: string, expectedToken?: number, actualToken?: number | null } = {}) {
     super(message);
@@ -59,9 +58,9 @@ export class SessionFenceConflictError extends Error {
 
 export class SessionSnapshotError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
-  agentSessionId: Loose;
-  snapshotVersion: Loose;
+  code: string;
+  agentSessionId: string | null;
+  snapshotVersion: number | null;
 
   constructor(message: string, meta: { code?: string, agentSessionId?: string, snapshotVersion?: number | null } = {}) {
     super(message);
@@ -79,9 +78,9 @@ export class SessionSnapshotError extends Error {
  */
 export class SessionRecoveryRequiredError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
-  agentSessionId: Loose;
-  recoveryReasonCode: Loose;
+  code: string;
+  agentSessionId: string | null;
+  recoveryReasonCode: string;
 
   /**
    * @param message
@@ -109,9 +108,9 @@ export class SessionRecoveryRequiredError extends Error {
  */
 export class SessionJournalError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
-  agentSessionId: Loose;
-  sessionEntryId: Loose;
+  code: string;
+  agentSessionId: string | null;
+  sessionEntryId: string | null;
 
   /**
    * @param message

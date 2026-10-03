@@ -11,6 +11,7 @@
  * 不能"看得到任务却读不了材料"地半可用。
  */
 
+import type { Knex } from 'knex';
 import { ReviewService } from '../application/review-service.js';
 import {
   createInternalReviewTransport,
@@ -18,14 +19,23 @@ import {
 } from '../infrastructure/sandbox/internal-review-http.js';
 import { readExecRpcFromEnv } from '../runtime/providers/exec-rpc.js';
 
-/** 过渡期宽松类型：容器里的多数依赖还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+type DbExecutor = Knex | Knex.Transaction;
+type RepositoryBundleLike = {
+  readonly runs: unknown;
+  readonly runEvents: unknown;
+  readonly outbox: unknown;
+  readonly approvals: unknown;
+  readonly toolExecutions: unknown;
+  readonly interactions: unknown;
+};
+type RepositoryFactory = (db?: DbExecutor) => RepositoryBundleLike;
+type TransactionRunner = { run: <T>(work: (trx: Knex.Transaction) => Promise<T>) => Promise<T> };
 
 export interface ReviewServiceWiring {
   readonly env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  readonly db: Loose;
-  readonly createRepositories: (db?: Loose) => Loose;
-  readonly transactionManager: { run: <T>(work: (trx: Loose) => Promise<T>) => Promise<T> };
+  readonly db: DbExecutor;
+  readonly createRepositories: RepositoryFactory;
+  readonly transactionManager: TransactionRunner;
   readonly generateId?: () => string;
   readonly now?: () => Date;
   /** 测试注入缝：给一个现成的 exec 客户端替身。 */

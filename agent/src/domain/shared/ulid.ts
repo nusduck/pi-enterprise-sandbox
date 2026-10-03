@@ -10,8 +10,7 @@
 
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
 
-/** 过渡期宽松类型：注入的依赖多数还是 JS 类，形状由各自的模块负责。 */
-type Loose = any;
+/** UlidError 的 code 固定为字符串字面量，由构造器传入。 */
 
 /** Crockford Base32 (excludes I, L, O, U). */
 export const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -34,7 +33,7 @@ const RANDOM_BYTES = 10; // 80 bits
  */
 export class UlidError extends Error {
   // TS 要求类字段显式声明（JS 里它们只在构造器里赋值）。
-  code: Loose;
+  code: string;
 
   constructor(message: string, code: string) {
     super(message);

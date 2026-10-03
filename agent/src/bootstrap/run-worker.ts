@@ -12,6 +12,8 @@
  * authority. Production BullMQ/Redis/MySQL wiring is injected by the caller.
  */
 
+import type { Knex } from 'knex';
+import type { RunExecutor, RunExecutorFactory } from '../application/run-executor.js';
 import {
   ExecuteRunService,
   LeaseBusyError,
@@ -66,21 +68,48 @@ export class NeedsReconciliationError extends Error {
  */
 
 /**
- * 过渡期宽松类型：`ExecuteRunService` / `RunRecoveryService` 仍是 JS，
- * 它们的 JSDoc 期待精确的函数签名，而这里的 deps 原本声明成裸 `Function`
- * ——那正是这个文件曾经六处 `@ts-expect-error` 的全部原因。用 `Loose` 把
- * "两边都还没有真类型"这件事说清楚，比逐个压制诚实。
+ * Worker 装配需要的最小依赖形状：按 ExecuteRunService / RunRecoveryService 的实际读取字段定义。
+ * 不确定的 JS 句柄用 unknown 透传，不编造方法。
  */
-type Loose = any;
+type DbExecutor = Knex | Knex.Transaction;
+type RepositoryBundleLike = {
+  readonly runs: unknown;
+  readonly runEvents: unknown;
+  readonly outbox: unknown;
+  readonly approvals: unknown;
+  readonly toolExecutions: unknown;
+  readonly interactions: unknown;
+};
+type RepositoryFactory = (db?: DbExecutor) => RepositoryBundleLike;
+type TransactionRunner = { run: <T>(work: (trx: Knex.Transaction) => Promise<T>) => Promise<T> };
+interface LeaseManagerLike {
+  acquire(runId: string, ownerToken: string): Promise<boolean>;
+  renew(runId: string, ownerToken: string): Promise<boolean>;
+  release(runId: string, ownerToken: string): Promise<boolean>;
+  renewIntervalMs?: number;
+}
+interface RunQueueLike {
+  enqueue(ref: { runId: string; orgId: string; traceId: string }, options?: object): Promise<unknown>;
+}
+interface CancelSignalLike {
+  isRequested(runId: string): Promise<boolean>;
+}
+type SkillDiagnosticsResolver = (input: {
+  run: unknown;
+  scope: { orgId: string; userId: string };
+}) => Promise<unknown>;
+interface RunWorkerRuntimeLike {
+  start(): Promise<void>;
+}
 
 export interface RunWorkerDeps {
-  readonly transactionManager: { run: Loose };
-  readonly createRepositories: Loose;
-  readonly leaseManager: Loose;
-  readonly runQueue: { enqueue: Loose };
-  readonly cancelSignal?: Loose;
-  readonly runExecutor?: Loose;
-  readonly runExecutorFactory?: Loose;
+  readonly transactionManager: TransactionRunner;
+  readonly createRepositories: RepositoryFactory;
+  readonly leaseManager: LeaseManagerLike;
+  readonly runQueue: RunQueueLike;
+  readonly cancelSignal?: CancelSignalLike | null;
+  readonly runExecutor?: RunExecutor | null;
+  readonly runExecutorFactory?: RunExecutorFactory | null;
   readonly allowStubExecutor?: boolean;
   readonly generateId: () => string;
   readonly workerId?: string;
@@ -88,7 +117,7 @@ export interface RunWorkerDeps {
   readonly cancelPollIntervalMs?: number;
   readonly leaseRenewIntervalMs?: number;
   /** run.started 诊断的来源（可选）：透传给 ExecuteRunService。 */
-  readonly resolveSkillDiagnostics?: Loose;
+  readonly resolveSkillDiagnostics?: SkillDiagnosticsResolver | null;
   readonly onStart?: (runtime: object) => Promise<void> | void;
   readonly onShutdown?: (runtime: object) => Promise<void> | void;
 }
@@ -114,7 +143,7 @@ export function createRunWorkerRuntime(deps: RunWorkerDeps) {
 
   // Prefer explicit factory. Shared runExecutor only for concurrency=1 tests.
   // Never silently invent a stub here for production paths.
-  let runExecutorFactory: Loose = deps.runExecutorFactory;
+  let runExecutorFactory: RunExecutorFactory | null | undefined = deps.runExecutorFactory ?? null;
   if (!runExecutorFactory && deps.runExecutor) {
     runExecutorFactory = undefined; // use shared instance
   }
@@ -283,7 +312,7 @@ export function createRunWorkerRuntime(deps: RunWorkerDeps) {
  * Explicit start helper (not invoked on import).
  * @param {RunWorkerRuntime} runtime
  */
-export async function startRunWorkerRuntime(runtime: Loose) {
+export async function startRunWorkerRuntime(runtime: RunWorkerRuntimeLike) {
   if (!runtime || typeof runtime.start !== 'function') {
     throw new Error('startRunWorkerRuntime requires a runtime from createRunWorkerRuntime');
   }
