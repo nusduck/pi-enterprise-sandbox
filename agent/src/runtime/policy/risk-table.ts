@@ -50,8 +50,14 @@ export function classifyTool(toolName: string): ToolRiskClass {
  * 2026-08-31 清空：原来只有 `skill_install: 'high'`，而 ADR 0009 D7 取消了整套
  * skill 变更工具（模型改用 `write`/`bash` 写草稿目录，闸门移到 UI 上的「启用」），
  * 那条覆盖与它服务的 `source-digest` 重放路径一起退役。
+ *
+ * 2026-10-03 产品决定：远端委派默认不审批。分类仍是 `external_high`（内容会发到外部），
+ * 只把默认风险降到 medium（放行）；远端清单由运维登记、AgentVersion 白名单授权，
+ * 需要审批的 Agent 可在 `toolPolicy.riskLevels` 里调回 high。
  */
-const DEFAULT_TOOL_OVERRIDES: Readonly<Record<string, PolicyRiskLevel>> = {};
+const DEFAULT_TOOL_OVERRIDES: Readonly<Record<string, PolicyRiskLevel>> = {
+  delegate_to_remote_agent: 'medium',
+};
 
 export function decideFromRiskTable(
   toolName: string,

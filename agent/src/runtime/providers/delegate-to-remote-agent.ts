@@ -6,8 +6,9 @@
  *   本 Run 能调哪些，看 `RunServices.remoteDelegation.agents`（AgentVersion 白名单）。
  *   两者都满足才发——清单里有、版本没授权，或版本授权了、清单里已经没了，一律拒。
  * - 模型只给远端 id，给不了 URL：地址只来自登记表，没有 SSRF 面。
- * - 风险分类 `external_high`（tool-names.ts `EXTERNAL_HOST_TOOL_NAMES`），平台默认需要审批；
- *   审批在 `tools/pre-execute` 挂载点，本工具体只在批准后才会被调用。
+ * - 风险分类 `external_high`（tool-names.ts `EXTERNAL_HOST_TOOL_NAMES`），平台默认风险 medium、
+ *   不审批（2026-10-03 产品决定）；AgentVersion 调回 high 时审批在 `tools/pre-execute`
+ *   挂载点，本工具体只在批准后才会被调用。
  * - `protocol: "hiagent"` 的远端走火山应用 API：同一平台会话里连续委派默认续用上一次的
  *   远端会话（绑定存在服务端，模型拿不到也传不进远端会话 ID，见 H3）；`new_conversation`
  *   为 true 时强制新建。对 A2A 远端该参数被忽略（一问一答，无续聊）。
